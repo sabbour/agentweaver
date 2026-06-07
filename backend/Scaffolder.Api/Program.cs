@@ -1,6 +1,10 @@
 using Microsoft.EntityFrameworkCore;
+using Scaffolder.Api.Agent;
+using Scaffolder.Api.Agent.Tools;
 using Scaffolder.Api.Configuration;
 using Scaffolder.Api.Persistence;
+using Scaffolder.Api.Runs;
+using Scaffolder.Api.Worktrees;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +22,26 @@ builder.Services.AddDbContext<ScaffolderDbContext>(options =>
 builder.Services.AddScoped<IRunRepository, RunRepository>();
 builder.Services.AddScoped<IEventRepository, EventRepository>();
 builder.Services.AddScoped<IOperationalRecordRepository, OperationalRecordRepository>();
+
+// Worktree services
+builder.Services.AddScoped<IWorktreeService, WorktreeService>();
+builder.Services.AddScoped<IDiffService, DiffService>();
+
+// Agent loop
+builder.Services.AddScoped<IAgentLoopHost, AgentLoopHost>();
+
+// Event log
+builder.Services.AddScoped<EventLogService>();
+
+// Sandbox tools
+builder.Services.AddSingleton<SandboxPathResolver>();
+builder.Services.AddScoped<ReadFileTool>();
+builder.Services.AddScoped<WriteFileTool>();
+
+// Runs orchestration
+builder.Services.AddScoped<RunStateMachine>();
+builder.Services.AddScoped<OperationalRecordWriter>();
+builder.Services.AddScoped<RunExecutionService>();
 
 // ProblemDetails for RFC 7807 error responses
 builder.Services.AddProblemDetails();
@@ -54,8 +78,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Scaffolder API v1"));
 }
 
-// Placeholder — endpoints added in T029-T031, T035, T043
-// app.MapRunsEndpoints();
+app.MapRunsEndpoints();
 // app.MapStreamEndpoints();
 
 app.Run();
