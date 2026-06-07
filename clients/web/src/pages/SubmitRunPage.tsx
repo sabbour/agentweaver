@@ -95,7 +95,7 @@ export function SubmitRunPage({ onRunCreated }: SubmitRunPageProps) {
           <Input
             value={originatingBranch}
             onChange={(_, d) => setOriginatingBranch(d.value)}
-            placeholder="main"
+            placeholder="e.g. master or feature/my-branch"
           />
         </Field>
 

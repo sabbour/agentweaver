@@ -8,7 +8,17 @@ public sealed class ScaffolderOptions
     public const string SectionName = "Scaffolder";
 
     /// <summary>
-    /// Absolute path to the directory where per-run git worktrees are created.
+    /// Absolute (or relative-to-CWD) path to the git repository that the agent
+    /// will edit. When null or empty, the service auto-detects the repo root by
+    /// running <c>git rev-parse --show-toplevel</c> from the process working
+    /// directory. Override this when the API process starts in a location that
+    /// is not inside the target repository.
+    /// </summary>
+    public string? RepoRoot { get; init; }
+
+    /// <summary>
+    /// Absolute (or relative-to-RepoRoot) path to the directory where per-run
+    /// git worktrees are created.
     /// </summary>
     public required string RunRoot { get; init; }
 

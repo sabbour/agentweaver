@@ -36,7 +36,8 @@ internal sealed class WorktreeService : IWorktreeService
         string originatingBranch,
         CancellationToken ct = default)
     {
-        var runRoot = Path.GetFullPath(_options.RunRoot);
+        var repoRoot = await ResolveRepoRootAsync(ct);
+        var runRoot = ResolveRunRoot(repoRoot);
         Directory.CreateDirectory(runRoot);
 
         var worktreePath = Path.Combine(runRoot, runId.ToString("N"));
@@ -46,6 +47,7 @@ internal sealed class WorktreeService : IWorktreeService
         var commitSha = await RunGitAsync(
             "rev-parse",
             new[] { originatingBranch },
+            workingDir: repoRoot,
             ct: ct);
         commitSha = commitSha.Trim();
 
@@ -53,6 +55,7 @@ internal sealed class WorktreeService : IWorktreeService
         await RunGitAsync(
             "worktree",
             new[] { "add", "-b", worktreeBranchName, worktreePath, originatingBranch },
+            workingDir: repoRoot,
             ct: ct);
 
         _logger.LogInformation(
@@ -73,13 +76,47 @@ internal sealed class WorktreeService : IWorktreeService
     {
         try
         {
-            await RunGitAsync("worktree", new[] { "remove", "--force", worktreePath }, ct: ct);
+            var repoRoot = await ResolveRepoRootAsync(ct);
+            await RunGitAsync("worktree", new[] { "remove", "--force", worktreePath },
+                workingDir: repoRoot, ct: ct);
             _logger.LogInformation("Removed worktree at {WorktreePath}", worktreePath);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to remove worktree at {WorktreePath}", worktreePath);
         }
+    }
+
+    /// <summary>
+    /// Returns the absolute path to the git repository root.
+    /// Uses the configured <see cref="ScaffolderOptions.RepoRoot"/> when set;
+    /// otherwise auto-detects via <c>git rev-parse --show-toplevel</c>.
+    /// </summary>
+    private async Task<string> ResolveRepoRootAsync(CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(_options.RepoRoot))
+            return Path.GetFullPath(_options.RepoRoot);
+
+        var raw = await RunGitAsync(
+            "rev-parse",
+            new[] { "--show-toplevel" },
+            workingDir: Directory.GetCurrentDirectory(),
+            ct: ct);
+
+        // git on Windows returns forward-slash paths; GetFullPath normalises to OS separators
+        return Path.GetFullPath(raw.Trim());
+    }
+
+    /// <summary>
+    /// Resolves the run root directory, anchoring a relative <see cref="ScaffolderOptions.RunRoot"/>
+    /// to the repository root so worktrees land next to the repo rather than next to the API binary.
+    /// </summary>
+    private string ResolveRunRoot(string repoRoot)
+    {
+        var runRoot = _options.RunRoot;
+        return Path.IsPathRooted(runRoot)
+            ? runRoot
+            : Path.GetFullPath(Path.Combine(repoRoot, runRoot));
     }
 
     private async Task<string> RunGitAsync(
