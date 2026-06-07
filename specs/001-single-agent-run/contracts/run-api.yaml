@@ -42,13 +42,42 @@ paths:
           description: Not found
   /runs/{runId}/stream:
     get:
-      summary: Stream ordered run steps (SSE)
-      operationId: streamRunSteps
+      summary: Stream ordered run events (SSE)
+      operationId: streamRunEvents
+      description: >
+        Server-Sent Events stream of the run's durable, append-only event log.
+        Each SSE message's `id` field carries the per-run monotonic `sequence`,
+        which doubles as the resumable cursor. To reconnect, the client sends the
+        last sequence it processed via the standard `Last-Event-ID` request header
+        (equivalently the `lastSeenSequence` query parameter); the server replays
+        only events after that cursor - across process restarts while within the
+        retention window - and then continues live. Delivery is at-least-once, so
+        clients MUST deduplicate by per-run `sequence`. Each event body conforms to
+        `run-step-event.schema.json` (RunEvent). The stream spans the full run
+        lifecycle through merge, including review/merge events.
       parameters:
         - $ref: '#/components/parameters/RunId'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: >
+            Last per-run `sequence` the client has already processed. On reconnect,
+            the server replays only events with a greater `sequence`.
+          schema:
+            type: integer
+            minimum: 1
+        - name: lastSeenSequence
+          in: query
+          required: false
+          description: >
+            Alternative to the `Last-Event-ID` header for environments that cannot
+            set it. Same semantics: replay only events after this per-run sequence.
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
-          description: text/event-stream of RunStepEvent payloads
+          description: text/event-stream of RunEvent payloads (see run-step-event.schema.json)
           content:
             text/event-stream:
               schema:
@@ -142,7 +171,7 @@ components:
 
     Run:
       type: object
-      required: [id, originatingBranch, modelSource, status, createdAt]
+      required: [id, originatingBranch, modelSource, submittedBy, status, createdAt]
       properties:
         id:
           type: string
@@ -151,6 +180,12 @@ components:
           type: string
         modelSource:
           $ref: '#/components/schemas/ModelSource'
+        submittedBy:
+          type: string
+          description: >
+            Identity of the user who submitted the run. The named human accountable
+            for the run (FR-024). Derived from authentication context; preserved in
+            the run's event log for the full retention window.
         status:
           $ref: '#/components/schemas/RunStatus'
         createdAt:

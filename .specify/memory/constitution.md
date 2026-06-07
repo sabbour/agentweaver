@@ -1,24 +1,23 @@
 <!--
 Sync Impact Report
 ==================
-Version change: (template, unratified) -> 1.0.0
-Bump rationale: Initial ratification. The constitution moves from an unfilled
-template to a concrete document defining seven governing principles. A first
-adoption of normative principles is a MAJOR baseline (1.0.0).
+Version change: 1.0.0 -> 1.1.0
+Bump rationale: MINOR. Three new governing principles were added (VIII
+Responsible AI, IX Safe Execution, X Agent Governance Toolkit). No existing
+principle was removed or redefined, and no backward-incompatible governance
+change was made, so this is an additive MINOR expansion rather than a MAJOR.
 
-Principles defined (template slot -> concrete principle):
-- PRINCIPLE_1 -> I. Agent Runtime (Microsoft Agent Framework)
-- PRINCIPLE_2 -> II. Model Sources (Copilot SDK or Microsoft Foundry)
-- PRINCIPLE_3 -> III. API-First
-- PRINCIPLE_4 -> IV. Two Front-Ends at Parity
-- PRINCIPLE_5 -> V. Observable Runs
-- (added)     -> VI. Deployment Parity (Local and Cloud)
-- (added)     -> VII. No Emojis
+Modified principles: none renamed or redefined (I-VII unchanged).
 
-Sections:
-- Added: Architecture & Technology Constraints (SECTION_2)
-- Added: Development Workflow & Quality Gates (SECTION_3)
-- Added: Governance
+Added principles:
+- VIII. Responsible AI
+- IX. Safe Execution
+- X. Agent Governance Toolkit (.NET)
+
+Added sections: none (new principles integrated into existing Core
+Principles; Architecture & Technology Constraints and Development Workflow &
+Quality Gates extended with corresponding bullets; "seven principles" counts
+updated to "ten principles").
 
 Templates requiring updates:
 - .specify/templates/plan-template.md ............ OK (generic Constitution
@@ -27,8 +26,10 @@ Templates requiring updates:
 - .specify/templates/tasks-template.md ........... OK (Principle VII scopes to
   the product, not Spec Kit tooling; template emojis left intact)
 - .specify/templates/checklist-template.md ....... OK (no conflicts)
+- specs/001-single-agent-run/plan.md ............. UPDATED (Constitution Check
+  table extended with rows VIII, IX, X)
 
-Follow-up TODOs: none. RATIFICATION_DATE set to first adoption date.
+Follow-up TODOs: none. RATIFICATION_DATE unchanged (2026-06-07).
 -->
 
 # Scaffolder Constitution
@@ -37,7 +38,7 @@ Follow-up TODOs: none. RATIFICATION_DATE set to first adoption date.
 
 ### I. Agent Runtime
 
-Every agent MUST be built on the Microsoft Agent Framework. An agent MUST
+Every agent MUST be built on the Microsoft Agent Framework (.NET) (https://github.com/microsoft/agent-framework). An agent MUST
 operate as an agent loop: evaluate the prompt, call tools, receive results,
 and repeat until the task is complete. No alternative agent runtime or ad hoc
 control flow may replace this loop.
@@ -48,8 +49,11 @@ inspectable, and composable across the system.
 ### II. Model Sources
 
 A run's model MUST come from exactly one of two providers: the GitHub Copilot
-SDK (the Copilot SDK specifically, NOT GitHub Models) or Microsoft Foundry.
+SDK (.NET) (https://github.com/github/copilot-sdk) (the Copilot SDK specifically, NOT GitHub Models) or Microsoft Foundry.
+
 The provider MUST be selectable per run. No other model source is permitted.
+
+GitHub Copilot SDK supports multiple auth types: https://github.com/github/copilot-sdk/blob/main/docs/auth/index.md
 
 Rationale: Constraining model sources to two well-defined providers keeps
 authentication, billing, and capability assumptions tractable and auditable.
@@ -99,9 +103,72 @@ rule governs the application; it does not constrain the development tooling
 Rationale: A strict no-emoji rule across the product keeps every shipped
 surface consistent, accessible, and free of rendering and encoding ambiguity.
 
+### VIII. Responsible AI
+
+The product's use of AI MUST be responsible, transparent, and accountable:
+
+- A named human MUST remain accountable for every run. The system MUST keep a
+  person in the loop for consequential or irreversible actions (Principle IX).
+- AI actions MUST be transparent. Every model message, tool call, and tool
+  result MUST be attributable and visible through the run's step stream and
+  audit log (Principles V and IX).
+- The product MUST NOT generate harmful content or content that infringes
+  copyright, and MUST apply content-safety checks appropriate to the active
+  model provider.
+- Privacy MUST be preserved. Secrets and personal data MUST NOT be exposed in
+  outputs, logs, or telemetry, and MUST NOT be sent to any party beyond the
+  selected model provider.
+- Fairness and bias concerns MUST be considered wherever prompts, tools, or
+  defaults can influence outcomes.
+
+Rationale: An agent acts on a user's behalf, so responsible, transparent,
+privacy-preserving behavior with clear human accountability is the baseline for
+trusting it with real work.
+
+### IX. Safe Execution
+
+Agent actions MUST execute inside enforced safety boundaries:
+
+- File and process operations MUST stay within the run's designated sandbox
+  (its artifact or worktree directory). Any operation that escapes the sandbox
+  MUST be rejected, not merely warned about.
+- Every run MUST be bounded by explicit limits, at minimum a maximum number of
+  steps and a maximum wall-clock duration, and MUST end in a visible terminal
+  state.
+- Destructive or irreversible actions (for example merging, publishing, or
+  deleting outside the sandbox) MUST require explicit human approval before they
+  proceed.
+- Every action MUST be auditable. The event log MUST record agent messages,
+  tool calls, and tool results in order, in enough detail to reconstruct what
+  the agent did.
+
+Rationale: Bounded, sandboxed, human-gated, and auditable execution is what
+makes it safe to let an agent run at all; without these limits a single run
+could cause unbounded or irreversible harm.
+
+### X. Agent Governance Toolkit (.NET)
+
+Governance of the agentic stack MUST be enforced through the Microsoft Agent
+Framework (.NET) governance capabilities (Principle I), not reimplemented ad hoc
+or pushed into client code:
+
+- Policies and guardrails (allowed tools, permitted model sources, sandbox
+  boundaries, and approval rules) MUST be enforced by the runtime/governance
+  layer so that every agent and client is bound by the same rules.
+- Agent behavior MUST be observable through structured telemetry (traces,
+  metrics, and logs) emitted by the runtime.
+- Agent behavior MUST be as deterministic and reproducible as the underlying
+  models allow, and every run MUST be auditable from its recorded events
+  (Principles V and IX).
+
+Rationale: Centralizing policy, guardrails, telemetry, and auditability in the
+shared .NET governance toolkit keeps enforcement consistent, observable, and
+tamper-resistant across every agent and every client, rather than relying on
+each surface to police itself.
+
 ## Architecture & Technology Constraints
 
-- The Microsoft Agent Framework is the mandated agent runtime (Principle I).
+- The Microsoft Agent Framework (https://github.com/microsoft/agent-framework) is the mandated agent runtime (Principle I).
 - Model providers are limited to the GitHub Copilot SDK or Microsoft Foundry,
   selectable per run (Principle II).
 - The backend API is authoritative; clients hold no business logic
@@ -112,10 +179,19 @@ surface consistent, accessible, and free of rendering and encoding ambiguity.
   any client (Principle V).
 - The same build MUST support both local-developer and hosted-cloud execution
   (Principle VI).
+- AI use MUST be responsible, transparent, privacy-preserving, and free of
+  harmful or copyright-infringing content, with a human accountable for every
+  run (Principle VIII).
+- Agent actions MUST run inside an enforced sandbox under explicit step and
+  time limits, with human approval required for irreversible actions and a
+  complete audit trail (Principle IX).
+- Policy, guardrails, telemetry, and auditability MUST be enforced by the
+  Microsoft Agent Framework (.NET) governance layer, not by individual clients
+  (Principle X).
 
 ## Development Workflow & Quality Gates
 
-- Every change MUST be evaluated against all seven principles before merge.
+- Every change MUST be evaluated against all ten principles before merge.
   Any deviation MUST be recorded in the plan's Complexity Tracking with an
   explicit justification, or the change MUST be revised to comply.
 - New capability exposed to users MUST be added to the API first, then made
@@ -127,6 +203,13 @@ surface consistent, accessible, and free of rendering and encoding ambiguity.
 - Reviews MUST reject any emoji introduced into the product's code, UI,
   output, logs, generated docs, or commit messages (Principle VII). This does
   not apply to development tooling such as Spec Kit templates.
+- Reviews MUST confirm responsible-AI obligations are met: transparency of AI
+  actions, privacy of secrets and personal data, no harmful or
+  copyright-infringing content, and a human accountable for the run
+  (Principle VIII).
+- Changes that affect how runs execute MUST preserve the sandbox boundary,
+  the step and time limits, the human-approval gate for irreversible actions,
+  and the audit trail (Principles IX and X).
 
 ## Governance
 
@@ -146,7 +229,7 @@ Versioning follows semantic versioning:
 - PATCH: Clarifications, wording, or non-semantic refinements.
 
 Compliance is reviewed at every pull request and plan gate. Reviewers MUST
-verify that changes satisfy all seven principles; unavoidable complexity MUST
+verify that changes satisfy all ten principles; unavoidable complexity MUST
 be justified in the plan's Complexity Tracking section.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-07
+**Version**: 1.1.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-07
