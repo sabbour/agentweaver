@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scaffolder/specs/001-single-agent-run/contracts/run-step-event.schema.json",
+  "title": "RunStepEvent",
+  "type": "object",
+  "required": ["runId", "sequence", "type", "timestamp", "payload"],
+  "properties": {
+    "runId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": ["agent_message", "tool_call", "tool_result", "lifecycle"]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/AgentMessagePayload" },
+        { "$ref": "#/$defs/ToolCallPayload" },
+        { "$ref": "#/$defs/ToolResultPayload" },
+        { "$ref": "#/$defs/LifecyclePayload" }
+      ]
+    }
+  },
+  "$defs": {
+    "AgentMessagePayload": {
+      "type": "object",
+      "required": ["message"],
+      "properties": {
+        "message": { "type": "string" }
+      }
+    },
+    "ToolCallPayload": {
+      "type": "object",
+      "required": ["toolName", "path"],
+      "properties": {
+        "toolName": { "type": "string", "enum": ["read_file", "write_file"] },
+        "path": { "type": "string" }
+      }
+    },
+    "ToolResultPayload": {
+      "type": "object",
+      "required": ["toolName", "result"],
+      "properties": {
+        "toolName": { "type": "string", "enum": ["read_file", "write_file"] },
+        "result": { "type": "string", "enum": ["success", "rejected", "error"] },
+        "errorCode": {
+          "type": "string",
+          "enum": ["PATH_ESCAPE", "NOT_FOUND", "PERMISSION", "UNKNOWN"]
+        }
+      }
+    },
+    "LifecyclePayload": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "bounded",
+            "awaiting_review",
+            "approved",
+            "declined",
+            "merged",
+            "merge_conflict"
+          ]
+        },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

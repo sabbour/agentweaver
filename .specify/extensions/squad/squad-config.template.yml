@@ -5,7 +5,7 @@
 squad:
   # Model to use when generating agent definitions.
   # Options: claude-opus-4, claude-sonnet-4, claude-haiku-4.5, gpt-4.1, gpt-4.1-mini
-  agent_model: "claude-sonnet-4"
+  agent_model: "claude-opus-4"
 
   # How tasks are routed to agents.
   # "capability-match" - match task keywords to agent capabilities (recommended)
@@ -35,7 +35,7 @@ squad:
   # --- Execution settings (for /speckit.squad.run) ---
   execution:
     # Max number of agent sessions running in parallel.
-    parallel_limit: 3
+    parallel_limit: 5
 
     # Automatically create a PR when an agent completes a task.
     auto_pr: false

@@ -1,0 +1,181 @@
+openapi: 3.1.0
+info:
+  title: Scaffolder Run API
+  version: 0.1.0
+  description: API contract for single-agent file-editing runs.
+servers:
+  - url: http://localhost:3000
+paths:
+  /runs:
+    post:
+      summary: Create a run
+      operationId: createRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRunRequest'
+      responses:
+        '201':
+          description: Run created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          description: Invalid request
+  /runs/{runId}:
+    get:
+      summary: Get run status
+      operationId: getRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '404':
+          description: Not found
+  /runs/{runId}/stream:
+    get:
+      summary: Stream ordered run steps (SSE)
+      operationId: streamRunSteps
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: text/event-stream of RunStepEvent payloads
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /runs/{runId}/diff:
+    get:
+      summary: Get run diff output against originating branch
+      operationId: getRunDiff
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Unified diff output
+          content:
+            text/plain:
+              schema:
+                type: string
+        '409':
+          description: Run not in state with available diff
+  /runs/{runId}/review:
+    post:
+      summary: Submit human review decision
+      operationId: submitReviewDecision
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewDecisionRequest'
+      responses:
+        '200':
+          description: Decision accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '409':
+          description: Invalid state transition
+
+components:
+  parameters:
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    ModelSource:
+      type: string
+      enum: [copilot_sdk, microsoft_foundry]
+
+    RunStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - completed
+        - failed
+        - bounded
+        - awaiting_review
+        - approved
+        - declined
+        - merged
+        - merge_conflict
+
+    CreateRunRequest:
+      type: object
+      required: [originatingBranch, modelSource, taskPrompt]
+      properties:
+        originatingBranch:
+          type: string
+          minLength: 1
+        modelSource:
+          $ref: '#/components/schemas/ModelSource'
+        taskPrompt:
+          type: string
+          minLength: 1
+        maxSteps:
+          type: integer
+          minimum: 1
+          default: 200
+        maxDurationSeconds:
+          type: integer
+          minimum: 1
+          default: 1800
+
+    Run:
+      type: object
+      required: [id, originatingBranch, modelSource, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        originatingBranch:
+          type: string
+        modelSource:
+          $ref: '#/components/schemas/ModelSource'
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        sessionId:
+          type: string
+          format: uuid
+          nullable: true
+
+    ReviewDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, decline]
+        comment:
+          type: string
+          maxLength: 4000
