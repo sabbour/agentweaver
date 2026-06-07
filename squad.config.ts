@@ -16,16 +16,16 @@ export default defineSquad({
   team: defineTeam({
     name: "scaffolders-core",
     description:
-      "Squad generated from specs/001-single-agent-run/plan.md for the single-agent file-editing vertical slice.",
+      "Squad for the scaffolders-core team, single-agent file-editing vertical slice (specs/001-single-agent-run).",
   }),
   agents: [
     defineAgent({
       name: "backend-engineer",
-      role: "Owns Fastify backend API, run lifecycle, and streaming contracts",
+      role: "Owns ASP.NET Core 10 backend API, run lifecycle, and streaming contracts",
       model: modelTiers.expert,
       status: "active",
       capabilities: [
-        { name: "fastify-api", level: "expert" },
+        { name: "aspnetcore-api", level: "expert" },
         { name: "sse-streaming", level: "expert" },
         { name: "sqlite-persistence", level: "proficient" },
       ],
@@ -37,7 +37,7 @@ export default defineSquad({
       status: "active",
       capabilities: [
         { name: "react-19-fluent2", level: "expert" },
-        { name: "ink-cli-ui", level: "expert" },
+        { name: "spectre-console-tui", level: "expert" },
         { name: "api-client-integration", level: "expert" },
       ],
     }),
@@ -70,19 +70,19 @@ export default defineSquad({
       status: "active",
       capabilities: [
         { name: "github-actions", level: "proficient" },
-        { name: "cross-platform-node", level: "proficient" },
+        { name: "dotnet-platform", level: "proficient" },
         { name: "developer-experience", level: "proficient" },
       ],
     }),
   ],
   routing: defineRouting({
     rules: [
-      { pattern: /\bapi|endpoint|fastify|route|sse|stream\b/i, agent: "backend-engineer" },
+      { pattern: /\bapi|endpoint|aspnetcore|route|sse|stream\b/i, agent: "backend-engineer" },
       { pattern: /\breact|fluent|component|web|frontend|ui\b/i, agent: "frontend-engineer" },
       { pattern: /\bink|cli|terminal|tui\b/i, agent: "frontend-engineer" },
       { pattern: /\bagent framework|loop|orchestr|tool call|sandbox|worktree\b/i, agent: "runtime-engineer" },
       { pattern: /\btest|vitest|playwright|coverage|contract|qa\b/i, agent: "qa-engineer" },
-      { pattern: /\bci|cd|workflow|pipeline|container|node 22|platform\b/i, agent: "platform-engineer" },
+      { pattern: /\bci|cd|workflow|pipeline|container|dotnet|platform\b/i, agent: "platform-engineer" },
     ],
   }),
 });

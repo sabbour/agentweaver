@@ -93,7 +93,7 @@ After a run completes, a human reviews the run's output (the set of changes the 
 ### Functional Requirements
 
 - **FR-001**: The system MUST provide exactly one agent that operates as an agent loop: evaluate the task, call tools, receive results, and repeat until the task is complete.
-- **FR-002**: A run MUST be created from a user-chosen originating branch.
+- **FR-002**: A run MUST be created from a user-chosen local git repository — an existing folder on disk that is already a valid git repository (initialized with `git init` or cloned from another repository) — and a user-chosen originating branch within that repository.
 - **FR-003**: Each run MUST execute inside its own session, and each session MUST have a dedicated artifact directory backed by a git worktree checked out from the originating branch.
 - **FR-004**: The session's artifact directory MUST be the agent's entire visible file system for the run.
 - **FR-005**: The agent MUST have exactly two core tools available during a run: read a file and write a file.
@@ -107,7 +107,7 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **FR-013**: A run MUST finish in a visible terminal state when the task is complete (or when it ends due to a bound or failure).
 - **FR-014**: When a run completes, the changes made in the session's worktree - the difference against the originating branch - MUST be available as the run's output artifacts.
 - **FR-015**: A human MUST be able to review a completed run's output before any change reaches the originating branch.
-- **FR-016**: On human approval, the system MUST merge the session's worktree back into the originating branch; without approval, the originating branch MUST remain unchanged.
+- **FR-016**: On human approval, the system MUST attempt to merge the session's worktree back into the originating branch; without approval, the originating branch MUST remain unchanged. If the merge attempt fails after approval (for example, due to conflicts from a diverged originating branch), the originating branch MUST remain unchanged, a `merge.failed` event MUST be emitted with a human-readable failure reason, and the run's working area MUST be preserved intact for human inspection.
 - **FR-017**: The backend interface MUST be the single source of truth for the agent loop, tasks, and the stream of run steps, and each client MUST be a thin client over it with no independent task or run logic.
 - **FR-018**: Every event MUST share a common envelope with the fields `runId`, `sequence`, `type`, `timestamp`, and `payload`; tool events (`tool.call`, `tool.result`, `tool.rejected`, `tool.error`) MUST additionally carry a `callId`. `timestamp` is informational only and MUST NOT be used to order events.
 - **FR-019**: `sequence` MUST be a per-run monotonic value that establishes a total ordering of all events within a run.
@@ -124,7 +124,7 @@ After a run completes, a human reviews the run's output (the set of changes the 
 
 ### Key Entities *(include if feature involves data)*
 
-- **Run**: One execution of the agent against a submitted task. Has an originating branch, a selected model source, a current status (for example: in progress, complete, failed), a durable append-only event log, and an output (the diff against the originating branch).
+- **Run**: One execution of the agent against a submitted task. Has a local git repository, an originating branch, a selected model source, a current status (for example: in progress, complete, failed), a durable append-only event log, and an output (the diff against the originating branch).
 - **Session**: The isolated execution context for a single run. Owns one artifact directory.
 - **Artifact Directory (Worktree)**: The per-session directory, checked out from the originating branch, that is the agent's entire visible file system and that scopes all file access.
 - **Task**: The natural-language prompt a user submits to start a run.
@@ -132,7 +132,8 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **Event Log**: The durable, append-only, per-run sequence of Events spanning the full run lifecycle through merge. Retained for the full run plus a bounded post-completion retention window. The per-run `sequence` is the persisted cursor enabling reconnect and replay across process restarts.
 - **Tool Call / Tool Result**: A read-file or write-file invocation against a path inside the artifact directory, and its outcome. A `tool.call` carries a `callId`; the outcome is reported as a `tool.result` (success), `tool.rejected` (denied, e.g. path escape), or `tool.error` (failure such as not-found), each echoing the originating `callId`.
 - **Model Source**: The provider selected for a run; one of the two supported providers.
-- **Originating Branch**: The branch a run starts from and the branch an approved run merges back into.
+- **Local Git Repository**: The folder on disk chosen by the user at run submission time; it must already be a valid git repository (initialized with `git init` or cloned from another repository). All branches and worktrees for a run are resolved within this folder.
+- **Originating Branch**: The branch within the chosen local git repository that a run starts from and that an approved run merges back into.
 
 ### Non-Functional Requirements
 
@@ -167,3 +168,4 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - The post-completion retention window for a run's event log is bounded but its exact duration is a tuning detail for planning; reconnect/replay is guaranteed only for a `lastSeenSequence` still within that window.
 - The format and storage mechanism for the operational record required by FR-028 are implementation details for planning; the operational record is distinct from the per-run event log and is intended for operational and compliance consumers, not end users.
 - The content-safety mechanism applied under FR-025 depends on the active model provider's safety capabilities; both supported providers are expected to expose content-safety capabilities that the system can invoke before relaying model output to clients.
+- The transport protocol and API endpoint shape for the live event stream (SSE, WebSocket, URL conventions) are implementation details to be established during planning; the spec requires that the mechanism supports reconnect with a resumable cursor (`lastSeenSequence`) and replay from that cursor.

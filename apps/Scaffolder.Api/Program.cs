@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Encodings.Web;
+using Scaffolder.AgentRuntime;
 using Scaffolder.Api;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Git;
@@ -35,8 +36,8 @@ builder.Services.AddSingleton<WorktreeManager>();
 // Run orchestration.
 builder.Services.AddSingleton<RunOrchestrator>();
 
-// Agent runtime integration seam (wired in a later wave).
-builder.Services.AddSingleton<IAgentRunner, NotWiredAgentRunner>();
+// Agent runtime — GitHub Copilot SDK + Microsoft Foundry providers, MAF loop, governance.
+builder.Services.AddAgentRuntime(builder.Configuration);
 
 // Authentication.
 builder.Services.AddSingleton<ApiKeyRegistry>();

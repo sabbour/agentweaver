@@ -34,7 +34,18 @@ public sealed class ScaffolderWebApplicationFactory : WebApplicationFactory<Prog
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
                 ["Git:Author:Name"] = "Test",
-                ["Git:Author:Email"] = "test@localhost"
+                ["Git:Author:Email"] = "test@localhost",
+                // Provider keys are required by AddAgentRuntime at startup.
+                // These tests never execute a run, so the values are never used
+                // to make a real model call.
+                ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
+                ["Providers:GitHubCopilot:Endpoint"] = "https://api.githubcopilot.com",
+                ["Providers:GitHubCopilot:Model"] = "gpt-4o",
+                ["Providers:MicrosoftFoundry:ApiKey"] = "test-foundry-key",
+                ["Providers:MicrosoftFoundry:Endpoint"] = "https://test.openai.azure.com",
+                ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
+                ["RunBounds:MaxSteps"] = "50",
+                ["RunBounds:MaxMinutes"] = "10"
             });
         });
     }

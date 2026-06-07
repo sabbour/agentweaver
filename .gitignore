@@ -20,16 +20,16 @@ dist/
 .DS_Store
 
 # Build output
-backend/*/bin/
-backend/*/obj/
-clients/cli/bin/
-clients/cli/obj/
+apps/*/bin/
+apps/*/obj/
+packages/*/bin/
+packages/*/obj/
 tests/*/bin/
 tests/*/obj/
 
 # Node.js
-clients/web/node_modules/
-clients/web/dist/
+apps/web/node_modules/
+apps/web/dist/
 
 # .NET user files
 *.user

@@ -1,0 +1,107 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Scaffolder.Cli;
+
+/// <summary>Request body for POST /api/runs.</summary>
+public sealed record SubmitRunRequest
+{
+    [JsonPropertyName("repository_path")]
+    public required string RepositoryPath { get; init; }
+
+    [JsonPropertyName("originating_branch")]
+    public required string OriginatingBranch { get; init; }
+
+    [JsonPropertyName("task")]
+    public required string Task { get; init; }
+
+    [JsonPropertyName("model_source")]
+    public required string ModelSource { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs.</summary>
+public sealed record SubmitRunResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
+/// <summary>Response body for GET /api/runs/{id}.</summary>
+public sealed record RunDetail
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("model_source")]
+    public required string ModelSource { get; init; }
+
+    [JsonPropertyName("started_at")]
+    public required string StartedAt { get; init; }
+
+    [JsonPropertyName("ended_at")]
+    public string? EndedAt { get; init; }
+
+    [JsonPropertyName("step_count")]
+    public required int StepCount { get; init; }
+
+    [JsonPropertyName("diff")]
+    public string? Diff { get; init; }
+}
+
+/// <summary>Request body for POST /api/runs/{id}/review.</summary>
+public sealed record ReviewSubmitRequest
+{
+    [JsonPropertyName("approved")]
+    public required bool Approved { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs/{id}/review.</summary>
+public sealed record ReviewSubmitResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("merge_result")]
+    public string? MergeResult { get; init; }
+}
+
+/// <summary>Run event envelope as served by the API stream and events log.</summary>
+public sealed record RunEvent
+{
+    [JsonPropertyName("runId")]
+    public string? RunId { get; init; }
+
+    [JsonPropertyName("sequence")]
+    public int Sequence { get; init; }
+
+    [JsonPropertyName("type")]
+    public string Type { get; init; } = string.Empty;
+
+    [JsonPropertyName("timestamp")]
+    public string? Timestamp { get; init; }
+
+    [JsonPropertyName("payload")]
+    public JsonElement Payload { get; init; }
+
+    [JsonPropertyName("callId")]
+    public string? CallId { get; init; }
+}
+
+/// <summary>Shared serialization settings for the CLI.</summary>
+public static class JsonConfig
+{
+    public static JsonSerializerOptions Options { get; } = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNameCaseInsensitive = true
+    };
+}
