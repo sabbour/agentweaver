@@ -125,10 +125,6 @@ public sealed class RunOrchestrator
         {
             await FinalizeFailedRunAsync(run, "cancelled").ConfigureAwait(false);
         }
-        catch (Exception ex) when (IsBoundsExceeded(ex))
-        {
-            await FinalizeBoundedRunAsync(run).ConfigureAwait(false);
-        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Agent loop failed for run {RunId}", run.Id);
@@ -310,11 +306,36 @@ public sealed class RunOrchestrator
             new ReviewApprovedPayload { TreeHash = treeHash, ApprovedBy = reviewerIdentity },
             ct: ct).ConfigureAwait(false);
 
-        var merge = _worktree.MergeWorktree(
-            run.RepositoryPath,
-            run.OriginatingBranch,
-            run.WorktreeBranch!,
-            treeHash);
+        MergeOutcome merge;
+        try
+        {
+            merge = _worktree.MergeWorktree(
+                run.RepositoryPath,
+                run.OriginatingBranch,
+                run.WorktreeBranch!,
+                treeHash);
+        }
+        catch (Exception ex)
+        {
+            // The git operation itself threw (e.g. originating branch deleted, repo lock, IO
+            // error). review.approved is already persisted; emit merge.failed so the audit log
+            // has a terminal merge event (FR-016) and release all waiting stream consumers.
+            _logger.LogError(ex, "Merge threw for run {RunId}", run.Id);
+            await _emitter.EmitAsync(
+                run.Id,
+                EventType.MergeFailed,
+                new MergeFailedPayload { Reason = $"{ex.GetType().Name}: {ex.Message}" },
+                ct: CancellationToken.None).ConfigureAwait(false);
+            await _runStore.UpdateStatusAsync(run.Id, RunStatus.Approved, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+            _broadcaster.Complete(run.Id);
+            _reviewLocks.TryRemove(run.Id, out _);
+            return new ReviewResult
+            {
+                Outcome = ReviewDecisionOutcome.Approved,
+                Status = RunStatus.Approved,
+                MergeResult = $"conflict:{ex.GetType().Name}"
+            };
+        }
 
         if (merge.Success)
         {
@@ -326,6 +347,7 @@ public sealed class RunOrchestrator
 
             await _runStore.UpdateStatusAsync(run.Id, RunStatus.Approved, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
             _broadcaster.Complete(run.Id);
+            _reviewLocks.TryRemove(run.Id, out _);
             return new ReviewResult
             {
                 Outcome = ReviewDecisionOutcome.Approved,
@@ -344,6 +366,7 @@ public sealed class RunOrchestrator
         // and the worktree is preserved for inspection (FR-016).
         await _runStore.UpdateStatusAsync(run.Id, RunStatus.Approved, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         _broadcaster.Complete(run.Id);
+        _reviewLocks.TryRemove(run.Id, out _);
         return new ReviewResult
         {
             Outcome = ReviewDecisionOutcome.Approved,
@@ -362,6 +385,7 @@ public sealed class RunOrchestrator
 
         await _runStore.UpdateStatusAsync(run.Id, RunStatus.Declined, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         _broadcaster.Complete(run.Id);
+        _reviewLocks.TryRemove(run.Id, out _);
         return new ReviewResult
         {
             Outcome = ReviewDecisionOutcome.Declined,
@@ -370,10 +394,4 @@ public sealed class RunOrchestrator
         };
     }
 
-    // Forward-compatible seam: the agent runtime signals a bounds breach by throwing an
-    // exception whose type name is RunBoundsExceededException. Until that runtime is wired
-    // (Wave 2), only the placeholder runner runs, which throws NotImplementedException and is
-    // handled as a failure.
-    private static bool IsBoundsExceeded(Exception ex) =>
-        ex.GetType().Name == "RunBoundsExceededException";
 }

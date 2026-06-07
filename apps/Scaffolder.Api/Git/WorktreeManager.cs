@@ -107,6 +107,17 @@ public sealed class WorktreeManager
 
         var mergeBase = repo.ObjectDatabase.FindMergeBase(origin.Tip, worktree.Tip);
 
+        // Guard: refuse to advance the originating branch ref while it is currently checked out
+        // in the main working tree. UpdateTarget moves the ref but leaves the working tree and
+        // index stale, making git report spurious modifications for the developer.
+        if (!repo.Info.IsBare &&
+            string.Equals(repo.Head.FriendlyName, originatingBranch, StringComparison.Ordinal))
+        {
+            return MergeOutcome.Conflict(
+                $"Cannot advance '{originatingBranch}' while it is currently checked out in the main working tree. " +
+                "Switch to a different branch, then re-approve.");
+        }
+
         // Fast-forward when the originating branch has not advanced since the run started.
         if (mergeBase is not null && mergeBase.Sha == origin.Tip.Sha)
         {

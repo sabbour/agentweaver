@@ -59,14 +59,16 @@ public sealed class AgentRunner : IAgentRunner
             var tools = new SandboxedFileTools(run.WorktreePath);
 
             var readTool = AIFunctionFactory.Create(
-                async (string path, CancellationToken innerCt) =>
-                    (await ExecuteReadAsync(tools, path, innerCt)).ResultText,
+                (string path, CancellationToken innerCt) =>
+                    Task.FromException<string>(new InvalidOperationException(
+                        "read_file must not be invoked automatically; dispatch manually via FunctionCallContent.")),
                 name: "read_file",
                 description: "Read the text content of a file inside the working area. Path must be relative.");
 
             var writeTool = AIFunctionFactory.Create(
-                async (string path, string content, CancellationToken innerCt) =>
-                    (await ExecuteWriteAsync(tools, path, content, run.ModelSource, innerCt)).ResultText,
+                (string path, string content, CancellationToken innerCt) =>
+                    Task.FromException<string>(new InvalidOperationException(
+                        "write_file must not be invoked automatically; dispatch manually via FunctionCallContent.")),
                 name: "write_file",
                 description: "Write text content to a file inside the working area. Creates or overwrites. Path must be relative.");
 
@@ -174,14 +176,25 @@ public sealed class AgentRunner : IAgentRunner
                         callId, publisher, store, ct);
 
                     ToolOutcome outcome;
-                    if (functionCall.Name == "write_file")
+                    try
                     {
-                        var content = GetStringArgument(functionCall, "content");
-                        outcome = await ExecuteWriteAsync(tools, path, content, run.ModelSource, stepCts.Token);
+                        if (functionCall.Name == "write_file")
+                        {
+                            var content = GetStringArgument(functionCall, "content");
+                            outcome = await ExecuteWriteAsync(tools, path, content, run.ModelSource, stepCts.Token);
+                        }
+                        else
+                        {
+                            outcome = await ExecuteReadAsync(tools, path, stepCts.Token);
+                        }
                     }
-                    else
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                     {
-                        outcome = await ExecuteReadAsync(tools, path, stepCts.Token);
+                        // Wall-clock deadline fired during a tool call — emit run.bounded, not run.failed.
+                        await EmitEventAsync(run.Id, EventType.RunBounded,
+                            new RunBoundedPayload { LimitType = "wall-clock", StepCount = stepCount },
+                            null, publisher, store, ct);
+                        return;
                     }
 
                     await EmitToolOutcomeAsync(run.Id, outcome, path, callId, publisher, store, ct);
