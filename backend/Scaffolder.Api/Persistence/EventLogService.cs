@@ -17,23 +17,17 @@ public sealed class EventLogService
     private readonly IEventRepository _eventRepository;
     private readonly ILogger<EventLogService> _logger;
 
-    // EventBroadcaster is injected here as a Lazy/optional dependency to avoid
-    // circular DI. It will be wired in T036.
-    private IEventBroadcaster? _broadcaster;
+    // T036: IEventBroadcaster is a Singleton injected into this Scoped service.
+    // Optional (nullable) so tests and early phases can run without a broadcaster.
+    private readonly IEventBroadcaster? _broadcaster;
 
     public EventLogService(
         IEventRepository eventRepository,
-        ILogger<EventLogService> logger)
+        ILogger<EventLogService> logger,
+        IEventBroadcaster? broadcaster = null)
     {
         _eventRepository = eventRepository;
         _logger = logger;
-    }
-
-    /// <summary>
-    /// Called by EventBroadcaster registration (T036) to wire up live push.
-    /// </summary>
-    public void SetBroadcaster(IEventBroadcaster broadcaster)
-    {
         _broadcaster = broadcaster;
     }
 
