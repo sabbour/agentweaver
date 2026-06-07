@@ -59,8 +59,8 @@ async function apiFetch<T>(
   options?: RequestInit,
 ): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
   });
 
   if (!response.ok) {

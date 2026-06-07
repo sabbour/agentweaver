@@ -121,12 +121,9 @@ using (var scope = app.Services.CreateScope())
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
-// OpenAPI
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Scaffolder API v1"));
-}
+// OpenAPI - always enable Swagger for local use
+app.UseSwagger();
+app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Scaffolder API v1"));
 
 app.MapRunsEndpoints();
 app.MapStreamEndpoints(); // T035: SSE stream endpoint
