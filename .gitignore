@@ -43,3 +43,4 @@ apps/web/dist/
 # Environment
 .env
 .env.local
+apps/Scaffolder.Api/appsettings.Local.json
