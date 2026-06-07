@@ -35,8 +35,26 @@ public sealed class CreateRunRequest
 }
 
 /// <summary>
-/// Response body for run endpoints.
+/// Request body for POST /runs/{runId}/review.
 /// </summary>
+public sealed class ReviewDecisionRequest
+{
+    /// <summary>
+    /// The review decision: "approve" or "decline".
+    /// </summary>
+    public required string Decision { get; init; }
+
+    /// <summary>
+    /// Identity of the reviewer (human approval gate, FR-016).
+    /// </summary>
+    public required string Reviewer { get; init; }
+
+    /// <summary>
+    /// Optional comment explaining the decision.
+    /// </summary>
+    public string? Comment { get; init; }
+}
+
 public sealed class RunResponse
 {
     public Guid Id { get; init; }
