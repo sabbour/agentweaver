@@ -8,20 +8,6 @@
 
 **Input**: User description: "Build the first feature: a single AI agent that runs an agent loop to complete a file-editing task. One agent runs from an originating branch inside its own session, with a dedicated artifact directory backed by a git worktree. The agent has read-file and write-file tools sandboxed to that directory. A user submits a natural-language task and selects a model source (GitHub Copilot SDK or Microsoft Foundry). Submitting starts a run that streams each step live. The user watches from the CLI or Web UI. On completion the worktree diff is the output; a human reviews and, on approval, the worktree merges back to the originating branch."
 
-## Clarifications
-
-### Session 2026-06-07
-
-- Q: How granular is the run's live event stream - does it emit typed lifecycle and content events, and does it stream token-level deltas? → A: A defined event loop emits typed lifecycle and content events that share a common envelope: `run.started`, `run.completed`, `run.failed`, `run.bounded`, `agent.message`, `tool.call`, `tool.result`, `tool.rejected`, and `tool.error`. `tool.rejected` and `tool.error` are distinct from `tool.result`. `run.bounded` is emitted when a step-count or time limit ends the run. No token-level delta streaming.
-- Q: How do clients reconnect to a run's stream and what are the delivery guarantees? → A: Clients reconnect with a resumable cursor (`lastSeenSequence`, surfaced as the SSE `Last-Event-ID` header). On reconnect the backend replays only events after `lastSeenSequence`, then continues live. Delivery is at-least-once; clients deduplicate by per-run `sequence`.
-- Q: How are events persisted and retained? → A: Events are stored in a durable append-only event log per run, retained for the full run plus a bounded post-completion retention window. The per-run `sequence` is the persisted cursor. Replay works across process restarts for any `lastSeenSequence` still within the retention window.
-- Q: What is the event envelope, and how are ordering and tool correlation handled? → A: `sequence` is a per-run monotonic value giving total ordering within a run. Every tool event carries a `callId`; `tool.result`, `tool.rejected`, and `tool.error` echo the originating `tool.call`'s `callId` so consumers pair them without relying on adjacency. Timestamps are informational only. Envelope fields: `runId`, `sequence`, `type`, `timestamp`, `callId` (on tool events), `payload`.
-- Q: Are human review and merge outcomes part of the same event stream? → A: Yes. Review decisions and merge outcomes are first-class events on the same per-run append-only log (`review.requested`, `review.approved`, `review.declined`, `merge.completed`, `merge.failed`), sharing the same monotonic `sequence` and resumable cursor. The event log spans the full run lifecycle through merge.
-
-### Amendment 2026-06-07 - Constitution v1.1.0
-
-Constitution v1.1.0 ratified three new governing principles: VIII Responsible AI, IX Safe Execution, and X Agent Governance Toolkit. This spec was updated to reflect them with new functional requirements (FR-024 through FR-029), a new Non-Functional Requirements section (NFR-001 through NFR-003), two new edge cases (content-safety failure and task containing secrets or personal data), and three new success criteria (SC-008 through SC-010). The prior assumption that runs are bounded was promoted to a hard functional requirement (FR-029); the specific limit values remain a tuning detail for planning.
-
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Submit a task and get a file-editing result (Priority: P1)

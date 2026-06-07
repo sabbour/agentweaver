@@ -1,59 +1,28 @@
-<!--
-Sync Impact Report
-==================
-Version change: 1.0.0 -> 1.1.0
-Bump rationale: MINOR. Three new governing principles were added (VIII
-Responsible AI, IX Safe Execution, X Agent Governance Toolkit). No existing
-principle was removed or redefined, and no backward-incompatible governance
-change was made, so this is an additive MINOR expansion rather than a MAJOR.
-
-Modified principles: none renamed or redefined (I-VII unchanged).
-
-Added principles:
-- VIII. Responsible AI
-- IX. Safe Execution
-- X. Agent Governance Toolkit (.NET)
-
-Added sections: none (new principles integrated into existing Core
-Principles; Architecture & Technology Constraints and Development Workflow &
-Quality Gates extended with corresponding bullets; "seven principles" counts
-updated to "ten principles").
-
-Templates requiring updates:
-- .specify/templates/plan-template.md ............ OK (generic Constitution
-  Check gate; no constitution-specific edits required)
-- .specify/templates/spec-template.md ............ OK (no conflicts)
-- .specify/templates/tasks-template.md ........... OK (Principle VII scopes to
-  the product, not Spec Kit tooling; template emojis left intact)
-- .specify/templates/checklist-template.md ....... OK (no conflicts)
-- specs/001-single-agent-run/plan.md ............. UPDATED (Constitution Check
-  table extended with rows VIII, IX, X)
-
-Follow-up TODOs: none. RATIFICATION_DATE unchanged (2026-06-07).
--->
-
 # Scaffolder Constitution
 
 ## Core Principles
 
 ### I. Agent Runtime
 
-Every agent MUST be built on the Microsoft Agent Framework (.NET) (https://github.com/microsoft/agent-framework). An agent MUST
+Every agent MUST be built on the Microsoft Agent Framework (.NET 10) (https://github.com/microsoft/agent-framework). An agent MUST
 operate as an agent loop: evaluate the prompt, call tools, receive results,
 and repeat until the task is complete. No alternative agent runtime or ad hoc
 control flow may replace this loop.
 
+Before implementing anything, make sure you're not reimplementing core functionality in the Microsoft Agent Framework (https://learn.microsoft.com/en-us/agent-framework/). You should build on it. 
+
 Rationale: A single, shared runtime keeps agent behavior consistent,
-inspectable, and composable across the system.
+inspectable, and composable across the system. Using MAF will help us keep our project lean and manageable.
 
 ### II. Model Sources
 
-A run's model MUST come from exactly one of two providers: the GitHub Copilot
-SDK (.NET) (https://github.com/github/copilot-sdk) (the Copilot SDK specifically, NOT GitHub Models) or Microsoft Foundry.
+A run's model MUST come from exactly one of two providers: GitHub Copilot CLI or Microsoft Foundry.
 
 The provider MUST be selectable per run. No other model source is permitted.
 
-GitHub Copilot SDK supports multiple auth types: https://github.com/github/copilot-sdk/blob/main/docs/auth/index.md
+Microsoft Agent Framework supports multiple providers. For this project:
+- GitHub Copilot: https://docs.github.com/en/copilot/how-tos/copilot-sdk/integrations/microsoft-agent-framework
+- Microsoft Foundry: https://learn.microsoft.com/en-us/agent-framework/agents/providers/microsoft-foundry?pivots=programming-language-csharp using the ChatClientAgent
 
 Rationale: Constraining model sources to two well-defined providers keeps
 authentication, billing, and capability assumptions tractable and auditable.
@@ -146,10 +115,10 @@ Rationale: Bounded, sandboxed, human-gated, and auditable execution is what
 makes it safe to let an agent run at all; without these limits a single run
 could cause unbounded or irreversible harm.
 
-### X. Agent Governance Toolkit (.NET)
+### X. Agent Governance Toolkit (.NET 10)
 
 Governance of the agentic stack MUST be enforced through the Microsoft Agent
-Framework (.NET) governance capabilities (Principle I), not reimplemented ad hoc
+Framework (.NET 10) governance capabilities (Principle I), not reimplemented ad hoc
 or pushed into client code:
 
 - Policies and guardrails (allowed tools, permitted model sources, sandbox
@@ -162,14 +131,14 @@ or pushed into client code:
   (Principles V and IX).
 
 Rationale: Centralizing policy, guardrails, telemetry, and auditability in the
-shared .NET governance toolkit keeps enforcement consistent, observable, and
+shared .NET 10 governance toolkit keeps enforcement consistent, observable, and
 tamper-resistant across every agent and every client, rather than relying on
 each surface to police itself.
 
 ## Architecture & Technology Constraints
 
-- The Microsoft Agent Framework (https://github.com/microsoft/agent-framework) is the mandated agent runtime (Principle I).
-- Model providers are limited to the GitHub Copilot SDK or Microsoft Foundry,
+- The Microsoft Agent Framework (.NET 10) (https://github.com/microsoft/agent-framework) is the mandated agent runtime (Principle I).
+- Model providers are limited to the GitHub Copilot CLI or Microsoft Foundry,
   selectable per run (Principle II).
 - The backend API is authoritative; clients hold no business logic
   (Principle III).
@@ -186,7 +155,7 @@ each surface to police itself.
   time limits, with human approval required for irreversible actions and a
   complete audit trail (Principle IX).
 - Policy, guardrails, telemetry, and auditability MUST be enforced by the
-  Microsoft Agent Framework (.NET) governance layer, not by individual clients
+  Microsoft Agent Framework (.NET 10) governance layer, not by individual clients
   (Principle X).
 
 ## Development Workflow & Quality Gates
@@ -232,4 +201,4 @@ Compliance is reviewed at every pull request and plan gate. Reviewers MUST
 verify that changes satisfy all ten principles; unavoidable complexity MUST
 be justified in the plan's Complexity Tracking section.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-07
+**Version**: 1.1.1 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-07
