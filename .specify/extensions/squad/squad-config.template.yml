@@ -1,0 +1,50 @@
+# Squad Bridge Configuration
+# Copy this file to .specify/extensions/squad/squad-config.yml and customize.
+# This file can be committed. DO NOT commit squad-config.local.yml (for secrets/overrides).
+
+squad:
+  # Model to use when generating agent definitions.
+  # Options: claude-opus-4, claude-sonnet-4, claude-haiku-4.5, gpt-4.1, gpt-4.1-mini
+  agent_model: "claude-sonnet-4"
+
+  # How tasks are routed to agents.
+  # "capability-match" - match task keywords to agent capabilities (recommended)
+  # "round-robin"      - distribute tasks evenly across all active agents
+  routing_strategy: "capability-match"
+
+  # Path to the Squad root directory relative to the project root.
+  squad_root: ".squad"
+
+  # When true, agent definitions are regenerated automatically after /speckit.plan.
+  # Requires the after_plan hook to be enabled (non-optional).
+  auto_generate: false
+
+  # Model tier assignments used when generating routing rules.
+  # Tasks with higher complexity get routed to more capable models.
+  # Tiers match Squad's routing tiers: full, standard, lightweight, direct.
+  model_tiers:
+    full: "claude-opus-4"
+    standard: "claude-sonnet-4"
+    lightweight: "claude-haiku-4.5"
+
+  # Default capability level assigned to generated agents when the plan
+  # doesn't provide enough signal to infer a more specific level.
+  # Options: expert, proficient, basic
+  default_capability_level: "proficient"
+
+  # --- Execution settings (for /speckit.squad.run) ---
+  execution:
+    # Max number of agent sessions running in parallel.
+    parallel_limit: 3
+
+    # Automatically create a PR when an agent completes a task.
+    auto_pr: false
+
+    # Abort an agent session if it exceeds this duration (minutes).
+    session_timeout_minutes: 30
+
+    # Branch naming pattern. Placeholders: {agent}, {task-id}
+    branch_pattern: "squad/{agent}/{task-id}"
+
+    # Copilot flags passed to agent sessions.
+    copilot_flags: "--yolo"
