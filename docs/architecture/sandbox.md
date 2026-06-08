@@ -41,7 +41,7 @@ A handle that resolves outside the worktree is rejected before any bytes are rea
 
 Both providers use the same governance kernel, the same embedded policy, and the same path-containment backend.
 
-**GitHub Copilot.** The deny-by-default `OnPermissionRequest` handler is the authoritative enforcement point for the Copilot provider. The SDK (github.copilot.sdk 1.0.0-beta.2) uses native tool names (e.g. `view`) that do not correspond to the logical names used in the governance policy. The handler fires for every native tool invocation, maps the native tool to a logical tool name (`read_file`, `list_directory`, `write_file`, `edit_file`), and routes through the dual-layer governance evaluation before approving or rejecting. The permission handler is fail-closed: any exception during evaluation denies the request.
+**GitHub Copilot.** The deny-by-default `OnPermissionRequest` handler is the authoritative enforcement point for the Copilot provider. The SDK (github.copilot.sdk 1.0.0-beta.2) uses native tool names (e.g. `view`) that do not correspond to the logical names used in the governance policy. The handler fires for every native tool invocation, maps the native tool to a logical tool name (`read_file`, `list_directory`, `write_file`, `edit_file`), and routes through the dual-layer governance evaluation before approving or rejecting. The permission handler is fail-closed: any exception during evaluation denies the request. For observability, the Copilot runner also reads the SDK's tool-execution lifecycle, which flows inline through the streaming response, and surfaces a `tool.call`, then a `tool.result` (with the approved tool's content) or a `tool.error`, at parity with the Foundry runner.
 
 **Microsoft Foundry.** The runner evaluates governance as a pre-execution check in its tool dispatch loop. Before invoking any tool, it runs the dual-layer evaluation and, if denied, returns a structured denial to the model without executing the tool. Tool arguments arrive as `System.Text.Json.JsonElement`; the `SandboxPolicyBackend` coerces these to their underlying string values so path containment is evaluated correctly. `SandboxedFileTools` performs an additional validate-and-open-then-verify pass when the tool executes, providing defense in depth.
 
@@ -77,4 +77,4 @@ The agent cannot:
 
 ## Failure model
 
-The sandboxed file tools never throw policy failures into the agent loop. They return structured failures instead, which the runtime converts into `tool.rejected` for policy denials and `tool.error` for ordinary execution failures such as missing files or access errors.
+The sandboxed file tools never throw policy failures into the agent loop. They return structured failures instead, which the runtime surfaces as `tool.error` — for both policy denials and ordinary execution failures such as missing files or access errors. The `errorMessage` distinguishes a sandbox denial from a not-found or I/O error.

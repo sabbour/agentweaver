@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
 using GitHub.Copilot.SDK;
@@ -60,9 +61,104 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         // through OnPermissionRequest (an attacker who can write into or near the working
         // directory cannot register a config-driven server/skill). Native file/shell tools
         // remain governed by the handler above.
+        //
+        // The per-tool run events on this provider come from two correlated sources, both
+        // keyed by the SDK's ToolCallId so each tool.call is emitted exactly once:
+        //   1. OnPermissionRequest (below) — fires for EVERY native tool call before it runs.
+        //      It surfaces the tool.call and, for a DENIED call, the tool.error (denied calls
+        //      never execute, so they produce no execution-complete event).
+        //   2. The MAF streaming loop — the SDK's ToolExecutionStart/Complete lifecycle events
+        //      are delivered inline as chunk.Contents[].RawRepresentation (the standalone
+        //      SessionConfig.OnEvent callback is never invoked on the RunStreamingAsync path).
+        //      ToolExecutionComplete carries the approved call's real result, surfaced as
+        //      tool.result (success) or tool.error (failure) — same content parity as Foundry.
+
+        // --- Thread-safe run-event emission ---
+        // The permission handler fires on SDK callback threads concurrently with the MAF
+        // streaming loop, so the sequence increment and the channel write are taken under one
+        // lock. This keeps event sequence numbers monotonic AND in arrival order.
+        var sb = new StringBuilder();
+        var seq = 0;
+        var emitLock = new object();
+        var deltaCount = 0;
+        var streamedMessageIds = new HashSet<string>(StringComparer.Ordinal);
+        var anyDeltaEmittedForNullId = false;
+
+        void Emit(string type, object payload)
+        {
+            if (stream is null) return;
+            lock (emitLock)
+            {
+                if (!stream.TryWrite(new RunEvent(++seq, type, payload)))
+                    _logger.LogWarning("TryWrite false for {EventType}", type);
+            }
+        }
+
+        // Each native tool call carries a distinct ToolCallId. These gates ensure exactly one
+        // tool.call and one terminal (tool.result OR tool.error) per call, regardless of which
+        // source (permission handler or streaming lifecycle event) observes it first.
+        var emittedCalls = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        var emittedTerminals = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+
+        void EmitToolCallOnce(string callId, string toolName, object? arguments)
+        {
+            if (emittedCalls.TryAdd(callId, 0))
+                Emit("tool.call", new { callId, toolName, arguments });
+        }
+
+        void EmitToolResultOnce(string callId, string content)
+        {
+            EmitToolCallOnce(callId, "unknown", null); // defensive call-before-result
+            if (emittedTerminals.TryAdd(callId, 0))
+                Emit("tool.result", new { callId, content });
+        }
+
+        void EmitToolErrorOnce(string callId, string errorMessage)
+        {
+            EmitToolCallOnce(callId, "unknown", null); // defensive call-before-error
+            if (emittedTerminals.TryAdd(callId, 0))
+                Emit("tool.error", new { callId, errorMessage });
+        }
+
+        void EmitDelta(string text, string? messageId)
+        {
+            sb.Append(text);
+            if (stream is null) return;
+            Emit("agent.message.delta", new { delta = text, messageId });
+            deltaCount++;
+            if (messageId is null) anyDeltaEmittedForNullId = true;
+        }
+
+        // Translates the SDK tool-execution lifecycle (delivered inline through the MAF stream
+        // as chunk content raw representations) into individual tool.call / tool.result /
+        // tool.error run events. Observe-only: it never alters execution. The result content
+        // is the SDK's own execution output for an approved (in-sandbox) call — nothing is
+        // fabricated. Denied calls never execute, so they never reach this path.
+        void TranslateToolLifecycle(object? raw)
+        {
+            switch (raw)
+            {
+                case ToolExecutionStartEvent start when start.Data is not null:
+                {
+                    var callId = start.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
+                    EmitToolCallOnce(callId, start.Data.ToolName ?? "unknown", start.Data.Arguments);
+                    break;
+                }
+                case ToolExecutionCompleteEvent complete when complete.Data is not null:
+                {
+                    var callId = complete.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
+                    if (complete.Data.Success)
+                        EmitToolResultOnce(callId, complete.Data.Result?.Content ?? string.Empty);
+                    else
+                        EmitToolErrorOnce(callId, complete.Data.Error?.Message ?? "Tool execution failed.");
+                    break;
+                }
+            }
+        }
+
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = BuildPermissionHandler(governance, runId),
+            OnPermissionRequest = BuildPermissionHandler(governance, runId, EmitToolCallOnce, EmitToolErrorOnce),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
@@ -72,25 +168,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var session = await agent.CreateSessionAsync(ct);
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
-
-        var sb = new StringBuilder();
-        var seq = 0;
-        var deltaCount = 0;
-        var streamedMessageIds = new HashSet<string>(StringComparer.Ordinal);
-        var anyDeltaEmittedForNullId = false;
-
-        void EmitDelta(string text, string? messageId)
-        {
-            sb.Append(text);
-            if (stream is null) return;
-
-            var n = ++seq;
-            var written = stream.TryWrite(new RunEvent(n, "agent.message.delta", new { delta = text, messageId }));
-            deltaCount++;
-            if (messageId is null) anyDeltaEmittedForNullId = true;
-            if (!written)
-                _logger.LogWarning("TryWrite false for agent.message.delta");
-        }
 
         try
         {
@@ -132,16 +209,23 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
                 if (string.IsNullOrEmpty(deltaText) && string.IsNullOrEmpty(finalContent))
                     _logger.LogTrace("RunStreamingAsync non-text chunk — messageId={MessageId}", messageId);
+
+                // The SDK tool-execution lifecycle arrives inline as content raw representations.
+                if (chunk.Contents is not null)
+                {
+                    foreach (var c in chunk.Contents)
+                        TranslateToolLifecycle(c.RawRepresentation);
+                }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "RunStreamingAsync threw for workingDirectory={WorkingDirectory}", workingDirectory);
-            stream?.TryWrite(new RunEvent(++seq, "run.failed", new { message = "The agent encountered an internal error." }));
+            Emit("run.failed", new { message = "The agent encountered an internal error." });
             throw;
         }
 
-        stream?.TryWrite(new RunEvent(++seq, "run.completed", new { }));
+        Emit("run.completed", new { });
 
         var result = sb.ToString();
         _logger.LogInformation(
@@ -154,22 +238,53 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// <summary>
     /// Builds the permission handler that enforces sandbox containment through
     /// two independent layers: AGT policy evaluation AND direct SandboxPolicyBackend check.
-    /// Both must allow for the tool call to proceed.
+    /// Both must allow for the tool call to proceed. The handler is also a per-tool
+    /// observability source. A denied call is surfaced here as a tool.call + tool.error pair
+    /// carrying the gate reason, because denied calls never execute and so never reach the
+    /// streaming tool-execution lifecycle. An approved call is surfaced from that lifecycle in
+    /// the streaming loop (call + real result); the handler only co-emits its tool.call when it
+    /// holds the SDK's real ToolCallId, so the two sources dedup instead of diverging.
     /// </summary>
     private PermissionRequestHandler BuildPermissionHandler(
         SandboxGovernance governance,
-        string runId)
+        string runId,
+        Action<string, string, object?> emitToolCallOnce,
+        Action<string, string> emitToolErrorOnce)
     {
         return (request, invocation) =>
         {
+            // The real SDK ToolCallId correlates this handler's events with the streaming
+            // tool-execution lifecycle (which carries the same id). When it can't be read, we
+            // fall back to a synthetic id that is local to this handler — the lifecycle cannot
+            // see it. realCallId being null therefore changes which source owns emission below.
+            var realCallId = GetToolCallId(request);
+            var callId = realCallId ?? Guid.NewGuid().ToString("n");
             try
             {
                 var (toolName, args) = MapToToolCall(request);
-                var (allowed, _) = governance.EvaluateToolCall(
+
+                // Surface the call from this source ONLY when we hold the real ToolCallId, so it
+                // dedups against the streaming lifecycle. With a synthetic id we stay silent on
+                // the approved path (the lifecycle, which has the real id, emits the call and its
+                // result) to avoid a divergent duplicate tool.call. Denied calls never execute,
+                // so they never reach the lifecycle — those are emitted in the deny branch below.
+                if (realCallId is not null)
+                    emitToolCallOnce(callId, toolName, args);
+
+                var (allowed, reason) = governance.EvaluateToolCall(
                     agentId: $"did:mesh:scaffolder:copilot:{runId}",
                     toolName: toolName,
                     args: args,
                     _logger);
+
+                if (!allowed)
+                {
+                    // A denied call is terminal here and never reaches the lifecycle, so emit a
+                    // self-consistent call+error pair. emitToolCallOnce is a no-op if the call was
+                    // already surfaced above; for a synthetic id this is its only emission point.
+                    emitToolCallOnce(callId, toolName, args);
+                    emitToolErrorOnce(callId, reason ?? "Operation denied by sandbox policy.");
+                }
 
                 return Task.FromResult(new PermissionRequestResult
                 {
@@ -182,6 +297,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             {
                 // Fail-closed: any failure mapping or evaluating the request denies the tool call.
                 _logger.LogError(ex, "Permission handler exception (fail-closed deny) — RunId={RunId}", runId);
+                emitToolCallOnce(callId, request.Kind ?? "unknown", null);
+                emitToolErrorOnce(callId, "Operation denied: internal error evaluating sandbox policy.");
                 return Task.FromResult(new PermissionRequestResult
                 {
                     Kind = PermissionRequestResultKind.Rejected,
@@ -189,6 +306,16 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             }
         };
     }
+
+    /// <summary>
+    /// Reads the <c>ToolCallId</c> carried by every concrete Copilot SDK
+    /// <see cref="PermissionRequest"/> subtype (Read/Write/Shell/Mcp/...). The base
+    /// type exposes only <see cref="PermissionRequest.Kind"/>, so the id is read
+    /// reflectively to cover all subtypes uniformly. Used to correlate a denied call
+    /// with its tool.error and to dedup against the execution lifecycle events.
+    /// </summary>
+    private static string? GetToolCallId(PermissionRequest request)
+        => request.GetType().GetProperty("ToolCallId")?.GetValue(request) as string;
 
     /// <summary>
     /// Maps a Copilot SDK <see cref="PermissionRequest"/> to an AGT tool-call

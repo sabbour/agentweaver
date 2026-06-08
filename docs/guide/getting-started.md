@@ -73,7 +73,7 @@ The CLI prompts for the repository path, originating branch, task, and model sou
 
 ## 5. Watch live output
 
-While the run is active, the CLI prints ordered events such as `agent.message`, `tool.call`, `tool.result`, `tool.rejected`, and lifecycle updates. If you need to reconnect later, run the watch command with the run id:
+While the run is active, the CLI prints ordered events such as `agent.message`, `tool.call`, `tool.result`, `tool.error`, and lifecycle updates. If you need to reconnect later, run the watch command with the run id:
 
 ```powershell
 dotnet run --project apps/Scaffolder.Cli -- run watch <run-id>

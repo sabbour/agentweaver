@@ -32,16 +32,19 @@ public static class EventRenderer
                 return Markup.Escape(Str(p, "text"));
             case "tool.call":
             {
-                var op = Str(p, "operation");
-                var verb = op.Equals("write", StringComparison.OrdinalIgnoreCase) ? "write_file" : "read_file";
-                return $"{verb}: {Markup.Escape(Str(p, "path"))}";
+                var toolName = Str(p, "toolName");
+                var path = ArgPath(p);
+                return path.Length > 0
+                    ? $"{Markup.Escape(toolName)}: {Markup.Escape(path)}"
+                    : Markup.Escape(toolName);
             }
             case "tool.result":
-                return $"OK {Markup.Escape(Str(p, "path"))} ({Str(p, "bytes_read_or_written")} bytes)";
-            case "tool.rejected":
-                return $"REJECTED {Markup.Escape(Str(p, "path"))}: {Markup.Escape(Str(p, "reason"))}";
+            {
+                var content = Str(p, "content");
+                return content.Length > 0 ? $"OK: {Markup.Escape(Preview(content))}" : "OK";
+            }
             case "tool.error":
-                return $"ERROR {Markup.Escape(Str(p, "path"))}: {Markup.Escape(Str(p, "error_message"))}";
+                return $"ERROR: {Markup.Escape(Str(p, "errorMessage"))}";
             case "review.requested":
                 return $"Awaiting review (tree: {Markup.Escape(Str(p, "tree_hash"))})";
             case "review.approved":
@@ -66,7 +69,6 @@ public static class EventRenderer
         "agent.message" => "white",
         "tool.call" => "cyan",
         "tool.result" => "green",
-        "tool.rejected" => "yellow",
         "tool.error" => "red",
         "review.requested" => "magenta",
         "review.approved" => "green",
@@ -98,6 +100,28 @@ public static class EventRenderer
 
     private static string RawPayload(JsonElement payload) =>
         payload.ValueKind == JsonValueKind.Undefined ? string.Empty : payload.GetRawText();
+
+    /// <summary>Reads the <c>path</c> argument from a tool event's <c>arguments</c> object, if present.</summary>
+    private static string ArgPath(JsonElement payload)
+    {
+        if (payload.ValueKind == JsonValueKind.Object &&
+            payload.TryGetProperty("arguments", out var args) &&
+            args.ValueKind == JsonValueKind.Object &&
+            args.TryGetProperty("path", out var path) &&
+            path.ValueKind == JsonValueKind.String)
+        {
+            return path.GetString() ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>Collapses content to a single trimmed line capped at 80 characters for console display.</summary>
+    private static string Preview(string value)
+    {
+        var single = value.ReplaceLineEndings(" ").Trim();
+        return single.Length <= 80 ? single : single[..80] + "...";
+    }
 
     private static string Short(string? value) =>
         string.IsNullOrEmpty(value) ? string.Empty

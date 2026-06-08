@@ -52,9 +52,8 @@ Example output:
 [run.started]        Run abc12345 started (github-copilot)
 [agent.message]      Looking at the source files
 [tool.call]          read_file: src/main.cs
-[tool.result]        OK src/main.cs (1024 bytes)
-[tool.rejected]      REJECTED ../outside.txt: path traversal not permitted
-[tool.error]         ERROR src/missing.cs: File not found
+[tool.result]        OK: namespace Demo { public static class Program { ... } }
+[tool.error]         ERROR: Path '../outside.txt' rejected: resolves outside the sandbox boundary
 [review.requested]   Awaiting review (tree: abc123def)
 [run.completed]      Run complete after 7 steps
 ```
