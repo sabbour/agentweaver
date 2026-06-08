@@ -33,7 +33,7 @@ public sealed class RunOrchestrator
     {
         var started = run with { Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow };
         await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
-        var entry = _streamStore.Create(run.Id.ToString());
+        var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
         _ = Task.Run(() => RunTurnAsync(started, entry), _appStopping);
     }
 
@@ -49,14 +49,12 @@ public sealed class RunOrchestrator
         catch (Exception ex)
         {
             _logger.LogError(ex, "Agent turn failed for run {RunId}", run.Id);
-            entry.Channel.Writer.TryComplete(ex);
             await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
             return;
         }
         finally
         {
-            entry.Channel.Writer.TryComplete();
-            _streamStore.Remove(run.Id.ToString());
+            _streamStore.Complete(run.Id.ToString());
         }
     }
 
@@ -74,17 +72,22 @@ public sealed class RunOrchestrator
     }
 }
 
+/// <summary>
+/// Adapts a <see cref="RunStreamEntry"/> into a <see cref="ChannelWriter{T}"/> for
+/// the agent runner. Events are recorded directly into the entry's history list;
+/// there is no separate channel — clients poll the history via
+/// <see cref="RunStreamEntry.GetSnapshotSince"/>.
+/// </summary>
 file sealed class RecordingChannelWriter(RunStreamEntry entry) : ChannelWriter<RunEvent>
 {
     public override bool TryWrite(RunEvent item)
     {
         entry.Record(item);
-        return entry.Channel.Writer.TryWrite(item);
+        return true;
     }
 
     public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default) =>
-        entry.Channel.Writer.WaitToWriteAsync(cancellationToken);
+        ValueTask.FromResult(true);
 
-    public override bool TryComplete(Exception? error = null) =>
-        entry.Channel.Writer.TryComplete(error);
+    public override bool TryComplete(Exception? error = null) => true;
 }

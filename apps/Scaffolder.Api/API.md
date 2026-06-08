@@ -87,35 +87,51 @@ Unknown id returns `404`. Status values: `pending`, `in_progress`, `completed`,
 
 ### GET /api/runs/{id}/stream
 
-Server-sent event stream of the run's events. Each frame carries the per-run
-`sequence` as the SSE `id` and the event envelope as `data`:
+Server-sent event stream of the run's events. Requires a valid bearer key and
+run ownership — non-owners receive `404` (no existence leak). Each frame carries
+the per-run `sequence` as the SSE `id` and the event payload as `data`:
 
 ```
-id: 1
-data: {"runId":"...","sequence":1,"type":"run.started","timestamp":"...","payload":{...}}
+id: 3
+event: agent.message.delta
+data: {"delta":"Hello","messageId":"msg-001"}
 
+id: 4
+event: run.completed
+data: {}
+
+event: done
+data: {}
 ```
+
+Event types:
+
+| Event | Payload |
+|-------|---------|
+| `agent.message.delta` | `{"delta":"...","messageId":"..."}` — incremental token |
+| `agent.message` | `{"messageId":null,"content":"..."}` — complete message (restart fallback) |
+| `run.completed` | `{}` |
+| `run.failed` | `{"message":"The agent encountered an internal error."}` |
+
+The stream ends with a synthetic `done` frame after the terminal event.
 
 Reconnect with the `Last-Event-ID` header set to the last sequence you saw. The
-backend replays only events after that sequence from the durable log, then
-continues live. Delivery is at-least-once; deduplicate by `sequence`. Replay works
-across process restarts while the run is retained.
+server resumes from that point in the in-memory event buffer. Reconnection works
+while the run's entry is retained in memory (up to 256 completed runs; in-progress
+entries evicted after approximately two hours). Delivery is at-least-once;
+deduplicate by `sequence`.
+
+After a process restart the in-memory history is lost. If the run already
+completed, the endpoint replays the stored final result as a single
+`agent.message` event and closes. If the run was still in progress, restart
+recovery marks it as failed and the stream returns `done` with no events.
 
 `Content-Type: text/event-stream`.
 
 ### GET /api/runs/{id}/events
 
-Returns the durable event log as a JSON array. Query parameter `afterSequence`
-(default `-1`) returns only events after that sequence.
-
-Response `200`:
-
-```json
-[
-  { "runId": "...", "sequence": 1, "type": "run.started", "timestamp": "...", "payload": { } },
-  { "runId": "...", "sequence": 2, "type": "agent.message", "timestamp": "...", "payload": { "text": "..." } }
-]
-```
+Not yet implemented. Planned as a JSON endpoint over a durable append-only event
+log (FR-022). Currently returns `404`.
 
 ### POST /api/runs/{id}/review
 
@@ -142,44 +158,30 @@ Response `200`:
 merge could not be applied, or `null` for a decline. A decision that cannot be
 applied (run not awaiting review, or a decision already recorded) returns `409`.
 
-## Event taxonomy
+## Event types on the stream
 
-Every event shares the envelope `runId`, `sequence`, `type`, `timestamp`,
-`payload`. Tool events also carry `callId`. `timestamp` is informational and must
-not be used to order events; order by `sequence`.
+Events emitted by the agent runtime during a run:
 
 | Type | Payload fields |
 |------|----------------|
-| `run.started` | `submitting_user`, `model_source`, `repository_path`, `originating_branch` |
-| `run.completed` | `step_count` |
-| `run.failed` | `reason` |
-| `run.bounded` | `limit_type` (`step-count` or `wall-clock`), `step_count` |
-| `agent.message` | `text` |
-| `tool.call` | `path`, `operation` (`read` or `write`) |
-| `tool.result` | `path`, `bytes_read_or_written` |
-| `tool.rejected` | `path`, `reason` |
-| `tool.error` | `path`, `error_message` |
-| `review.requested` | `tree_hash` |
-| `review.approved` | `tree_hash`, `approved_by` |
-| `review.declined` | `declined_by` |
-| `merge.completed` | `merged_commit_hash` |
-| `merge.failed` | `reason` |
+| `agent.message.delta` | `delta`, `messageId` |
+| `agent.message` | `content`, `messageId` (restart fallback only) |
+| `run.completed` | (empty) |
+| `run.failed` | `message` |
 
-`tool.result`, `tool.rejected`, and `tool.error` echo the `callId` of their
-`tool.call`.
+The `done` frame (no `id` field) signals the end of the stream.
 
 ## Persistence
 
-Three SQLite tables back the API, created on startup with WAL enabled:
+One SQLite table backs the API, created on startup with WAL enabled:
 
-- `run_events` — the append-only event log, keyed by `(run_id, sequence)`. The
-  sequence is allocated server-side inside the write transaction. Triggers reject
-  any `UPDATE` or `DELETE`, so the log is strictly append-only.
-- `runs` — run records with the mutable lifecycle fields (status, timing,
-  worktree location, committed tree hash).
-- `run_operational_records` — one record per run for compliance consumers,
-  holding the submitting user, model source, timing, outcome, and the policy
-  decisions enforced during the run.
+- `runs` — run records with status, timing, submitting user, task, model source,
+  and the final result text.
+
+The run's event stream is held in memory by `RunStreamStore` and is not persisted
+to SQLite. After a process restart, the granular event history is unavailable —
+only the final `result` text survives in the `runs` table. A durable append-only
+event log (`run_events`) is specified (FR-022) but not yet implemented.
 
 The database path defaults to `scaffolder.db` in the application data directory
 and is overridable with `Database:Path`. Worktrees default to a `worktrees`

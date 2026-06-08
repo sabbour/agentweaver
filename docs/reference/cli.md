@@ -44,7 +44,7 @@ On success the CLI prints the run id and initial status, then switches to live w
 
 ### `scaffolder run watch <run-id>`
 
-Connects to the run's event stream and prints each event as it arrives. The client reconnects after a drop, sends the last seen sequence through `Last-Event-ID`, and ignores duplicate events.
+Connects to the run's event stream and prints each event as it arrives. The client reconnects after a drop, sends the last seen sequence through `Last-Event-ID`, and ignores duplicate events. Reconnection works while the run's entry is retained in the server's memory; after a process restart only the final result is available.
 
 Example output:
 

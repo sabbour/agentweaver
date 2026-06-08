@@ -33,9 +33,8 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/runs` | Submit a task and start a run |
-| `GET` | `/api/runs/{id}` | Get current run state and diff |
+| `GET` | `/api/runs/{id}` | Get current run state |
 | `GET` | `/api/runs/{id}/stream` | Stream ordered run events over SSE |
-| `GET` | `/api/runs/{id}/events` | Read the durable event log as JSON |
 | `POST` | `/api/runs/{id}/review` | Record an approve or decline decision |
 
 ### POST /api/runs
@@ -65,7 +64,7 @@ Validation failures return `400 Bad Request`. Invalid repositories or branches a
 
 ### GET /api/runs/{id}
 
-Returns the current state of a run. `diff` contains the worktree changes against the originating branch after the run reaches `completed`, `approved`, or `declined`.
+Returns the current state of a run. Only the submitting user may access their own runs; non-owners receive `403 Forbidden`.
 
 Response `200 OK`:
 
@@ -85,39 +84,41 @@ Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, 
 
 ### GET /api/runs/{id}/stream
 
-Streams the run's events as server-sent events. Each frame carries the per-run `sequence` as the SSE `id` and the event envelope as `data`.
+Streams the run's events over SSE. Requires a valid bearer key and run ownership — a non-owner receives `404` (no existence leak). Each frame carries the per-run `sequence` as the SSE `id` and the event payload as `data`:
 
 ```text
-id: 1
-data: {"runId":"...","sequence":1,"type":"run.started","timestamp":"...","payload":{...}}
+id: 3
+event: agent.message.delta
+data: {"delta":"Hello","messageId":"msg-001"}
 
+id: 4
+event: run.completed
+data: {}
+
+event: done
+data: {}
 ```
 
-Set the `Last-Event-ID` request header to reconnect after the last sequence you saw. The backend replays only later events from the durable log, then continues live. Delivery is at least once, so clients should deduplicate by `sequence`.
+Event types emitted on the stream:
+
+| Event | Payload |
+| --- | --- |
+| `agent.message.delta` | `{"delta":"...","messageId":"..."}` — incremental token |
+| `agent.message` | `{"messageId":null,"content":"..."}` — complete message (restart fallback) |
+| `run.completed` | `{}` |
+| `run.failed` | `{"message":"The agent encountered an internal error."}` |
+
+The stream ends with a synthetic `done` frame (no `id`) after the terminal event.
+
+Set `Last-Event-ID` to the last sequence you received. The server resumes from that point in the in-memory event buffer. Reconnection works while the run's entry is retained in memory (up to 256 completed runs, entries evicted after approximately two hours of inactivity for in-progress runs). Delivery is at least once; deduplicate by `sequence`.
+
+After a process restart, the in-memory event history is lost. If the run already completed, the endpoint replays the stored final result as a single `agent.message` event and closes the stream. If the run was still in progress, restart recovery marks it as failed and the stream returns `done` immediately with no events.
 
 Response headers:
 
 - `Content-Type: text/event-stream`
 - `Cache-Control: no-cache`
-
-### GET /api/runs/{id}/events
-
-Returns the durable event log as a JSON array. Use `afterSequence` to fetch only events after a known cursor.
-
-Request example:
-
-```text
-GET /api/runs/f36800fd-f2f8-418c-958e-aae3e4921ba6/events?afterSequence=12
-```
-
-Response `200 OK`:
-
-```json
-[
-  { "runId": "...", "sequence": 1, "type": "run.started", "timestamp": "...", "payload": {} },
-  { "runId": "...", "sequence": 2, "type": "agent.message", "timestamp": "...", "payload": { "text": "..." } }
-]
-```
+- `Connection: keep-alive`
 
 ### POST /api/runs/{id}/review
 
@@ -139,42 +140,28 @@ Response `200 OK`:
 
 `merge_result` is `merged:{hash}` on success, `conflict:{reason}` when the merge cannot be applied, or `null` for a decline. Rejected review attempts return `409 Conflict`.
 
-## Event taxonomy summary
+## Event types on the stream
 
-Every event shares the envelope `runId`, `sequence`, `type`, `timestamp`, and `payload`. Tool events also carry `callId`. `timestamp` is informational only and must not be used to order events.
+Events emitted by the agent runtime during a run:
 
 | Type | Payload fields |
 | --- | --- |
-| `run.started` | `submitting_user`, `model_source`, `repository_path`, `originating_branch` |
-| `run.completed` | `step_count` |
-| `run.failed` | `reason` |
-| `run.bounded` | `limit_type`, `step_count` |
-| `agent.message` | `text` |
-| `tool.call` | `path`, `operation` |
-| `tool.result` | `path`, `bytes_read_or_written` |
-| `tool.rejected` | `path`, `reason` |
-| `tool.error` | `path`, `error_message` |
-| `review.requested` | `tree_hash` |
-| `review.approved` | `tree_hash`, `approved_by` |
-| `review.declined` | `declined_by` |
-| `merge.completed` | `merged_commit_hash` |
-| `merge.failed` | `reason` |
+| `agent.message.delta` | `delta`, `messageId` |
+| `agent.message` | `content`, `messageId` (restart fallback only) |
+| `run.completed` | (empty) |
+| `run.failed` | `message` |
 
-`tool.result`, `tool.rejected`, and `tool.error` echo the `callId` of their originating `tool.call`.
-
-For a fuller description of when each event fires, see [Events reference](/reference/events).
+The `done` frame (no `id` field) signals the end of the stream.
 
 ## Persistence
 
-Three SQLite tables back the API, created on startup with WAL enabled:
+One SQLite table backs the API, created on startup with WAL enabled:
 
 | Table | Purpose |
 | --- | --- |
-| `run_events` | Append-only event log keyed by `(run_id, sequence)` |
-| `runs` | Mutable run record with status, timings, worktree path, and committed tree hash |
-| `run_operational_records` | One record per run for compliance, debugging, and capacity analysis |
+| `runs` | Run records with status, timing, submitting user, task, model source, and the final result text |
 
-`run_events` is strictly append-only. The API allocates `sequence` server-side inside the write transaction, and SQLite triggers reject any `UPDATE` or `DELETE`.
+The run's event stream is held in memory by `RunStreamStore` and is not persisted to SQLite. After a process restart, the granular event history is unavailable — only the final `result` text survives. A durable append-only event log (`run_events`) is specified but not yet implemented.
 
 ## Configuration keys
 

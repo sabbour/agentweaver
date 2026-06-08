@@ -146,12 +146,23 @@ app.MapGet("/api/runs/{id}/stream", async (
         return;
     }
 
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     var entry = streamStore.Get(id);
 
-    Run? completedRun = null;
-    if (entry is null)
+    // Authorize: for in-progress runs the entry carries the owner; for completed runs
+    // (or when the entry has been evicted) fall back to the persistent run record.
+    if (entry is not null)
     {
-        try { completedRun = await runStore.GetAsync(runId, ct); }
+        if (!string.Equals(caller.User, entry.Owner, StringComparison.Ordinal))
+        {
+            httpContext.Response.StatusCode = 404;
+            return;
+        }
+    }
+    else
+    {
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to fetch run {RunId} for stream", runId);
@@ -160,11 +171,25 @@ app.MapGet("/api/runs/{id}/stream", async (
             return;
         }
 
-        if (completedRun is null)
+        if (run is null || !string.Equals(caller.User, run.SubmittingUser, StringComparison.Ordinal))
         {
             httpContext.Response.StatusCode = 404;
             return;
         }
+
+        // No retained event stream (for example after a process restart). Fall back to the
+        // persisted result as a single message; the live delta sequence is not durable.
+        httpContext.Response.Headers.ContentType = "text/event-stream";
+        httpContext.Response.Headers.CacheControl = "no-cache";
+        httpContext.Response.Headers.Connection = "keep-alive";
+
+        if (run.Result is not null)
+        {
+            var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = run.Result });
+            await WriteSseEventAsync(httpContext.Response, evt, ct);
+        }
+        await WriteSseDoneAsync(httpContext.Response, ct);
+        return;
     }
 
     httpContext.Response.Headers.ContentType = "text/event-stream";
@@ -176,25 +201,27 @@ app.MapGet("/api/runs/{id}/stream", async (
 
     try
     {
-        if (entry is null)
+        // Poll-based streaming: use the atomic GetSnapshotSince to get events + completion flag
+        // under a single lock. This eliminates the race between reading events and checking
+        // whether the run has completed — no events can be lost.
+        while (!ct.IsCancellationRequested)
         {
-            // Run already finished — replay stored result as a single agent.message event.
-            if (completedRun?.Result is not null)
+            var snapshot = entry.GetSnapshotSince(lastSeen);
+
+            foreach (var evt in snapshot.Events)
             {
-                var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = completedRun.Result });
                 await WriteSseEventAsync(httpContext.Response, evt, ct);
+                if (evt.Sequence > lastSeen)
+                    lastSeen = evt.Sequence;
             }
-            await WriteSseDoneAsync(httpContext.Response, ct);
-            return;
+
+            if (snapshot.IsCompleted)
+                break;
+
+            // Wait for new events or completion (with a short timeout to avoid indefinite hang).
+            try { await entry.WaitForChangeAsync(ct); }
+            catch (TimeoutException) { /* poll again */ }
         }
-
-        // Replay any missed events for reconnecting clients.
-        foreach (var missed in entry.GetSince(lastSeen))
-            await WriteSseEventAsync(httpContext.Response, missed, ct);
-
-        // Stream live events.
-        await foreach (var evt in entry.Channel.Reader.ReadAllAsync(ct))
-            await WriteSseEventAsync(httpContext.Response, evt, ct);
 
         await WriteSseDoneAsync(httpContext.Response, ct);
     }

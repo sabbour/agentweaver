@@ -39,7 +39,7 @@ The home page collects the repository path, originating branch, task description
 
 ### Watch a run
 
-The watch screen streams events with `fetch`, not `EventSource`, so it can send the bearer key and `Last-Event-ID`. Each event shows its type, a relative time, and a summary. The stream reconnects after a drop and deduplicates by `sequence`.
+The watch screen streams events with `fetch`, not `EventSource`, so it can send the bearer key and `Last-Event-ID`. Each event shows its type, a relative time, and a summary. The stream reconnects after a drop and deduplicates by `sequence`. Reconnection replays from the in-memory buffer while the run's entry is retained on the server.
 
 A status badge marks terminal states such as completed, failed, bounded, approved, declined, or merged. When the run requests review, the screen links you to the review page.
 
