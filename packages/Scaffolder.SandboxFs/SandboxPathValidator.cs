@@ -82,6 +82,64 @@ public static class SandboxPathValidator
     }
 
     /// <summary>
+    /// Validates that <paramref name="absolutePath"/> (an absolute path from an
+    /// external system such as the Copilot SDK permission request) resolves to a
+    /// location strictly inside <paramref name="sandboxRoot"/>.
+    /// Throws <see cref="SandboxViolationException"/> on any escape.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="ValidateAndResolve"/>, this method EXPECTS an absolute
+    /// path and does NOT reject it for being rooted. It performs:
+    /// 1. Null/empty check.
+    /// 2. Early-reject device paths (\\?\, \\.\) and UNC (\\server\share).
+    /// 3. Early-reject drive-relative paths (e.g. C:foo — no separator after colon).
+    /// 4. IsPathRooted assertion (must be absolute; relative input is a caller bug).
+    /// 5. GetFullPath normalization (resolves ., .., trailing separators).
+    /// 6. Lexical prefix check: normalized path must start with
+    ///    (normalizedRoot + DirectorySeparatorChar) OR equal normalizedRoot exactly
+    ///    (for directory-listing operations targeting the root itself).
+    /// 7. Reparse-point ancestor walk (same as ValidateAndResolve).
+    /// </remarks>
+    public static string ValidateAbsoluteContained(string absolutePath, string sandboxRoot)
+    {
+        if (string.IsNullOrWhiteSpace(absolutePath))
+            throw new SandboxViolationException(absolutePath ?? string.Empty, sandboxRoot, "empty path is not permitted");
+
+        // Early-reject device paths (\\?\ and \\.\)
+        if (absolutePath.StartsWith(@"\\?\", StringComparison.Ordinal) ||
+            absolutePath.StartsWith(@"\\.\", StringComparison.Ordinal))
+            throw new SandboxViolationException(absolutePath, sandboxRoot, "device paths are not permitted");
+
+        // Early-reject UNC paths (\\server\share)
+        if (absolutePath.StartsWith(@"\\", StringComparison.Ordinal))
+            throw new SandboxViolationException(absolutePath, sandboxRoot, "UNC paths are not permitted");
+
+        // Early-reject drive-relative paths (e.g. C:foo — colon not followed by separator)
+        if (absolutePath.Length >= 2 && absolutePath[1] == ':' &&
+            (absolutePath.Length == 2 || (absolutePath[2] != Path.DirectorySeparatorChar && absolutePath[2] != Path.AltDirectorySeparatorChar)))
+            throw new SandboxViolationException(absolutePath, sandboxRoot, "drive-relative paths are not permitted");
+
+        // Must be absolute — relative input here is a caller bug
+        if (!Path.IsPathRooted(absolutePath))
+            throw new SandboxViolationException(absolutePath, sandboxRoot, "path must be absolute");
+
+        // Normalize both paths
+        var normalized = Path.GetFullPath(absolutePath);
+        var rootNormalized = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
+        var rootPrefix = rootNormalized + Path.DirectorySeparatorChar;
+
+        // Lexical prefix check (case-insensitive on Windows)
+        if (!normalized.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(normalized, rootNormalized, StringComparison.OrdinalIgnoreCase))
+            throw new SandboxViolationException(absolutePath, sandboxRoot, "path resolves outside sandbox boundary");
+
+        // Reparse-point ancestor walk
+        ValidateNoReparsePointsInAncestors(normalized, sandboxRoot);
+
+        return normalized;
+    }
+
+    /// <summary>
     /// After opening a file handle, resolve the real path and re-verify it is
     /// inside the sandbox. Defeats reparse-point redirection that a lexical
     /// check cannot see. Platform-specific: GetFinalPathNameByHandle on Windows,

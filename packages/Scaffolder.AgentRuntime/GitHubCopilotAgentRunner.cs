@@ -32,11 +32,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, ModelSource modelSource, ChannelWriter<RunEvent>? stream, CancellationToken ct)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct)
     {
-        _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, streamIsNull={StreamIsNull}",
-            workingDirectory, task.Length, stream is null);
+        _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, runId={RunId}, streamIsNull={StreamIsNull}",
+            workingDirectory, task.Length, runId, stream is null);
         _logger.LogDebug("Task content preview: {TaskPreview}", task.Length > 100 ? task[..100] : task);
+
+        // --- Governance kernel (per-run) ---
+        using var governance = SandboxGovernance.Create(workingDirectory, runId, _logger);
 
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
@@ -45,15 +48,16 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = PermissionHandler.ApproveAll,
+            OnPermissionRequest = BuildPermissionHandler(governance, runId),
             WorkingDirectory = workingDirectory,
             Streaming = true,
+            AvailableTools = ["read_file", "write_file", "list_directory", "edit_file"],
         };
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
         var session = await agent.CreateSessionAsync(ct);
 
-        _logger.LogInformation("MAF agent session created");
+        _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
 
         var sb = new StringBuilder();
         var seq = 0;
@@ -131,6 +135,84 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             deltaCount, result.Length);
 
         return result;
+    }
+
+    /// <summary>
+    /// Builds the permission handler that enforces sandbox containment through
+    /// two independent layers: AGT policy evaluation AND direct SandboxPolicyBackend check.
+    /// Both must allow for the tool call to proceed.
+    /// </summary>
+    private PermissionRequestHandler BuildPermissionHandler(
+        SandboxGovernance governance,
+        string runId)
+    {
+        return (request, invocation) =>
+        {
+            var (toolName, args) = MapToToolCall(request);
+            var (allowed, _) = governance.EvaluateToolCall(
+                agentId: $"scaffolder:copilot:{runId}",
+                toolName: toolName,
+                args: args,
+                _logger);
+
+            return Task.FromResult(new PermissionRequestResult
+            {
+                Kind = allowed
+                    ? PermissionRequestResultKind.Approved
+                    : PermissionRequestResultKind.Rejected,
+            });
+        };
+    }
+
+    /// <summary>
+    /// Maps a Copilot SDK <see cref="PermissionRequest"/> to an AGT tool-call
+    /// representation (tool name + arguments dictionary).
+    /// </summary>
+    private static (string toolName, Dictionary<string, object> args) MapToToolCall(
+        PermissionRequest request)
+    {
+        return request switch
+        {
+            PermissionRequestRead read => MapReadRequest(read),
+            // SDK routes both write_file and edit_file through PermissionRequestWrite
+            // (no distinct PermissionRequestEdit type exists). YAML rule "allow-file-write"
+            // covers both tool names; SandboxPolicyBackend path-checks the FileName.
+            PermissionRequestWrite write => ("write_file", new Dictionary<string, object>
+            {
+                ["path"] = write.FileName ?? "",
+            }),
+            PermissionRequestShell shell => ("shell", new Dictionary<string, object>
+            {
+                ["command"] = shell.FullCommandText ?? "",
+            }),
+            PermissionRequestMcp mcp => ("mcp", new Dictionary<string, object>
+            {
+                ["tool"] = mcp.ToolName ?? "",
+            }),
+            _ => (request.Kind ?? "unknown", new Dictionary<string, object>()),
+        };
+    }
+
+    /// <summary>
+    /// Disambiguates a read permission request into either "read_file" or "list_directory".
+    /// Heuristic: trailing directory separator OR <see cref="Directory.Exists"/> → list_directory.
+    /// </summary>
+    private static (string toolName, Dictionary<string, object> args) MapReadRequest(
+        PermissionRequestRead request)
+    {
+        var path = request.Path ?? "";
+        var args = new Dictionary<string, object> { ["path"] = path };
+
+        // Heuristic: trailing separator OR existing directory → list_directory
+        if (path.Length > 0 &&
+            (path[^1] == Path.DirectorySeparatorChar ||
+             path[^1] == Path.AltDirectorySeparatorChar ||
+             Directory.Exists(path)))
+        {
+            return ("list_directory", args);
+        }
+
+        return ("read_file", args);
     }
 
     /// <summary>

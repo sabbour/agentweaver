@@ -87,6 +87,16 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **Client disconnect during streaming**: A watching client disconnects and reconnects. On reconnect the client presents its `lastSeenSequence` (SSE `Last-Event-ID`); the backend replays only events after that cursor from the durable event log - working across process restarts while the run is still within the retention window - and then continues live. Delivery is at-least-once, so the client deduplicates re-delivered events by per-run `sequence`.
 - **Content-safety failure**: The model provider returns content that fails a content-safety check. The content is withheld from the client; the run ends in a visible terminal failure state; and the failure is recorded in the event log so the human accountable for the run can see what occurred and why the run ended.
 - **Task or files containing secrets or personal data**: The user's task prompt or the files in the working area contain credentials, tokens, or personal data. The system relays to the model provider only what that provider requires for the active run and does not forward sensitive data to any other party; raw secrets and personal data are not written into event log payloads or client-facing outputs.
+- **Provider-native shell or command escape**: The active model provider exposes a native shell or command tool, and the agent issues a command that targets or reads a path outside the artifact directory (for example, listing the drive root). The operation is denied before it touches the host, the denial is surfaced as a `tool.error` / rejection event, and nothing outside the artifact directory is read or modified.
+- **Provider-native non-file tool reaching the host**: The agent invokes any provider-native tool (not only file read or write) whose effect would escape the artifact directory. The operation is denied by the shared governance policy before execution and the denial is audited in the operational record.
+
+## Clarifications
+
+### Session 2026-06-07
+
+- Q: Does the sandbox threat model cover provider-native tools beyond the read-file and write-file tools? -> A: Yes. A model provider may expose native tools (including shell or command execution and file operations) beyond the two core file tools. These provider-native tools are in scope for the sandbox threat model, and the sandbox boundary MUST be enforced against every operation they attempt.
+- Q: How is the sandbox boundary enforced for the GitHub Copilot SDK provider, whose agent runs with its own native toolset? -> A: Defense-in-depth. A deny-by-default permission handler enforces the sandbox boundary on every provider-native operation, AND the agent's available toolset is restricted to sandboxed file operations so native tools that cannot be confined to the artifact directory are not exposed. OS-level process isolation (container, job object, or restricted token) is acknowledged as a planned follow-up and is not part of this slice.
+- Q: Is enforcement provider-specific or unified across the two supported providers? -> A: Unified. Both providers (GitHub Copilot SDK and Microsoft Foundry) are backed by a single shared governance policy and a single path-validation mechanism. The Foundry runner's weaker inline path check is replaced by the shared validator so enforcement does not depend on which provider's native toolset is active.
 
 ## Requirements *(mandatory)*
 
@@ -98,7 +108,7 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **FR-004**: The session's artifact directory MUST be the agent's entire visible file system for the run.
 - **FR-005**: The agent MUST have exactly two core tools available during a run: read a file and write a file.
 - **FR-006**: Both file tools MUST operate only on paths inside the session's artifact directory.
-- **FR-007**: The system MUST reject any file access whose path attempts to escape the artifact directory, including absolute paths, `..` traversal, and symlinks that resolve outside the directory.
+- **FR-007**: The system MUST reject any file access whose path attempts to escape the artifact directory, including absolute paths, `..` traversal, and symlinks that resolve outside the directory. This rejection requirement applies to ALL tools available to the agent, not only the two core file tools; see FR-030 for the extension to provider-native tools.
 - **FR-008**: A user MUST be able to submit a task as a natural-language prompt to start a run.
 - **FR-009**: When submitting a task, the user MUST be able to select the model source for that run from exactly two providers: the GitHub Copilot SDK or Microsoft Foundry. No other source is permitted.
 - **FR-010**: Submitting a task MUST start a run in which the agent reasons, calls the read and write tools, receives their results, and repeats until the task is done.
@@ -121,6 +131,10 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **FR-027**: The rules governing which tools an agent may use, which model sources are permitted, the sandbox boundary, and the requirement for human approval before irreversible actions MUST be enforced uniformly for every run regardless of which client or interface initiates it. No client may grant itself permissions beyond what the governance rules allow.
 - **FR-028**: The system MUST produce an operational record for every run, independent of the per-run event log, sufficient for debugging, compliance review, and capacity analysis. This operational record MUST capture at minimum: the submitting user's identity, selected model source, run start time, step count, outcome, and end time.
 - **FR-029**: Every run MUST be subject to explicit, enforceable limits: at minimum a maximum step count and a maximum wall-clock duration. Reaching either limit MUST end the run in a visible terminal `run.failed` state. These limits MUST be enforced by policy and MUST NOT be bypassable by any client or tool. *Note: `run.bounded` as a distinct event type is not available from the Copilot SDK; bound violations are surfaced as `run.failed`.*
+- **FR-030**: A model provider may expose native tools beyond the read-file and write-file tools (including shell or command execution and other file operations). The system MUST enforce the sandbox boundary against EVERY operation an agent attempts through ANY provider-native tool, not only the two core file tools. Any operation that targets a path or resource outside the session's artifact directory MUST be denied before execution (deny-by-default), not merely warned about.
+- **FR-031**: For every run, the agent's available toolset MUST be restricted to operations that can be validated against the sandbox boundary (sandboxed file operations). A provider's native tools that cannot be confined to the artifact directory MUST NOT be exposed to the agent.
+- **FR-032**: Sandbox-boundary enforcement MUST be identical across both supported providers (GitHub Copilot SDK and Microsoft Foundry) and MUST NOT depend on which provider's native toolset is active. A single shared governance policy and a single path-validation mechanism MUST back enforcement for both providers. This extends the uniform-enforcement guarantee of FR-027 to provider-native tools.
+- **FR-033**: Every sandbox-boundary policy decision — allow or deny — for any provider-native operation MUST be recorded in the operational record with enough detail to reconstruct what was attempted and why it was allowed or denied. This extends FR-028 and SC-010 to provider-native operations.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -155,6 +169,8 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **SC-008**: 100% of model-generated outputs that fail a content-safety check are withheld from clients and recorded in the event log, with zero safety-failing content reaching any client.
 - **SC-009**: No secrets, credentials, or personal data appear in any event log payload, client-visible output, or operational record across any run.
 - **SC-010**: Every governance policy decision (tool permission, model-source validation, sandbox boundary enforcement, and human-approval gate) produces a traceable entry in the operational record, enabling a compliance reviewer to reconstruct all policy outcomes for any run within the retention window.
+- **SC-011**: 100% of provider-native operations (including shell or command execution) that target a path or resource outside the session's artifact directory are denied before execution, with zero such operations reaching the host, across both supported providers. This extends SC-002 beyond the two core file tools.
+- **SC-012**: Every denied provider-native escape attempt produces a traceable audit entry in the operational record identifying the attempted operation and the deny decision. This extends SC-010 to provider-native operations.
 
 ## Assumptions
 

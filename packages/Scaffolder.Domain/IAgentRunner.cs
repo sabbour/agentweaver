@@ -11,5 +11,5 @@ public interface IAgentRunner
     /// Executes one agent turn for the given task and returns the agent's full response.
     /// Chunks are written to <paramref name="stream"/> as they arrive when provided.
     /// </summary>
-    Task<string> ExecuteAsync(string task, string workingDirectory, ModelSource modelSource, ChannelWriter<RunEvent>? stream, CancellationToken ct);
+    Task<string> ExecuteAsync(string task, string workingDirectory, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct);
 }

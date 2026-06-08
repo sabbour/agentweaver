@@ -2,10 +2,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Scaffolder.Domain\Scaffolder.Domain.csproj" />
+    <ProjectReference Include="..\Scaffolder.SandboxFs\Scaffolder.SandboxFs.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.0-beta.2" />
+    <PackageReference Include="Microsoft.AgentGovernance" Version="[4.0.0,5.0.0)" />
     <PackageReference Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.9.0-preview.260603.1" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.1" />
     <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
