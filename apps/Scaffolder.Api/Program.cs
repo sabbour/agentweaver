@@ -129,10 +129,17 @@ app.MapGet("/api/runs/{id}/stream", async (
         return;
     }
 
-    await foreach (var chunk in channel.Reader.ReadAllAsync(ct))
-        await WriteChunkAsync(httpContext.Response, chunk, ct);
+    try
+    {
+        await foreach (var chunk in channel.Reader.ReadAllAsync(ct))
+            await WriteChunkAsync(httpContext.Response, chunk, ct);
 
-    await WriteDoneAsync(httpContext.Response, ct);
+        await WriteDoneAsync(httpContext.Response, ct);
+    }
+    catch (OperationCanceledException)
+    {
+        // Client disconnected — normal for SSE; suppress the exception.
+    }
 });
 
 app.Run();
