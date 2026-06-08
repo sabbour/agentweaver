@@ -59,53 +59,17 @@ public sealed class SqliteDb
     }
 
     private const string SchemaSql = """
-        CREATE TABLE IF NOT EXISTS run_events (
-            run_id    TEXT    NOT NULL,
-            sequence  INTEGER NOT NULL,
-            type      TEXT    NOT NULL,
-            timestamp TEXT    NOT NULL,
-            call_id   TEXT,
-            payload   TEXT    NOT NULL,
-            PRIMARY KEY (run_id, sequence)
-        );
-
-        CREATE TRIGGER IF NOT EXISTS prevent_run_events_mutation
-        BEFORE UPDATE ON run_events
-        BEGIN
-            SELECT RAISE(ABORT, 'run_events is append-only');
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS prevent_run_events_delete
-        BEFORE DELETE ON run_events
-        BEGIN
-            SELECT RAISE(ABORT, 'run_events is append-only');
-        END;
-
-        CREATE TABLE IF NOT EXISTS run_operational_records (
-            run_id           TEXT PRIMARY KEY,
-            submitting_user  TEXT NOT NULL,
-            model_source     TEXT NOT NULL,
-            started_at       TEXT NOT NULL,
-            ended_at         TEXT,
-            step_count       INTEGER,
-            outcome          TEXT,
-            policy_decisions TEXT
-        );
-
         CREATE TABLE IF NOT EXISTS runs (
-            run_id              TEXT PRIMARY KEY,
-            repository_path     TEXT NOT NULL,
-            originating_branch  TEXT NOT NULL,
-            model_source        TEXT NOT NULL,
-            task                TEXT NOT NULL,
-            submitting_user     TEXT NOT NULL,
-            status              TEXT NOT NULL,
-            started_at          TEXT NOT NULL,
-            ended_at            TEXT,
-            step_count          INTEGER DEFAULT 0,
-            worktree_path       TEXT,
-            worktree_branch     TEXT,
-            committed_tree_hash TEXT
+            run_id             TEXT PRIMARY KEY,
+            repository_path    TEXT NOT NULL,
+            originating_branch TEXT NOT NULL,
+            model_source       TEXT NOT NULL,
+            task               TEXT NOT NULL,
+            submitting_user    TEXT NOT NULL,
+            status             TEXT NOT NULL,
+            started_at         TEXT NOT NULL,
+            ended_at           TEXT,
+            result             TEXT
         );
         """;
 }
