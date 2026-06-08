@@ -1,3 +1,5 @@
+using System.Text;
+using System.Threading.Channels;
 using GitHub.Copilot;
 using GitHub.Copilot.SDK;
 using Microsoft.Agents.AI;
@@ -19,7 +21,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, CancellationToken ct)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, ChannelWriter<string>? stream, CancellationToken ct)
     {
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
@@ -34,7 +36,20 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             id: null, name: null, description: null);
 
         var session = await agent.CreateSessionAsync(ct);
-        var result = await agent.RunAsync(task, session, options: null, ct);
-        return result.ToString();
+
+        var sb = new StringBuilder();
+        await foreach (var update in agent.RunStreamingAsync(task, session, options: null, ct))
+        {
+            var chunk = update.ToString();
+            if (!string.IsNullOrEmpty(chunk))
+            {
+                sb.Append(chunk);
+                if (stream is not null)
+                    await stream.WriteAsync(chunk, ct).ConfigureAwait(false);
+            }
+        }
+
+        stream?.TryComplete();
+        return sb.ToString();
     }
 }

@@ -27,6 +27,7 @@ builder.Services.AddCors(options =>
 // Infrastructure
 builder.Services.AddSingleton<SqliteDb>();
 builder.Services.AddSingleton<SqliteRunStore>();
+builder.Services.AddSingleton<RunStreamStore>();
 
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
@@ -104,9 +105,54 @@ app.MapGet("/api/runs/{id}", async (
     });
 });
 
+app.MapGet("/api/runs/{id}/stream", async (
+    HttpContext httpContext,
+    string id,
+    RunStreamStore streamStore,
+    SqliteRunStore runStore,
+    CancellationToken ct) =>
+{
+    httpContext.Response.Headers.ContentType = "text/event-stream";
+    httpContext.Response.Headers.CacheControl = "no-cache";
+    httpContext.Response.Headers.Connection = "keep-alive";
+
+    var channel = streamStore.Get(id);
+    if (channel is null)
+    {
+        if (RunId.TryParse(id, out var runId))
+        {
+            var run = await runStore.GetAsync(runId, ct);
+            if (run?.Result is not null)
+                await WriteChunkAsync(httpContext.Response, run.Result, ct);
+        }
+        await WriteDoneAsync(httpContext.Response, ct);
+        return;
+    }
+
+    await foreach (var chunk in channel.Reader.ReadAllAsync(ct))
+        await WriteChunkAsync(httpContext.Response, chunk, ct);
+
+    await WriteDoneAsync(httpContext.Response, ct);
+});
+
 app.Run();
 
 static bool IsOwner(HttpContext context, Run run) =>
     string.Equals(ApiKeyAuthMiddleware.GetCaller(context).User, run.SubmittingUser, StringComparison.Ordinal);
+
+static async Task WriteChunkAsync(HttpResponse response, string chunk, CancellationToken ct)
+{
+    await response.WriteAsync($"data: {EscapeSse(chunk)}\n\n", ct);
+    await response.Body.FlushAsync(ct);
+}
+
+static async Task WriteDoneAsync(HttpResponse response, CancellationToken ct)
+{
+    await response.WriteAsync("event: done\ndata: \n\n", ct);
+    await response.Body.FlushAsync(ct);
+}
+
+static string EscapeSse(string text) =>
+    text.Replace("\n", "\ndata: ");
 
 public partial class Program { }

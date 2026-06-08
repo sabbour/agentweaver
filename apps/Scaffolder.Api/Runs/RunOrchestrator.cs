@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Scaffolder.Api.Infrastructure;
 using Scaffolder.Domain;
 
@@ -10,17 +11,20 @@ public sealed class RunOrchestrator
 {
     private readonly SqliteRunStore _runStore;
     private readonly IAgentRunner _agentRunner;
+    private readonly RunStreamStore _streamStore;
     private readonly ILogger<RunOrchestrator> _logger;
     private readonly CancellationToken _appStopping;
 
     public RunOrchestrator(
         SqliteRunStore runStore,
         IAgentRunner agentRunner,
+        RunStreamStore streamStore,
         IHostApplicationLifetime lifetime,
         ILogger<RunOrchestrator> logger)
     {
         _runStore = runStore;
         _agentRunner = agentRunner;
+        _streamStore = streamStore;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
     }
@@ -29,21 +33,27 @@ public sealed class RunOrchestrator
     {
         var started = run with { Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow };
         await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
-        _ = Task.Run(() => RunTurnAsync(started), _appStopping);
+        var channel = _streamStore.CreateChannel(run.Id.ToString());
+        _ = Task.Run(() => RunTurnAsync(started, channel), _appStopping);
     }
 
-    private async Task RunTurnAsync(Run run)
+    private async Task RunTurnAsync(Run run, Channel<string> channel)
     {
         var ct = _appStopping;
         try
         {
-            var result = await _agentRunner.ExecuteAsync(run.Task, run.RepositoryPath, ct).ConfigureAwait(false);
+            var result = await _agentRunner.ExecuteAsync(run.Task, run.RepositoryPath, channel.Writer, ct).ConfigureAwait(false);
             await _runStore.UpdateResultAsync(run.Id, RunStatus.Completed, result, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Agent turn failed for run {RunId}", run.Id);
+            channel.Writer.TryComplete(ex);
             await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            _streamStore.Remove(run.Id.ToString());
         }
     }
 
