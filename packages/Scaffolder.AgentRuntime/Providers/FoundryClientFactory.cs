@@ -1,7 +1,7 @@
+using Azure;
+using Azure.AI.Inference;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
-using OpenAI;
-using System.ClientModel;
 
 namespace Scaffolder.AgentRuntime.Providers;
 
@@ -26,9 +26,9 @@ public sealed class FoundryClientFactory
         if (_apiKey is null)
             throw new InvalidOperationException("Providers:MicrosoftFoundry:ApiKey is required.");
 
-        var oaiClient = new OpenAIClient(
-            new ApiKeyCredential(_apiKey),
-            new OpenAIClientOptions { Endpoint = new Uri(_endpoint) });
-        return oaiClient.GetChatClient(_modelId).AsIChatClient();
+        return new ChatCompletionsClient(
+            new Uri(_endpoint),
+            new AzureKeyCredential(_apiKey)
+        ).AsIChatClient(_modelId);
     }
 }
