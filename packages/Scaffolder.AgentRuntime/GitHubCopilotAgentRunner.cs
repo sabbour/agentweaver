@@ -24,8 +24,13 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
 
-        var agent = client.AsAIAgent(
-            instructions: "You are a helpful assistant.");
+        var sessionConfig = new SessionConfig
+        {
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+        };
+
+        var agent = client.AsAIAgent(sessionConfig, ownsClient: false,
+            id: null, name: null, description: null);
 
         var session = await agent.CreateSessionAsync(ct);
         var result = await agent.RunAsync(task, session, options: null, ct);
