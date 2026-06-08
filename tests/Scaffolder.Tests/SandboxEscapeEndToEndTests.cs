@@ -176,9 +176,73 @@ public sealed class SandboxEscapeEndToEndTests
         Assert.True(File.Exists(canaryPath), "canary file should still exist");
         Assert.Equal(secret, await File.ReadAllTextAsync(canaryPath));
 
+        // === EVENT PARITY — individual tool calls are observable on BOTH providers ===
+        // Each provider surfaces every native tool call as a tool.call run event, correlated
+        // by a non-empty callId, with a tool.result for an approved call's output and a
+        // tool.error for a denied call. This is the observability contract (Constitution
+        // Principle V) held at parity across providers (Principle IV).
+        var toolCalls = events.Where(e => e.Type == "tool.call").ToList();
+        var toolResults = events.Where(e => e.Type == "tool.result").ToList();
+        var toolErrors = events.Where(e => e.Type == "tool.error").ToList();
+
+        Assert.True(
+            toolCalls.Count > 0,
+            $"[{provider}] expected at least one 'tool.call' run event — individual tool "
+            + "calls are not surfaced on this provider's stream.");
+
+        // The approved in-sandbox read surfaces its output as a tool.result.
+        Assert.True(
+            toolResults.Count > 0,
+            $"[{provider}] expected at least one 'tool.result' — an approved in-sandbox "
+            + "tool call produced no result event.");
+
+        // The out-of-sandbox attempts were denied → at least one tool.error must surface.
+        Assert.True(
+            toolErrors.Count > 0,
+            $"[{provider}] expected at least one 'tool.error' — a denied out-of-sandbox "
+            + "tool call produced no error event.");
+
+        // The approved in-sandbox read surfaces a tool.result whose content is the marker,
+        // proving the result content (not a fabricated placeholder) reaches the stream.
+        Assert.Contains(
+            toolResults,
+            e => (ExtractStringField(e.Payload, "content") ?? string.Empty).Contains(insandboxMarker, StringComparison.Ordinal));
+
+        // Every tool event carries a non-empty callId, and every result/error correlates to a
+        // tool.call emitted before it (call-before-result ordering by sequence).
+        var callSeqById = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var ev in toolCalls)
+        {
+            var id = ExtractStringField(ev.Payload, "callId");
+            Assert.False(string.IsNullOrEmpty(id), $"[{provider}] tool.call missing callId.");
+            if (!callSeqById.ContainsKey(id!)) callSeqById[id!] = ev.Sequence;
+        }
+
+        foreach (var ev in toolResults.Concat(toolErrors))
+        {
+            var id = ExtractStringField(ev.Payload, "callId");
+            Assert.False(string.IsNullOrEmpty(id), $"[{provider}] {ev.Type} missing callId.");
+            Assert.True(
+                callSeqById.TryGetValue(id!, out var callSeq) && callSeq < ev.Sequence,
+                $"[{provider}] {ev.Type} (callId={id}) has no preceding tool.call — "
+                + "call/result correlation broken.");
+        }
+
         // Cleanup.
         TryDelete(canaryPath);
         TryDeleteDir(sandbox);
+    }
+
+    /// <summary>
+    /// Serializes a run-event payload and returns the named string field, or null when
+    /// the field is absent or not a string. Used to read the <c>callId</c> correlation key.
+    /// </summary>
+    private static string? ExtractStringField(object payload, string field)
+    {
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(payload));
+        return doc.RootElement.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()
+            : null;
     }
 
     private static string Truncate(string value, int max) =>
