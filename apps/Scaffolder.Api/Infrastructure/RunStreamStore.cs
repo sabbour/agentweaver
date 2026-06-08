@@ -1,21 +1,40 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Scaffolder.Domain;
 
 namespace Scaffolder.Api.Infrastructure;
 
-public sealed class RunStreamStore
+public sealed class RunStreamEntry
 {
-    private readonly ConcurrentDictionary<string, Channel<string>> _channels = new();
+    public Channel<RunEvent> Channel { get; } =
+        System.Threading.Channels.Channel.CreateUnbounded<RunEvent>(new UnboundedChannelOptions { SingleReader = true });
+    public List<RunEvent> History { get; } = [];
+    private readonly Lock _lock = new();
 
-    public Channel<string> CreateChannel(string runId)
+    public void Record(RunEvent evt)
     {
-        var ch = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
-        _channels[runId] = ch;
-        return ch;
+        lock (_lock) History.Add(evt);
     }
 
-    public Channel<string>? Get(string runId) =>
-        _channels.TryGetValue(runId, out var ch) ? ch : null;
+    public IReadOnlyList<RunEvent> GetSince(int lastSeen)
+    {
+        lock (_lock) return History.Where(e => e.Sequence > lastSeen).ToList();
+    }
+}
 
-    public void Remove(string runId) => _channels.TryRemove(runId, out _);
+public sealed class RunStreamStore
+{
+    private readonly ConcurrentDictionary<string, RunStreamEntry> _entries = new();
+
+    public RunStreamEntry Create(string runId)
+    {
+        var entry = new RunStreamEntry();
+        _entries[runId] = entry;
+        return entry;
+    }
+
+    public RunStreamEntry? Get(string runId) =>
+        _entries.TryGetValue(runId, out var e) ? e : null;
+
+    public void Remove(string runId) => _entries.TryRemove(runId, out _);
 }

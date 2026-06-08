@@ -33,26 +33,29 @@ public sealed class RunOrchestrator
     {
         var started = run with { Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow };
         await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
-        var channel = _streamStore.CreateChannel(run.Id.ToString());
-        _ = Task.Run(() => RunTurnAsync(started, channel), _appStopping);
+        var entry = _streamStore.Create(run.Id.ToString());
+        _ = Task.Run(() => RunTurnAsync(started, entry), _appStopping);
     }
 
-    private async Task RunTurnAsync(Run run, Channel<string> channel)
+    private async Task RunTurnAsync(Run run, RunStreamEntry entry)
     {
+        var recordingWriter = new RecordingChannelWriter(entry);
         var ct = _appStopping;
         try
         {
-            var result = await _agentRunner.ExecuteAsync(run.Task, run.RepositoryPath, channel.Writer, ct).ConfigureAwait(false);
+            var result = await _agentRunner.ExecuteAsync(run.Task, run.RepositoryPath, recordingWriter, ct).ConfigureAwait(false);
             await _runStore.UpdateResultAsync(run.Id, RunStatus.Completed, result, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Agent turn failed for run {RunId}", run.Id);
-            channel.Writer.TryComplete(ex);
+            entry.Channel.Writer.TryComplete(ex);
             await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+            return;
         }
         finally
         {
+            entry.Channel.Writer.TryComplete();
             _streamStore.Remove(run.Id.ToString());
         }
     }
@@ -69,4 +72,19 @@ public sealed class RunOrchestrator
             await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
         }
     }
+}
+
+file sealed class RecordingChannelWriter(RunStreamEntry entry) : ChannelWriter<RunEvent>
+{
+    public override bool TryWrite(RunEvent item)
+    {
+        entry.Record(item);
+        return entry.Channel.Writer.TryWrite(item);
+    }
+
+    public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default) =>
+        entry.Channel.Writer.WaitToWriteAsync(cancellationToken);
+
+    public override bool TryComplete(Exception? error = null) =>
+        entry.Channel.Writer.TryComplete(error);
 }

@@ -139,7 +139,6 @@ app.MapGet("/api/runs/{id}/stream", async (
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
-    // Validate ID and ownership before committing to an SSE response.
     if (!RunId.TryParse(id, out var runId))
     {
         httpContext.Response.StatusCode = 400;
@@ -147,11 +146,10 @@ app.MapGet("/api/runs/{id}/stream", async (
         return;
     }
 
-    var channel = streamStore.Get(id);
+    var entry = streamStore.Get(id);
 
-    // If no live channel, check the DB for a completed run.
     Run? completedRun = null;
-    if (channel is null)
+    if (entry is null)
     {
         try { completedRun = await runStore.GetAsync(runId, ct); }
         catch (Exception ex)
@@ -169,26 +167,36 @@ app.MapGet("/api/runs/{id}/stream", async (
         }
     }
 
-    // Headers must be set before any body writes.
     httpContext.Response.Headers.ContentType = "text/event-stream";
     httpContext.Response.Headers.CacheControl = "no-cache";
     httpContext.Response.Headers.Connection = "keep-alive";
 
+    var lastSeenHeader = httpContext.Request.Headers["Last-Event-ID"].FirstOrDefault();
+    var lastSeen = int.TryParse(lastSeenHeader, out var ls) ? ls : 0;
+
     try
     {
-        if (channel is null)
+        if (entry is null)
         {
-            // Run already finished — replay stored result as a single chunk.
+            // Run already finished — replay stored result as a single agent.message event.
             if (completedRun?.Result is not null)
-                await WriteChunkAsync(httpContext.Response, completedRun.Result, ct);
-            await WriteDoneAsync(httpContext.Response, ct);
+            {
+                var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = completedRun.Result });
+                await WriteSseEventAsync(httpContext.Response, evt, ct);
+            }
+            await WriteSseDoneAsync(httpContext.Response, ct);
             return;
         }
 
-        await foreach (var chunk in channel.Reader.ReadAllAsync(ct))
-            await WriteChunkAsync(httpContext.Response, chunk, ct);
+        // Replay any missed events for reconnecting clients.
+        foreach (var missed in entry.GetSince(lastSeen))
+            await WriteSseEventAsync(httpContext.Response, missed, ct);
 
-        await WriteDoneAsync(httpContext.Response, ct);
+        // Stream live events.
+        await foreach (var evt in entry.Channel.Reader.ReadAllAsync(ct))
+            await WriteSseEventAsync(httpContext.Response, evt, ct);
+
+        await WriteSseDoneAsync(httpContext.Response, ct);
     }
     catch (OperationCanceledException)
     {
@@ -197,7 +205,6 @@ app.MapGet("/api/runs/{id}/stream", async (
     catch (Exception ex)
     {
         logger.LogError(ex, "Error streaming run {RunId}", runId);
-        // Headers already sent; can't change status code. Send an error event so the client knows.
         try { await httpContext.Response.WriteAsync("event: error\ndata: stream failure\n\n", CancellationToken.None); }
         catch { /* response may already be closed */ }
     }
@@ -208,19 +215,18 @@ app.Run();
 static bool IsOwner(HttpContext context, Run run) =>
     string.Equals(ApiKeyAuthMiddleware.GetCaller(context).User, run.SubmittingUser, StringComparison.Ordinal);
 
-static async Task WriteChunkAsync(HttpResponse response, string chunk, CancellationToken ct)
+static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)
 {
-    await response.WriteAsync($"data: {EscapeSse(chunk)}\n\n", ct);
+    var json = System.Text.Json.JsonSerializer.Serialize(evt.Payload,
+        new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+    await response.WriteAsync($"id: {evt.Sequence}\nevent: {evt.Type}\ndata: {json}\n\n", ct);
     await response.Body.FlushAsync(ct);
 }
 
-static async Task WriteDoneAsync(HttpResponse response, CancellationToken ct)
+static async Task WriteSseDoneAsync(HttpResponse response, CancellationToken ct)
 {
-    await response.WriteAsync("event: done\ndata: \n\n", ct);
+    await response.WriteAsync("event: done\ndata: {}\n\n", ct);
     await response.Body.FlushAsync(ct);
 }
-
-static string EscapeSse(string text) =>
-    text.Replace("\n", "\ndata: ");
 
 public partial class Program { }

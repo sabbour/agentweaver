@@ -38,9 +38,9 @@ While a run is in progress, the user watches the run unfold step by step: each m
 **Acceptance Scenarios**:
 
 1. **Given** a run is in progress, **When** the agent emits a message, **Then** an `agent.message` event appears in the watching client without the user refreshing or re-requesting.
-2. **Given** a run is in progress, **When** the agent calls a read or write tool, **Then** a `tool.call` event and its paired outcome event (`tool.result`, `tool.rejected`, or `tool.error` carrying the same `callId`) appear in `sequence` order in the stream.
+2. **Given** a run is in progress, **When** the agent calls a read or write tool, **Then** a `tool.call` event and its paired `tool.result` or `tool.error` event (carrying the same `callId`) appear in `sequence` order in the stream.
 3. **Given** two users watching the same run from different clients, **When** an event occurs, **Then** both clients show the same event at the same `sequence`.
-4. **Given** a run completes, **When** the final lifecycle event is delivered, **Then** the stream indicates the run has finished with a `run.completed`, `run.failed`, or `run.bounded` event.
+4. **Given** a run completes, **When** the final lifecycle event is delivered, **Then** the stream indicates the run has finished with a `run.completed` or `run.failed` event.
 5. **Given** a watching client disconnects and reconnects with its `lastSeenSequence` (SSE `Last-Event-ID`), **When** it reconnects, **Then** the backend replays only events after `lastSeenSequence` and then continues live, and the client deduplicates any re-delivered event by `sequence`.
 
 ---

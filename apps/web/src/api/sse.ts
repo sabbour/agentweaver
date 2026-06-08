@@ -48,36 +48,58 @@ export function useRunPoll(runId: string, apiKey: string, baseUrl: string): Poll
   return { run, status, error };
 }
 
+export type EventType =
+  | 'agent.message.delta'
+  | 'agent.message'
+  | 'agent.turn.start'
+  | 'agent.turn.end'
+  | 'tool.call'
+  | 'tool.result'
+  | 'tool.error'
+  | 'run.completed'
+  | 'run.failed'
+  | 'done'
+  | 'error';
+
+export interface RunStreamEvent {
+  sequence: number;
+  type: EventType;
+  payload: Record<string, unknown>;
+}
+
 export type StreamStatus = 'connecting' | 'streaming' | 'done' | 'error';
 
 interface StreamState {
-  text: string;
+  events: RunStreamEvent[];
   status: StreamStatus;
   error: string | null;
 }
 
 export function useRunStream(runId: string, apiKey: string, baseUrl: string): StreamState {
-  const [text, setText] = useState('');
+  const [events, setEvents] = useState<RunStreamEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const [error, setError] = useState<string | null>(null);
   const stopRef = useRef(false);
+  const lastSeqRef = useRef(0);
 
   useEffect(() => {
     stopRef.current = false;
-    setText('');
+    lastSeqRef.current = 0;
+    setEvents([]);
     setStatus('connecting');
     setError(null);
 
-    const url = `${baseUrl.replace(/\/+$/, '')}/api/runs/${encodeURIComponent(runId)}/stream`;
-
-    const run = async () => {
+    const connect = async () => {
+      const url = `${baseUrl.replace(/\/+$/, '')}/api/runs/${encodeURIComponent(runId)}/stream`;
       try {
-        const response = await fetch(url, {
-          headers: { Authorization: `Bearer ${apiKey}`, Accept: 'text/event-stream' },
-        });
-        if (!response.ok) {
-          throw new Error(`status ${response.status}`);
-        }
+        const headers: Record<string, string> = {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'text/event-stream',
+        };
+        if (lastSeqRef.current > 0) headers['Last-Event-ID'] = String(lastSeqRef.current);
+
+        const response = await fetch(url, { headers });
+        if (!response.ok) throw new Error(`status ${response.status}`);
         if (!response.body) throw new Error('no body');
 
         setStatus('streaming');
@@ -95,19 +117,40 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
             const frame = buffer.slice(0, sep);
             buffer = buffer.slice(sep + 2);
 
-            let eventType = '';
-            let data = '';
+            let evtId = '';
+            let evtType = '';
+            let evtData = '';
             for (const line of frame.split('\n')) {
-              if (line.startsWith('event:')) eventType = line.slice(6).trim();
-              else if (line.startsWith('data:')) data += line.slice(5);
+              if (line.startsWith('id:')) evtId = line.slice(3).trim();
+              else if (line.startsWith('event:')) evtType = line.slice(6).trim();
+              else if (line.startsWith('data:')) evtData += line.slice(5);
             }
 
-            if (eventType === 'done') {
+            if (evtType === 'done') {
               setStatus('done');
               stopRef.current = true;
               break;
             }
-            if (data) setText((prev) => prev + data);
+            if (evtType === 'error') {
+              setStatus('error');
+              setError('Stream error from server');
+              stopRef.current = true;
+              break;
+            }
+
+            const seq = evtId ? parseInt(evtId, 10) : 0;
+            if (seq > 0) lastSeqRef.current = seq;
+
+            if (evtType && evtData) {
+              let payload: Record<string, unknown> = {};
+              try { payload = JSON.parse(evtData); } catch { /* ignore bad JSON */ }
+              const streamEvt: RunStreamEvent = { sequence: seq, type: evtType as EventType, payload };
+              setEvents((prev) => {
+                if (seq > 0 && prev.some((e) => e.sequence === seq)) return prev;
+                return [...prev, streamEvt];
+              });
+            }
+
             sep = buffer.indexOf('\n\n');
           }
         }
@@ -119,9 +162,9 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
       }
     };
 
-    void run();
+    void connect();
     return () => { stopRef.current = true; };
   }, [runId, apiKey, baseUrl]);
 
-  return { text, status, error };
+  return { events, status, error };
 }
