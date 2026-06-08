@@ -43,6 +43,13 @@ var app = builder.Build();
 await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
 await app.Services.GetRequiredService<RunOrchestrator>().RestartRecoveryAsync(CancellationToken.None);
 
+app.UseExceptionHandler(err => err.Run(async context =>
+{
+    context.Response.StatusCode = 500;
+    context.Response.ContentType = "application/json";
+    await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred." });
+}));
+
 app.UseCors();
 app.UseMiddleware<ApiKeyAuthMiddleware>();
 
@@ -52,6 +59,7 @@ app.MapPost("/api/runs", async (
     HttpContext httpContext,
     CreateRunRequest request,
     RunOrchestrator orchestrator,
+    ILogger<Program> logger,
     CancellationToken ct) =>
 {
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
@@ -75,7 +83,15 @@ app.MapPost("/api/runs", async (
         StartedAt = DateTimeOffset.UtcNow,
     };
 
-    await orchestrator.StartRunAsync(run, ct);
+    try
+    {
+        await orchestrator.StartRunAsync(run, ct);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to start run {RunId}", run.Id);
+        return Results.Problem("Failed to start the run.", statusCode: 500);
+    }
 
     return Results.Accepted($"/api/runs/{run.Id}", new CreateRunResponse { RunId = run.Id.ToString(), Status = "in_progress" });
 });
@@ -84,14 +100,24 @@ app.MapGet("/api/runs/{id}", async (
     HttpContext httpContext,
     string id,
     SqliteRunStore runStore,
+    ILogger<Program> logger,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
         return Results.BadRequest(new { error = "Invalid run id." });
 
-    var run = await runStore.GetAsync(runId, ct);
-    if (run is null) return Results.NotFound();
+    Run? run;
+    try
+    {
+        run = await runStore.GetAsync(runId, ct);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId}", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
 
+    if (run is null) return Results.NotFound();
     if (!IsOwner(httpContext, run)) return Results.Forbid();
 
     return Results.Json(new RunResponse
@@ -110,27 +136,55 @@ app.MapGet("/api/runs/{id}/stream", async (
     string id,
     RunStreamStore streamStore,
     SqliteRunStore runStore,
+    ILogger<Program> logger,
     CancellationToken ct) =>
 {
+    // Validate ID and ownership before committing to an SSE response.
+    if (!RunId.TryParse(id, out var runId))
+    {
+        httpContext.Response.StatusCode = 400;
+        await httpContext.Response.WriteAsJsonAsync(new { error = "Invalid run id." }, ct);
+        return;
+    }
+
+    var channel = streamStore.Get(id);
+
+    // If no live channel, check the DB for a completed run.
+    Run? completedRun = null;
+    if (channel is null)
+    {
+        try { completedRun = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for stream", runId);
+            httpContext.Response.StatusCode = 500;
+            await httpContext.Response.WriteAsJsonAsync(new { error = "Failed to retrieve the run." }, ct);
+            return;
+        }
+
+        if (completedRun is null)
+        {
+            httpContext.Response.StatusCode = 404;
+            return;
+        }
+    }
+
+    // Headers must be set before any body writes.
     httpContext.Response.Headers.ContentType = "text/event-stream";
     httpContext.Response.Headers.CacheControl = "no-cache";
     httpContext.Response.Headers.Connection = "keep-alive";
 
-    var channel = streamStore.Get(id);
-    if (channel is null)
-    {
-        if (RunId.TryParse(id, out var runId))
-        {
-            var run = await runStore.GetAsync(runId, ct);
-            if (run?.Result is not null)
-                await WriteChunkAsync(httpContext.Response, run.Result, ct);
-        }
-        await WriteDoneAsync(httpContext.Response, ct);
-        return;
-    }
-
     try
     {
+        if (channel is null)
+        {
+            // Run already finished — replay stored result as a single chunk.
+            if (completedRun?.Result is not null)
+                await WriteChunkAsync(httpContext.Response, completedRun.Result, ct);
+            await WriteDoneAsync(httpContext.Response, ct);
+            return;
+        }
+
         await foreach (var chunk in channel.Reader.ReadAllAsync(ct))
             await WriteChunkAsync(httpContext.Response, chunk, ct);
 
@@ -138,7 +192,14 @@ app.MapGet("/api/runs/{id}/stream", async (
     }
     catch (OperationCanceledException)
     {
-        // Client disconnected — normal for SSE; suppress the exception.
+        // Client disconnected — normal for SSE.
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error streaming run {RunId}", runId);
+        // Headers already sent; can't change status code. Send an error event so the client knows.
+        try { await httpContext.Response.WriteAsync("event: error\ndata: stream failure\n\n", CancellationToken.None); }
+        catch { /* response may already be closed */ }
     }
 });
 
