@@ -43,7 +43,7 @@ public sealed class RunOrchestrator
         var ct = _appStopping;
         try
         {
-            var result = await _agentRunner.ExecuteAsync(run.Task, run.RepositoryPath, recordingWriter, ct).ConfigureAwait(false);
+            var result = await _agentRunner.ExecuteAsync(run.Task, run.RepositoryPath, run.ModelSource, recordingWriter, ct).ConfigureAwait(false);
             await _runStore.UpdateResultAsync(run.Id, RunStatus.Completed, result, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)

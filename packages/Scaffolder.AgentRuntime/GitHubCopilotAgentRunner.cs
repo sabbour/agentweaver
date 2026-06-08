@@ -19,7 +19,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, ChannelWriter<RunEvent>? stream, CancellationToken ct)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, ModelSource modelSource, ChannelWriter<RunEvent>? stream, CancellationToken ct)
     {
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);

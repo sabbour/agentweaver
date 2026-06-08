@@ -9,7 +9,10 @@ public static class AgentRuntimeServiceCollectionExtensions
     public static IServiceCollection AddAgentRuntime(this IServiceCollection services)
     {
         services.AddSingleton<GitHubCopilotClientFactory>();
-        services.AddSingleton<IAgentRunner, GitHubCopilotAgentRunner>();
+        services.AddSingleton<GitHubCopilotAgentRunner>();
+        services.AddSingleton<FoundryClientFactory>();
+        services.AddSingleton<FoundryAgentRunner>();
+        services.AddSingleton<IAgentRunner, AgentRunnerDispatcher>();
         return services;
     }
 }
