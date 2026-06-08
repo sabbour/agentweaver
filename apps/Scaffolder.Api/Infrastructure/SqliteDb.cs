@@ -56,6 +56,12 @@ public sealed class SqliteDb
         await using var command = connection.CreateCommand();
         command.CommandText = SchemaSql;
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+        // Migration: add result column to runs if it doesn't exist yet.
+        await using var migrate = connection.CreateCommand();
+        migrate.CommandText = "ALTER TABLE runs ADD COLUMN result TEXT;";
+        try { await migrate.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
+        catch (SqliteException) { /* column already exists */ }
     }
 
     private const string SchemaSql = """
