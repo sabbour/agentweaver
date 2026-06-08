@@ -17,6 +17,19 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
 });
 
+// CORS — origins are configured per-environment under Cors:AllowedOrigins.
+var allowedOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .Get<string[]>() ?? [];
+
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod());
+});
+
 // Infrastructure and stores.
 builder.Services.AddSingleton<SqliteDb>();
 builder.Services.AddSingleton<SqliteEventStore>();
@@ -49,6 +62,7 @@ var app = builder.Build();
 await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
 await app.Services.GetRequiredService<RunOrchestrator>().RestartRecoveryAsync(CancellationToken.None);
 
+app.UseCors();
 app.UseMiddleware<EmojiResponseGuardMiddleware>();
 app.UseMiddleware<ApiKeyAuthMiddleware>();
 

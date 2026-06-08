@@ -1,5 +1,5 @@
 using Azure;
-using Azure.AI.OpenAI;
+using Azure.AI.Inference;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Scaffolder.Domain;
@@ -7,20 +7,46 @@ using Scaffolder.Domain;
 namespace Scaffolder.AgentRuntime.Providers;
 
 /// <summary>
-/// Builds an <see cref="IChatClient"/> backed by a Microsoft Foundry (Azure
-/// OpenAI compatible) deployment (Principle II). Configuration is read from the
-/// <c>Providers:MicrosoftFoundry</c> section. Config is validated lazily — only
-/// when a run that requests this provider is actually submitted, so the API starts
-/// successfully without Foundry config when only GitHub Copilot is in use.
+/// Builds an <see cref="IChatClient"/> backed by a Microsoft Foundry deployment
+/// through the <see cref="ChatCompletionsClient"/> from
+/// <c>Azure.AI.Inference</c> (Principle II). Configuration is read from the
+/// <c>Providers:MicrosoftFoundry</c> section at startup.
 /// </summary>
 public sealed class MicrosoftFoundryChatClientFactory : IChatClientFactory
 {
-    private readonly IConfiguration _configuration;
+    private readonly string _endpoint;
+    private readonly string _apiKey;
+    private readonly string _deployment;
 
     public MicrosoftFoundryChatClientFactory(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        _configuration = configuration;
+        var section = configuration.GetSection("Providers:MicrosoftFoundry");
+        _endpoint = section.GetValue<string>("Endpoint")
+            ?? throw new InvalidOperationException(
+                "Missing configuration 'Providers:MicrosoftFoundry:Endpoint' for the Microsoft Foundry model source.");
+        _apiKey = section.GetValue<string>("ApiKey")
+            ?? throw new InvalidOperationException(
+                "Missing configuration 'Providers:MicrosoftFoundry:ApiKey' for the Microsoft Foundry model source.");
+        _deployment = section.GetValue<string>("Deployment")
+            ?? throw new InvalidOperationException(
+                "Missing configuration 'Providers:MicrosoftFoundry:Deployment' for the Microsoft Foundry model source.");
+
+        // Security (Seraph F8): the model endpoint receives every prompt, tool
+        // schema, and run-context value. Reject any non-HTTPS endpoint at startup
+        // so credentials and prompts are never sent over an unencrypted channel.
+        if (!Uri.TryCreate(_endpoint, UriKind.Absolute, out var endpointUri))
+        {
+            throw new InvalidOperationException(
+                $"Configuration 'Providers:MicrosoftFoundry:Endpoint' is not a valid absolute URI: '{_endpoint}'.");
+        }
+
+        if (!string.Equals(endpointUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Configuration 'Providers:MicrosoftFoundry:Endpoint' must use the 'https' scheme; " +
+                $"got '{endpointUri.Scheme}'. Plain-text model endpoints are not permitted.");
+        }
     }
 
     public IChatClient CreateForRun(Run run)
@@ -32,21 +58,10 @@ public sealed class MicrosoftFoundryChatClientFactory : IChatClientFactory
                 $"Factory is for MicrosoftFoundry; run uses {run.ModelSource}.");
         }
 
-        var section = _configuration.GetSection("Providers:MicrosoftFoundry");
-        var endpoint = section.GetValue<string>("Endpoint")
-            ?? throw new InvalidOperationException(
-                "Missing configuration 'Providers:MicrosoftFoundry:Endpoint' for the Microsoft Foundry model source.");
-        var apiKey = section.GetValue<string>("ApiKey")
-            ?? throw new InvalidOperationException(
-                "Missing configuration 'Providers:MicrosoftFoundry:ApiKey' for the Microsoft Foundry model source.");
-        var deployment = section.GetValue<string>("Deployment")
-            ?? throw new InvalidOperationException(
-                "Missing configuration 'Providers:MicrosoftFoundry:Deployment' for the Microsoft Foundry model source.");
+        var client = new ChatCompletionsClient(
+            new Uri(_endpoint),
+            new AzureKeyCredential(_apiKey));
 
-        var client = new AzureOpenAIClient(
-            new Uri(endpoint),
-            new AzureKeyCredential(apiKey));
-
-        return client.GetChatClient(deployment).AsIChatClient();
+        return client.AsIChatClient(_deployment);
     }
 }

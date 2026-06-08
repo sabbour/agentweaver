@@ -27,16 +27,16 @@ public sealed class AgentRunner : IAgentRunner
 {
     private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly ChatClientFactoryRouter _clientRouter;
+    private readonly MicrosoftFoundryChatClientFactory _factory;
     private readonly ContentSafetyChecker _safetyChecker;
     private readonly RunBounds _bounds;
 
     public AgentRunner(
-        ChatClientFactoryRouter clientRouter,
+        MicrosoftFoundryChatClientFactory factory,
         ContentSafetyChecker safetyChecker,
         RunBounds bounds)
     {
-        _clientRouter = clientRouter ?? throw new ArgumentNullException(nameof(clientRouter));
+        _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _safetyChecker = safetyChecker ?? throw new ArgumentNullException(nameof(safetyChecker));
         _bounds = bounds ?? throw new ArgumentNullException(nameof(bounds));
     }
@@ -55,7 +55,7 @@ public sealed class AgentRunner : IAgentRunner
                     "Run has no worktree path; the agent loop requires an isolated working directory.");
             }
 
-            var client = _clientRouter.CreateForRun(run);
+            var client = _factory.CreateForRun(run);
             var tools = new SandboxedFileTools(run.WorktreePath);
 
             var readTool = AIFunctionFactory.Create(
@@ -122,7 +122,6 @@ public sealed class AgentRunner : IAgentRunner
                     return;
                 }
 
-                stepCount++;
                 messages.AddRange(response.Messages);
 
                 var functionCalls = new List<FunctionCallContent>();
@@ -165,6 +164,16 @@ public sealed class AgentRunner : IAgentRunner
                 var resultContents = new List<AIContent>(functionCalls.Count);
                 foreach (var functionCall in functionCalls)
                 {
+                    // Step = tool call (a user-visible decision). Bound the run on the
+                    // number of tool calls, checked before each one executes.
+                    if (stepCount >= _bounds.MaxSteps)
+                    {
+                        await EmitEventAsync(run.Id, EventType.RunBounded,
+                            new RunBoundedPayload { LimitType = "step-count", StepCount = stepCount },
+                            null, publisher, store, ct);
+                        return;
+                    }
+
                     var callId = string.IsNullOrEmpty(functionCall.CallId)
                         ? Guid.NewGuid().ToString("N")
                         : functionCall.CallId;
@@ -174,6 +183,8 @@ public sealed class AgentRunner : IAgentRunner
                     await EmitEventAsync(run.Id, EventType.ToolCall,
                         new ToolCallPayload { Path = path, Operation = operation },
                         callId, publisher, store, ct);
+
+                    stepCount++;
 
                     ToolOutcome outcome;
                     try
@@ -292,20 +303,28 @@ public sealed class AgentRunner : IAgentRunner
         return string.Empty;
     }
 
-    private static string BuildSystemPrompt(Run run) =>
-        $"""
-        You are a file-editing agent. Your task is to edit files inside a working directory using the read_file and write_file tools.
+    private static string BuildSystemPrompt(Run run)
+    {
+        var worktreePath = (run.WorktreePath ?? string.Empty).Replace("\r", "").Replace("\n", "");
+        var repoPath = (run.RepositoryPath ?? string.Empty).Replace("\r", "").Replace("\n", "");
+        var branch = (run.OriginatingBranch ?? string.Empty).Replace("\r", "").Replace("\n", "");
 
-        Working directory: {run.WorktreePath}
-        Repository: {run.RepositoryPath}
-        Branch: {run.OriginatingBranch}
+        return $"""
+            You are a file-editing agent. Your task is to edit files inside a working directory using the read_file and write_file tools.
 
-        Rules:
-        - All file paths must be relative (no absolute paths, no .. traversal)
-        - Only read and write files inside the working directory
-        - When you have completed the task, respond with a final message and no further tool calls
-        - Do not include any emoji characters in any output
-        """;
+            [RUN CONTEXT]
+            working_directory: {worktreePath}
+            repository_path: {repoPath}
+            branch: {branch}
+            [END RUN CONTEXT]
+
+            Rules:
+            - All file paths must be relative (no absolute paths, no .. traversal)
+            - Only read and write files inside the working directory
+            - When you have completed the task, respond with a final message and no further tool calls
+            - Do not include any emoji characters in any output
+            """;
+    }
 
     private async Task EmitEventAsync(
         RunId runId, string type, object payload, string? callId,
