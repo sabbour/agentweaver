@@ -19,20 +19,20 @@ internal sealed class SandboxGovernance : IDisposable
     /// </summary>
     internal static readonly string SandboxPolicyYaml =
         """
-        apiVersion: governance/v1
+        apiVersion: governance.toolkit/v1
         name: sandbox-containment
         description: Deny-by-default sandbox confinement for all agent tool calls.
         defaultAction: Deny
         rules:
           - name: allow-file-read-or-list
-            condition: "tool_name == 'read_file' OR tool_name == 'list_directory'"
+            condition: "tool_name == 'read_file' or tool_name == 'list_directory'"
             action: Allow
             description: >
               Unified rule — both read_file and list_directory pass tool-name gating.
               Actual path containment is enforced by SandboxPolicyBackend regardless
               of which tool name was resolved.
           - name: allow-file-write
-            condition: "tool_name == 'write_file' OR tool_name == 'edit_file'"
+            condition: "tool_name == 'write_file' or tool_name == 'edit_file'"
             action: Allow
             description: Allowed if SandboxPolicyBackend passes path check.
           - name: deny-shell

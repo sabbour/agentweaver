@@ -46,7 +46,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
         // --- Per-run governance kernel (shared mechanism — FR-032) ---
         using var governance = SandboxGovernance.Create(workingDirectory, runId, _logger);
-        var agentId = $"scaffolder:foundry:{runId}";
+        var agentId = $"did:mesh:scaffolder:foundry:{runId}";
 
         var chatClient = _factory.CreateChatClient();
         var fileTools = new SandboxedFileTools(workingDirectory);

@@ -51,15 +51,22 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
                 };
             }
 
-            // Seraph Y-2: resolve path from known argument keys
+            // Seraph Y-2: resolve path from known argument keys.
+            // Values may arrive boxed as something other than System.String — the Foundry
+            // runner forwards tool arguments straight from the model, where they are
+            // JsonElement instances. Coerce to the underlying string so containment is
+            // actually evaluated rather than silently denied for "no path".
             string? path = null;
             foreach (var key in PathArgumentKeys)
             {
-                if (context.TryGetValue(key, out var p) && p is string s
-                    && !string.IsNullOrWhiteSpace(s))
+                if (context.TryGetValue(key, out var p))
                 {
-                    path = s;
-                    break;
+                    var s = CoercePathValue(p);
+                    if (!string.IsNullOrWhiteSpace(s))
+                    {
+                        path = s;
+                        break;
+                    }
                 }
             }
 
@@ -124,4 +131,20 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
     public Task<ExternalPolicyDecision> EvaluateAsync(
         IReadOnlyDictionary<string, object> context, CancellationToken ct)
         => Task.FromResult(Evaluate(context));
+
+    /// <summary>
+    /// Coerces a tool-argument value to its underlying path string. Accepts a
+    /// <see cref="string"/> directly; for any other boxed value (e.g. a
+    /// <c>System.Text.Json.JsonElement</c> forwarded by the Foundry runner) falls back to
+    /// <see cref="object.ToString"/>, which yields the underlying string for a JSON string
+    /// value. The resolved string is always validated by <see cref="SandboxPathValidator"/>,
+    /// so coercion can never widen the boundary — at worst it routes more values through
+    /// containment.
+    /// </summary>
+    private static string? CoercePathValue(object? value) => value switch
+    {
+        null => null,
+        string s => s,
+        _ => value.ToString(),
+    };
 }

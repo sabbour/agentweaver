@@ -46,12 +46,26 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         _logger.LogInformation("Copilot client started");
 
+        // The deny-by-default OnPermissionRequest handler is the authoritative sandbox
+        // gate: it fires for every native tool call (read/write/shell/mcp), maps it to a
+        // governed tool name + path, and rejects anything outside the working directory or
+        // any non-file tool. We intentionally do NOT set AvailableTools: the SDK's native
+        // file tool is named "view" (not "read_file"), so an allowlist of logical names
+        // would offer the model no usable tools at all — leaving file operations broken and
+        // the permission gate never exercised.
+        //
+        // EnableConfigDiscovery is forced off so the session is hermetic: the SDK will not
+        // auto-load MCP servers, skills, custom agents, or instruction files from disk. That
+        // closes the one surface that could introduce tools which execute without passing
+        // through OnPermissionRequest (an attacker who can write into or near the working
+        // directory cannot register a config-driven server/skill). Native file/shell tools
+        // remain governed by the handler above.
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(governance, runId),
             WorkingDirectory = workingDirectory,
+            EnableConfigDiscovery = false,
             Streaming = true,
-            AvailableTools = ["read_file", "write_file", "list_directory", "edit_file"],
         };
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
@@ -148,19 +162,31 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     {
         return (request, invocation) =>
         {
-            var (toolName, args) = MapToToolCall(request);
-            var (allowed, _) = governance.EvaluateToolCall(
-                agentId: $"scaffolder:copilot:{runId}",
-                toolName: toolName,
-                args: args,
-                _logger);
-
-            return Task.FromResult(new PermissionRequestResult
+            try
             {
-                Kind = allowed
-                    ? PermissionRequestResultKind.Approved
-                    : PermissionRequestResultKind.Rejected,
-            });
+                var (toolName, args) = MapToToolCall(request);
+                var (allowed, _) = governance.EvaluateToolCall(
+                    agentId: $"did:mesh:scaffolder:copilot:{runId}",
+                    toolName: toolName,
+                    args: args,
+                    _logger);
+
+                return Task.FromResult(new PermissionRequestResult
+                {
+                    Kind = allowed
+                        ? PermissionRequestResultKind.Approved
+                        : PermissionRequestResultKind.Rejected,
+                });
+            }
+            catch (Exception ex)
+            {
+                // Fail-closed: any failure mapping or evaluating the request denies the tool call.
+                _logger.LogError(ex, "Permission handler exception (fail-closed deny) — RunId={RunId}", runId);
+                return Task.FromResult(new PermissionRequestResult
+                {
+                    Kind = PermissionRequestResultKind.Rejected,
+                });
+            }
         };
     }
 
@@ -168,7 +194,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// Maps a Copilot SDK <see cref="PermissionRequest"/> to an AGT tool-call
     /// representation (tool name + arguments dictionary).
     /// </summary>
-    private static (string toolName, Dictionary<string, object> args) MapToToolCall(
+    internal static (string toolName, Dictionary<string, object> args) MapToToolCall(
         PermissionRequest request)
     {
         return request switch
@@ -197,7 +223,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// Disambiguates a read permission request into either "read_file" or "list_directory".
     /// Heuristic: trailing directory separator OR <see cref="Directory.Exists"/> → list_directory.
     /// </summary>
-    private static (string toolName, Dictionary<string, object> args) MapReadRequest(
+    internal static (string toolName, Dictionary<string, object> args) MapReadRequest(
         PermissionRequestRead request)
     {
         var path = request.Path ?? "";

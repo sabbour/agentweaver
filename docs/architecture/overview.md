@@ -2,7 +2,7 @@
 
 Scaffolders runs as a single ASP.NET Core process. The API, run orchestration, event persistence, live streaming, and agent runtime all live in the same host, so the backend stays the single source of truth for every run.
 
-The `RunOrchestrator` provisions a per-run git worktree, persists run state, emits `run.started`, and launches the agent loop as hosted background work inside the process. The agent loop uses the shared runtime, enforces sandboxed file access, applies content safety, and writes every event to the durable log before publishing it live.
+The `RunOrchestrator` provisions a per-run git worktree, persists run state, emits `run.started`, and launches the agent loop as hosted background work inside the process. The agent loop uses the shared runtime, evaluates every tool call through a deny-by-default governance gate before it executes, applies content safety, and writes every event to the durable log before publishing it live.
 
 SQLite stores both mutable run state and the append-only event log. `RunEventBroadcaster` fans live events out through `Channel<RunEvent>` so the CLI and web UI can subscribe to the same stream without owning any run logic. When the run finishes, the orchestrator commits the worktree, requests human review, and lets `LibGit2Sharp` merge only after approval.
 
@@ -21,7 +21,7 @@ POST /api/runs
     v
 Agent loop
     |
-    +--> read_file / write_file inside sandbox
+    +--> governance gate (deny-by-default) → read_file / write_file inside worktree
     +--> append events to SQLite
     +--> publish events to live subscribers
     |
@@ -52,7 +52,8 @@ Human review gate
 | ASP.NET Core API | Accepts requests, authorizes users, and exposes run endpoints |
 | `RunOrchestrator` | Owns run lifecycle, review gate, and merge decisions |
 | Agent runtime | Executes the single-agent loop with provider selection, content safety, and run bounds |
-| `SandboxedFileTools` | Restricts file reads and writes to the run worktree |
+| Governance gate | Per-run AGT kernel that evaluates every tool call against a deny-by-default policy and path-containment backend before execution |
+| `SandboxedFileTools` | Defense-in-depth file reads and writes inside the run worktree; validates and re-verifies every path after open |
 | SQLite stores | Persist `runs`, `run_events`, and operational records |
 | `RunEventBroadcaster` | Fans events out to live subscribers through in-memory channels |
 | CLI and web UI | Thin clients that submit runs, watch events, and record review decisions |

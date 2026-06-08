@@ -584,12 +584,12 @@ AGT's `.WithGovernance()` MAF middleware CANNOT reach the Copilot SDK subprocess
 
 The following assumptions MUST hold for the Copilot sandbox to be sound:
 
-1. **No symlink-creation tool**: `AvailableTools` restricts to `["read_file", "write_file", "list_directory", "edit_file"]`. No shell, no `create_symlink`, no MCP tool can create filesystem links.
-2. **Shell denied categorically**: Both by `AvailableTools` (not listed) and by the permission handler (deny unconditionally).
+1. **No symlink-creation tool**: The deny-by-default `OnPermissionRequest` handler denies any tool that is not a recognized file operation. No shell, no `create_symlink`, no MCP tool can create filesystem links.
+2. **Shell denied categorically**: The permission handler denies shell-type invocations unconditionally; the AGT policy layer also denies any tool name outside the four permitted names.
 3. **Per-run fresh directory**: Each run gets a newly-created working directory. No pre-existing symlinks.
 4. **TOCTOU residual risk accepted**: Between `OnPermissionRequest` path check and actual file I/O by the subprocess, a race window exists. Mitigation: assumptions 1-3 eliminate the agent's ability to create reparse points during the race. External actors creating symlinks during a run is accepted as residual risk mitigated by OS-level isolation (future phase).
 5. **SDK RPC protocol is faithful**: The subprocess does not execute a tool without receiving `Approved`.
-6. **`AvailableTools` enforced at protocol level**: Tools not in the list are not offered to the model.
+6. **`OnPermissionRequest` is the authoritative gate**: The SDK (github.copilot.sdk 1.0.0-beta.2) uses Claude-style native tool names (e.g. `view`, not `read_file`). Setting `AvailableTools` to logical names that do not match the SDK's native tool names silently disables all tools — it does not enforce containment. The `OnPermissionRequest` deny-by-default handler is therefore the sole authoritative enforcement point. It fires for every native tool invocation, maps the native tool to a logical tool name, and routes through the shared dual-layer gate (Layer A = AGT tool-name policy; Layer B = SandboxPolicyBackend path containment). `AvailableTools` has been removed from the session configuration. (Future hardening: `ExcludedTools` by native name for defense-in-depth — not current behavior.)
 
 ### `SessionConfig` Changes
 
@@ -601,8 +601,9 @@ var sessionConfig = new SessionConfig
 {
     WorkingDirectory = workingDirectory,
     Streaming = true,
-    AvailableTools = new List<string>
-        { "read_file", "write_file", "list_directory", "edit_file" },
+    // No AvailableTools — the SDK's native tool names (e.g. "view") do not
+    // match our logical names; setting them silently disables all tools.
+    // Enforcement is handled entirely by the OnPermissionRequest handler.
     OnPermissionRequest = BuildPermissionHandler(kernel, sandboxBackend, runId),
 };
 ```
@@ -667,11 +668,10 @@ private static PermissionRequestHandler BuildPermissionHandler(
 ### 6.1 `MapToToolCall` — Explicit Read ↔ List Directory Disambiguation (BLOCKING Fix)
 
 **Design Decision (rubber-duck #1):** The Copilot SDK's `PermissionRequestRead` carries
-a single `Path` property for both file reads and directory listings. The tool name in
-`AvailableTools` is either `"read_file"` or `"list_directory"` — but the SDK permission
-callback only sees `Kind == "read"`. If we always map to `"read_file"`, the YAML rule
-for `list_directory` never matches and AGT denies the call (default-deny). This is a
-functional break, not just a test gap.
+a single `Path` property for both file reads and directory listings. The SDK permission
+callback sees `Kind == "read"` for both cases. If we always map to `"read_file"`, the
+YAML rule for `list_directory` never matches and AGT denies the call (default-deny).
+This is a functional break, not just a test gap.
 
 **Chosen approach:** Inspect `PermissionRequestRead.Path` at mapping time:
 - If the path has a trailing directory separator (`/` or `\`), OR
