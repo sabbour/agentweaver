@@ -8,7 +8,6 @@ import {
 } from '@fluentui/react-components';
 import { HomePage } from './pages/HomePage';
 import { WatchPage } from './pages/WatchPage';
-import { ReviewPage } from './pages/ReviewPage';
 
 const useStyles = makeStyles({
   app: {
@@ -44,7 +43,6 @@ function Shell() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/watch/:runId" element={<WatchPage />} />
-          <Route path="/review/:runId" element={<ReviewPage />} />
         </Routes>
       </main>
     </div>

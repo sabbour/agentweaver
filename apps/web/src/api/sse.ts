@@ -1,154 +1,49 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RunEvent } from './types';
+import type { RunDetail } from './types';
+import { ScaffolderApiClient } from './client';
 
-export type StreamStatus = 'connecting' | 'streaming' | 'done' | 'error';
+export type PollStatus = 'polling' | 'done' | 'error';
 
-interface StreamState {
-  events: RunEvent[];
-  status: StreamStatus;
+interface PollState {
+  run: RunDetail | null;
+  status: PollStatus;
   error: string | null;
 }
 
-// Events that end the client stream. The backend keeps the connection open
-// after a run completes so a human can review; the run is only finished from a
-// client's perspective once it fails, is bounded, or a review decision and any
-// resulting merge have been recorded.
-const TERMINAL_TYPES = new Set<string>([
-  'run.failed',
-  'run.bounded',
-  'merge.completed',
-  'merge.failed',
-  'review.approved',
-  'review.declined',
-]);
+const TERMINAL = new Set(['completed', 'failed']);
+const POLL_INTERVAL_MS = 2000;
 
-/**
- * Streams a run's events over server-sent events using fetch so the bearer key
- * and Last-Event-ID header can be sent. Deduplicates by sequence and reconnects
- * with the last seen id until a terminal event arrives.
- */
-export function useRunStream(
-  runId: string,
-  apiKey: string,
-  baseUrl: string,
-): StreamState {
-  const [events, setEvents] = useState<RunEvent[]>([]);
-  const [status, setStatus] = useState<StreamStatus>('connecting');
+export function useRunPoll(runId: string, apiKey: string, baseUrl: string): PollState {
+  const [run, setRun] = useState<RunDetail | null>(null);
+  const [status, setStatus] = useState<PollStatus>('polling');
   const [error, setError] = useState<string | null>(null);
-  const seenRef = useRef<Set<number>>(new Set());
+  const stopRef = useRef(false);
 
   useEffect(() => {
-    const controller = new AbortController();
-    let stopped = false;
-    let lastEventId: string | null = null;
-    const trimmedBase = baseUrl.replace(/\/+$/, '');
-    const url = `${trimmedBase}/api/runs/${encodeURIComponent(runId)}/stream`;
+    stopRef.current = false;
+    const client = new ScaffolderApiClient(baseUrl, apiKey);
 
-    seenRef.current = new Set();
-
-    const handleEnvelope = (data: string) => {
-      let evt: RunEvent;
-      try {
-        evt = JSON.parse(data) as RunEvent;
-      } catch {
-        return;
-      }
-      if (typeof evt.sequence !== 'number' || !evt.type) {
-        return;
-      }
-      if (seenRef.current.has(evt.sequence)) {
-        return;
-      }
-      seenRef.current.add(evt.sequence);
-      setEvents((prev) => [...prev, evt]);
-      if (TERMINAL_TYPES.has(evt.type)) {
-        stopped = true;
-        setStatus('done');
-        controller.abort();
-      }
-    };
-
-    const run = async () => {
-      while (!stopped) {
+    const poll = async () => {
+      while (!stopRef.current) {
         try {
-          const headers: Record<string, string> = {
-            Accept: 'text/event-stream',
-            Authorization: `Bearer ${apiKey}`,
-          };
-          if (lastEventId !== null) {
-            headers['Last-Event-ID'] = lastEventId;
-          }
-
-          const response = await fetch(url, {
-            method: 'GET',
-            headers,
-            signal: controller.signal,
-          });
-
-          if (!response.ok) {
-            const body = await response.text();
-            throw new Error(`status ${response.status}: ${body}`);
-          }
-          if (!response.body) {
-            throw new Error('response has no readable body');
-          }
-
-          setStatus('streaming');
-
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-
-          while (!stopped) {
-            const { value, done } = await reader.read();
-            if (done) {
-              break;
-            }
-            buffer += decoder.decode(value, { stream: true });
-
-            let separator = buffer.indexOf('\n\n');
-            while (separator !== -1) {
-              const frame = buffer.slice(0, separator);
-              buffer = buffer.slice(separator + 2);
-              let data = '';
-              for (const rawLine of frame.split('\n')) {
-                const line = rawLine.replace(/\r$/, '');
-                if (line.startsWith('id:')) {
-                  lastEventId = line.slice(3).trim();
-                } else if (line.startsWith('data:')) {
-                  data += (data ? '\n' : '') + line.slice(5).trim();
-                }
-              }
-              if (data) {
-                handleEnvelope(data);
-              }
-              separator = buffer.indexOf('\n\n');
-            }
-          }
-        } catch (err) {
-          if (stopped || controller.signal.aborted) {
+          const detail = await client.getRun(runId);
+          setRun(detail);
+          if (TERMINAL.has(detail.status)) {
+            setStatus('done');
             return;
           }
+        } catch (err) {
           setStatus('error');
           setError(err instanceof Error ? err.message : String(err));
-        }
-
-        if (stopped) {
           return;
         }
-
-        // Pause briefly before reconnecting with the last id.
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
     };
 
-    void run();
-
-    return () => {
-      stopped = true;
-      controller.abort();
-    };
+    void poll();
+    return () => { stopRef.current = true; };
   }, [runId, apiKey, baseUrl]);
 
-  return { events, status, error };
+  return { run, status, error };
 }

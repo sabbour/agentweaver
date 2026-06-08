@@ -85,7 +85,6 @@ export function RunDetail({ runId }: RunDetailProps) {
     ['Model source', run.model_source],
     ['Started', run.started_at],
     ['Ended', run.ended_at ?? '-'],
-    ['Step count', String(run.step_count)],
   ];
 
   return (
