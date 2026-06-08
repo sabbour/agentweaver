@@ -19,7 +19,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
     }
 
-    public async Task<string> ExecuteAsync(string task, CancellationToken ct)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, CancellationToken ct)
     {
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
@@ -27,6 +27,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = PermissionHandler.ApproveAll,
+            WorkingDirectory = workingDirectory,
         };
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false,

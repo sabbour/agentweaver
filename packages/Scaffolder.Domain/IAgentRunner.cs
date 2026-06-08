@@ -8,5 +8,5 @@ public interface IAgentRunner
     /// <summary>
     /// Executes one agent turn for the given task and returns the agent's response.
     /// </summary>
-    Task<string> ExecuteAsync(string task, CancellationToken ct);
+    Task<string> ExecuteAsync(string task, string workingDirectory, CancellationToken ct);
 }
