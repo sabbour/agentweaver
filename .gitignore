@@ -46,3 +46,6 @@ apps/web/dist/
 apps/Scaffolder.Api/appsettings.Development.json
 
 obj/
+
+# Test results
+[Tt]est[Rr]esults/

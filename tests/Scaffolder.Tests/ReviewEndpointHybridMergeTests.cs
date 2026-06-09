@@ -345,15 +345,10 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK,
-            "a tree-hash mismatch is a terminal failure returned as HTTP 200 merge_failed, not a 409 retriable");
-        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
-        result!.Status.Should().Be("merge_failed",
-            "a tampered worktree tree must produce a terminal merge_failed status");
-        result.MergeResult.Should().StartWith("conflict:",
-            "the tree-hash mismatch must produce a conflict:... merge result");
-        result.MergeResult.Should().Contain("tree hash",
-            "the conflict reason must mention the tree hash mismatch");
+        // Issue 3: the pre-merge tree-hash validation now catches the mismatch before
+        // attempting the merge and returns 409 (do not attempt merge on tampered worktree).
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "a tree-hash mismatch must be caught before merge and returned as 409");
     }
 
     // =========================================================================
@@ -365,7 +360,7 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     public async Task RestartRecovery_RevertsInterruptedMerge_AndRecreatesStreamEntry()
     {
         var runStore     = _factory.Services.GetRequiredService<SqliteRunStore>();
-        var orchestrator = _factory.Services.GetRequiredService<RunOrchestrator>();
+        var restartSvc   = _factory.Services.GetRequiredService<WorkflowRestartService>();
         var streamStore  = _factory.Services.GetRequiredService<RunStreamStore>();
 
         // Simulate a run that was interrupted while in the Merging state
@@ -392,7 +387,7 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         runBeforeRecovery!.Status.Should().Be(RunStatus.Merging);
 
         // Trigger the restart-recovery path.
-        await orchestrator.RestartRecoveryAsync(CancellationToken.None);
+        await restartSvc.RecoverAsync(CancellationToken.None);
 
         // The run must be reverted to awaiting_review.
         var runAfterRecovery = await runStore.GetAsync(runId);

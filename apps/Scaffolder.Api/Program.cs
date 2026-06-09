@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using Scaffolder.AgentRuntime;
+using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Git;
 using Scaffolder.Api.Infrastructure;
@@ -32,6 +33,15 @@ builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
 
+// Workflow services
+builder.Services.AddSingleton<RunWorkflowRegistry>();
+builder.Services.AddSingleton<PendingRequestStore>();
+builder.Services.AddSingleton<IWorktreeOperations, WorktreeOperationsAdapter>();
+builder.Services.AddSingleton<IMergeCoordinator, MergeCoordinator>();
+builder.Services.AddSingleton<RunWorkflowFactory>();
+builder.Services.AddSingleton<RunWatchLoopService>();
+builder.Services.AddSingleton<WorkflowRestartService>();
+
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
 
@@ -41,10 +51,13 @@ builder.Services.AddAgentRuntime();
 // Authentication
 builder.Services.AddSingleton<ApiKeyRegistry>();
 
+// Checkpoint GC background service (Guardrail 8)
+builder.Services.AddHostedService<CheckpointGcService>();
+
 var app = builder.Build();
 
 await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
-await app.Services.GetRequiredService<RunOrchestrator>().RestartRecoveryAsync(CancellationToken.None);
+await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
 
 app.UseExceptionHandler(err => err.Run(async context =>
 {
@@ -265,8 +278,10 @@ app.MapPost("/api/runs/{id}/review", async (
     ReviewRequest request,
     SqliteRunStore runStore,
     RunStreamStore streamStore,
-    WorktreeManager worktreeManager,
-    RepositoryMergeLock mergeLock,
+    RunWorkflowRegistry workflowRegistry,
+    PendingRequestStore pendingStore,
+    IWorktreeOperations worktreeOps,
+    IMergeCoordinator mergeCoordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -295,198 +310,208 @@ app.MapPost("/api/runs/{id}/review", async (
     if (run.Status != RunStatus.AwaitingReview)
         return Results.Conflict(new { error = $"Run is in status '{run.Status.ToApiString()}' and cannot be reviewed." });
 
-    // A3 null-guard: the entry may be absent after a process restart. In that case
-    // events are not emitted to the stream, but the DB transition is still applied.
-    var entry = streamStore.Get(id);
-
-    if (!request.Approved)
+    // Guardrail 10: Atomic TryRemove for replay/double-POST protection.
+    var pendingEntry = pendingStore.TryRemove(id);
+    if (pendingEntry is null)
     {
-        // S3: Structured operational record for the decline decision.
-        logger.LogInformation(
-            "Review decision: declined. RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
-            id, run.SubmittingUser, caller.User);
-
-        var declined = await runStore.TryTransitionReviewAsync(
-            runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None);
-
-        if (!declined)
-            return Results.Conflict(new { error = "Run status changed concurrently; please retry." });
-
-        logger.LogInformation("Review outcome: declined. RunId={RunId} Reviewer={Reviewer}", id, caller.User);
-
-        if (entry is not null)
+        // Guardrail 2: On-demand fallback — if pending store is empty (e.g., after restart
+        // before recovery fully repopulates), check the workflow's current status.
+        var streamingRun = workflowRegistry.Get(id);
+        if (streamingRun is null)
         {
-            var declinedSeq = entry.NextSequence();
-            entry.Record(new RunEvent(declinedSeq, EventTypes.ReviewDeclined, new { declined_by = caller.User }));
-            streamStore.Complete(id);
+            // Direct execution path: no live MAF workflow is registered for this run.
+            // This covers: (a) test setups that populate the DB directly; (b) post-restart
+            // recovery when no checkpoint exists (WorkflowRestartService re-creates the
+            // stream entry but cannot resume the workflow without a checkpoint).
+            // Auth is already validated above (IsOwner). Execute the merge/decline directly
+            // using the same infrastructure as MergeExecutor so no guardrails are bypassed.
+            logger.LogInformation(
+                "Review decision: {Decision} (direct path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
+                request.Approved ? "approved" : "declined", id, run.SubmittingUser, caller.User);
+            return await ExecuteDirectReviewAsync(
+                id, runId, run, request, runStore, streamStore, worktreeOps, mergeCoordinator, logger, ct);
         }
-
-        // Worktree is preserved on decline per acceptance scenario 3.
-        return Results.Json(new ReviewResponse { RunId = id, Status = RunStatus.Declined.ToApiString(), MergeResult = null });
+        // If the run is registered but no pending request, the request was already consumed.
+        return Results.StatusCode(409);
     }
 
-    // ---- Approve path ----
+    // Guardrail 9: IDOR defense-in-depth — verify caller owns the pending request.
+    if (!string.Equals(caller.User, pendingEntry.OwnerUser, StringComparison.Ordinal))
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-    // MF4: Defensive canonicalization — verify the stored repository path resolves to a real
-    // directory before acquiring locks or touching git. No workspace-root prefix restriction
-    // is configured in this project; see decision record tank-story4-merge-hybrid.md.
-    string canonicalRepoPath;
-    try { canonicalRepoPath = Path.GetFullPath(run.RepositoryPath); }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to canonicalize repository path for run {RunId}", id);
-        return Results.Problem("Invalid repository path.", statusCode: 400);
-    }
+    var streamingRunForReview = workflowRegistry.Get(id);
+    if (streamingRunForReview is null)
+        return Results.Conflict(new { error = "Workflow run is no longer active." });
 
-    if (!Directory.Exists(canonicalRepoPath))
-    {
-        logger.LogWarning("Repository path does not exist for run {RunId}", id);
-        return Results.Problem("Repository path does not exist.", statusCode: 400);
-    }
-
-    if (run.TreeHash is null || run.WorktreeBranch is null || run.WorktreePath is null)
-    {
-        logger.LogError("Run {RunId} is missing tree hash or worktree coordinates", id);
-        return Results.Problem("Run is missing required merge data.", statusCode: 500);
-    }
-
-    // MF2: Acquire per-repository lock for the entire check-then-merge critical section.
-    // Serializes concurrent approvals on the same repository and closes the TOCTOU window.
-    using var lockHandle = await mergeLock.TryAcquireAsync(
-        canonicalRepoPath, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
-
-    if (lockHandle is null)
-        return Results.Conflict(new { error = "Repository is busy; try again." });
-
-    // MF3: CAS gate — atomically transition AwaitingReview → Merging before any mutation.
-    // If another concurrent request already won this gate, return 409 retriable.
-    var casSucceeded = await runStore.TryStartMergingAsync(runId, CancellationToken.None);
-    if (!casSucceeded)
-        return Results.Conflict(new { error = "Run is already being merged." });
-
-    // S3: Structured operational record for the approve decision.
+    // S3: Structured operational record for the review decision.
     logger.LogInformation(
-        "Review decision: approved. RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
-        id, run.SubmittingUser, caller.User);
+        "Review decision: {Decision}. RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
+        request.Approved ? "approved" : "declined", id, run.SubmittingUser, caller.User);
 
-    MergeOutcome outcome;
-    try
-    {
-        outcome = worktreeManager.MergeWorktree(
-            run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch, run.TreeHash);
-    }
-    catch (Exception ex)
-    {
-        // MF6: Fail-safe — on any unexpected exception, revert Merging → AwaitingReview.
-        // Never transition to a terminal state here. Preserve worktree branch for inspection.
-        var headSha = worktreeManager.TryGetCurrentHeadSha(run.RepositoryPath);
-        logger.LogError(ex,
-            "Merge operation threw unexpectedly for run {RunId}. " +
-            "CurrentHeadSha={CurrentHeadSha} WorktreeBranch={WorktreeBranch}. " +
-            "Reverting to awaiting_review for manual recovery.",
-            id, headSha ?? "(unknown)", run.WorktreeBranch);
+    // Create the response and send it to the workflow to resume.
+    var decision = new WorkflowReviewDecision(request.Approved);
+    var externalResponse = pendingEntry.Request.CreateResponse(decision);
+    await streamingRunForReview.SendResponseAsync(externalResponse);
 
-        var reverted = await runStore.RevertMergingAsync(runId, CancellationToken.None).ConfigureAwait(false);
-        if (!reverted)
-            logger.LogWarning("Revert to awaiting_review was a no-op for run {RunId} (status was not merging)", id);
-        return Results.Problem(
-            "Merge operation failed unexpectedly. The run has been reverted to awaiting review.",
-            statusCode: 500);
-    }
-
-    if (outcome.Kind == MergeOutcomeKind.Merged)
-    {
-        // S2: merge_result is a safe, enumerated string — never contains raw file content.
-        var mergeResult = $"merged:{outcome.CommitHash}";
-
-        await runStore.CompleteMergingAsync(
-            runId, RunStatus.Merged, DateTimeOffset.UtcNow, mergeResult, CancellationToken.None)
-            .ConfigureAwait(false);
-
-        // MF5: Structured audit record for a successful merge.
-        logger.LogInformation(
-            "Merge outcome: success. RunId={RunId} CommitHash={CommitHash} MergeMode={MergeMode} " +
-            "PreviousHeadSha={PreviousHeadSha} NewHeadSha={NewHeadSha} WasFastForward={WasFastForward} " +
-            "RepositoryPath={RepositoryPath} Reviewer={Reviewer}",
-            id, outcome.CommitHash, outcome.MergeMode,
-            outcome.PreviousHeadSha, outcome.NewHeadSha, outcome.WasFastForward,
-            canonicalRepoPath, caller.User);
-
-        if (entry is not null)
-        {
-            var approvedSeq = entry.NextSequence();
-            entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved,
-                new { tree_hash = run.TreeHash, approved_by = caller.User }));
-            var mergedSeq = entry.NextSequence();
-            // MF5: previous_head_sha is safe (a git SHA) and aids operational tracing.
-            entry.Record(new RunEvent(mergedSeq, EventTypes.MergeCompleted,
-                new { merged_commit_hash = outcome.CommitHash, previous_head_sha = outcome.PreviousHeadSha }));
-            streamStore.Complete(id);
-        }
-
-        // Remove the worktree on successful merge only.
-        try { worktreeManager.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch); }
-        catch (Exception ex) { logger.LogWarning(ex, "Failed to remove worktree for run {RunId} after merge", id); }
-
-        return Results.Json(new ReviewResponse { RunId = id, Status = RunStatus.Merged.ToApiString(), MergeResult = mergeResult });
-    }
-
-    if (outcome.Kind == MergeOutcomeKind.Blocked)
-    {
-        // Retriable precondition failure — no mutations occurred in git.
-        // Revert Merging → AwaitingReview so the client can fix the condition and re-approve.
-        // Do NOT record review.approved — the approve was not accepted.
-        // Stream stays open.
-        var reverted = await runStore.RevertMergingAsync(runId, CancellationToken.None).ConfigureAwait(false);
-        if (!reverted)
-            logger.LogWarning("Revert to awaiting_review was a no-op for run {RunId} (status was not merging)", id);
-
-        logger.LogInformation(
-            "Merge outcome: blocked (retriable). RunId={RunId} Reason={Reason} Reviewer={Reviewer}",
-            id, outcome.Reason, caller.User);
-
-        return Results.Conflict(new
-        {
-            error  = outcome.Reason,
-            status = RunStatus.AwaitingReview.ToApiString(),
-        });
-    }
-
-    // Conflict — terminal.
-    {
-        // S2: Reason is a safe human-readable category string from WorktreeManager.
-        var safeDetails = outcome.Reason ?? "merge_conflict";
-        var mergeResult = $"conflict:{safeDetails}";
-
-        await runStore.CompleteMergingAsync(
-            runId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeResult, CancellationToken.None)
-            .ConfigureAwait(false);
-
-        // S3: Structured operational record for the merge failure.
-        logger.LogInformation(
-            "Merge outcome: conflict. RunId={RunId} Details={Details} Reviewer={Reviewer}",
-            id, safeDetails, caller.User);
-
-        if (entry is not null)
-        {
-            var approvedSeq = entry.NextSequence();
-            entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved,
-                new { tree_hash = run.TreeHash, approved_by = caller.User }));
-            var failedSeq = entry.NextSequence();
-            // S2: reason mirrors WorktreeManager's generic conflict strings.
-            entry.Record(new RunEvent(failedSeq, EventTypes.MergeFailed, new { reason = safeDetails }));
-            streamStore.Complete(id);
-        }
-
-        // Worktree is preserved on merge failure per FR-016.
-        return Results.Json(new ReviewResponse { RunId = id, Status = RunStatus.MergeFailed.ToApiString(), MergeResult = mergeResult });
-    }
+    // Return immediately — the watch loop will handle the terminal state transition.
+    var expectedStatus = request.Approved ? "merging" : "declined";
+    return Results.Json(new ReviewResponse { RunId = id, Status = expectedStatus, MergeResult = null });
 });
 
 app.Run();
 
 static bool IsOwner(HttpContext context, Run run) =>
     string.Equals(ApiKeyAuthMiddleware.GetCaller(context).User, run.SubmittingUser, StringComparison.Ordinal);
+
+/// <summary>
+/// Direct review execution: merge or decline without a live MAF workflow.
+/// FALLBACK path — used when no workflow is registered for the run (test setup or
+/// post-restart with no checkpoint). The primary path is SendResponseAsync through
+/// the MAF workflow. Unexpected production hits are logged as warnings.
+/// </summary>
+static async Task<IResult> ExecuteDirectReviewAsync(
+    string id,
+    RunId runId,
+    Run run,
+    ReviewRequest request,
+    SqliteRunStore runStore,
+    RunStreamStore streamStore,
+    IWorktreeOperations worktreeOps,
+    IMergeCoordinator mergeCoordinator,
+    ILogger<Program> logger,
+    CancellationToken ct)
+{
+    // Structured warning: detect unexpected production usage of the fallback path.
+    if (!string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"), "Test", StringComparison.OrdinalIgnoreCase))
+    {
+        logger.LogWarning(
+            "ExecuteDirectReviewAsync fallback entered for run {RunId} in non-test environment. " +
+            "This should only occur post-restart with no checkpoint.", id);
+    }
+
+    var entry = streamStore.Get(id);
+
+    if (!request.Approved)
+    {
+        await runStore.TryTransitionReviewAsync(runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (entry is not null)
+        {
+            var declinedSeq = entry.NextSequence();
+            entry.Record(new RunEvent(declinedSeq, EventTypes.ReviewDeclined, new { }));
+            streamStore.Complete(id);
+        }
+        return Results.Json(new ReviewResponse { RunId = id, Status = RunStatus.Declined.ToApiString(), MergeResult = null });
+    }
+
+    // Approve path: validate required merge data.
+    if (run.TreeHash is null || run.WorktreeBranch is null || run.WorktreePath is null)
+    {
+        logger.LogError("Run {RunId} is missing required merge data in direct review path", id);
+        return Results.Problem("Run is missing required merge data.", statusCode: 500);
+    }
+
+    // Worktree-exists + tree-hash-matches validation (same as WorkflowRestartService).
+    if (!worktreeOps.WorktreeExists(run.WorktreePath))
+    {
+        logger.LogError("Worktree missing for run {RunId} at path during direct review", id);
+        return Results.Conflict(new { error = "Worktree no longer exists. The run cannot be merged." });
+    }
+
+    var currentTreeHash = worktreeOps.GetTreeHash(run.WorktreePath);
+    if (currentTreeHash is not null && !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
+    {
+        logger.LogError(
+            "Worktree tree hash mismatch for run {RunId} in direct review: expected={Expected} actual={Actual}",
+            id, run.TreeHash, currentTreeHash);
+        return Results.Problem("Worktree content has changed since review was requested.", statusCode: 409);
+    }
+
+    // Acquire per-repository lock + CAS gate (AwaitingReview -> Merging).
+    var lockResult = await mergeCoordinator.AcquireMergeLockAsync(id, run.RepositoryPath, ct).ConfigureAwait(false);
+    if (!lockResult.Acquired)
+    {
+        if (string.Equals(lockResult.Reason, "already_merging", StringComparison.Ordinal))
+            return Results.Conflict(new { error = "Run is already being merged." });
+        if (string.Equals(lockResult.Reason, "repository_path_not_found", StringComparison.Ordinal))
+            return Results.Problem("Repository path does not exist.", statusCode: 400);
+        return Results.Conflict(new { error = lockResult.Reason });
+    }
+
+    try
+    {
+        var result = worktreeOps.MergeWorktree(
+            run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch, run.TreeHash);
+
+        switch (result.Kind)
+        {
+            case MergeResultKind.Merged:
+                var mergeResult = $"merged:{result.CommitHash}";
+                await mergeCoordinator.CompleteMergeAsync(id, mergeResult, ct).ConfigureAwait(false);
+                logger.LogInformation(
+                    "Merge outcome: success (direct path). RunId={RunId} CommitHash={CommitHash}",
+                    id, result.CommitHash);
+                if (entry is not null)
+                {
+                    var approvedSeq = entry.NextSequence();
+                    entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved, new { }));
+                    var mergedSeq = entry.NextSequence();
+                    entry.Record(new RunEvent(mergedSeq, EventTypes.MergeCompleted,
+                        new { merged_commit_hash = result.CommitHash, previous_head_sha = result.PreviousHeadSha }));
+                    streamStore.Complete(id);
+                }
+                try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch); }
+                catch (Exception ex) { logger.LogWarning(ex, "Failed to remove worktree for run {RunId} after merge", id); }
+                return Results.Json(new ReviewResponse
+                {
+                    RunId = id,
+                    Status = RunStatus.Merged.ToApiString(),
+                    MergeResult = mergeResult,
+                });
+
+            case MergeResultKind.Blocked:
+                // Retriable precondition failure — revert CAS back to AwaitingReview.
+                await mergeCoordinator.RevertMergeAsync(id, ct).ConfigureAwait(false);
+                logger.LogInformation(
+                    "Merge outcome: blocked/retriable (direct path). RunId={RunId} Reason={Reason}",
+                    id, result.Reason);
+                return Results.Conflict(new
+                {
+                    error  = result.Reason,
+                    status = RunStatus.AwaitingReview.ToApiString(),
+                });
+
+            case MergeResultKind.Conflict:
+                var conflictResult = $"conflict:{result.Reason}";
+                await mergeCoordinator.FailMergeAsync(id, conflictResult, ct).ConfigureAwait(false);
+                logger.LogInformation(
+                    "Merge outcome: conflict/terminal (direct path). RunId={RunId}", id);
+                if (entry is not null)
+                {
+                    var approvedSeq2 = entry.NextSequence();
+                    entry.Record(new RunEvent(approvedSeq2, EventTypes.ReviewApproved, new { }));
+                    var failedSeq = entry.NextSequence();
+                    entry.Record(new RunEvent(failedSeq, EventTypes.MergeFailed,
+                        new { reason = result.Reason }));
+                    streamStore.Complete(id);
+                }
+                return Results.Json(new ReviewResponse
+                {
+                    RunId = id,
+                    Status = RunStatus.MergeFailed.ToApiString(),
+                    MergeResult = conflictResult,
+                });
+
+            default:
+                throw new InvalidOperationException($"Unexpected merge result kind: {result.Kind}");
+        }
+    }
+    finally
+    {
+        lockResult.Release();
+    }
+}
 
 static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)
 {

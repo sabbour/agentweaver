@@ -194,6 +194,30 @@ public sealed class SqliteRunStore
             }, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Conditionally sets a terminal status. Only writes if the current status is NOT already
+    /// terminal (Guardrail 3: dual-writer safety). Returns true if the update was applied.
+    /// </summary>
+    public async Task<bool> TrySetTerminalStatusAsync(
+        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE runs
+               SET status = $toStatus, ended_at = $endedAt, result = $result
+             WHERE run_id = $runId
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed');
+            """;
+        command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
+        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
+        command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
     private async Task ExecuteNonQueryAsync(string sql, Action<SqliteCommand> bind, CancellationToken ct)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);

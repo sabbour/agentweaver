@@ -24,13 +24,13 @@ Clients should order and deduplicate events by `sequence`.
 | `tool.call` | Before the runtime evaluates a tool invocation against the sandbox policy | `callId`, `toolName`, `arguments` |
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
 | `tool.error` | After a tool is denied by the sandbox policy, or fails for any other reason such as a missing file or I/O failure | `callId`, `errorMessage` |
-| `run.completed` | When the model returns without any more tool calls | *(none)* |
-| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `errorMessage` |
+| `run.completed` | When the agent turn produces no file changes and the run terminates without a review gate | `result` |
+| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
-| `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash` |
-| `review.approved` | When the owner approves the run and the merge proceeds | `tree_hash`, `approved_by` |
-| `review.declined` | When the owner declines the run | `declined_by` |
-| `merge.completed` | After an approved run merges cleanly into the originating branch | `merged_commit_hash`, `previous_head_sha` |
+| `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
+| `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |
+| `review.declined` | When the owner declines the run | *(none)* |
+| `merge.completed` | After an approved run merges cleanly into the originating branch | `merged_commit_hash`; `previous_head_sha` (direct path only) |
 | `merge.failed` | After an approved run cannot merge back cleanly | `reason` |
 
 ## Tool event pairing
@@ -63,11 +63,11 @@ This event records every tool outcome that is not a success. It covers sandbox p
 
 ### `run.completed`
 
-This event means the model returned no further tool calls. The payload carries no fields. The final model text has already streamed as `agent.message.delta` events for that turn. The orchestrator still needs to commit the worktree and emit `review.requested` before the run reaches the review gate.
+This event fires when the agent turn completes and the worktree contains no file changes. The `result` field is `"no_changes"`. The run terminates immediately on this path — no `review.requested` is emitted and no review gate is reached. When the agent does produce changes, `run.completed` is not emitted; the run transitions to `review.requested` instead.
 
 ### `run.failed`
 
-This event marks a terminal failure. Typical reasons include provider exceptions, unexpected runtime failures, explicit cancellation, or content-safety failures.
+This event marks a terminal failure. The `reason` field identifies the cause. When the agent's output is blocked by content safety policy, `reason` is `"content_safety"` and the run never reaches the review gate. Other values reflect infrastructure or watch-loop errors (for example, `"watch_loop_error"`).
 
 ### `run.bounded`
 
@@ -75,19 +75,19 @@ This event marks a run that exceeded enforced limits. `limit_type` is `step-coun
 
 ### `review.requested`
 
-This event anchors the review gate. `tree_hash` identifies the committed worktree state that the human reviews and that the merge step later verifies.
+This event anchors the review gate. `tree_hash` identifies the committed worktree state that the human reviews and that the merge step later verifies. `request_id` is an informational correlation id for the underlying workflow review request; it is not required for the review decision.
 
 ### `review.approved`
 
-This event records the approving user and the tree hash they approved. It is followed immediately by either `merge.completed` or `merge.failed`. A blocked (retriable) approve does not emit this event — the run stays at the review gate and `review.requested` remains the last event on the stream.
+This event records that an approve decision was accepted. It carries no payload fields. It is followed immediately by either `merge.completed` or `merge.failed`. A blocked (retriable) approve does not emit this event — the run stays at the review gate and `review.requested` remains the last event on the stream.
 
 ### `review.declined`
 
-This event records a decline decision. The originating branch remains unchanged.
+This event records a decline decision. It carries no payload fields. The originating branch remains unchanged.
 
 ### `merge.completed`
 
-This event records the merge commit hash and the SHA the originating branch pointed to before the merge. `merged_commit_hash` is the new HEAD of the originating branch. `previous_head_sha` is the SHA it had before the merge, useful for auditing and rollback.
+This event records a successful merge. `merged_commit_hash` is always present. In the primary workflow path, the field contains the full result string in the format `merged:{commitHash}` (e.g., `"merged:34c09ee..."`). In the direct fallback path (post-restart recovery with no checkpoint), the field contains just the commit hash, and `previous_head_sha` is also present — the SHA the originating branch pointed to before the merge, useful for auditing and rollback.
 
 ### `merge.failed`
 

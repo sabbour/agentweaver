@@ -18,11 +18,13 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
 
     private readonly string _dbPath;
     private readonly string _worktreesPath;
+    private readonly string _checkpointsPath;
 
     public ReviewWebApplicationFactory()
     {
         _dbPath        = Path.Combine(Path.GetTempPath(), $"scaffolder-rv-{Guid.NewGuid():N}.db");
         _worktreesPath = Path.Combine(Path.GetTempPath(), $"scaffolder-rv-wt-{Guid.NewGuid():N}");
+        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"scaffolder-rv-cp-{Guid.NewGuid():N}");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -33,6 +35,7 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
             {
                 ["Database:Path"]                         = _dbPath,
                 ["Worktrees:BasePath"]                    = _worktreesPath,
+                ["Checkpoints:Path"]                      = _checkpointsPath,
                 // Primary owner key (Auth:ApiKey + Auth:User).
                 ["Auth:ApiKey"]                           = OwnerApiKey,
                 ["Auth:User"]                             = OwnerUser,
@@ -64,5 +67,6 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
         }
 
         try { Directory.Delete(_worktreesPath, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(_checkpointsPath, recursive: true); } catch { /* best effort */ }
     }
 }

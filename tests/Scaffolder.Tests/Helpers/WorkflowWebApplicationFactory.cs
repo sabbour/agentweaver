@@ -1,28 +1,32 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Scaffolder.Domain;
 
 namespace Scaffolder.Tests.Helpers;
 
 /// <summary>
-/// Configures the API for integration tests: injects a unique temp SQLite
-/// database per factory instance and a known test API key so HTTP tests can
-/// authenticate without any real secrets.
+/// Web application factory for workflow integration tests. Overrides IAgentRunner
+/// with TestFileEditAgentRunner so tests exercise the REAL MAF workflow path
+/// (not the direct fallback) with deterministic, real file operations.
 /// </summary>
-public sealed class ScaffolderWebApplicationFactory : WebApplicationFactory<Program>
+public sealed class WorkflowWebApplicationFactory : WebApplicationFactory<Program>
 {
-    public const string TestApiKey = "test-api-key-12345";
-    public const string TestUser = "test-user";
+    public const string TestApiKey = "workflow-test-key-12345";
+    public const string TestUser = "workflow-test-user";
 
     private readonly string _dbPath;
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
 
-    public ScaffolderWebApplicationFactory()
+    public TestFileEditAgentRunner TestAgentRunner { get; } = new();
+
+    public WorkflowWebApplicationFactory()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"scaffolder-waf-{Guid.NewGuid():N}.db");
-        _worktreesPath = Path.Combine(Path.GetTempPath(), $"scaffolder-wt-{Guid.NewGuid():N}");
-        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"scaffolder-cp-{Guid.NewGuid():N}");
+        _dbPath = Path.Combine(Path.GetTempPath(), $"scaffolder-wf-{Guid.NewGuid():N}.db");
+        _worktreesPath = Path.Combine(Path.GetTempPath(), $"scaffolder-wf-wt-{Guid.NewGuid():N}");
+        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"scaffolder-wf-cp-{Guid.NewGuid():N}");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -36,11 +40,8 @@ public sealed class ScaffolderWebApplicationFactory : WebApplicationFactory<Prog
                 ["Checkpoints:Path"] = _checkpointsPath,
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
-                ["Git:Author:Name"] = "Test",
+                ["Git:Author:Name"] = "TestAgent",
                 ["Git:Author:Email"] = "test@localhost",
-                // Provider keys are required by AddAgentRuntime at startup.
-                // These tests never execute a run, so the values are never used
-                // to make a real model call.
                 ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
                 ["Providers:GitHubCopilot:Endpoint"] = "https://api.githubcopilot.com",
                 ["Providers:GitHubCopilot:Model"] = "gpt-4o",
@@ -48,8 +49,20 @@ public sealed class ScaffolderWebApplicationFactory : WebApplicationFactory<Prog
                 ["Providers:MicrosoftFoundry:Endpoint"] = "https://test.openai.azure.com",
                 ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
                 ["RunBounds:MaxSteps"] = "50",
-                ["RunBounds:MaxMinutes"] = "10"
+                ["RunBounds:MaxMinutes"] = "10",
+                // Mark as test environment so the fallback warning does not fire.
+                ["DOTNET_ENVIRONMENT"] = "Test",
             });
+        });
+
+        builder.ConfigureServices(services =>
+        {
+            // Remove the production IAgentRunner registration and replace with the test runner.
+            var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IAgentRunner));
+            if (descriptor is not null)
+                services.Remove(descriptor);
+
+            services.AddSingleton<IAgentRunner>(TestAgentRunner);
         });
     }
 

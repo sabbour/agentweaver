@@ -81,7 +81,7 @@ Response `200 OK`:
 }
 ```
 
-Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `merge_failed`, and `failed`. The value `completed` is retained for backward compatibility with runs created before the review gate was introduced; no new run reaches that status.
+Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `merge_failed`, `failed`, and `completed`. `completed` is reached when the agent turn produced no file changes (no review gate is entered on that path).
 
 ### GET /api/runs/{id}/stream
 
@@ -94,7 +94,7 @@ data: {"delta":"Hello","messageId":"msg-001"}
 
 id: 4
 event: run.completed
-data: {}
+data: {"result":"no_changes"}
 
 event: done
 data: {}
@@ -114,7 +114,7 @@ Response headers:
 
 ### POST /api/runs/{id}/review
 
-Records a human review decision. Only the run owner may submit a decision. The run must be in status `awaiting_review`; any other status returns `409 Conflict`.
+Records a human review decision. Only the run owner may submit a decision. Non-owners receive `403 Forbidden`.
 
 Request:
 
@@ -122,35 +122,60 @@ Request:
 { "approved": true }
 ```
 
-**Approve outcomes**
+**Primary path (normal operation)**
 
-On approval the API acquires a per-repository lock, does a CAS transition to `merging`, and calls `MergeWorktree`. There are three possible results:
+In normal operation the API hands the decision to the background MAF workflow and returns immediately:
 
-1. **Merged** — `200 OK`, status `merged`. The run's worktree branch is merged into the originating branch. `merge_result` is `merged:{commit-hash}`. If the originating branch is currently checked out in the main working tree and the tree is clean, the merge advances the branch ref and updates the working tree via a hard reset. If it is not checked out (bare repo or HEAD on a different branch), only the branch ref is advanced. The worktree is removed on success.
+- **Approve** — `200 OK`, `status: "merging"`. The merge runs asynchronously inside the workflow. Watch the SSE stream for `review.approved` followed by either `merge.completed` or `merge.failed` to learn the outcome.
+- **Decline** — `200 OK`, `status: "declined"`. The workflow terminates; `review.declined` is emitted on the stream.
 
-2. **Blocked (retriable)** — `409 Conflict`, status `awaiting_review`. No git mutations occurred. The run stays at the review gate and can be approved again once the condition is resolved. Causes include: uncommitted changes to tracked files, staged changes in the index, untracked files that would be overwritten by the merge, a merge or rebase already in progress in the working tree, the repository lock being held by another concurrent request, or a concurrent approve that already won the CAS gate. Body:
+```json
+{ "run_id": "...", "status": "merging", "merge_result": null }
+{ "run_id": "...", "status": "declined", "merge_result": null }
+```
 
-   ```json
-   { "error": "there are uncommitted changes to tracked files", "status": "awaiting_review" }
-   ```
+**Idempotent re-POST**
 
-   If the originating branch is checked out but the working tree is not clean, the approve is also blocked retriably — clean the tree and approve again.
+If the run has already reached a matching terminal state, the endpoint returns the current state rather than an error:
 
-3. **Terminal conflict** — `200 OK`, status `merge_failed`. The originating branch has diverged and the 3-way merge produces conflicts that require human resolution, or the tree hash stored at review time no longer matches the worktree branch (the run changed after review). The originating branch is unchanged and the worktree is preserved. `merge_result` is `conflict:{reason}`.
+- Re-approving an already-`merged` run returns `200 OK` with `status: "merged"` and the stored `merge_result`.
+- Re-declining an already-`declined` run returns `200 OK` with `status: "declined"`.
 
-**Decline**
+**Error responses**
 
-`{ "approved": false }` transitions the run to `declined` and leaves the originating branch untouched. The worktree is preserved.
+| Status | Condition |
+| --- | --- |
+| `403 Forbidden` | The caller does not own the run |
+| `404 Not Found` | No run found for the given id |
+| `409 Conflict` | The run is not in `awaiting_review` status (and the decision does not match an already-terminal state), or the review decision was already consumed by a concurrent POST |
 
-Responses `200 OK`:
+A `409` from a duplicate or concurrent POST has no body. A `409` from a wrong-status run includes an error message:
+
+```json
+{ "error": "Run is in status 'in_progress' and cannot be reviewed." }
+```
+
+**Direct fallback path (post-restart recovery)**
+
+After a server restart, if no workflow checkpoint is available to resume, the endpoint executes the merge or decline synchronously and returns the final outcome directly:
+
+- **Merge succeeds** — `200 OK`, status `merged`. The run's worktree branch is merged into the originating branch. `merge_result` is `merged:{commit-hash}`. If the originating branch is currently checked out and the tree is clean, the branch ref is advanced and the working tree is updated via a hard reset. If it is not checked out, only the branch ref is advanced. The worktree is removed on success.
+
+- **Blocked (retriable)** — `409 Conflict`, status `awaiting_review`. No git mutations occurred. The run stays at the review gate and can be approved again once the condition is resolved. Causes include: uncommitted changes to tracked files, staged changes in the index, untracked files that would be overwritten by the merge, a merge or rebase already in progress in the working tree, the repository lock being held by another concurrent request, or a concurrent approve that already won the CAS gate. Body:
+
+  ```json
+  { "error": "there are uncommitted changes to tracked files", "status": "awaiting_review" }
+  ```
+
+- **Terminal conflict** — `200 OK`, status `merge_failed`. The originating branch has diverged with conflicts that require human resolution, or the tree hash stored at review time no longer matches the worktree branch. The originating branch is unchanged and the worktree is preserved. `merge_result` is `conflict:{reason}`.
+
+- **Decline** — `200 OK`, status `declined`, `merge_result: null`.
 
 ```json
 { "run_id": "...", "status": "merged", "merge_result": "merged:34c09ee..." }
 { "run_id": "...", "status": "merge_failed", "merge_result": "conflict:The originating branch has diverged..." }
 { "run_id": "...", "status": "declined", "merge_result": null }
 ```
-
-`merge_result` is `merged:{hash}` on success, `conflict:{reason}` when the merge cannot be applied, or `null` for a decline.
 
 See [events.md](events.md) for the event types emitted on the stream for each outcome.
 
