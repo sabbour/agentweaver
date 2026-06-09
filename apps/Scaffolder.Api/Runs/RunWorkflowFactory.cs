@@ -78,7 +78,6 @@ public sealed class RunWorkflowFactory
             _loggerFactory.CreateLogger<AgentTurnExecutor>());
 
         var mergeExecutor = new MergeExecutor(
-            _worktreeOps,
             _mergeCoordinator,
             _loggerFactory.CreateLogger<MergeExecutor>());
 

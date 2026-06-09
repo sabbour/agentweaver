@@ -428,88 +428,65 @@ static async Task<IResult> ExecuteDirectReviewAsync(
         return Results.Problem("Worktree content has changed since review was requested.", statusCode: 409);
     }
 
-    // Acquire per-repository lock + CAS gate (AwaitingReview -> Merging).
-    var lockResult = await mergeCoordinator.AcquireMergeLockAsync(id, run.RepositoryPath, ct).ConfigureAwait(false);
-    if (!lockResult.Acquired)
+    // Consolidated merge execution via the coordinator.
+    var mergeInput = new MergeInput(id, run.TreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
+    var mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, ct).ConfigureAwait(false);
+
+    switch (mergeExecResult.Outcome)
     {
-        if (string.Equals(lockResult.Reason, "already_merging", StringComparison.Ordinal))
-            return Results.Conflict(new { error = "Run is already being merged." });
-        if (string.Equals(lockResult.Reason, "repository_path_not_found", StringComparison.Ordinal))
-            return Results.Problem("Repository path does not exist.", statusCode: 400);
-        return Results.Conflict(new { error = lockResult.Reason });
-    }
+        case MergeExecutionOutcome.Merged:
+            if (entry is not null)
+            {
+                var approvedSeq = entry.NextSequence();
+                entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved, new { }));
+                var mergedSeq = entry.NextSequence();
+                entry.Record(new RunEvent(mergedSeq, EventTypes.MergeCompleted,
+                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha }));
+                streamStore.Complete(id);
+            }
+            return Results.Json(new ReviewResponse
+            {
+                RunId = id,
+                Status = RunStatus.Merged.ToApiString(),
+                MergeResult = mergeExecResult.MergeResult,
+            });
 
-    try
-    {
-        var result = worktreeOps.MergeWorktree(
-            run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch, run.TreeHash);
+        case MergeExecutionOutcome.Blocked:
+            return Results.Conflict(new
+            {
+                error  = mergeExecResult.Reason,
+                status = RunStatus.AwaitingReview.ToApiString(),
+            });
 
-        switch (result.Kind)
-        {
-            case MergeResultKind.Merged:
-                var mergeResult = $"merged:{result.CommitHash}";
-                await mergeCoordinator.CompleteMergeAsync(id, mergeResult, ct).ConfigureAwait(false);
-                logger.LogInformation(
-                    "Merge outcome: success (direct path). RunId={RunId} CommitHash={CommitHash}",
-                    id, result.CommitHash);
-                if (entry is not null)
-                {
-                    var approvedSeq = entry.NextSequence();
-                    entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved, new { }));
-                    var mergedSeq = entry.NextSequence();
-                    entry.Record(new RunEvent(mergedSeq, EventTypes.MergeCompleted,
-                        new { merged_commit_hash = result.CommitHash, previous_head_sha = result.PreviousHeadSha }));
-                    streamStore.Complete(id);
-                }
-                try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch); }
-                catch (Exception ex) { logger.LogWarning(ex, "Failed to remove worktree for run {RunId} after merge", id); }
-                return Results.Json(new ReviewResponse
-                {
-                    RunId = id,
-                    Status = RunStatus.Merged.ToApiString(),
-                    MergeResult = mergeResult,
-                });
+        case MergeExecutionOutcome.Conflict:
+            if (entry is not null)
+            {
+                var approvedSeq2 = entry.NextSequence();
+                entry.Record(new RunEvent(approvedSeq2, EventTypes.ReviewApproved, new { }));
+                var failedSeq = entry.NextSequence();
+                entry.Record(new RunEvent(failedSeq, EventTypes.MergeFailed,
+                    new { reason = mergeExecResult.Reason }));
+                streamStore.Complete(id);
+            }
+            return Results.Json(new ReviewResponse
+            {
+                RunId = id,
+                Status = RunStatus.MergeFailed.ToApiString(),
+                MergeResult = mergeExecResult.MergeResult,
+            });
 
-            case MergeResultKind.Blocked:
-                // Retriable precondition failure — revert CAS back to AwaitingReview.
-                await mergeCoordinator.RevertMergeAsync(id, ct).ConfigureAwait(false);
-                logger.LogInformation(
-                    "Merge outcome: blocked/retriable (direct path). RunId={RunId} Reason={Reason}",
-                    id, result.Reason);
-                return Results.Conflict(new
-                {
-                    error  = result.Reason,
-                    status = RunStatus.AwaitingReview.ToApiString(),
-                });
+        case MergeExecutionOutcome.LockFailed:
+            if (string.Equals(mergeExecResult.LockFailureReason, "already_merging", StringComparison.Ordinal))
+                return Results.Conflict(new { error = "Run is already being merged." });
+            if (string.Equals(mergeExecResult.LockFailureReason, "repository_path_not_found", StringComparison.Ordinal))
+                return Results.Problem("Repository path does not exist.", statusCode: 400);
+            return Results.Conflict(new { error = mergeExecResult.LockFailureReason });
 
-            case MergeResultKind.Conflict:
-                var conflictResult = $"conflict:{result.Reason}";
-                await mergeCoordinator.FailMergeAsync(id, conflictResult, ct).ConfigureAwait(false);
-                logger.LogInformation(
-                    "Merge outcome: conflict/terminal (direct path). RunId={RunId}", id);
-                if (entry is not null)
-                {
-                    var approvedSeq2 = entry.NextSequence();
-                    entry.Record(new RunEvent(approvedSeq2, EventTypes.ReviewApproved, new { }));
-                    var failedSeq = entry.NextSequence();
-                    entry.Record(new RunEvent(failedSeq, EventTypes.MergeFailed,
-                        new { reason = result.Reason }));
-                    streamStore.Complete(id);
-                }
-                return Results.Json(new ReviewResponse
-                {
-                    RunId = id,
-                    Status = RunStatus.MergeFailed.ToApiString(),
-                    MergeResult = conflictResult,
-                });
+        case MergeExecutionOutcome.InternalError:
+            return Results.Problem("Merge failed unexpectedly.", statusCode: 500);
 
-            default:
-                throw new InvalidOperationException($"Unexpected merge result kind: {result.Kind}");
-        }
-    }
-    finally
-    {
-        lockResult.Release();
+        default:
+            throw new InvalidOperationException($"Unexpected merge execution outcome: {mergeExecResult.Outcome}");
     }
 }
 

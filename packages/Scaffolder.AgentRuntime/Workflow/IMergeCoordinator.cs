@@ -20,6 +20,13 @@ public interface IMergeCoordinator
 
     /// <summary>Transitions the run from Merging to MergeFailed with the given result.</summary>
     Task FailMergeAsync(string runId, string mergeResult, CancellationToken ct);
+
+    /// <summary>
+    /// Executes the full merge flow: acquire lock, CAS, merge worktree, transition run state.
+    /// Callers requiring friendly pre-merge validation (worktree-exists, tree-hash match) must
+    /// perform those checks BEFORE calling; ExecuteMergeAsync trusts the provided state.
+    /// </summary>
+    Task<MergeExecutionResult> ExecuteMergeAsync(MergeInput input, CancellationToken ct);
 }
 
 /// <summary>Result of attempting to acquire the merge lock + CAS gate.</summary>
@@ -40,4 +47,25 @@ public sealed class MergeLockResult
 
     public static MergeLockResult Success(IDisposable lockHandle) => new(true, null, lockHandle);
     public static MergeLockResult Failed(string reason) => new(false, reason, null);
+}
+
+/// <summary>Outcome of a consolidated merge execution.</summary>
+public enum MergeExecutionOutcome
+{
+    Merged,
+    Blocked,
+    Conflict,
+    LockFailed,
+    InternalError
+}
+
+/// <summary>Result of ExecuteMergeAsync containing outcome details for caller mapping.</summary>
+public sealed record MergeExecutionResult
+{
+    public required MergeExecutionOutcome Outcome { get; init; }
+    public string? MergeResult { get; init; }
+    public string? CommitHash { get; init; }
+    public string? PreviousHeadSha { get; init; }
+    public string? Reason { get; init; }
+    public string? LockFailureReason { get; init; }
 }
