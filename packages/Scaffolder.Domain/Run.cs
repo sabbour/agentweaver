@@ -15,5 +15,10 @@ public sealed record Run
     public required RunStatus Status { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset? EndedAt { get; init; }
-    public string? Result { get; init; }   // agent response, set on completion
+    public string? Result { get; init; }
+    public string? WorktreePath { get; init; }
+    public string? WorktreeBranch { get; init; }
+    public string? TreeHash { get; init; }
+    public int StepCount { get; init; }
+    public string? Diff { get; init; }
 }

@@ -26,6 +26,7 @@ public sealed class RunStreamEntry
 
     private readonly List<RunEvent> _history = [];
     private bool _isCompleted;
+    private bool _isAwaitingReview;
     private readonly Lock _lock = new();
     private readonly TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile TaskCompletionSource _eventSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -38,6 +39,35 @@ public sealed class RunStreamEntry
     public bool IsCompleted
     {
         get { lock (_lock) return _isCompleted; }
+    }
+
+    /// <summary>
+    /// True once the agent has finished and the run is waiting for a human review decision.
+    /// AwaitingReview entries are exempt from the stale-in-progress eviction sweep (A1).
+    /// </summary>
+    public bool IsAwaitingReview
+    {
+        get { lock (_lock) return _isAwaitingReview; }
+    }
+
+    /// <summary>
+    /// Marks this entry as awaiting a review decision. Must be called before emitting
+    /// review.requested so the stale sweep cannot evict the entry while it waits (A1).
+    /// </summary>
+    public void MarkAwaitingReview()
+    {
+        lock (_lock) _isAwaitingReview = true;
+    }
+
+    /// <summary>
+    /// Returns the next monotonic sequence number for an event to be appended by
+    /// the orchestrator or review endpoint AFTER IAgentRunner.ExecuteAsync has returned.
+    /// Must be called under _lock to preserve total ordering (A2 / FR-019).
+    /// </summary>
+    public int NextSequence()
+    {
+        lock (_lock)
+            return _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
     }
 
     /// <summary>
@@ -137,10 +167,15 @@ public sealed class RunStreamStore
         }
 
         // Evict stale in-progress entries that likely represent leaked runs.
+        // AwaitingReview entries are exempt: they are waiting for a human decision
+        // and must not be evicted while that decision is pending (A1).
+        // Merging entries inherit this exemption: MarkAwaitingReview() is set before
+        // the approve flow enters the Merging state, so IsAwaitingReview is already
+        // true for any in-flight merge. No separate flag is needed.
         var cutoff = DateTimeOffset.UtcNow - MaxInProgressAge;
         foreach (var kvp in _entries)
         {
-            if (!kvp.Value.Entry.IsCompleted && kvp.Value.CreatedAt < cutoff)
+            if (!kvp.Value.Entry.IsCompleted && !kvp.Value.Entry.IsAwaitingReview && kvp.Value.CreatedAt < cutoff)
                 _entries.TryRemove(kvp.Key, out _);
         }
     }

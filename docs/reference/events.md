@@ -17,21 +17,20 @@ Clients should order and deduplicate events by `sequence`.
 
 | Type | When it fires | Payload fields |
 | --- | --- | --- |
-| `run.started` | After the run record and worktree are created, before the agent loop starts | `submitting_user`, `model_source`, `repository_path`, `originating_branch` |
 | `agent.turn.start` | When the model begins a turn | `turnId` |
-| `agent.message.delta` | When the model streams a chunk of visible text | `delta`, `messageId` |
-| `agent.message` | When the model returns a complete visible message that passes content safety | `content` |
+| `agent.message.delta` | When the model streams a chunk of visible text — emitted by both the GitHub Copilot and Microsoft Foundry runners | `delta`, `messageId` |
+| `agent.message` | Fallback: emitted only when a turn produced no token deltas (Foundry runner only; tool-call-only turns or empty streams) | `content` |
 | `agent.turn.end` | When the model finishes a turn | `turnId` |
 | `tool.call` | Before the runtime evaluates a tool invocation against the sandbox policy | `callId`, `toolName`, `arguments` |
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
 | `tool.error` | After a tool is denied by the sandbox policy, or fails for any other reason such as a missing file or I/O failure | `callId`, `errorMessage` |
-| `run.completed` | When the model returns without any more tool calls | `summary` |
+| `run.completed` | When the model returns without any more tool calls | *(none)* |
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `errorMessage` |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash` |
-| `review.approved` | When the owner approves a completed run | `tree_hash`, `approved_by` |
-| `review.declined` | When the owner declines a completed run | `declined_by` |
-| `merge.completed` | After an approved run merges cleanly into the originating branch | `merged_commit_hash` |
+| `review.approved` | When the owner approves the run and the merge proceeds | `tree_hash`, `approved_by` |
+| `review.declined` | When the owner declines the run | `declined_by` |
+| `merge.completed` | After an approved run merges cleanly into the originating branch | `merged_commit_hash`, `previous_head_sha` |
 | `merge.failed` | After an approved run cannot merge back cleanly | `reason` |
 
 ## Tool event pairing
@@ -40,17 +39,15 @@ Each `tool.call` carries a `callId` in its payload. The matching `tool.result` o
 
 ## Provider parity
 
-Both supported providers — GitHub Copilot and Microsoft Foundry — surface the same tool event vocabulary. For each tool the agent runs, the stream carries a `tool.call`, followed by a `tool.result` for an approved tool (with its real content) or a `tool.error` for a denial or failure. The Copilot provider reads these from the tool-execution lifecycle that flows inline through the streaming response, so an observer sees individual tool activity on Copilot runs at parity with Foundry.
+Both the GitHub Copilot and Microsoft Foundry runners stream text as `agent.message.delta` events. Each delta carries a `delta` chunk and the `messageId` it belongs to. Both providers surface the same tool event vocabulary. For each tool the agent runs, the stream carries a `tool.call`, followed by a `tool.result` for an approved tool (with its real content) or a `tool.error` for a denial or failure. The Copilot provider reads these from the tool-execution lifecycle that flows inline through the streaming response, so an observer sees individual tool activity on Copilot runs at parity with Foundry.
 
 ## Event details
 
-### `run.started`
-
-This is the first event in a healthy run. It records the accountable user, selected provider, repository path, and originating branch.
-
 ### `agent.message`
 
-This event carries the complete model message that the runtime allows to reach clients, in its `content` field. While a turn is streaming, the text arrives as a sequence of `agent.message.delta` events, each carrying a `delta` chunk and the `messageId` it belongs to. If content safety fails, the message is withheld and the run ends through `run.failed` instead.
+This event is emitted only by the Foundry runner, as a fallback when a turn produced no token deltas — for example, a tool-call-only turn or an empty stream. `content` carries the full text for that turn. It is never emitted alongside `agent.message.delta` events for the same turn.
+
+During normal streaming, both the GitHub Copilot and Microsoft Foundry runners produce `agent.message.delta` events, each carrying a `delta` chunk and the `messageId` it belongs to.
 
 ### `tool.call`
 
@@ -66,7 +63,7 @@ This event records every tool outcome that is not a success. It covers sandbox p
 
 ### `run.completed`
 
-This event means the model returned no further tool calls. The orchestrator still needs to commit the worktree and emit `review.requested` before the run reaches the review gate.
+This event means the model returned no further tool calls. The payload carries no fields. The final model text has already streamed as `agent.message.delta` events for that turn. The orchestrator still needs to commit the worktree and emit `review.requested` before the run reaches the review gate.
 
 ### `run.failed`
 
@@ -82,7 +79,7 @@ This event anchors the review gate. `tree_hash` identifies the committed worktre
 
 ### `review.approved`
 
-This event records the approving user and the tree hash they approved. Merge starts only after this event is written.
+This event records the approving user and the tree hash they approved. It is followed immediately by either `merge.completed` or `merge.failed`. A blocked (retriable) approve does not emit this event — the run stays at the review gate and `review.requested` remains the last event on the stream.
 
 ### `review.declined`
 
@@ -90,8 +87,8 @@ This event records a decline decision. The originating branch remains unchanged.
 
 ### `merge.completed`
 
-This event records the merge commit hash or fast-forward target after a successful merge back into the originating branch.
+This event records the merge commit hash and the SHA the originating branch pointed to before the merge. `merged_commit_hash` is the new HEAD of the originating branch. `previous_head_sha` is the SHA it had before the merge, useful for auditing and rollback.
 
 ### `merge.failed`
 
-This event records why an approved run could not merge. Typical reasons include branch divergence, conflicts, or a checked-out originating branch that cannot be advanced safely.
+This event records why an approved run could not merge. Terminal reasons are branch divergence with unresolvable conflicts, and a tree-hash mismatch (the worktree branch changed after the run was reviewed). A checked-out originating branch is not a terminal reason — if the branch is checked out but the working tree is dirty, the approve is blocked retriably and no event is emitted until the condition is resolved.

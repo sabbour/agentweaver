@@ -73,7 +73,7 @@ The CLI prompts for the repository path, originating branch, task, and model sou
 
 ## 5. Watch live output
 
-While the run is active, the CLI prints ordered events such as `agent.message`, `tool.call`, `tool.result`, `tool.error`, and lifecycle updates. If you need to reconnect later, run the watch command with the run id:
+While the run is active, the CLI prints ordered events such as `agent.message.delta` token chunks, `tool.call`, `tool.result`, `tool.error`, and lifecycle updates. If you need to reconnect later, run the watch command with the run id:
 
 ```powershell
 dotnet run --project apps/Scaffolder.Cli -- run watch <run-id>
@@ -83,13 +83,19 @@ The backend replays only the events after the last sequence the client saw, then
 
 ## 6. Review and approve
 
-When the agent finishes, the run enters the review gate and the CLI prompts you to approve or decline the diff. You can also review the run explicitly:
+When the agent finishes, the run commits its worktree changes and enters `awaiting_review`. If you are watching in an interactive session the CLI prompts you immediately. You can also run the review command explicitly:
 
 ```powershell
 dotnet run --project apps/Scaffolder.Cli -- run review <run-id>
 ```
 
-Approval records `review.approved` and attempts the merge back into the originating branch. A decline records `review.declined` and leaves the originating branch untouched.
+The CLI fetches the run, prints the unified diff between the originating branch and the run's worktree branch, and prompts you to approve or decline.
+
+**Approve** merges the worktree branch back into the originating branch. When you run the API locally and the originating branch is your current checkout with a clean working tree, the merge also updates your working directory — you see the files change on disk immediately. If your working tree has uncommitted changes, the approve is blocked and the CLI tells you what to fix; the run stays at the review gate and you can approve again once the tree is clean. A successful merge prints `Merged successfully.` and the new commit hash.
+
+**Decline** leaves the originating branch unchanged and closes the run.
+
+A terminal merge conflict (branch divergence that cannot be resolved automatically) prints `Merge failed.` and keeps the worktree intact for manual inspection.
 
 ## 7. Use the web UI instead
 

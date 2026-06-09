@@ -10,7 +10,7 @@ interface PollState {
   error: string | null;
 }
 
-const TERMINAL = new Set(['completed', 'failed']);
+const TERMINAL = new Set(['completed', 'failed', 'merged', 'declined', 'merge_failed']);
 const POLL_INTERVAL_MS = 2000;
 
 export function useRunPoll(runId: string, apiKey: string, baseUrl: string): PollState {
@@ -58,6 +58,11 @@ export type EventType =
   | 'tool.error'
   | 'run.completed'
   | 'run.failed'
+  | 'review.requested'
+  | 'review.approved'
+  | 'review.declined'
+  | 'merge.completed'
+  | 'merge.failed'
   | 'done'
   | 'error';
 
@@ -85,11 +90,13 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
   useEffect(() => {
     stopRef.current = false;
     lastSeqRef.current = 0;
-    setEvents([]);
-    setStatus('connecting');
-    setError(null);
 
     const connect = async () => {
+      // Reset connection state at the start of each connection attempt
+      setEvents([]);
+      setStatus('connecting');
+      setError(null);
+
       const url = `${baseUrl.replace(/\/+$/, '')}/api/runs/${encodeURIComponent(runId)}/stream`;
       try {
         const headers: Record<string, string> = {

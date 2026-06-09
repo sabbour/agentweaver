@@ -152,17 +152,39 @@ public static class RunCommands
         {
             result = await api.SubmitReviewAsync(runId, approved, ct);
         }
+        catch (RetriableReviewException ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Approve could not complete:[/] {Markup.Escape(ex.ServerMessage)}");
+            AnsiConsole.MarkupLine("[grey]Fix the issue above and run approve again.[/]");
+            return 2;
+        }
         catch (ApiException ex)
         {
             PrintApiError(ex);
             return 1;
         }
 
-        AnsiConsole.MarkupLine(
-            $"[green]Review submitted.[/] status: {Markup.Escape(result.Status)}");
-        if (!string.IsNullOrEmpty(result.MergeResult))
+        if (string.Equals(result.Status, "merge_failed", StringComparison.OrdinalIgnoreCase))
         {
-            AnsiConsole.MarkupLine($"merge result: {Markup.Escape(result.MergeResult)}");
+            AnsiConsole.MarkupLine("[red]Merge failed.[/]");
+            if (!string.IsNullOrEmpty(result.MergeResult))
+                AnsiConsole.MarkupLine($"Reason: {Markup.Escape(result.MergeResult)}");
+            AnsiConsole.MarkupLine("[grey]The worktree has been preserved for manual resolution.[/]");
+            return 1;
+        }
+
+        if (string.Equals(result.Status, "merged", StringComparison.OrdinalIgnoreCase))
+        {
+            AnsiConsole.MarkupLine("[green]Merged successfully.[/]");
+            if (!string.IsNullOrEmpty(result.MergeResult))
+                AnsiConsole.MarkupLine($"merge result: {Markup.Escape(result.MergeResult)}");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine(
+                $"[green]Review submitted.[/] status: {Markup.Escape(result.Status)}");
+            if (!string.IsNullOrEmpty(result.MergeResult))
+                AnsiConsole.MarkupLine($"merge result: {Markup.Escape(result.MergeResult)}");
         }
 
         return 0;
@@ -212,7 +234,7 @@ public static class RunCommands
             return;
         }
 
-        if (!string.Equals(run.Status, "completed", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(run.Status, "awaiting_review", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -222,12 +244,25 @@ public static class RunCommands
         try
         {
             var result = await api.SubmitReviewAsync(runId, approved, ct);
-            AnsiConsole.MarkupLine(
-                $"[grey]Review recorded:[/] {Markup.Escape(result.Status)}");
-            if (!string.IsNullOrEmpty(result.MergeResult))
+            if (string.Equals(result.Status, "merge_failed", StringComparison.OrdinalIgnoreCase))
             {
-                AnsiConsole.MarkupLine($"[grey]merge result:[/] {Markup.Escape(result.MergeResult)}");
+                AnsiConsole.MarkupLine("[red]Merge failed.[/]");
+                if (!string.IsNullOrEmpty(result.MergeResult))
+                    AnsiConsole.MarkupLine($"[grey]Reason: {Markup.Escape(result.MergeResult)}[/]");
+                AnsiConsole.MarkupLine("[grey]The worktree has been preserved for manual resolution.[/]");
             }
+            else
+            {
+                AnsiConsole.MarkupLine(
+                    $"[grey]Review recorded:[/] {Markup.Escape(result.Status)}");
+                if (!string.IsNullOrEmpty(result.MergeResult))
+                    AnsiConsole.MarkupLine($"[grey]merge result:[/] {Markup.Escape(result.MergeResult)}");
+            }
+        }
+        catch (RetriableReviewException ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Approve could not complete:[/] {Markup.Escape(ex.ServerMessage)}");
+            AnsiConsole.MarkupLine("[grey]Fix the issue above and run approve again.[/]");
         }
         catch (ApiException ex)
         {

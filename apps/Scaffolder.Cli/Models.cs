@@ -96,6 +96,16 @@ public sealed record RunEvent
     public string? CallId { get; init; }
 }
 
+/// <summary>Error body returned with HTTP 409 for a retriable review failure.</summary>
+public sealed record RetriableReviewErrorBody
+{
+    [JsonPropertyName("error")]
+    public required string Error { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
 /// <summary>Shared serialization settings for the CLI.</summary>
 public static class JsonConfig
 {

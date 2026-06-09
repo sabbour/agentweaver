@@ -12,6 +12,17 @@ public sealed class ApiException(int statusCode, string body)
     public string Body { get; } = body;
 }
 
+/// <summary>
+/// Raised when POST /review returns 409 indicating a retriable precondition failure.
+/// The run remains awaiting_review; the caller may fix the condition and re-submit.
+/// </summary>
+public sealed class RetriableReviewException(string serverMessage, string runStatus)
+    : Exception($"Review cannot proceed: {serverMessage}")
+{
+    public string ServerMessage { get; } = serverMessage;
+    public string RunStatus { get; } = runStatus;
+}
+
 /// <summary>Typed thin wrapper over the Scaffolder backend API.</summary>
 public sealed class ApiClient
 {
@@ -66,7 +77,30 @@ public sealed class ApiClient
             Content = JsonContent.Create(request, options: JsonConfig.Options)
         };
         using var response = await _http.SendAsync(message, ct);
-        return await ReadJsonAsync<ReviewSubmitResponse>(response, ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+
+        if ((int)response.StatusCode == 409)
+        {
+            RetriableReviewErrorBody? errorBody = null;
+            try
+            {
+                errorBody = JsonSerializer.Deserialize<RetriableReviewErrorBody>(
+                    body, JsonConfig.Options);
+            }
+            catch (JsonException) { }
+
+            if (errorBody is not null)
+                throw new RetriableReviewException(errorBody.Error, errorBody.Status);
+            throw new ApiException(409, body);
+        }
+
+        if (!response.IsSuccessStatusCode)
+            throw new ApiException((int)response.StatusCode, body);
+
+        var value = JsonSerializer.Deserialize<ReviewSubmitResponse>(body, JsonConfig.Options);
+        if (value is null)
+            throw new ApiException((int)response.StatusCode, "Response body could not be parsed.");
+        return value;
     }
 
     private static async Task<T> ReadJsonAsync<T>(HttpResponseMessage response, CancellationToken ct)

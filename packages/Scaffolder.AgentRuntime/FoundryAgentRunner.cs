@@ -20,12 +20,20 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
     private const int MaxTurns = 30;
 
-    private readonly FoundryClientFactory _factory;
+    private readonly FoundryClientFactory? _factory;
+    private readonly IChatClient? _chatClient;
     private readonly ILogger<FoundryAgentRunner> _logger;
 
     public FoundryAgentRunner(FoundryClientFactory factory, ILogger<FoundryAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    /// <summary>Internal constructor for unit tests — injects a pre-built IChatClient directly.</summary>
+    internal FoundryAgentRunner(IChatClient chatClient, ILogger<FoundryAgentRunner> logger)
+    {
+        _chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -48,7 +56,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
         using var governance = SandboxGovernance.Create(workingDirectory, runId, _logger);
         var agentId = $"did:mesh:scaffolder:foundry:{runId}";
 
-        var chatClient = _factory.CreateChatClient();
+        var chatClient = _chatClient ?? _factory!.CreateChatClient();
         var fileTools = new SandboxedFileTools(workingDirectory);
         var tools = BuildTools(fileTools);
 
@@ -66,11 +74,57 @@ public sealed class FoundryAgentRunner : IAgentRunner
         {
             Emit("agent.turn.start", new { turnId = turn.ToString() });
 
-            ChatResponse response = await chatClient.GetResponseAsync(messages, options, ct);
-            var assistantMessage = response.Messages.Last();
+            // MF1 + SF3: reset per-turn state before the streaming loop so only
+            // the current turn's text accumulates and the delta/messageId flags are clean.
+            sb.Clear();
+            var hadTextDelta = false;
+            string? turnMessageId = null;
+            var updates = new List<ChatResponseUpdate>();
+
+            try
+            {
+                await foreach (var update in chatClient.GetStreamingResponseAsync(messages, options, ct)
+                                                       .WithCancellation(ct))
+                {
+                    updates.Add(update);
+
+                    // Pin the stable messageId for this turn: first non-null value wins.
+                    if (turnMessageId is null && update.MessageId is not null)
+                        turnMessageId = update.MessageId;
+
+                    var deltaText = update.Text;
+                    if (!string.IsNullOrEmpty(deltaText))
+                    {
+                        sb.Append(deltaText);
+                        Emit("agent.message.delta", new { delta = deltaText, messageId = turnMessageId });
+                        hadTextDelta = true;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // MF2: cancellation is not a failure — propagate cleanly without run.failed.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "GetStreamingResponseAsync threw — turn={Turn}, workingDirectory={WorkingDirectory}",
+                    turn, workingDirectory);
+                Emit("run.failed", new { errorMessage = "The agent encountered an internal error." });
+                throw;
+            }
+
+            // Reconstruct the full ChatMessage (including FunctionCallContent) from updates.
+            // ToChatResponse merges incremental function-call argument fragments correctly.
+            ChatResponse response = updates.ToChatResponse();
+            var assistantMessage = response.Messages.LastOrDefault()
+                ?? new ChatMessage(ChatRole.Assistant, "");
             messages.Add(assistantMessage);
 
-            if (!string.IsNullOrWhiteSpace(assistantMessage.Text))
+            // Fallback: emit agent.message only when no text deltas were produced this turn
+            // (tool-call-only turn, empty stream, etc.) — never double-emit alongside deltas.
+            if (!hadTextDelta && !string.IsNullOrWhiteSpace(assistantMessage.Text))
             {
                 sb.Clear();
                 sb.Append(assistantMessage.Text);
@@ -79,11 +133,10 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
             var calls = assistantMessage.Contents.OfType<FunctionCallContent>().ToList();
 
-            Emit("agent.turn.end", new { turnId = turn.ToString() });
-
             if (calls.Count == 0)
             {
-                Emit("run.completed", new { summary = assistantMessage.Text ?? string.Empty });
+                Emit("agent.turn.end", new { turnId = turn.ToString() });
+                Emit("run.completed", new { });
                 completedNormally = true;
                 break;
             }
@@ -139,6 +192,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
             }
 
             messages.Add(new ChatMessage(ChatRole.Tool, toolResults));
+            Emit("agent.turn.end", new { turnId = turn.ToString() });
         }
 
         if (!completedNormally)

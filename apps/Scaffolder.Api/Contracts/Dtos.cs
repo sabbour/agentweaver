@@ -48,4 +48,40 @@ public sealed record RunResponse
 
     [JsonPropertyName("result")]
     public string? Result { get; init; }
+
+    /// <summary>
+    /// Unified diff of the agent's changes versus the originating branch.
+    /// Only served when the run is in a review-ready or terminal state
+    /// (awaiting_review, merged, merge_failed, declined). Withheld for
+    /// failed/in_progress/pending to prevent leaking content from
+    /// safety-failed or incomplete runs (FR-026 / SC-009).
+    /// </summary>
+    [JsonPropertyName("diff")]
+    public string? Diff { get; init; }
+
+    [JsonPropertyName("step_count")]
+    public int StepCount { get; init; }
+
+    [JsonPropertyName("tree_hash")]
+    public string? TreeHash { get; init; }
+}
+
+/// <summary>Request body for POST /api/runs/{id}/review.</summary>
+public sealed record ReviewRequest
+{
+    [JsonPropertyName("approved")]
+    public required bool Approved { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs/{id}/review.</summary>
+public sealed record ReviewResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("merge_result")]
+    public string? MergeResult { get; init; }
 }

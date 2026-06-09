@@ -39,7 +39,7 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 
 ### POST /api/runs
 
-Submits a task and starts a run. The API creates a dedicated branch (`scaffolder/{runId}`), provisions a git worktree from the originating branch, records `run.started`, and starts the agent loop in the background.
+Submits a task and starts a run. The API creates a dedicated branch (`scaffolder/{runId}`), provisions a git worktree from the originating branch, and starts the agent loop in the background.
 
 Request:
 
@@ -57,7 +57,7 @@ Request:
 Response `202 Accepted`:
 
 ```json
-{ "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "status": "pending" }
+{ "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "status": "in_progress" }
 ```
 
 Validation failures return `400 Bad Request`. Invalid repositories or branches are recorded as failed runs so they do not stay stranded.
@@ -71,16 +71,17 @@ Response `200 OK`:
 ```json
 {
   "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6",
-  "status": "completed",
+  "status": "awaiting_review",
   "model_source": "github-copilot",
   "started_at": "2026-06-07T21:09:45.7526712+00:00",
   "ended_at": "2026-06-07T21:09:52.103+00:00",
   "step_count": 4,
+  "tree_hash": "a1b2c3d4e5f6...",
   "diff": "diff --git a/a.txt b/a.txt\n..."
 }
 ```
 
-Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, `completed`, `failed`, `bounded`, `reviewing`, `approved`, and `declined`.
+Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `merge_failed`, and `failed`. The value `completed` is retained for backward compatibility with runs created before the review gate was introduced; no new run reaches that status.
 
 ### GET /api/runs/{id}/stream
 
@@ -99,20 +100,11 @@ event: done
 data: {}
 ```
 
-Event types emitted on the stream:
-
-| Event | Payload |
-| --- | --- |
-| `agent.message.delta` | `{"delta":"...","messageId":"..."}` — incremental token |
-| `agent.message` | `{"messageId":null,"content":"..."}` — complete message (restart fallback) |
-| `run.completed` | `{}` |
-| `run.failed` | `{"message":"The agent encountered an internal error."}` |
-
 The stream ends with a synthetic `done` frame (no `id`) after the terminal event.
 
-Set `Last-Event-ID` to the last sequence you received. The server resumes from that point in the in-memory event buffer. Reconnection works while the run's entry is retained in memory (up to 256 completed runs, entries evicted after approximately two hours of inactivity for in-progress runs). Delivery is at least once; deduplicate by `sequence`.
+Set `Last-Event-ID` to the last sequence you received. The server resumes from that point in the in-memory event buffer. Reconnection works while the run's entry is retained in memory (up to 256 completed runs; in-progress entries are evicted after approximately two hours of inactivity). `awaiting_review` runs and any run actively being merged are exempt from inactivity eviction — entries for those runs stay in memory until a terminal review decision is recorded. After a process restart, stream entries for `awaiting_review` runs are re-created so the review endpoint can still emit events to reconnected clients; any run interrupted mid-merge is reverted to `awaiting_review` and also gets a fresh entry.
 
-After a process restart, the in-memory event history is lost. If the run already completed, the endpoint replays the stored final result as a single `agent.message` event and closes the stream. If the run was still in progress, restart recovery marks it as failed and the stream returns `done` immediately with no events.
+After a process restart, the in-memory event history is lost. If the run already completed, the endpoint replays the stored final result as a single `agent.message` event and closes the stream. If the run was still in progress at restart, recovery marks it as failed and the stream returns `done` immediately with no events.
 
 Response headers:
 
@@ -122,7 +114,7 @@ Response headers:
 
 ### POST /api/runs/{id}/review
 
-Records a human review decision. Only the run owner may submit a decision. The run must be `completed` and must not already have a recorded decision.
+Records a human review decision. Only the run owner may submit a decision. The run must be in status `awaiting_review`; any other status returns `409 Conflict`.
 
 Request:
 
@@ -130,26 +122,41 @@ Request:
 { "approved": true }
 ```
 
-On approval, the API verifies the approved tree hash, then attempts the merge back into the originating branch. If the branch diverged or the merge conflicts, the originating branch stays unchanged, `merge.failed` is recorded, and the worktree is preserved for inspection.
+**Approve outcomes**
 
-Response `200 OK`:
+On approval the API acquires a per-repository lock, does a CAS transition to `merging`, and calls `MergeWorktree`. There are three possible results:
+
+1. **Merged** — `200 OK`, status `merged`. The run's worktree branch is merged into the originating branch. `merge_result` is `merged:{commit-hash}`. If the originating branch is currently checked out in the main working tree and the tree is clean, the merge advances the branch ref and updates the working tree via a hard reset. If it is not checked out (bare repo or HEAD on a different branch), only the branch ref is advanced. The worktree is removed on success.
+
+2. **Blocked (retriable)** — `409 Conflict`, status `awaiting_review`. No git mutations occurred. The run stays at the review gate and can be approved again once the condition is resolved. Causes include: uncommitted changes to tracked files, staged changes in the index, untracked files that would be overwritten by the merge, a merge or rebase already in progress in the working tree, the repository lock being held by another concurrent request, or a concurrent approve that already won the CAS gate. Body:
+
+   ```json
+   { "error": "there are uncommitted changes to tracked files", "status": "awaiting_review" }
+   ```
+
+   If the originating branch is checked out but the working tree is not clean, the approve is also blocked retriably — clean the tree and approve again.
+
+3. **Terminal conflict** — `200 OK`, status `merge_failed`. The originating branch has diverged and the 3-way merge produces conflicts that require human resolution, or the tree hash stored at review time no longer matches the worktree branch (the run changed after review). The originating branch is unchanged and the worktree is preserved. `merge_result` is `conflict:{reason}`.
+
+**Decline**
+
+`{ "approved": false }` transitions the run to `declined` and leaves the originating branch untouched. The worktree is preserved.
+
+Responses `200 OK`:
 
 ```json
-{ "run_id": "...", "status": "approved", "merge_result": "merged:34c09ee..." }
+{ "run_id": "...", "status": "merged", "merge_result": "merged:34c09ee..." }
+{ "run_id": "...", "status": "merge_failed", "merge_result": "conflict:The originating branch has diverged..." }
+{ "run_id": "...", "status": "declined", "merge_result": null }
 ```
 
-`merge_result` is `merged:{hash}` on success, `conflict:{reason}` when the merge cannot be applied, or `null` for a decline. Rejected review attempts return `409 Conflict`.
+`merge_result` is `merged:{hash}` on success, `conflict:{reason}` when the merge cannot be applied, or `null` for a decline.
+
+See [events.md](events.md) for the event types emitted on the stream for each outcome.
 
 ## Event types on the stream
 
-Events emitted by the agent runtime during a run:
-
-| Type | Payload fields |
-| --- | --- |
-| `agent.message.delta` | `delta`, `messageId` |
-| `agent.message` | `content`, `messageId` (restart fallback only) |
-| `run.completed` | (empty) |
-| `run.failed` | `message` |
+The full event taxonomy — types, payload fields, and per-event descriptions — is in [events.md](events.md).
 
 The `done` frame (no `id` field) signals the end of the stream.
 

@@ -49,8 +49,7 @@ Connects to the run's event stream and prints each event as it arrives. The clie
 Example output:
 
 ```text
-[run.started]        Run abc12345 started (github-copilot)
-[agent.message]      Looking at the source files
+[agent.message.delta] {"delta":"Looking at the source files","messageId":"turn-0"}
 [tool.call]          read_file: src/main.cs
 [tool.result]        OK: namespace Demo { public static class Program { ... } }
 [tool.error]         ERROR: Path '../outside.txt' rejected: resolves outside the sandbox boundary
@@ -58,11 +57,19 @@ Example output:
 [run.completed]      Run complete after 7 steps
 ```
 
+`agent.message.delta` events carry raw JSON because the renderer has no dedicated case for them. `agent.message` appears only when a turn produced no token deltas.
+
 Watching stops when the run reaches a client-terminal event such as `run.failed`, `run.bounded`, `merge.completed`, `merge.failed`, or `review.declined`.
 
 ### `scaffolder run review <run-id>`
 
-Fetches the run, prints its diff, and prompts you to approve or decline. Added lines render in green and removed lines render in red. The command then submits the decision through the API and prints the resulting status and merge result.
+Fetches the run, prints its diff, and prompts you to approve or decline. Added lines render in green and removed lines render in red. The command then submits the decision through the API.
+
+On a clean approval the command prints `Merged successfully.` and the `merge_result` string (e.g. `merged:34c09ee...`), then exits 0.
+
+If the approve cannot proceed because of a retriable precondition — uncommitted local changes, staged files, untracked files that would be overwritten, or an in-progress merge in the working tree — the server returns the reason and the CLI prints it along with a prompt to fix the issue and run approve again. This exits with code 2, leaving the run at the review gate.
+
+If the merge reaches a terminal conflict the CLI prints `Merge failed.`, the reason, and a note that the worktree has been preserved for manual resolution. This exits with code 1.
 
 ### `scaffolder run show <run-id>`
 
@@ -73,6 +80,7 @@ Fetches the run and prints a table with the run id, status, model source, start 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Missing configuration, missing arguments, or API error |
+| `1` | Missing configuration, missing arguments, API error, or terminal merge conflict |
+| `2` | Retriable approve failure — the run stays at the review gate; fix the reported condition and approve again |
 
 API errors print the HTTP status code and response body.

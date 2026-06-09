@@ -18,9 +18,11 @@ public sealed class SqliteRunStore
         command.CommandText =
             """
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
-                              submitting_user, status, started_at, ended_at, result)
+                              submitting_user, status, started_at, ended_at, result,
+                              worktree_path, worktree_branch)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
-                    $user, $status, $startedAt, $endedAt, $result);
+                    $user, $status, $startedAt, $endedAt, $result,
+                    $worktreePath, $worktreeBranch);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -32,6 +34,8 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$startedAt", Ts(run.StartedAt));
         command.Parameters.AddWithValue("$endedAt", NullableTs(run.EndedAt));
         command.Parameters.AddWithValue("$result", (object?)run.Result ?? DBNull.Value);
+        command.Parameters.AddWithValue("$worktreePath", (object?)run.WorktreePath ?? DBNull.Value);
+        command.Parameters.AddWithValue("$worktreeBranch", (object?)run.WorktreeBranch ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -62,7 +66,7 @@ public sealed class SqliteRunStore
 
     public async Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default)
     {
-        await ExecuteAsync(
+        await ExecuteNonQueryAsync(
             "UPDATE runs SET status = $status, ended_at = $endedAt WHERE run_id = $runId;",
             cmd =>
             {
@@ -74,7 +78,7 @@ public sealed class SqliteRunStore
 
     public async Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default)
     {
-        await ExecuteAsync(
+        await ExecuteNonQueryAsync(
             "UPDATE runs SET status = $status, ended_at = $endedAt, result = $result WHERE run_id = $runId;",
             cmd =>
             {
@@ -85,7 +89,112 @@ public sealed class SqliteRunStore
             }, ct).ConfigureAwait(false);
     }
 
-    private async Task ExecuteAsync(string sql, Action<SqliteCommand> bind, CancellationToken ct)
+    /// <summary>
+    /// Sets tree_hash, diff, and step_count after the agent commits its changes,
+    /// and advances status to AwaitingReview. ended_at is intentionally not set
+    /// because the run is still awaiting a human decision.
+    /// </summary>
+    public async Task UpdateReviewReadyAsync(
+        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET tree_hash = $treeHash, diff = $diff, step_count = $stepCount,
+                   status = $status
+             WHERE run_id = $runId;
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$treeHash", treeHash);
+                cmd.Parameters.AddWithValue("$diff", diff);
+                cmd.Parameters.AddWithValue("$stepCount", stepCount);
+                cmd.Parameters.AddWithValue("$status", RunStatus.AwaitingReview.ToApiString());
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Atomically transitions a run from AwaitingReview to <paramref name="toStatus"/>.
+    /// Returns true if the transition was applied (exactly one row updated), false if a
+    /// concurrent request already changed the status. This single-row conditional UPDATE
+    /// is the idempotency and concurrency guard for the review endpoint (design issue #4).
+    /// </summary>
+    public async Task<bool> TryTransitionReviewAsync(
+        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE runs
+               SET status = $toStatus, ended_at = $endedAt, result = $result
+             WHERE run_id = $runId AND status = 'awaiting_review';
+            """;
+        command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
+        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
+        command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// Atomically transitions a run from AwaitingReview to Merging.
+    /// Returns true if the CAS succeeded (this request owns the merge slot),
+    /// false if another request already moved the run out of AwaitingReview (MF3).
+    /// </summary>
+    public async Task<bool> TryStartMergingAsync(RunId runId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE runs SET status = 'merging' WHERE run_id = $runId AND status = 'awaiting_review';";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// Reverts a run from Merging back to AwaitingReview.
+    /// Used on Blocked outcome or on exception fail-safe to keep the run recoverable (MF6).
+    /// Returns true if a row was reverted; false if the run was no longer in Merging
+    /// (a no-op the caller may log for observability).
+    /// </summary>
+    public async Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE runs SET status = 'awaiting_review' WHERE run_id = $runId AND status = 'merging';";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// Transitions a run from Merging to a terminal status (Merged or MergeFailed).
+    /// Called after MergeWorktree returns a Merged or Conflict outcome.
+    /// </summary>
+    public async Task CompleteMergingAsync(
+        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET status = $toStatus, ended_at = $endedAt, result = $result
+             WHERE run_id = $runId AND status = 'merging';
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
+                cmd.Parameters.AddWithValue("$endedAt", Ts(endedAt));
+                cmd.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+    }
+
+    private async Task ExecuteNonQueryAsync(string sql, Action<SqliteCommand> bind, CancellationToken ct)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
@@ -94,32 +203,36 @@ public sealed class SqliteRunStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    // Ordinals: 0=run_id 1=repository_path 2=originating_branch 3=model_source 4=task
+    //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
+    //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
     private const string SelectSql =
-        "SELECT run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result FROM runs";
+        """
+        SELECT run_id, repository_path, originating_branch, model_source, task,
+               submitting_user, status, started_at, ended_at, result,
+               worktree_path, worktree_branch, tree_hash, step_count, diff
+          FROM runs
+        """;
 
     private static Run Map(SqliteDataReader r) => new()
     {
-        Id = RunId.Parse(r.GetString(0)),
-        RepositoryPath = r.GetString(1),
+        Id               = RunId.Parse(r.GetString(0)),
+        RepositoryPath   = r.GetString(1),
         OriginatingBranch = r.GetString(2),
-        ModelSource = ModelSourceExtensions.FromApiString(r.GetString(3)),
-        Task = r.GetString(4),
-        SubmittingUser = r.GetString(5),
-        Status = ParseStatus(r.GetString(6)),
-        StartedAt = DateTimeOffset.Parse(r.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        EndedAt = r.IsDBNull(8) ? null : DateTimeOffset.Parse(r.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        Result = r.IsDBNull(9) ? null : r.GetString(9),
+        ModelSource      = ModelSourceExtensions.FromApiString(r.GetString(3)),
+        Task             = r.GetString(4),
+        SubmittingUser   = r.GetString(5),
+        Status           = RunStatusExtensions.ParseStatus(r.GetString(6)),
+        StartedAt        = DateTimeOffset.Parse(r.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        EndedAt          = r.IsDBNull(8)  ? null : DateTimeOffset.Parse(r.GetString(8),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        Result           = r.IsDBNull(9)  ? null : r.GetString(9),
+        WorktreePath     = r.IsDBNull(10) ? null : r.GetString(10),
+        WorktreeBranch   = r.IsDBNull(11) ? null : r.GetString(11),
+        TreeHash         = r.IsDBNull(12) ? null : r.GetString(12),
+        StepCount        = r.IsDBNull(13) ? 0    : r.GetInt32(13),
+        Diff             = r.IsDBNull(14) ? null : r.GetString(14),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
     private static object NullableTs(DateTimeOffset? v) => v is null ? DBNull.Value : Ts(v.Value);
-
-    private static RunStatus ParseStatus(string value) => value switch
-    {
-        "pending"     => RunStatus.Pending,
-        "in_progress" => RunStatus.InProgress,
-        "completed"   => RunStatus.Completed,
-        "failed"      => RunStatus.Failed,
-        _ => throw new ArgumentException($"Unknown run status: {value}", nameof(value))
-    };
 }

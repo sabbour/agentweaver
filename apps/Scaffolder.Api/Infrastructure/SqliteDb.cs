@@ -57,10 +57,20 @@ public sealed class SqliteDb
         command.CommandText = SchemaSql;
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        // Migration: add result column to runs if it doesn't exist yet.
-        await using var migrate = connection.CreateCommand();
-        migrate.CommandText = "ALTER TABLE runs ADD COLUMN result TEXT;";
-        try { await migrate.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
+        // Idempotent migrations for columns added after initial release.
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN result TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN worktree_path TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN worktree_branch TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN tree_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN diff TEXT;", ct);
+    }
+
+    private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        try { await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
         catch (SqliteException) { /* column already exists */ }
     }
 
@@ -75,7 +85,12 @@ public sealed class SqliteDb
             status             TEXT NOT NULL,
             started_at         TEXT NOT NULL,
             ended_at           TEXT,
-            result             TEXT
+            result             TEXT,
+            worktree_path      TEXT,
+            worktree_branch    TEXT,
+            tree_hash          TEXT,
+            step_count         INTEGER NOT NULL DEFAULT 0,
+            diff               TEXT
         );
         """;
 }

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
+  Badge,
+  Divider,
   Spinner,
   Table,
   TableBody,
@@ -11,7 +13,9 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { RunDetail as RunDetailModel } from '../api/types';
+import type { ReviewResponse, RunDetail as RunDetailModel, RunStatus } from '../api/types';
+import { DiffViewer } from './DiffViewer';
+import { ReviewPanel } from './ReviewPanel';
 
 const useStyles = makeStyles({
   root: {
@@ -23,6 +27,16 @@ const useStyles = makeStyles({
   label: {
     fontWeight: tokens.fontWeightSemibold,
     width: '160px',
+  },
+  reviewSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  mergeResult: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
   },
 });
 
@@ -67,6 +81,14 @@ export function RunDetail({ runId }: RunDetailProps) {
     };
   }, [runId]);
 
+  const handleReviewComplete = (resp: ReviewResponse) => {
+    setRun((prev) =>
+      prev
+        ? { ...prev, status: resp.status as RunStatus, result: resp.merge_result }
+        : null,
+    );
+  };
+
   if (loading) {
     return <Spinner label="Loading run" />;
   }
@@ -85,6 +107,8 @@ export function RunDetail({ runId }: RunDetailProps) {
     ['Model source', run.model_source],
     ['Started', run.started_at],
     ['Ended', run.ended_at ?? '-'],
+    ['Steps', run.step_count.toString()],
+    ['Result', run.result ?? '-'],
   ];
 
   return (
@@ -99,6 +123,27 @@ export function RunDetail({ runId }: RunDetailProps) {
           ))}
         </TableBody>
       </Table>
+      {run.status === 'awaiting_review' && (
+        <div className={styles.reviewSection}>
+          <Divider />
+          <Badge color="warning">Awaiting review</Badge>
+          <DiffViewer diff={run.diff} />
+          <ReviewPanel
+            runId={runId}
+            treeHash={run.tree_hash}
+            onReviewComplete={handleReviewComplete}
+          />
+        </div>
+      )}
+      {run.status === 'merge_failed' && (
+        <div className={styles.reviewSection}>
+          <Divider />
+          <Badge color="danger">Merge failed</Badge>
+          <DiffViewer diff={run.diff} />
+          {run.result && <Text className={styles.mergeResult}>{run.result}</Text>}
+          <Text>The worktree has been preserved for manual resolution.</Text>
+        </div>
+      )}
     </div>
   );
 }

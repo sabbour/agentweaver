@@ -1,4 +1,4 @@
-import type { RunDetail, SubmitRunRequest, SubmitRunResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SubmitRunRequest, SubmitRunResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -9,6 +9,18 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+  }
+}
+
+export class RetriableReviewError extends Error {
+  readonly serverMessage: string;
+  readonly runStatus: string;
+
+  constructor(serverMessage: string, runStatus: string) {
+    super(serverMessage);
+    this.name = 'RetriableReviewError';
+    this.serverMessage = serverMessage;
+    this.runStatus = runStatus;
   }
 }
 
@@ -27,6 +39,31 @@ export class ScaffolderApiClient {
 
   getRun(runId: string): Promise<RunDetail> {
     return this.request<RunDetail>('GET', `/api/runs/${encodeURIComponent(runId)}`);
+  }
+
+  async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {
+    const body: ReviewRequest = { approved };
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    const response = await fetch(
+      `${this.baseUrl}/api/runs/${encodeURIComponent(runId)}/review`,
+      { method: 'POST', headers, body: JSON.stringify(body) },
+    );
+    const text = await response.text();
+    if (response.status === 409) {
+      let parsed: RetriableReviewErrorBody | null = null;
+      try {
+        parsed = JSON.parse(text) as RetriableReviewErrorBody;
+      } catch {
+        // fall through to ApiError below
+      }
+      if (parsed?.error) throw new RetriableReviewError(parsed.error, parsed.status ?? 'awaiting_review');
+      throw new ApiError(409, text);
+    }
+    if (!response.ok) throw new ApiError(response.status, text);
+    return (text ? JSON.parse(text) : null) as ReviewResponse;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
