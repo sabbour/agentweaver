@@ -20,7 +20,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalM,
     padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   meta: {
