@@ -106,15 +106,27 @@ public sealed class RunWatchLoopService
                     break;
 
                 case WorkflowOutputEvent woe:
-                    await HandleTerminalOutputAsync(runId, woe, entry, ct).ConfigureAwait(false);
-                    _registry.Remove(runId);
-                    _factory.DeleteCheckpoints(runId);
-                    return;
+                        var isTerminal = await HandleTerminalOutputAsync(runId, woe, entry, ct).ConfigureAwait(false);
+                        if (isTerminal)
+                        {
+                            _registry.Remove(runId);
+                            _factory.DeleteCheckpoints(runId);
+                            return;
+                        }
+                        // Non-terminal (e.g. leaked blocked output): preserve registry + checkpoints
+                        // so the run can still be resumed/reviewed. Let the watch loop continue.
+                        break;
             }
         }
     }
 
-    private async Task HandleTerminalOutputAsync(
+    /// <summary>
+    /// Processes a workflow terminal output event. Returns true if the output is genuinely
+    /// terminal (merged, merge_failed, no_changes, declined, content_safety) and the run
+    /// should be cleaned up. Returns false for non-terminal leaked outputs (blocked) so the
+    /// watch loop preserves the registry entry and checkpoints for recovery.
+    /// </summary>
+    internal async Task<bool> HandleTerminalOutputAsync(
         string runId, WorkflowOutputEvent woe, RunStreamEntry entry, CancellationToken ct)
     {
         var parsedRunId = RunId.Parse(runId);
@@ -131,20 +143,36 @@ public sealed class RunWatchLoopService
                 entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved, new { }));
                 var mergedSeq = entry.NextSequence();
                 entry.Record(new RunEvent(mergedSeq, EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult }));
-            }
-            else
-            {
-                // merge_failed
-                await _runStore.TrySetTerminalStatusAsync(
-                    parsedRunId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
-                var approvedSeq = entry.NextSequence();
-                entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved, new { }));
-                var failedSeq = entry.NextSequence();
-                entry.Record(new RunEvent(failedSeq, EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult }));
+                _streamStore.Complete(runId);
+                return true;
             }
+
+            if (mergeOutput.Status == "blocked")
+            {
+                // Defensive: blocked outputs re-enter the review gate via the workflow graph
+                // and should never reach terminal output. If they do, log and leave the run
+                // at awaiting_review (RevertMergeAsync already restored it) — do NOT emit
+                // merge.failed so the run remains retriable. Do NOT clean up.
+                _logger.LogWarning(
+                    "Unexpected blocked MergeOutput reached terminal handler for run {RunId}; ignoring", runId);
+                return false;
+            }
+
+            // merge_failed (conflict, lock failure, internal error)
+            await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
+
+            var approvedSeqF = entry.NextSequence();
+            entry.Record(new RunEvent(approvedSeqF, EventTypes.ReviewApproved, new { }));
+            var failedSeq = entry.NextSequence();
+            entry.Record(new RunEvent(failedSeq, EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult }));
+
+            _streamStore.Complete(runId);
+            return true;
         }
-        else if (woe.Is<NoChangesOutput>(out var noChanges))
+
+        if (woe.Is<NoChangesOutput>(out _))
         {
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, "no_changes", CancellationToken.None).ConfigureAwait(false);
@@ -154,16 +182,24 @@ public sealed class RunWatchLoopService
 
             // No-changes runs must not leak worktrees (Issue 5).
             await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
+
+            _streamStore.Complete(runId);
+            return true;
         }
-        else if (woe.Is<DeclinedOutput>())
+
+        if (woe.Is<DeclinedOutput>())
         {
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None).ConfigureAwait(false);
 
             var seq = entry.NextSequence();
             entry.Record(new RunEvent(seq, EventTypes.ReviewDeclined, new { }));
+
+            _streamStore.Complete(runId);
+            return true;
         }
-        else if (woe.Is<ContentSafetyFailedOutput>())
+
+        if (woe.Is<ContentSafetyFailedOutput>())
         {
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "content_safety", CancellationToken.None).ConfigureAwait(false);
@@ -173,9 +209,15 @@ public sealed class RunWatchLoopService
 
             // Content-safety-failed runs must not leak worktrees (Issue 5).
             await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
+
+            _streamStore.Complete(runId);
+            return true;
         }
 
-        _streamStore.Complete(runId);
+        // Unknown output type — treat as non-terminal to avoid data loss.
+        _logger.LogWarning(
+            "Unrecognized WorkflowOutputEvent type for run {RunId}; treating as non-terminal", runId);
+        return false;
     }
 
     private async Task CleanupWorktreeAsync(RunId parsedRunId, string runId)

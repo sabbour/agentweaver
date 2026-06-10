@@ -20,4 +20,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Scaffolder.Tests" />
+  </ItemGroup>
+
 </Project>

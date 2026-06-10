@@ -453,6 +453,93 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
+    // HM-13 — Platform-conditional HEAD compare: on Windows a case-variant
+    // checked-out branch (Main vs main) must take the checked-out (hard-reset)
+    // path so merged files land in the working tree.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CaseVariantCheckedOutBranch_Windows_TakesCheckedOutPath()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            // On Linux/macOS branch names are case-sensitive; this test validates
+            // the Windows-specific OrdinalIgnoreCase comparison.
+            return;
+        }
+
+        // Create a repo where HEAD is on "Main" (capital M). The originating branch
+        // is recorded as "main" (lowercase) to exercise a genuine case-variant scenario.
+        // With Ordinal comparison these would NOT match → ref-only path → no working tree update.
+        // With OrdinalIgnoreCase (the fix) they DO match → checked-out path → hard reset.
+        var repoPath = Path.Combine(
+            Path.GetTempPath(), $"scaffolder-test-case-{Guid.NewGuid():N}");
+        _tempRepoDirs.Add(repoPath);
+
+        Repository.Init(repoPath);
+        using (var repo = new Repository(repoPath))
+        {
+            File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "initial content");
+            Commands.Stage(repo, "*");
+            var sig = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repo.Commit("Initial commit", sig, sig);
+
+            // Rename HEAD to "Main" (uppercase M).
+            repo.Branches.Rename(repo.Head, "Main");
+        }
+
+        // Setup a run targeting originatingBranch = "main" (lowercase) — different case from HEAD.
+        var runId = RunId.New();
+        var worktreeManager = _factory.Services.GetRequiredService<WorktreeManager>();
+        // AddWorktree looks up the branch via repo.Branches which is case-insensitive on Windows,
+        // so "main" resolves to the existing "Main" ref.
+        var worktreeInfo = worktreeManager.AddWorktree(repoPath, "main", runId);
+
+        File.WriteAllText(Path.Combine(worktreeInfo.WorktreePath, "agent-file.txt"), "agent content");
+        var treeHash = worktreeManager.CommitChanges(worktreeInfo.WorktreePath, runId);
+        var diff = worktreeManager.GetDiff(repoPath, "main", worktreeInfo.BranchName);
+
+        var run = new Run
+        {
+            Id = runId,
+            RepositoryPath = repoPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "case-variant checked-out test",
+            SubmittingUser = ReviewWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            WorktreePath = worktreeInfo.WorktreePath,
+            WorktreeBranch = worktreeInfo.BranchName,
+        };
+
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
+
+        await runStore.InsertAsync(run);
+        await runStore.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount: 0);
+
+        var entry = streamStore.Create(runId.ToString(), ReviewWebApplicationFactory.OwnerUser);
+        entry.MarkAwaitingReview();
+        entry.Record(new RunEvent(1, EventTypes.ReviewRequested, new { tree_hash = treeHash }));
+
+        // Approve — should take the checked-out path and hard-reset the working tree.
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{runId}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+
+        // The hard reset must have updated the main working tree on disk.
+        // With the old Ordinal comparison, HEAD "Main" != originating "main" →
+        // ref-only path → this file would NOT appear in the working tree.
+        File.Exists(Path.Combine(repoPath, "agent-file.txt")).Should().BeTrue(
+            "case-variant HEAD (Main vs main) on Windows must take the checked-out path " +
+            "and update the working tree via hard reset");
+        File.ReadAllText(Path.Combine(repoPath, "agent-file.txt")).Should().Be("agent content");
+    }
+
+    // =========================================================================
     // Helpers
     // =========================================================================
 

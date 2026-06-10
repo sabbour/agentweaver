@@ -124,6 +124,23 @@ public sealed class RunWorkflowFactory
             "terminal-safety-failed",
             (input, ctx, ct) => new ValueTask<ContentSafetyFailedOutput>(new ContentSafetyFailedOutput(input.RunId)));
 
+        // Terminal merge node: pass-through for merged/failed outputs that should end the workflow.
+        ExecutorBinding terminalMerge = new FunctionExecutor<MergeOutput, MergeOutput>(
+            "terminal-merge",
+            (input, ctx, ct) => new ValueTask<MergeOutput>(input));
+
+        // Blocked adapter: on a retriable block, re-enter the review gate via HITL
+        // so the workflow stays alive and the user can re-approve once the blocker clears.
+        ExecutorBinding blockedAdapter = new FunctionExecutor<MergeOutput, WorkflowReviewRequest>(
+            "blocked-adapter",
+            async (output, ctx, ct) =>
+            {
+                var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
+                    .ConfigureAwait(false);
+                return new WorkflowReviewRequest(
+                    agentOutput!.RunId, agentOutput.TreeHash, agentOutput.Diff, agentOutput.StepCount);
+            });
+
         ExecutorBinding agentBinding = agentTurnExecutor;
         ExecutorBinding mergeBinding = mergeExecutor;
         ExecutorBinding reviewBinding = reviewPort;
@@ -145,10 +162,18 @@ public sealed class RunWorkflowFactory
                 decision => decision is not null && decision.Approved)
             // Merge adapter -> merge executor (unconditional: MergeInput flows in)
             .AddEdge(mergeAdapter, mergeBinding)
+            // Merge succeeded or failed terminally -> terminal merge output
+            .AddEdge<MergeOutput>(mergeBinding, terminalMerge,
+                output => output is not null && output.Status != "blocked")
+            // Merge blocked (retriable) -> re-enter review gate via HITL.
+            // idempotent: true permits the cycle back through the review port.
+            .AddEdge<MergeOutput>(mergeBinding, blockedAdapter,
+                output => output is not null && output.Status == "blocked")
+            .AddEdge(blockedAdapter, reviewBinding, idempotent: true)
             // Declined -> terminal
             .AddEdge<WorkflowReviewDecision>(reviewBinding, terminalDeclined,
                 decision => decision is null || !decision.Approved)
-            .WithOutputFrom(mergeBinding)
+            .WithOutputFrom(terminalMerge)
             .WithOutputFrom(terminalNoOp)
             .WithOutputFrom(terminalDeclined)
             .WithOutputFrom(terminalSafetyFailed)

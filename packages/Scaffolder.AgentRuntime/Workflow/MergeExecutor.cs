@@ -32,7 +32,7 @@ public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>
                 new MergeOutput(input.RunId, "merged", result.MergeResult),
 
             MergeExecutionOutcome.Blocked =>
-                new MergeOutput(input.RunId, "merge_failed", result.Reason),
+                new MergeOutput(input.RunId, "blocked", result.Reason),
 
             MergeExecutionOutcome.Conflict =>
                 new MergeOutput(input.RunId, "merge_failed", result.MergeResult),

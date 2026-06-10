@@ -127,9 +127,17 @@ public sealed class WorktreeManager
         // (c) Detect whether the originating branch is currently checked out in the main working tree.
         // A detached HEAD has IsHeadDetached == true, so FriendlyName won't match any branch name
         // and correctly falls through to the ref-only path.
+        // Platform split: on Windows, git branch refs are case-insensitive (main == Main);
+        // on Linux/macOS they are case-sensitive (feature/x != feature/X).
+        // Seraph M1 advisory: branch identity is already validated case-sensitively via
+        // repo.Branches[originatingBranch] before this point, so OrdinalIgnoreCase on Windows
+        // is not a confused-deputy vector.
+        var headComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
         bool checkedOut = !repo.Info.IsBare
             && !repo.Info.IsHeadDetached
-            && string.Equals(repo.Head.FriendlyName, originatingBranch, StringComparison.Ordinal);
+            && string.Equals(repo.Head.FriendlyName, originatingBranch, headComparison);
 
         if (checkedOut)
         {
