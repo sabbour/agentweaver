@@ -38,8 +38,9 @@ public static class SandboxPathValidator
         var combined = Path.GetFullPath(Path.Combine(sandboxRoot, requestedPath));
 
         // 4. Lexical prefix check (catches obvious escapes after normalization).
-        var root = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!combined.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        var rootNoSep = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
+        if (!combined.StartsWith(rootNoSep + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(combined, rootNoSep, StringComparison.OrdinalIgnoreCase))
             throw new SandboxViolationException(requestedPath, sandboxRoot, "path resolves outside sandbox boundary");
 
         // 5. Walk each existing ancestor and reject reparse points (symlinks, junctions).
@@ -154,8 +155,9 @@ public static class SandboxPathValidator
         if (realPath is null)
             throw new SandboxViolationException(originalPath, sandboxRoot, "could not resolve real path of opened file");
 
-        var root = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!realPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        var rootNoSep = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
+        if (!realPath.StartsWith(rootNoSep + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(realPath, rootNoSep, StringComparison.OrdinalIgnoreCase))
             throw new SandboxViolationException(originalPath, sandboxRoot,
                 $"opened file resolves to '{realPath}' which is outside sandbox boundary");
     }

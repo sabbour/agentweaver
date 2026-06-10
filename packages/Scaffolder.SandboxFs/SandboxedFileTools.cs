@@ -15,6 +15,15 @@ public sealed class SandboxedFileTools
     public SandboxedFileTools(string sandboxRoot)
     {
         _sandboxRoot = Path.GetFullPath(sandboxRoot);
+
+        // Seraph A2: reject if the sandbox root itself is a reparse point
+        if (Directory.Exists(_sandboxRoot))
+        {
+            var rootInfo = new DirectoryInfo(_sandboxRoot);
+            if (rootInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new SandboxViolationException(_sandboxRoot, _sandboxRoot,
+                    "sandbox root is a symbolic link or junction; refusing to operate");
+        }
     }
 
     public string SandboxRoot => _sandboxRoot;
@@ -35,6 +44,10 @@ public sealed class SandboxedFileTools
         {
             return (null, new SandboxReadFailure(SandboxFailureKind.Rejected, ex.Message));
         }
+
+        if (Directory.Exists(resolvedPath))
+            return (null, new SandboxReadFailure(SandboxFailureKind.NotFound,
+                $"Path is a directory; use list_directory: {requestedPath}"));
 
         if (!File.Exists(resolvedPath))
             return (null, new SandboxReadFailure(SandboxFailureKind.NotFound, $"File not found: {requestedPath}"));
@@ -109,6 +122,75 @@ public sealed class SandboxedFileTools
             return (0, new SandboxWriteFailure(SandboxFailureKind.Error, ex.Message));
         }
     }
+
+    /// <summary>
+    /// Lists immediate children (non-recursive) of a directory. Does NOT follow
+    /// reparse points. Returns (entries, null) on success; (null, failure) on failure.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="ReadFileAsync"/> and <see cref="WriteFileAsync"/>, this method does
+    /// not perform an open-then-verify handle check. Containment relies on lexical validation
+    /// via <c>ValidateAndResolve</c> plus <c>AttributesToSkip = ReparsePoint</c> to exclude
+    /// junction/symlink children from enumeration results. A narrow TOCTOU window exists where
+    /// a local attacker with concurrent filesystem write access could swap the validated
+    /// directory for a junction between validation and enumeration. The worst-case outcome is
+    /// disclosure of bare filenames (never file content) from outside the sandbox.
+    /// Content access remains fully protected because ReadFile/WriteFile retain handle-level
+    /// verification. The residual risk is filename enumeration under a local concurrent-write
+    /// attacker, which is outside the practical threat model for this sandbox.
+    /// </remarks>
+    public Task<(IReadOnlyList<SandboxDirectoryEntry>? Entries, SandboxReadFailure? Failure)> ListDirectoryAsync(
+        string requestedPath, CancellationToken ct = default)
+    {
+        string resolvedPath;
+        try
+        {
+            resolvedPath = SandboxPathValidator.ValidateAndResolve(requestedPath, _sandboxRoot);
+        }
+        catch (SandboxViolationException ex)
+        {
+            return Task.FromResult<(IReadOnlyList<SandboxDirectoryEntry>?, SandboxReadFailure?)>(
+                (null, new SandboxReadFailure(SandboxFailureKind.Rejected, ex.Message)));
+        }
+
+        if (!Directory.Exists(resolvedPath))
+        {
+            return Task.FromResult<(IReadOnlyList<SandboxDirectoryEntry>?, SandboxReadFailure?)>(
+                (null, new SandboxReadFailure(SandboxFailureKind.NotFound, $"Directory not found: {requestedPath}")));
+        }
+
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var entries = new List<SandboxDirectoryEntry>();
+            var enumOptions = new EnumerationOptions
+            {
+                RecurseSubdirectories = false,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+                ReturnSpecialDirectories = false,
+            };
+
+            foreach (var entry in new DirectoryInfo(resolvedPath).EnumerateFileSystemInfos("*", enumOptions))
+            {
+                ct.ThrowIfCancellationRequested();
+                var kind = entry is DirectoryInfo ? SandboxEntryKind.Directory : SandboxEntryKind.File;
+                entries.Add(new SandboxDirectoryEntry(entry.Name, kind));
+            }
+
+            return Task.FromResult<(IReadOnlyList<SandboxDirectoryEntry>?, SandboxReadFailure?)>(
+                (entries, null));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Task.FromResult<(IReadOnlyList<SandboxDirectoryEntry>?, SandboxReadFailure?)>(
+                (null, new SandboxReadFailure(SandboxFailureKind.Error, ex.Message)));
+        }
+    }
 }
 
 public enum SandboxFailureKind
@@ -121,3 +203,11 @@ public enum SandboxFailureKind
 public sealed record SandboxReadFailure(SandboxFailureKind Kind, string Message);
 
 public sealed record SandboxWriteFailure(SandboxFailureKind Kind, string Message);
+
+public enum SandboxEntryKind
+{
+    File,
+    Directory
+}
+
+public sealed record SandboxDirectoryEntry(string Name, SandboxEntryKind Kind);

@@ -111,4 +111,24 @@ public sealed class SandboxPathValidatorTests : IDisposable
 
         act.Should().Throw<SandboxViolationException>();
     }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("./")]
+    public void DotPath_ResolvesToSandboxRoot_IsAccepted(string path)
+    {
+        var result = SandboxPathValidator.ValidateAndResolve(path, _sandboxRoot);
+
+        var expectedRoot = Path.GetFullPath(_sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
+        result.TrimEnd(Path.DirectorySeparatorChar).Should().Be(expectedRoot);
+    }
+
+    [Fact]
+    public void DotSlashSubpath_IsAccepted()
+    {
+        var result = SandboxPathValidator.ValidateAndResolve("./subdir/file.txt", _sandboxRoot);
+
+        result.Should().StartWith(_sandboxRoot);
+        result.Should().EndWith("file.txt");
+    }
 }

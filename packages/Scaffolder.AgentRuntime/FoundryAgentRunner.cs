@@ -13,7 +13,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
 {
     private const string SystemPrompt =
         """
-        You are a file-editing assistant. Complete the given task by using the read_file and write_file tools.
+        You are a file-editing assistant. Complete the given task by using the read_file, write_file, and list_directory tools.
         Work step by step. When you are done, produce a final message summarising what you changed and why.
         Do not ask clarifying questions — proceed with your best judgement.
         """;
@@ -219,5 +219,17 @@ public sealed class FoundryAgentRunner : IAgentRunner
                 return failure is not null ? $"Error: {failure.Message}" : "ok";
             },
             "write_file", "Write content to a file, creating it if it does not exist."),
+
+        AIFunctionFactory.Create(
+            async ([Description("Directory path relative to the working directory. Use \".\" for the root.")] string path) =>
+            {
+                var (entries, failure) = await fileTools.ListDirectoryAsync(path);
+                if (failure is not null) return $"Error: {failure.Message}";
+                var sb = new StringBuilder();
+                foreach (var entry in entries!)
+                    sb.AppendLine($"[{(entry.Kind == SandboxEntryKind.Directory ? "dir" : "file")}] {entry.Name}");
+                return sb.ToString();
+            },
+            "list_directory", "List the immediate contents of a directory."),
     ];
 }

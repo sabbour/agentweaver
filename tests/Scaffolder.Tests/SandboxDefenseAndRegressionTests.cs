@@ -107,4 +107,122 @@ public sealed class SandboxedFileToolsDefenseTests : IDisposable
         bytes.Should().BeGreaterThan(0);
         File.ReadAllText(Path.Combine(_sandboxRoot, "output.txt")).Should().Be("safe content");
     }
+
+    [Fact]
+    public async Task ReadFileAsync_OnDirectory_ReturnsDirectoryHint()
+    {
+        // "." resolves to the sandbox root, which is a directory — should return a helpful failure
+        var (content, failure) = await _tools.ReadFileAsync(".");
+
+        content.Should().BeNull();
+        failure.Should().NotBeNull();
+        failure!.Kind.Should().Be(SandboxFailureKind.NotFound);
+        failure.Message.Should().Contain("list_directory");
+    }
+
+    [Fact]
+    public async Task ListDirectoryAsync_DotPath_ReturnsEntries()
+    {
+        // Create a file and a subdirectory inside the sandbox
+        File.WriteAllText(Path.Combine(_sandboxRoot, "readme.md"), "hello");
+        Directory.CreateDirectory(Path.Combine(_sandboxRoot, "src"));
+
+        var (entries, failure) = await _tools.ListDirectoryAsync(".");
+
+        failure.Should().BeNull();
+        entries.Should().NotBeNull();
+        entries!.Should().Contain(e => e.Name == "readme.md" && e.Kind == SandboxEntryKind.File);
+        entries.Should().Contain(e => e.Name == "src" && e.Kind == SandboxEntryKind.Directory);
+    }
+
+    [Fact]
+    public async Task ListDirectoryAsync_SubDirectory_ReturnsEntries()
+    {
+        var sub = Path.Combine(_sandboxRoot, "subdir");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "file.cs"), "code");
+
+        var (entries, failure) = await _tools.ListDirectoryAsync("subdir");
+
+        failure.Should().BeNull();
+        entries.Should().NotBeNull();
+        entries!.Should().ContainSingle(e => e.Name == "file.cs");
+    }
+
+    [Fact]
+    public async Task ListDirectoryAsync_NonExistentDir_ReturnsNotFound()
+    {
+        var (entries, failure) = await _tools.ListDirectoryAsync("nonexistent");
+
+        entries.Should().BeNull();
+        failure.Should().NotBeNull();
+        failure!.Kind.Should().Be(SandboxFailureKind.NotFound);
+    }
+
+    [Fact]
+    public async Task ListDirectoryAsync_EscapeAttempt_ReturnsRejected()
+    {
+        var (entries, failure) = await _tools.ListDirectoryAsync(@"..\..\Windows");
+
+        entries.Should().BeNull();
+        failure.Should().NotBeNull();
+        failure!.Kind.Should().Be(SandboxFailureKind.Rejected);
+    }
+
+    [Fact]
+    public async Task ListDirectoryAsync_CancellationToken_ThrowsWhenCancelled()
+    {
+        // Create enough entries to iterate over
+        for (int i = 0; i < 5; i++)
+            File.WriteAllText(Path.Combine(_sandboxRoot, $"file{i}.txt"), "x");
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Func<Task> act = () => _tools.ListDirectoryAsync(".", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task ListDirectoryAsync_DoesNotFollowReparsePoints()
+    {
+        // Create a real subdirectory with a file
+        var realSub = Path.Combine(_sandboxRoot, "real");
+        Directory.CreateDirectory(realSub);
+        File.WriteAllText(Path.Combine(realSub, "legit.txt"), "ok");
+
+        // Create a symlink directory inside sandbox pointing outside
+        var outsideTarget = Path.Combine(Path.GetTempPath(), $"outside-dir-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outsideTarget);
+        File.WriteAllText(Path.Combine(outsideTarget, "secret.txt"), "sensitive");
+
+        var symlinkDir = Path.Combine(_sandboxRoot, "linkdir");
+        try
+        {
+            Directory.CreateSymbolicLink(symlinkDir, outsideTarget);
+        }
+        catch (UnauthorizedAccessException) { return; }
+        catch (IOException) { return; }
+        finally
+        {
+            try { Directory.Delete(outsideTarget, true); } catch { }
+        }
+
+        try
+        {
+            // List the root — the symlink directory should be skipped by EnumerationOptions
+            var (entries, failure) = await _tools.ListDirectoryAsync(".");
+
+            failure.Should().BeNull();
+            entries.Should().NotBeNull();
+            entries!.Should().NotContain(e => e.Name == "linkdir",
+                "reparse-point entries must be excluded from listing");
+            entries.Should().Contain(e => e.Name == "real");
+        }
+        finally
+        {
+            try { Directory.Delete(symlinkDir); } catch { }
+        }
+    }
 }

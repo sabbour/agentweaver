@@ -295,4 +295,35 @@ public sealed class SandboxGovernanceTests : IDisposable
         auditLogger.HasEntryContaining("GovernanceAudit").Should().BeTrue(
             "the governance kernel should emit audit events via the AuditEmitter");
     }
+
+    // ===================================================================
+    // I. Issue 3 — "." and "./" acceptance for list_directory
+    // ===================================================================
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("./")]
+    public void Allow_ListDirectory_DotPath(string dotPath)
+    {
+        var result = _governance.EvaluateToolCall(
+            AgentId, "list_directory",
+            new Dictionary<string, object> { ["path"] = dotPath },
+            _logger);
+
+        result.Allowed.Should().BeTrue($"list_directory with path \"{dotPath}\" should resolve to sandbox root and be allowed");
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("./")]
+    public void Allow_ReadFile_DotPath_PassesGovernance(string dotPath)
+    {
+        // Governance should allow "." for read_file (the tool itself returns "is a directory")
+        var result = _governance.EvaluateToolCall(
+            AgentId, "read_file",
+            new Dictionary<string, object> { ["path"] = dotPath },
+            _logger);
+
+        result.Allowed.Should().BeTrue("governance should accept '.' as a valid contained path");
+    }
 }

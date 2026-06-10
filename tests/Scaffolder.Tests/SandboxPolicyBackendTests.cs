@@ -197,6 +197,29 @@ public sealed class SandboxPolicyBackendTests : IDisposable
     }
 
     // ===================================================================
+    // F. Issue 3 — "." path acceptance
+    // ===================================================================
+
+    [Theory]
+    [InlineData("list_directory", ".")]
+    [InlineData("list_directory", "./")]
+    [InlineData("read_file", ".")]
+    public void DotPath_KnownTool_Allowed(string toolName, string dotPath)
+    {
+        var context = new Dictionary<string, object>
+        {
+            ["tool_name"] = toolName,
+            ["path"] = dotPath,
+        };
+
+        var decision = _backend.Evaluate(context);
+
+        decision.Allowed.Should().BeTrue(
+            $"\"{dotPath}\" for {toolName} resolves to sandbox root and must be allowed");
+        decision.Metadata.Should().ContainKey("resolved_path");
+    }
+
+    // ===================================================================
     // E. JsonElement coercion (Foundry runner regression)
     // The Foundry runner forwards model tool arguments as System.Text.Json
     // JsonElement values, not System.String. The backend must coerce these to

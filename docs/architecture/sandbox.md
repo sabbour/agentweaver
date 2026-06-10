@@ -23,19 +23,23 @@ For relative paths, `SandboxPathValidator` applies five steps:
 1. Reject absolute paths.
 2. Reject any `..` segment before the path is combined with the worktree root.
 3. Normalize the candidate path with `Path.GetFullPath` against the worktree root.
-4. Check that the normalized path has the worktree root as its lexical prefix, including a trailing separator — this prevents `work` from matching `work-evil`.
+4. Check that the normalized path starts with `(worktree root + separator)` OR equals the worktree root exactly. The OR branch allows `"."` and `"./"` to resolve to the root itself for directory listing. The separator requirement on the prefix branch prevents `work` from matching `work-evil`.
 5. Walk existing ancestors inside the worktree and reject any reparse point, including symlinks and junctions.
 
 For absolute paths supplied by the provider, the validator additionally rejects device paths (`\\?\`, `\\.\`), UNC paths, and drive-relative paths before applying normalization and the same lexical prefix and reparse-point checks.
 
 ## Open then verify
 
-The runtime does not trust a lexical path check alone. After opening a file handle, it resolves the final path from the handle and checks that path against the worktree root again.
+The runtime does not trust a lexical path check alone. After opening a file handle, it resolves the final path from the handle and checks that path against the worktree root again. The handle check also uses the OR-equality pattern so that a handle resolving exactly to the root (for directory operations) passes correctly.
 
 - On Windows, it uses `GetFinalPathNameByHandle`.
 - On Linux, it resolves `/proc/self/fd/<fd>`.
 
 A handle that resolves outside the worktree is rejected before any bytes are read or written.
+
+## Root integrity
+
+At construction time, `SandboxedFileTools` asserts the sandbox root itself is not a reparse point (symlink or junction). If it is, the runtime refuses to operate. This prevents an attacker from pointing the worktree root at an arbitrary location before the agent starts.
 
 ## Provider integration
 
@@ -58,10 +62,12 @@ Every allow and every deny decision is recorded through the AGT audit emitter, w
 Inside the worktree, the agent can:
 
 - Read existing text files
-- List directory contents
+- List directory contents (immediate children only; `"."` lists the worktree root)
 - Create directories as needed for a write
 - Create or overwrite text files
 - Retry within the sandbox when a path is missing or rejected
+
+Both the Foundry runner and the Copilot runner expose `list_directory` as an available tool. The Foundry runner registers it directly. The Copilot runner disambiguates read requests into `read_file` or `list_directory` based on whether the target is a directory.
 
 ## What the agent cannot do
 
