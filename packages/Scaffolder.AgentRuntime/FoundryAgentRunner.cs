@@ -30,7 +30,9 @@ public sealed class FoundryAgentRunner : IAgentRunner
         running tests, etc.). Do not use run_command to read, list, copy, or delete files —
         use the file tools instead.
 
-        - report_intent: call this before each major step to describe what you are about to do
+        - report_intent: call this before each major step to describe what you are about to do,
+          AND immediately after each run_command to give a one-sentence plain-English interpretation
+          of the output (what happened, whether it succeeded or failed, and why — max 15 words).
 
         Work step by step. When you are done, produce a final message summarising what you
         changed and why. Do not ask clarifying questions — proceed with your best judgement.
