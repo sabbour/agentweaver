@@ -54,6 +54,10 @@ Request:
 
 `model_source` must be `github-copilot` or `microsoft-foundry`. Any other value returns `400 Bad Request`. The submitting user comes from the bearer key, not the request body.
 
+`repository_path` must be an absolute local filesystem path. The server canonicalizes it with `Path.GetFullPath` before storing it on the run record. UNC paths (`\\server\share`, `//server/share`), device paths (`\\?\`, `\\.\`), drive-relative paths (`C:foo`), relative paths, and NTFS Alternate Data Streams are rejected with `400`.
+
+When `Runs:AllowedRepositoryRoots` is configured (non-empty string array), the server resolves the canonical path through symlinks and junctions and verifies that the resolved location is inside one of the allowed roots. Paths outside the allowlist return `400`. By default no allowlist is configured and any valid local absolute path is accepted. Shared, exposed, or multi-tenant deployments MUST set an allowlist to prevent users from targeting arbitrary repositories on the server filesystem.
+
 Response `202 Accepted`:
 
 ```json
@@ -207,6 +211,12 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | `Git:Author:Email` | `scaffolder@localhost` | Author email for commits and merges |
 | `RunBounds:MaxSteps` | `50` | Maximum tool-call steps before `run.bounded` |
 | `RunBounds:MaxMinutes` | `10` | Maximum wall-clock duration in minutes |
+
+### Security keys
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Runs:AllowedRepositoryRoots` | `[]` (permissive) | String array of allowed parent directories for `repository_path`. Symlinks and junctions in the submitted path are resolved and the final location must fall within one of these roots. When empty (the default), any valid local absolute path is accepted. Shared, exposed, or multi-tenant deployments MUST configure this. |
 
 ### Authentication keys
 

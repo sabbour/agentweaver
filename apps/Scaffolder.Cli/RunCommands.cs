@@ -15,7 +15,7 @@ public static class RunCommands
 
     public static async Task<int> SubmitAsync(ApiClient api, CancellationToken ct)
     {
-        var repositoryPath = AnsiConsole.Ask<string>("Repository path:");
+        var repositoryPath = Path.GetFullPath(AnsiConsole.Ask<string>("Repository path:"));
         var originatingBranch = AnsiConsole.Ask<string>("Originating branch:");
 
         AnsiConsole.MarkupLine("[grey]Task description (end with an empty line):[/]");

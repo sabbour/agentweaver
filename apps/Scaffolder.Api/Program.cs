@@ -51,6 +51,9 @@ builder.Services.AddAgentRuntime();
 // Authentication
 builder.Services.AddSingleton<ApiKeyRegistry>();
 
+// Repository path validation (A2 security fix)
+builder.Services.AddSingleton<RepositoryRootValidator>();
+
 // Checkpoint GC background service (Guardrail 8)
 builder.Services.AddHostedService<CheckpointGcService>();
 
@@ -75,6 +78,7 @@ app.MapPost("/api/runs", async (
     HttpContext httpContext,
     CreateRunRequest request,
     RunOrchestrator orchestrator,
+    RepositoryRootValidator repoValidator,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -90,10 +94,21 @@ app.MapPost("/api/runs", async (
     try { modelSource = ModelSourceExtensions.FromApiString(request.ModelSource); }
     catch (ArgumentException) { return Results.BadRequest(new { error = "model_source must be 'github-copilot' or 'microsoft-foundry'." }); }
 
+    // Validate and canonicalize the repository path (A2 security fix).
+    string canonicalRepoPath;
+    try
+    {
+        canonicalRepoPath = repoValidator.ValidateAndCanonicalize(request.RepositoryPath);
+    }
+    catch (RunSubmissionValidationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+
     var run = new Run
     {
         Id = RunId.New(),
-        RepositoryPath = request.RepositoryPath,
+        RepositoryPath = canonicalRepoPath,
         OriginatingBranch = request.OriginatingBranch,
         ModelSource = modelSource,
         Task = request.Task,

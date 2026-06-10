@@ -53,6 +53,17 @@ Request:
 `model_source` must be `github-copilot` or `microsoft-foundry`; any other value
 returns `400`. The submitting user is taken from the bearer key, not the body.
 
+`repository_path` must be an absolute local filesystem path. It is canonicalized
+via `Path.GetFullPath` on the server before use. UNC paths (`\\server\share`),
+device paths (`\\?\`, `\\.\`), drive-relative paths (`C:foo`), relative paths,
+and paths containing NTFS Alternate Data Streams are all rejected with `400`.
+
+When `Runs:AllowedRepositoryRoots` is configured (non-empty string array), the
+server resolves symlinks/junctions on the submitted path and verifies the result
+falls within one of the allowed roots. Paths that resolve outside the allowlist
+return `400` with an error. The default is permissive: any valid local absolute
+path is accepted when no allowlist is configured.
+
 Response `202 Accepted`:
 
 ```json
@@ -200,3 +211,4 @@ keys come from configuration.
 | `Git:Author:Email` | `scaffolder@localhost` | Commit and merge author email |
 | `Auth:Keys` | none | Array of `{ Token, User }` API keys |
 | `Auth:ApiKey` / `Auth:User` | none | Single-key alternative |
+| `Runs:AllowedRepositoryRoots` | `[]` (permissive) | String array of allowed parent directories for `repository_path`. When empty, any local absolute path is accepted. Shared or exposed deployments MUST configure this to restrict which repositories can be targeted. |
