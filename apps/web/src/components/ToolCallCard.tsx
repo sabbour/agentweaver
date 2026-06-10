@@ -137,7 +137,11 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: T
     return <CheckmarkCircleFilled className={mergeClasses(styles.statusIcon, styles.successIcon)} aria-hidden="true" />;
   }
 
-  const hasDetail = !!(item.result || item.error);
+  // "ok" is a no-content acknowledgement — nothing useful to expand.
+  const hasDetail = !!(
+    (item.result && item.result.content.trim() !== 'ok') ||
+    item.error
+  );
 
   return (
     <div>
