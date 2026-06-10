@@ -6,7 +6,7 @@ namespace Scaffolder.SandboxExec;
 /// Selects the appropriate ISandboxExecutor implementation based on the current
 /// platform and available backends. Selection order:
 ///   1. Windows: MxcSandboxExecutor (processcontainer)
-///   2. Windows: WslMxcSandboxExecutor (WSL2 + lxc-exec)
+///   2. Windows: WslMxcSandboxExecutor (WSL2 + bwrap/unshare)
 ///   3. Linux:   LinuxNativeMxcSandboxExecutor (lxc-exec direct)
 ///   4. Fallback: PassthroughExecutor (deny-by-default)
 /// </summary>
@@ -19,9 +19,9 @@ public static class SandboxExecutorFactory
             if (MxcSandboxExecutor.TryCreate(logger, out var mxc))
                 return mxc!;
 
-            var lxcPath = WslMxcSandboxExecutor.ResolveLxcExecWslPath();
-            if (lxcPath != null)
-                return new WslMxcSandboxExecutor(logger, lxcPath);
+            var wsl = WslMxcSandboxExecutor.TryCreate(logger);
+            if (wsl != null)
+                return wsl;
         }
 
         if (OperatingSystem.IsLinux())

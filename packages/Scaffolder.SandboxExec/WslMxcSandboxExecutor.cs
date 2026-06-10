@@ -1,30 +1,92 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using Sabbour.Mxc.Sdk;
 
 namespace Scaffolder.SandboxExec;
 
+/// <summary>
+/// Sandbox backend discovered inside WSL2.
+/// </summary>
+internal enum WslSandboxBackend
+{
+    /// <summary>bubblewrap (bwrap) — filesystem + PID namespace isolation. Real isolation.</summary>
+    Bwrap,
+
+    /// <summary>unshare — user/mount/PID namespace isolation (no fs confinement). Real isolation.</summary>
+    Unshare,
+
+    /// <summary>No isolation tool available — run directly in WSL2 with a warning.</summary>
+    Direct,
+}
+
+/// <summary>
+/// Executes sandboxed commands inside WSL2 by wrapping the user command with a
+/// discovered isolation tool (bwrap or unshare). Does NOT use lxc-exec or the
+/// Mxc SDK — the command is run via <c>wsl.exe -- bash -c &lt;wrapper&gt;</c>.
+/// </summary>
 internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
 {
     private readonly ILogger _logger;
-    private readonly string _lxcExecWslPath;
+    private readonly WslSandboxBackend _backend;
 
-    public bool IsRealIsolation => true;
-    public string BackendName => "wsl-lxc";
-    public string SelectionReason => "WSL2 with lxc-exec isolation.";
-    public bool HasNetworkWarning => false;
-    public string? NetworkWarningMessage => null;
+    public bool IsRealIsolation => _backend != WslSandboxBackend.Direct;
 
-    internal WslMxcSandboxExecutor(ILogger logger, string lxcExecWslPath)
+    public string BackendName => _backend switch
+    {
+        WslSandboxBackend.Bwrap => "wsl-bwrap",
+        WslSandboxBackend.Unshare => "wsl-unshare",
+        _ => "wsl-direct",
+    };
+
+    public string SelectionReason => _backend switch
+    {
+        WslSandboxBackend.Bwrap =>
+            "WSL2 with bubblewrap (bwrap): workspace-confined filesystem + PID namespace isolation.",
+        WslSandboxBackend.Unshare =>
+            "WSL2 with unshare: user/mount/PID namespace isolation (no filesystem confinement).",
+        _ =>
+            "WSL2 without an isolation tool (bwrap/unshare not found): running directly with no isolation.",
+    };
+
+    // None of the WSL2 wrappers enforce a network allowlist — outbound is unrestricted
+    // so that common tools (git, curl) keep working. Surface this as a warning.
+    public bool HasNetworkWarning => true;
+
+    public string? NetworkWarningMessage =>
+        "WSL2 sandbox does not enforce a network allowlist; outbound network access is unrestricted.";
+
+    internal WslMxcSandboxExecutor(ILogger logger, WslSandboxBackend backend)
     {
         _logger = logger;
-        _lxcExecWslPath = lxcExecWslPath;
+        _backend = backend;
     }
 
-    internal static bool IsWslAvailable()
+    /// <summary>
+    /// Probes for WSL2 and a usable isolation backend. Returns a configured executor,
+    /// or null when wsl.exe is not available.
+    /// </summary>
+    internal static WslMxcSandboxExecutor? TryCreate(ILogger logger)
+    {
+        if (!IsWslAvailable())
+            return null;
+
+        var backend = DetectBackend();
+        if (backend == WslSandboxBackend.Direct)
+        {
+            logger.LogWarning(
+                "WslMxcSandboxExecutor: no isolation tool found in WSL2 (bwrap/unshare). " +
+                "Falling back to direct execution with no isolation.");
+        }
+        else
+        {
+            logger.LogDebug("WslMxcSandboxExecutor: selected backend {Backend}.", backend);
+        }
+
+        return new WslMxcSandboxExecutor(logger, backend);
+    }
+
+    private static bool IsWslAvailable()
     {
         try
         {
@@ -39,10 +101,12 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             };
             using var proc = Process.Start(psi);
             if (proc is null) return false;
-            proc.WaitForExit(5000);
-            if (proc.ExitCode != 0) return false;
-            // lxc-exec must be resolvable — either bundled (via WSL2 mount) or in WSL2 PATH.
-            return ResolveLxcExecWslPath() != null;
+            if (!proc.WaitForExit(5000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch (Exception) { }
+                return false;
+            }
+            return proc.ExitCode == 0;
         }
         catch (Exception)
         {
@@ -51,66 +115,50 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
     }
 
     /// <summary>
-    /// Resolves the lxc-exec binary path as seen from inside WSL2. Checks:
-    ///   1. Assembly-adjacent bin/&lt;arch&gt;/lxc-exec (bundled Linux ELF, accessed via WSL2 /mnt/ mount).
-    ///   2. lxc-exec in WSL2 PATH (e.g. already installed at /usr/local/bin/lxc-exec).
-    /// Returns null when neither is available.
+    /// Discovers the best isolation tool available inside WSL2.
+    /// Preference: bwrap (fs confinement) &gt; unshare (namespace isolation) &gt; direct.
     /// </summary>
-    internal static string? ResolveLxcExecWslPath()
+    internal static WslSandboxBackend DetectBackend()
     {
-        // Priority 1: bundled Linux binary accessed via WSL2 /mnt/ mount.
-        var arch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
-        {
-            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
-            System.Runtime.InteropServices.Architecture.X64 => "x64",
-            _ => "x64",
-        };
-        var asmDir = System.IO.Path.GetDirectoryName(
-            System.Reflection.Assembly.GetExecutingAssembly().Location) ?? ".";
-        var winPath = System.IO.Path.Combine(asmDir, "bin", arch, "lxc-exec");
-        if (System.IO.File.Exists(winPath))
-        {
-            var wslPath = MapToLinuxPath(winPath);
-            // Verify WSL2 can actually reach and execute it.
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "wsl.exe",
-                    Arguments = $"-- bash -c \"chmod +x '{wslPath}' && '{wslPath}' --version 2>/dev/null; echo ok\"",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-                using var proc = Process.Start(psi);
-                if (proc is null) goto tryPath;
-                proc.WaitForExit(8000);
-                var output = proc.StandardOutput.ReadToEnd();
-                if (output.Contains("ok")) return wslPath;
-            }
-            catch { /* fall through */ }
-        }
-
-        tryPath:
-        // Priority 2: lxc-exec in WSL2 PATH.
         try
         {
             var psi = new ProcessStartInfo
             {
                 FileName = "wsl.exe",
-                Arguments = "-- which lxc-exec",
                 RedirectStandardOutput = true,
+                RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            psi.ArgumentList.Add("--");
+            psi.ArgumentList.Add("bash");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(
+                "if command -v bwrap >/dev/null 2>&1; then echo bwrap; " +
+                "elif command -v unshare >/dev/null 2>&1; then echo unshare; " +
+                "else echo direct; fi");
+
             using var proc = Process.Start(psi);
-            if (proc is null) return null;
-            var path = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit(3000);
-            return proc.ExitCode == 0 && !string.IsNullOrEmpty(path) ? path : null;
+            if (proc is null) return WslSandboxBackend.Direct;
+            var output = proc.StandardOutput.ReadToEnd();
+            if (!proc.WaitForExit(8000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch (Exception) { }
+                return WslSandboxBackend.Direct;
+            }
+
+            var token = output.Trim();
+            return token switch
+            {
+                "bwrap" => WslSandboxBackend.Bwrap,
+                "unshare" => WslSandboxBackend.Unshare,
+                _ => WslSandboxBackend.Direct,
+            };
         }
-        catch { return null; }
+        catch (Exception)
+        {
+            return WslSandboxBackend.Direct;
+        }
     }
 
     // Maps a Windows absolute path to its WSL2 /mnt/<drive>/... equivalent.
@@ -127,47 +175,77 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
         return windowsPath.Replace('\\', '/');
     }
 
-    private static FilesystemPolicy BuildMxcFilesystemPolicy(SandboxFsPolicy policy, bool mapPaths)
-    {
-        IEnumerable<string> Map(IReadOnlyList<string> paths) =>
-            mapPaths ? paths.Select(MapToLinuxPath) : paths;
+    // Safely single-quotes a string for embedding in a bash command.
+    private static string ShellSingleQuote(string s) =>
+        "'" + s.Replace("'", "'\\''") + "'";
 
-        return new FilesystemPolicy
+    /// <summary>
+    /// Builds the bash payload (passed to <c>bash -c</c>) that runs the user command
+    /// under the selected isolation backend. The user command is base64-encoded and
+    /// decoded inside WSL2 to avoid any shell-injection through the command string.
+    /// </summary>
+    private static string BuildSandboxedCommand(
+        string command, string workdirLinux, WslSandboxBackend backend)
+    {
+        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
+        return backend switch
         {
-            ReadwritePaths = [.. Map(policy.ReadWritePaths)],
-            ReadonlyPaths = [.. Map(policy.ReadOnlyPaths)],
-            DeniedPaths = [.. Map(policy.DeniedPaths)],
+            WslSandboxBackend.Bwrap => BuildBwrapCommand(b64, workdirLinux),
+            WslSandboxBackend.Unshare => BuildUnshareCommand(b64, workdirLinux),
+            _ => BuildDirectCommand(b64, workdirLinux),
         };
+    }
+
+    // bubblewrap: confine fs to the workspace, mount /usr + /etc read-only, recreate the
+    // /bin, /lib, /sbin symlinks (Ubuntu ARM64 has /bin->usr/bin etc., NO /lib64), give a
+    // private /proc, /dev and /tmp, and isolate the PID namespace. Verified on
+    // Ubuntu 24.04 aarch64 WSL2 (bwrap 0.9.0).
+    private static string BuildBwrapCommand(string b64, string workdirLinux)
+    {
+        var wd = ShellSingleQuote(workdirLinux);
+        return
+            "exec bwrap" +
+            $" --bind {wd} {wd}" +
+            " --ro-bind /usr /usr" +
+            " --ro-bind /etc /etc" +
+            " --symlink usr/bin /bin" +
+            " --symlink usr/lib /lib" +
+            " --symlink usr/sbin /sbin" +
+            " --proc /proc" +
+            " --dev /dev" +
+            " --tmpfs /tmp" +
+            $" --chdir {wd}" +
+            " --unshare-pid" +
+            " --new-session" +
+            $" -- /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
+    }
+
+    // unshare: user/mount/PID namespace isolation. Does not confine the filesystem to the
+    // workspace, so we cd into it first. Verified on Ubuntu 24.04 aarch64 WSL2.
+    private static string BuildUnshareCommand(string b64, string workdirLinux)
+    {
+        var wd = ShellSingleQuote(workdirLinux);
+        return
+            $"cd {wd} && exec unshare --user --map-root-user --mount --pid --fork" +
+            $" /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
+    }
+
+    // Direct: no isolation. Only used when neither bwrap nor unshare is present.
+    private static string BuildDirectCommand(string b64, string workdirLinux)
+    {
+        var wd = ShellSingleQuote(workdirLinux);
+        return $"cd {wd} && /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
-        var mappedWorkingDir = MapToLinuxPath(command.WorkingDirectory);
+        var workdirLinux = MapToLinuxPath(command.WorkingDirectory);
+        var payload = BuildSandboxedCommand(command.CommandLine, workdirLinux, _backend);
 
-        var mxcPolicy = new SandboxPolicy
-        {
-            Version = "0.4.0-alpha",
-            Network = new NetworkPolicy { AllowOutbound = false },
-            Filesystem = BuildMxcFilesystemPolicy(command.FilesystemPolicy, mapPaths: true),
-        };
-
-        // Build the ContainerConfig via the SDK, then serialize + base64-encode it.
-        // The command is carried inside the config blob — never passed as a raw wsl.exe argument
-        // to prevent command injection (F8).
-        ContainerConfig config = MxcSdk.BuildSandboxPayload(
-            command.CommandLine,
-            mxcPolicy,
-            mappedWorkingDir,
-            null,
-            "process");
-
-        var json = JsonSerializer.Serialize(
-            config,
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
-
-        _logger.LogDebug("Executing sandbox command via {Backend}, length={Length}", BackendName, command.CommandLine.Length);
+        _logger.LogDebug(
+            "Executing sandbox command via {Backend}, length={Length}",
+            BackendName, command.CommandLine.Length);
 
         Process? proc = null;
         try
@@ -175,12 +253,15 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             var psi = new ProcessStartInfo
             {
                 FileName = "wsl.exe",
-                Arguments = $"-- '{_lxcExecWslPath}' --experimental --config-base64 {b64}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            psi.ArgumentList.Add("--");
+            psi.ArgumentList.Add("bash");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(payload);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             if (command.TimeoutMs > 0)
