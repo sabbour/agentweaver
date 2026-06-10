@@ -118,6 +118,11 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: T
   const isSandbox = item.error?.isSandboxViolation ?? false;
   const isError = item.error && !isSandbox;
 
+  // Detect non-zero exit code from run_command result text (e.g. "exit_code: -1\n...")
+  const exitCodeMatch = item.result?.content?.match(/^exit_code:\s*(-?\d+)/m);
+  const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1], 10) : 0;
+  const isNonZeroExit = item.toolName === 'run_command' && item.settled && !item.error && exitCode !== 0;
+
   function StatusIcon() {
     if (!item.settled) {
       return streamStatus === 'error' ? (
@@ -128,12 +133,11 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: T
     }
     if (isSandbox) return <WarningFilled className={mergeClasses(styles.statusIcon, styles.sandboxIcon)} aria-hidden="true" />;
     if (item.error) return <ErrorCircleFilled className={mergeClasses(styles.statusIcon, styles.errorIcon)} aria-hidden="true" />;
+    if (isNonZeroExit) return <WarningFilled className={mergeClasses(styles.statusIcon, styles.sandboxIcon)} aria-label={`Exit code ${exitCode}`} />;
     return <CheckmarkCircleFilled className={mergeClasses(styles.statusIcon, styles.successIcon)} aria-hidden="true" />;
   }
 
-  const hasDetail = !!(item.args || item.result || item.error);
-  const argsJson = JSON.stringify(item.args, null, 2);
-  const { display: argsDisplay, truncated: argsTrunc, total: argsTotal } = truncate(argsJson);
+  const hasDetail = !!(item.result || item.error);
 
   return (
     <div>
@@ -163,20 +167,11 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: T
 
       {expanded && hasDetail && (
         <div className={styles.detail}>
-          <div className={styles.block}>
-            <Text as="span" className={styles.blockLabel}>args</Text>
-            <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit', display: 'inline' }}>
-              {argsDisplay}
-            </Text>
-            {argsTrunc && <Text as="span" className={styles.truncatedNote}>[Truncated — {argsTotal.toLocaleString()} chars]</Text>}
-          </div>
-
           {item.result && (() => {
             const { display, truncated, total } = truncate(item.result.content);
             return (
               <div className={styles.block}>
-                <Text as="span" className={styles.blockLabel}>result</Text>
-                <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit', display: 'inline' }}>
+                <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit' }}>
                   {display}
                 </Text>
                 {truncated && <Text as="span" className={styles.truncatedNote}>[Truncated — {total.toLocaleString()} chars]</Text>}

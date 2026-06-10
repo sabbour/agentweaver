@@ -71,9 +71,19 @@ public sealed class SandboxOutputRedactor
     public static SandboxOutputRedactor CreateDefault(bool redactPii = true) =>
         new(null, redactPii);
 
+    // Strip ANSI/VT escape sequences first — these appear in mxc stderr output and
+    // render as garbage in the event stream. Applied before secret patterns.
+    private static readonly Regex AnsiEscapePattern = new(
+        @"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])",
+        RegexOptions.Compiled, TimeSpan.FromSeconds(2));
+
     public string Redact(string data)
     {
         var result = data;
+
+        // Strip ANSI escape sequences before any other processing.
+        try { result = AnsiEscapePattern.Replace(result, string.Empty); }
+        catch (RegexMatchTimeoutException) { }
         foreach (var pattern in _patterns)
         {
             try { result = pattern.Replace(result, "[REDACTED]"); }

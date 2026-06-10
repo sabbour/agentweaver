@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Badge, MessageBar, MessageBarBody, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
   ErrorCircleFilled,
@@ -193,6 +193,11 @@ interface LifecycleEventCardProps {
 export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: LifecycleEventCardProps) {
   const styles = useStyles();
 
+  // sandbox.warning is suppressed — shown inline only if genuinely blocking.
+  if (event.type === 'sandbox.warning') {
+    return null;
+  }
+
   // --- terminal output line (tool.output) ---
   if (event.type === 'tool.output') {
     const stream = String(event.payload['stream'] ?? 'stdout');
@@ -259,16 +264,6 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: Li
         )}
         <Text className={styles.approvalMeta}>Request ID: {requestId}</Text>
       </div>
-    );
-  }
-
-  // --- sandbox warning banner ---
-  if (event.type === 'sandbox.warning') {
-    const message = String(event.payload['message'] ?? event.payload['warning'] ?? 'Sandbox warning');
-    return (
-      <MessageBar intent="warning" className={styles.sandboxWarning}>
-        <MessageBarBody>{message}</MessageBarBody>
-      </MessageBar>
     );
   }
 
