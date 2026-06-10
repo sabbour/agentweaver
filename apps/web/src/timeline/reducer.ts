@@ -354,6 +354,13 @@ function processEvent(
       return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
     }
 
+    case 'tool.output':
+    case 'tool.exec_result':
+    case 'shell.approval_required':
+    case 'sandbox.selected':
+    case 'sandbox.warning':
+      return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
+
     default:
       return state;
   }

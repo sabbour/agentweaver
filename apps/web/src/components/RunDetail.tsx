@@ -16,6 +16,7 @@ import { ApiError } from '../api/client';
 import type { ReviewResponse, RunDetail as RunDetailModel, RunStatus } from '../api/types';
 import { DiffViewer } from './DiffViewer';
 import { ReviewPanel } from './ReviewPanel';
+import { SandboxBadge } from './SandboxBadge';
 
 const useStyles = makeStyles({
   root: {
@@ -123,6 +124,9 @@ export function RunDetail({ runId }: RunDetailProps) {
           ))}
         </TableBody>
       </Table>
+      {run.sandbox && (
+        <SandboxBadge sandbox={run.sandbox} />
+      )}
       {run.status === 'awaiting_review' && (
         <div className={styles.reviewSection}>
           <Divider />

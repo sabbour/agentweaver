@@ -3,10 +3,11 @@ import { Badge, Divider, Spinner, makeStyles, tokens } from '@fluentui/react-com
 import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
 import { apiClient } from '../api/apiClient';
-import type { RunDetail, ReviewResponse } from '../api/types';
+import type { RunDetail, ReviewResponse, RunSandboxInfo } from '../api/types';
 import { DiffViewer } from './DiffViewer';
 import { ReviewPanel } from './ReviewPanel';
 import { RunHeader } from './RunHeader';
+import { SandboxBadge } from './SandboxBadge';
 import { Timeline } from './Timeline';
 import { useTimelineItems } from '../timeline/useTimelineItems';
 
@@ -45,6 +46,23 @@ export function RunWatcher({ runId }: RunWatcherProps) {
   const fetchingRef = useRef(false);
 
   const hasReviewRequested = events.some((e) => e.type === 'review.requested');
+
+  // Derive sandbox info from sandbox.selected event (live path).
+  const sandboxInfo = useMemo((): RunSandboxInfo | null => {
+    const evt = events.find((e) => e.type === 'sandbox.selected');
+    if (!evt) return null;
+    return {
+      backend: String(evt.payload['backend'] ?? ''),
+      isRealIsolation: evt.payload['isRealIsolation'] !== false,
+    };
+  }, [events]);
+
+  // Derive sandbox warning message from sandbox.warning event.
+  const sandboxWarning = useMemo((): string | null => {
+    const evt = events.find((e) => e.type === 'sandbox.warning');
+    if (!evt) return null;
+    return String(evt.payload['message'] ?? evt.payload['warning'] ?? '');
+  }, [events]);
 
   useEffect(() => {
     if (hasReviewRequested && !reviewRun && !fetchingRef.current) {
@@ -87,6 +105,9 @@ export function RunWatcher({ runId }: RunWatcherProps) {
   return (
     <div className={styles.root}>
       <RunHeader runId={runId} streamStatus={status} error={error ?? undefined} />
+      {sandboxInfo && (
+        <SandboxBadge sandbox={sandboxInfo} warningMessage={sandboxWarning} />
+      )}
       <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} />
       {hasReviewRequested && (
         <div className={styles.reviewSection}>
