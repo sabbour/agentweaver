@@ -14,7 +14,21 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
     /// <summary>Known file-tool names that require path validation.</summary>
     private static readonly HashSet<string> KnownFileTools = new(StringComparer.Ordinal)
     {
-        "read_file", "write_file", "edit_file", "list_directory"
+        "read_file", "write_file", "edit_file", "list_directory",
+        // Custom tools matching Copilot built-in names:
+        "str_replace_editor", "apply_patch", "create", "edit",
+    };
+
+    /// <summary>Known search-tool names that enumerate the sandbox root.</summary>
+    private static readonly HashSet<string> KnownSearchTools = new(StringComparer.Ordinal)
+    {
+        "grep_search", "file_search",
+    };
+
+    /// <summary>Known shell-tool names that require working-directory containment.</summary>
+    private static readonly HashSet<string> KnownShellTools = new(StringComparer.Ordinal)
+    {
+        "run_command"
     };
 
     /// <summary>
@@ -40,7 +54,8 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
                 ? tn?.ToString() : null;
 
             // Seraph Y-1: unrecognized/null tool names → denied
-            if (toolName is null || !KnownFileTools.Contains(toolName))
+            if (toolName is null ||
+                (!KnownFileTools.Contains(toolName) && !KnownSearchTools.Contains(toolName) && !KnownShellTools.Contains(toolName)))
             {
                 return new ExternalPolicyDecision
                 {
@@ -49,6 +64,58 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
                     Reason = $"Unrecognized or null tool name '{toolName}'; denied by sandbox backend.",
                     EvaluationMs = sw.Elapsed.TotalMilliseconds,
                 };
+            }
+
+            // Search tools enumerate the sandbox root and carry no explicit path argument.
+            if (KnownSearchTools.Contains(toolName))
+            {
+                return new ExternalPolicyDecision
+                {
+                    Backend = Name,
+                    Allowed = true,
+                    Reason = "Search tool allowed (enumerates sandbox root).",
+                    EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                };
+            }
+
+            if (KnownShellTools.Contains(toolName))
+            {
+                // Shell tools carry working directory in the "directory" argument key
+                // (injected by the custom run_command AIFunction / MapToToolCall).
+                string? directory = null;
+                if (context.TryGetValue("directory", out var d))
+                    directory = CoercePathValue(d);
+
+                if (string.IsNullOrWhiteSpace(directory))
+                {
+                    return new ExternalPolicyDecision
+                    {
+                        Backend = Name, Allowed = false,
+                        Reason = "Shell tool missing 'directory' argument; denied.",
+                        EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                    };
+                }
+
+                try
+                {
+                    var resolvedDir = SandboxPathValidator.ValidateAbsoluteContained(directory, _sandboxRoot);
+                    return new ExternalPolicyDecision
+                    {
+                        Backend = Name, Allowed = true,
+                        Reason = "Shell working directory is within sandbox boundary.",
+                        EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                        Metadata = new Dictionary<string, object> { ["resolved_directory"] = resolvedDir },
+                    };
+                }
+                catch (SandboxViolationException ex)
+                {
+                    return new ExternalPolicyDecision
+                    {
+                        Backend = Name, Allowed = false,
+                        Reason = $"Shell working directory escape: {ex.Message}",
+                        EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                    };
+                }
             }
 
             // Seraph Y-2: resolve path from known argument keys.
