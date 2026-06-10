@@ -336,7 +336,8 @@ function processEvent(
     }
 
     case 'run.completed': {
-      // GitHubCopilotAgentRunner emits no agent.turn.end, so close any open turn here.
+      // The watch loop emits run.completed at the workflow terminal; close any lingering
+      // open turn defensively (should already be closed by agent.turn.end from the runner).
       const s = closeOpenTurn(state);
       return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
     }

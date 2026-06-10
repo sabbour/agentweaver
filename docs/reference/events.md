@@ -20,16 +20,17 @@ Clients should order and deduplicate events by `sequence`.
 | `agent.turn.start` | When the model begins a turn | `turnId` |
 | `agent.message.delta` | When the model streams a chunk of visible text — emitted by both the GitHub Copilot and Microsoft Foundry runners | `delta`, `messageId` |
 | `agent.message` | Fallback: emitted only when a turn produced no token deltas (Foundry runner only; tool-call-only turns or empty streams) | `content` |
-| `agent.turn.end` | When the model finishes a turn | `turnId` |
+| `agent.turn.end` | When the model finishes a turn (emitted by both runners; closes the turn bubble in the frontend) | `turnId` |
 | `tool.call` | Before the runtime evaluates a tool invocation against the sandbox policy | `callId`, `toolName`, `arguments` |
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
 | `tool.error` | After a tool is denied by the sandbox policy, or fails for any other reason such as a missing file or I/O failure | `callId`, `errorMessage` |
-| `run.completed` | When the agent turn produces no file changes and the run terminates without a review gate | `result` |
+| `run.completed` | When the watch loop determines the run is terminal with no file changes (watch-loop only; never emitted by the runner) | `result` |
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
 | `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |
 | `review.declined` | When the owner declines the run | *(none)* |
+| `merge.started` | When an approved merge begins execution | `tree_hash` |
 | `merge.completed` | After an approved run merges cleanly into the originating branch | `merged_commit_hash`; `previous_head_sha` (direct path only) |
 | `merge.failed` | After an approved run cannot merge back cleanly | `reason` |
 
@@ -39,7 +40,11 @@ Each `tool.call` carries a `callId` in its payload. The matching `tool.result` o
 
 ## Provider parity
 
-Both the GitHub Copilot and Microsoft Foundry runners stream text as `agent.message.delta` events. Each delta carries a `delta` chunk and the `messageId` it belongs to. Both providers surface the same tool event vocabulary. For each tool the agent runs, the stream carries a `tool.call`, followed by a `tool.result` for an approved tool (with its real content) or a `tool.error` for a denial or failure. The Copilot provider reads these from the tool-execution lifecycle that flows inline through the streaming response, so an observer sees individual tool activity on Copilot runs at parity with Foundry.
+Both the GitHub Copilot and Microsoft Foundry runners stream text as `agent.message.delta` events. Each delta carries a `delta` chunk and the `messageId` it belongs to. Both providers emit `agent.turn.end` to close the final turn, giving the frontend a consistent signal to close the turn bubble regardless of which provider is active.
+
+Both providers surface the same tool event vocabulary. For each tool the agent runs, the stream carries a `tool.call`, followed by a `tool.result` for an approved tool (with its real content) or a `tool.error` for a denial or failure. The Copilot provider reads these from the tool-execution lifecycle that flows inline through the streaming response, so an observer sees individual tool activity on Copilot runs at parity with Foundry.
+
+SDK-internal tools (`report_intent`, `glob`) are suppressed from the event stream entirely. These are housekeeping operations that never pass through the sandbox permission handler and would confuse the frontend if rendered as tool cards.
 
 ## Event details
 
@@ -63,7 +68,7 @@ This event records every tool outcome that is not a success. It covers sandbox p
 
 ### `run.completed`
 
-This event fires when the agent turn completes and the worktree contains no file changes. The `result` field is `"no_changes"`. The run terminates immediately on this path — no `review.requested` is emitted and no review gate is reached. When the agent does produce changes, `run.completed` is not emitted; the run transitions to `review.requested` instead.
+This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when the workflow reaches a terminal state with no file changes. The `result` field is `"no_changes"`. Neither the GitHub Copilot runner nor the Foundry runner emits this event; they emit `agent.turn.end` to close their final turn and let the watch loop determine terminal state. When the agent produces changes, `run.completed` is not emitted; the run transitions to `review.requested` instead.
 
 ### `run.failed`
 
@@ -84,6 +89,10 @@ This event records that an approve decision was accepted. It carries no payload 
 ### `review.declined`
 
 This event records a decline decision. It carries no payload fields. The originating branch remains unchanged.
+
+### `merge.started`
+
+This event fires immediately before the merge operation begins, bridging the gap between the approve action and the terminal `merge.completed` or `merge.failed` event. `tree_hash` identifies the committed worktree state being merged — the same value recorded by `review.requested`.
 
 ### `merge.completed`
 

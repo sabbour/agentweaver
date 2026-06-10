@@ -136,7 +136,6 @@ public sealed class FoundryAgentRunner : IAgentRunner
             if (calls.Count == 0)
             {
                 Emit("agent.turn.end", new { turnId = turn.ToString() });
-                Emit("run.completed", new { });
                 completedNormally = true;
                 break;
             }

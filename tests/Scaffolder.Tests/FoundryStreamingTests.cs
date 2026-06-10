@@ -77,7 +77,8 @@ public sealed class FoundryStreamingTests : IDisposable
         events.Should().NotContain(e => e.Type == "agent.message");
         events.Should().Contain(e => e.Type == "agent.turn.start");
         events.Should().Contain(e => e.Type == "agent.turn.end");
-        events.Should().Contain(e => e.Type == "run.completed");
+        // run.completed is emitted only by the watch loop, not the runner.
+        events.Should().NotContain(e => e.Type == "run.completed");
     }
 
     // ---- T-2 ----
@@ -106,7 +107,9 @@ public sealed class FoundryStreamingTests : IDisposable
         // No whole agent.message emitted (deltas cover all text)
         events.Should().NotContain(e => e.Type == "agent.message");
 
-        events.Should().Contain(e => e.Type == "run.completed");
+        events.Should().Contain(e => e.Type == "agent.turn.end");
+        // run.completed is emitted only by the watch loop, not the runner.
+        events.Should().NotContain(e => e.Type == "run.completed");
     }
 
     // ---- T-3 ----
@@ -133,7 +136,9 @@ public sealed class FoundryStreamingTests : IDisposable
         // Tool loop did run for turn 1
         events.Should().Contain(e => e.Type == "tool.call");
 
-        events.Should().Contain(e => e.Type == "run.completed");
+        // run.completed is emitted only by the watch loop, not the runner.
+        events.Should().Contain(e => e.Type == "agent.turn.end");
+        events.Should().NotContain(e => e.Type == "run.completed");
     }
 
     // ---- T-4 ----
@@ -165,7 +170,9 @@ public sealed class FoundryStreamingTests : IDisposable
         File.Exists(Path.Combine(_workDir, "out.txt")).Should().BeTrue();
         File.ReadAllText(Path.Combine(_workDir, "out.txt")).Should().Be("hello world");
 
-        events.Should().Contain(e => e.Type == "run.completed");
+        // run.completed is emitted only by the watch loop, not the runner.
+        events.Should().Contain(e => e.Type == "agent.turn.end");
+        events.Should().NotContain(e => e.Type == "run.completed");
     }
 
     // ---- T-5: MF2 — cancellation is not failure ----
@@ -228,7 +235,9 @@ public sealed class FoundryStreamingTests : IDisposable
             "task", _workDir, ModelSource.MicrosoftFoundry, "r7", writer, CancellationToken.None);
 
         var events = drain();
-        events.Should().Contain(e => e.Type == "run.completed");
+        // Runner no longer emits run.completed — the watch loop does that.
+        events.Should().Contain(e => e.Type == "agent.turn.end");
+        events.Should().NotContain(e => e.Type == "run.completed");
         events.Should().NotContain(e => e.Type == "run.failed");
         events.Should().NotContain(e => e.Type == "agent.message");
         events.Should().NotContain(e => e.Type == "agent.message.delta");
@@ -312,10 +321,10 @@ public sealed class FoundryStreamingTests : IDisposable
             "tool.result must be emitted before agent.turn.end closes the turn");
     }
 
-    // ---- T-11: run.completed carries no summary field (FIX 2) ----
+    // ---- T-11: runner emits agent.turn.end (not run.completed) on normal exit ----
 
     [Fact]
-    public async Task RunCompleted_PayloadHasNoSummaryField()
+    public async Task NormalExit_EmitsAgentTurnEnd_NotRunCompleted()
     {
         var client = new FakeStreamingChatClient(
             new TurnSetup([TextUpdate("Final answer.")]));
@@ -324,10 +333,10 @@ public sealed class FoundryStreamingTests : IDisposable
         await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r11", writer, CancellationToken.None);
         var events = drain();
 
-        var completed = events.First(e => e.Type == "run.completed");
-        // Payload must not expose a 'summary' property.
-        completed.Payload.GetType().GetProperty("summary").Should().BeNull(
-            "run.completed payload must no longer carry a summary field");
+        // Runner must emit agent.turn.end to close the turn bubble.
+        events.Should().Contain(e => e.Type == "agent.turn.end");
+        // run.completed is the watch loop's responsibility, not the runner's.
+        events.Should().NotContain(e => e.Type == "run.completed");
     }
 
     // ---- MF1 regression: multi-turn text accumulation ----
@@ -354,7 +363,8 @@ public sealed class FoundryStreamingTests : IDisposable
         result.Should().Be("SECOND");
 
         var events = drain();
-        events.Should().Contain(e => e.Type == "run.completed");
+        events.Should().Contain(e => e.Type == "agent.turn.end");
+        events.Should().NotContain(e => e.Type == "run.completed");
     }
 }
 
