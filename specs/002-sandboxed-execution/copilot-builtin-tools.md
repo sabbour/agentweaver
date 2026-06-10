@@ -179,22 +179,25 @@ add_line: "+" /(.*)/ LF -> line
 
 ---
 
-## In-Scope Tools
-
----
-
-### 11. report_intent
+### report_intent
 
 - **Bundle location:** Line ~1139 (`Jm="report_intent"`), schema: `Rbi=Z.object({intent:Z.string()})`
 - **Type:** `function` (standard JSON tool call)
 - **Internal category:** `"think"` (from line ~6274 tool category mapping)
-- **Description:** "A description of what you are currently doing or planning to do."
+- **Status:** IN SCOPE -- reimplemented as a UI observability tool. The custom `report_intent` `AIFunction` takes a short `intent` string and emits the `agent.intent` run event so the run view can surface the agent's current high-level intent/plan (Principle V: Observable Runs). It performs NO filesystem or shell action and persists nothing beyond the event stream -- it is NOT a memory or todo tool. Registered with `is_override = true` (matches this native bundle name) and included in the AvailableTools allowlist (9 tools). See plan section 4.7.8.
 
-| Arg | Type | Required | Description |
-|---|---|---|---|
-| `intent` | string | YES | A description of current activity or planned next steps. |
+### update_todo
 
-**Notes:** Returns "Intent logged". Used for UI status display. In our implementation, emits `agent.intent` event for live run-status observability.
+- **Bundle location:** Line ~5422 (`aK="update_todo"`), schema: `ees=Z.object({todos:Z.string()})`
+- **Type:** `function` (standard JSON tool call)
+- **Internal category:** `"think"`
+- **Reason for exclusion:** The todo tool is OUT OF SCOPE for this feature per product decision. The native tool remains excluded via `NativeToolExclusion`. Not reimplemented.
+
+---
+
+### Memory and Todo Tools (OUT OF SCOPE)
+
+> **Status:** Memory tools (`store_memory`, `vote_memory`) and the todo tool (`update_todo`) are OUT OF SCOPE for this feature per product decision. They are NOT reimplemented in the current scope. The native memory and todo permission-kind rows have been intentionally removed from the Permission Map above (native memory/todo tools remain excluded via `NativeToolExclusion`). `report_intent` is NOT in this list -- it IS reimplemented as a UI observability tool (see above).
 
 ---
 
@@ -226,9 +229,6 @@ shell        -> { kind: "shell", argument: null }
 write        -> { kind: "write", argument: null }
 edit         -> { kind: "write", argument: null }
 create       -> { kind: "write", argument: null }
-memory       -> { kind: "memory", argument: null }
-store_memory -> { kind: "memory", argument: null }
-vote_memory  -> { kind: "memory", argument: null }
 read         -> null (no permission required)
 view         -> null
 glob         -> null

@@ -2,7 +2,7 @@
 
 **Branch**: `002-sandboxed-execution` | **Date**: 2026-06-10 | **Spec**: `specs/002-sandboxed-execution/spec.md`
 
-**Revised**: 2026-06-10 (post architecture rubber-duck + Seraph security review + M4 built-in tools addition + M5/M6/M7 reusable-tools/native-exclusion/memory-planning + RBD1-RBD6/F-BT1-F-BT5 review resolution)
+**Revised**: 2026-06-10 (post architecture rubber-duck + Seraph security review + M4 built-in tools addition + M5/M6 reusable-tools/native-exclusion + RBD1-RBD6/F-BT1-F-BT5 review resolution + memory/planning removal)
 
 **Input**: Feature specification from `/specs/002-sandboxed-execution/spec.md` + approved exploratory design plan.
 
@@ -23,11 +23,9 @@ The platform probe (`MxcSdk.GetPlatformSupport()`) runs at executor construction
 
 **Shell routing architecture (revised per C1):** Both runners expose shell/command execution to the agent via a custom `run_command` AIFunction registered through their respective tool mechanisms. The Copilot SDK's native `shell` tool is ALWAYS DENIED in the permission handler (defense-in-depth) -- native shell approval would execute unsandboxed in the CLI subprocess, which we cannot intercept. Instead, `run_command` is registered via `SessionConfig.Tools` and executes in our process, routing through `ISandboxExecutor.StreamAsync(...)`. The Foundry runner already uses this custom-tool model. Both runners are now symmetric.
 
-**Reusable tool library (M5):** All custom tools (shell, file, search, memory, planning) are factored into a shared `Scaffolder.AgentTools` package with a common `ISandboxTool` contract and `SandboxToolRegistry`. Both runners consume the registry output (`IList<AIFunction>`) instead of building tool lists inline. See section 4.8.
+**Reusable tool library (M5):** All custom tools (shell, file, search, and the `report_intent` run-intent observability tool) are factored into a shared `Scaffolder.AgentTools` package with a common `ISandboxTool` contract and `SandboxToolRegistry`. The allowlist comprises 9 tools (8 unconditional + 1 conditional shell). Both runners consume the registry output (`IList<AIFunction>`) instead of building tool lists inline. See section 4.8.
 
 **Native-tool exclusion (M6):** The Copilot runner sets `SessionConfig.AvailableTools` to an explicit allowlist of ONLY our custom tool names. This is the strongest restriction (confirmed in spike: `AvailableTools` is allowlist, server-side enforced). `ExcludedTools` populated with known native names as defense-in-depth. See section 4.8.
-
-**Memory/planning tools (M7):** The `store_memory`, `vote_memory`, `update_todo`, and `report_intent` built-in tools are reimplemented as custom AIFunctions with sandbox-scoped backing stores. `exit_plan_mode` is scoped OUT (internal orchestration tool, not a model-callable function). See section 4.7.8.
 
 **File-tool routing scope (revised per M2):** For Phase 1, file-tool sandbox routing (FR-033) is scoped to shell-only. File tools (read/write/list) continue to use the existing `SandboxedFileTools` in-process path with handle-level TOCTOU verification (`VerifyOpenedHandle`). A purpose-built in-sandbox file helper is deferred to a follow-up increment (see N3 benchmark task). Rationale: routing file ops through `cat`/`echo` shell strings corrupts binary/metachar content and loses the handle-level TOCTOU defense; mxc filesystem-policy enforcement does not yet provide equivalent handle verification.
 
@@ -565,6 +563,7 @@ New event types on the existing `RunEvent` stream:
 | `tool.output` | `{ callId, stream: "stdout"\|"stderr", data }` | Each output chunk during streaming exec |
 | `tool.exec_result` | `{ callId, exitCode, timedOut, truncated }` | Command completion |
 | `tool.error` | `{ callId, errorMessage }` | Command denied or failed (existing) |
+| `agent.intent` | `{ intent }` | Agent calls `report_intent` to surface its current high-level intent/plan in the run view (Principle V: Observable Runs) |
 
 **Event schema decision (N2):** A distinct `tool.exec_result` event type is used for sandbox command completion (rather than extending the existing `tool.result`). Rationale: `tool.result` carries a `content` string (the tool's return value to the model). `tool.exec_result` carries structured execution metadata (`exitCode`, `timedOut`, `truncated`). Using a distinct type preserves backward compatibility -- existing clients that handle `tool.result` are unaffected. New clients opt into `tool.exec_result` handling.
 
@@ -619,7 +618,7 @@ Exposed through the API as read-only run metadata (Principle III); both CLI and 
 
 Each in-scope tool is implemented as a custom `AIFunction` registered in BOTH runners (Constitution IV parity):
 
-- **Copilot runner:** Registered via `SessionConfig.Tools` (extending `BuildCopilotCustomTools` from section 4.3). Each file/search/memory/planning tool is marked `is_override = true` so it supersedes the native built-in of the same name. `run_command` is marked `is_override = false` (no native tool of that name exists -- native shell is excluded via AvailableTools/ExcludedTools). The native equivalents are additionally excluded via the permission handler as defense-in-depth.
+- **Copilot runner:** Registered via `SessionConfig.Tools` (extending `BuildCopilotCustomTools` from section 4.3). Each file/search tool is marked `is_override = true` so it supersedes the native built-in of the same name. `run_command` is marked `is_override = false` (no native tool of that name exists -- native shell is excluded via AvailableTools/ExcludedTools). The native equivalents are additionally excluded via the permission handler as defense-in-depth.
 - **Foundry runner:** Registered via `BuildTools(...)` in `FoundryAgentRunner.cs`.
 
 All tools share the same internal implementation layer -- a new `BuiltInToolImplementations` static class in `Scaffolder.SandboxExec` (or `Scaffolder.SandboxFs`) that provides the sandboxed operation bodies.
@@ -700,17 +699,15 @@ These tools flow through the existing dual-layer governance: `SandboxGovernance.
 | `grep_search` | None (operates from working dir) | N/A | Validate working-dir containment; if `includePattern` is provided, validate it does not escape |
 | `file_search` | None (glob from working dir) | N/A | Validate working-dir containment; reject traversal patterns |
 
-**Required changes to `SandboxPolicyBackend` (three distinct code branches -- RBD6):**
+**Required changes to `SandboxPolicyBackend` (two distinct code branches -- RBD6):**
 
 1. **`KnownFileTools` set (path-arg validation):** Add `"filePath"` to `PathArgumentKeys` array. Add all path-bearing tool names to `KnownFileTools`: `"read_file"`, `"str_replace_editor"`, `"apply_patch"`, `"create"`, `"edit"` (some already present; add missing ones). For `apply_patch`: the backend validates that the tool is recognized (allows it through the known-tool check), but per-path validation is deferred to the tool implementation itself (which validates each path extracted from the patch text via the two-phase approach). The backend trusts the tool to call `SandboxPathValidator` per-path.
 
 2. **`KnownSearchTools` set (working-directory-containment-only validation):** A NEW set containing `"grep_search"` and `"file_search"`. These tools have no path argument -- they operate from working directory. The backend validates working-directory containment only (these tools are implicitly scoped to `workingDirectory` which is already validated at run start). If `includePattern` is provided (grep_search), the tool implementation validates it does not escape.
 
-3. **`KnownInternalTools` set (allow-without-path):** A NEW set containing `"update_todo"` and `"report_intent"`. These tools have no filesystem paths and operate on in-memory/event-only state. The backend unconditionally allows them (returns `Allowed` immediately with reason "Internal tool, no filesystem access required").
+Both branches are distinct `if` checks in `Evaluate()`, evaluated in order: KnownFileTools (path validation) -> KnownShellTools (directory validation) -> KnownSearchTools (working-dir containment) -> deny-by-default. Unknown tool names fall through to the existing deny-by-default.
 
-All three branches are distinct `if` checks in `Evaluate()`, evaluated in order: KnownFileTools (path validation) -> KnownShellTools (directory validation) -> KnownSearchTools (working-dir containment) -> KnownInternalTools (allow). Unknown tool names fall through to the existing deny-by-default.
-
-**Output redaction (return-value path -- F-BT2/F-BT3):** Every tool AIFunction MUST run its return value (the string/content handed back to the LLM framework) through `SandboxOutputRedactor.Redact()` BEFORE returning -- not only at `tool.output` event emission. This applies to: `read_file` content, `grep_search`/`file_search` results, `run_command` output, `store_memory`/`vote_memory` confirmation echoes, and `RecallAsync` content surfaced to the model. This closes the secret-amplification vector where the model could echo redacted event content from an unredacted return value. The redaction wraps the RETURN path of every tool; event-level redaction (existing F7 pipeline) is defense-in-depth on top.
+**Output redaction (return-value path -- F-BT2/F-BT3):** Every tool AIFunction MUST run its return value (the string/content handed back to the LLM framework) through `SandboxOutputRedactor.Redact()` BEFORE returning -- not only at `tool.output` event emission. This applies to: `read_file` content, `grep_search`/`file_search` results, and `run_command` output. This closes the secret-amplification vector where the model could echo redacted event content from an unredacted return value. The redaction wraps the RETURN path of every tool; event-level redaction (existing F7 pipeline) is defense-in-depth on top.
 
 #### 4.7.6 Events (Principle V)
 
@@ -727,111 +724,15 @@ In `BuildPermissionHandler`, the following native tool permission requests are D
 
 This ensures that even if the model somehow invokes a native built-in instead of our override, it is blocked. The custom AIFunction tools registered with `is_override = true` are the ONLY execution path.
 
-#### 4.7.8 Memory and Planning Tools (M7)
+#### 4.7.8 Run Intent Tool (report_intent)
 
-**Goal:** Reimplement the remaining Copilot CLI built-in tool families (memory, planning) as custom sandboxed AIFunctions, ensuring the model cannot invoke native implementations that operate outside our control.
+`report_intent` is a custom `AIFunction` that lets the agent surface its current high-level intent/plan to the run view (Principle V: Observable Runs). It is a UI observability tool, NOT a memory or todo tool -- it persists nothing beyond the run event stream.
 
-##### 4.7.8.1 Confirmed Tool Schemas (from bundle v1.0.61 static analysis)
-
-**Memory tools** (permission kind: `"memory"`):
-
-| Tool Name | Args (name / type / required) | Description | Bundle Evidence |
-|---|---|---|---|
-| `store_memory` | `subject` (string, R -- 1-2 words topic), `fact` (string, R -- <200 chars), `citations` (string, R -- file:line refs or user quote), `reason` (string, R -- 2-3 sentences), `scope` (enum: "repository"\|"user", R) | Store a fact about the codebase for future tasks. | Line ~1714 (`DS="store_memory"`), schema at line ~1785 (`Vbe=Z.object(...)`) |
-| `vote_memory` | `fact` (string, R -- exact fact text to vote on), `direction` (enum: "upvote"\|"downvote", R), `reason` (string, R -- 2-3 sentences), `scope` (enum: "repository"\|"user", opt) | Vote on an existing memory to indicate agreement or disagreement. | Line ~1714 (`MY="vote_memory"`), schema at line ~1785 (`nqt=Z.object(...)`) |
-
-**Planning tools** (internal category: `"think"`):
-
-| Tool Name | Args (name / type / required) | Description | Bundle Evidence |
-|---|---|---|---|
-| `update_todo` | `todos` (string, R -- markdown checklist) | Update the TODO checklist showing completed and pending tasks. | Line ~5422 (`aK="update_todo"`), schema: `ees=Z.object({todos:Z.string()})` |
-| `report_intent` | `intent` (string, R -- current activity description) | Report what the agent is currently doing or planning to do. | Line ~1139 (`Jm="report_intent"`), schema: `Rbi=Z.object({intent:Z.string()})` |
-
-**Scoped OUT tools (not reimplemented):**
-
-| Tool Name | Reason for Exclusion |
-|---|---|
-| `exit_plan_mode` | Internal SDK orchestration tool. Not a model-callable function in the standard sense -- it triggers a UI-level plan review flow (`exit_plan_mode.requested` event) that is specific to the Copilot CLI session lifecycle. Our runners have their own run lifecycle management. Scoped OUT per Constitution VII (no mocks of infrastructure we do not provide). |
-| `task` | Explicitly excluded per user direction. Subagent orchestration is out of scope. |
-| `notebook` | Explicitly excluded per user direction. Not relevant to scaffolder runtime. |
-| `web_fetch` | MCP server tool (`github-mcp-server-web_search` / `web_fetch`). Not a built-in -- delivered via GitHub's MCP server. Network access is not needed in sandboxed scaffolder runs. Scoped OUT. |
-| `web_search` | Same as `web_fetch` -- MCP-delivered. Scoped OUT. |
-| `sql` / `session_store_sql` | Session-local SQLite database tools for the Copilot CLI's own session management (checkpoints, turn history). Not a scaffolder concern -- we have our own event store. Scoped OUT. |
-
-##### 4.7.8.2 Implementation: Memory Tools
-
-Memory tools are reimplemented as custom AIFunctions backed by a **sandbox-scoped JSON store** persisted within the run's artifact directory. This is NOT a mock -- it is a real persistent store that survives the run and can be consumed by subsequent runs against the same repository.
-
-**Backing store:** `{sandboxRoot}/.scaffolder/memory.json` -- a simple JSON file containing an array of memory objects:
-
-```csharp
-// packages/Scaffolder.AgentTools/Stores/SandboxMemoryStore.cs
-namespace Scaffolder.AgentTools.Stores;
-
-public sealed class SandboxMemoryStore
-{
-    private readonly string _storePath;
-    private readonly SandboxPathValidator _validator;
-    private readonly string _sandboxRoot;
-
-    public SandboxMemoryStore(string sandboxRoot, SandboxPathValidator validator)
-    {
-        _sandboxRoot = sandboxRoot;
-        _validator = validator;
-        _storePath = Path.Combine(sandboxRoot, ".scaffolder", "memory.json");
-    }
-
-    public async Task<StoreMemoryResult> StoreAsync(MemoryEntry entry, CancellationToken ct);
-    public async Task<VoteMemoryResult> VoteAsync(string fact, string direction, string reason, CancellationToken ct);
-    public async Task<IReadOnlyList<MemoryEntry>> RecallAsync(CancellationToken ct);
-}
-
-public sealed record MemoryEntry(
-    string Subject, string Fact, string Citations,
-    string Reason, string Scope, DateTimeOffset StoredAt);
-```
-
-The store path is validated through `SandboxPathValidator.ValidateAbsoluteContained` (contained within sandbox root). File I/O uses the same handle-verified path as `SandboxedFileTools`. Concurrency: file-level lock via `FileStream` with `FileShare.None` during writes.
-
-**`store_memory` AIFunction:** Validates all required fields, appends to the JSON array, returns confirmation text. Enforces `fact` max 200 chars, `subject` max 50 chars. Return value is passed through `SandboxOutputRedactor.Redact()` before being handed to the LLM framework (F-BT2: prevents secret amplification if citations or reason contain sensitive content).
-
-**`vote_memory` AIFunction:** Finds the matching `fact` entry in the store, appends a vote record (direction + reason + timestamp). If fact not found, returns an error message (not an exception -- the model should see the failure). Return value is redacted before return (F-BT2).
-
-##### 4.7.8.3 Implementation: Planning Tools
-
-Planning tools are reimplemented as custom AIFunctions backed by **in-memory state** scoped to the current run. These tools have no persistence requirement beyond the run (the model uses them for self-organization during execution).
-
-**`update_todo` AIFunction:** Accepts a markdown checklist string. Stores it in a `RunTodoState` object held by the tool registry (scoped to the run). Emits a `tool.result` event with the parsed counts (total/completed/pending). The stored checklist is available to the model on subsequent calls.
-
-```csharp
-// packages/Scaffolder.AgentTools/Stores/RunTodoState.cs
-namespace Scaffolder.AgentTools.Stores;
-
-public sealed class RunTodoState
-{
-    public string CurrentChecklist { get; private set; } = "";
-    public int TotalItems { get; private set; }
-    public int CompletedItems { get; private set; }
-
-    public (int Total, int Completed, int Pending) Update(string todos)
-    {
-        CurrentChecklist = todos;
-        // Parse markdown checklist: count lines matching "- [x]" and "- [ ]"
-        var lines = todos.Split('\n');
-        CompletedItems = lines.Count(l => l.TrimStart().StartsWith("- [x]", StringComparison.OrdinalIgnoreCase));
-        TotalItems = CompletedItems + lines.Count(l => l.TrimStart().StartsWith("- [ ]"));
-        return (TotalItems, CompletedItems, TotalItems - CompletedItems);
-    }
-}
-```
-
-**`report_intent` AIFunction:** Accepts an intent string. Emits it as a run event (`agent.intent` type with `{ intent }` payload) for observability (Principle V). Returns "Intent logged" to the model. This feeds the live run-status display in CLI/Web UI.
-
-##### 4.7.8.4 Governance Integration (Memory/Planning)
-
-- `store_memory` and `vote_memory`: Evaluated by `SandboxPolicyBackend` -- the store path (`{sandboxRoot}/.scaffolder/memory.json`) is within the sandbox read-write zone (already covered by `SandboxFsPolicy.ReadWritePaths`). No new governance rules needed.
-- `update_todo` and `report_intent`: No filesystem paths involved. These tools are unconditionally allowed through governance (they operate on in-memory/event-only state). Added to a new `KnownInternalTools` set in `SandboxPolicyBackend` that always returns `Allowed`.
-- Output from all four tools passes through `SandboxOutputRedactor` before event emission (consistent with Constitution IX). Additionally, the RETURN VALUE of each tool (the string handed back to the LLM framework) is redacted through the same `SandboxOutputRedactor.Redact()` call before return (F-BT2/F-BT3: closes secret-amplification via model echo of unredacted return content).
+- **Schema:** single string argument `intent` (the short intent/plan text). Matches the native bundle schema (`{ intent: string }`), so `IsOverride = true`.
+- **Behavior:** emits an `agent.intent` event (`{ intent }`) on the run event stream via the context's `EmitEvent` delegate (section 4.8.2). It performs NO filesystem and NO shell action.
+- **No path validation, no governance branch:** because it touches neither the filesystem nor the shell, it requires no `SandboxPathValidator` check and no `SandboxPolicyBackend` known-tool branch. It does not reintroduce any internal-tool governance list.
+- **Return redaction (F-BT2):** its return value (the acknowledgement string handed back to the LLM framework) still passes through `SandboxOutputRedactor.Redact()` before returning, consistent with every other tool.
+- **No persistence:** the intent is observable only through the emitted `agent.intent` event; there is no backing store.
 
 ### 4.8 Reusable Tool Library and Native-Tool Exclusion (M5/M6)
 
@@ -873,7 +774,7 @@ public interface ISandboxTool
     /// tool name from the bundle (copilot-builtin-tools.md evidence artifact).
     /// run_command -> false (no native "run_command"; native shell is "shell"/"bash").
     /// read_file, grep_search, file_search, str_replace_editor, apply_patch,
-    /// create, edit, store_memory, vote_memory, update_todo, report_intent -> true.
+    /// create, edit, report_intent -> true (each matches a real native bundle name).
     /// </summary>
     bool IsOverride { get; }
 
@@ -902,8 +803,6 @@ public sealed record SandboxToolContext(
     SandboxedSearchTools SearchTools,
     SandboxPathValidator PathValidator,
     SandboxOutputRedactor Redactor,
-    SandboxMemoryStore MemoryStore,
-    RunTodoState TodoState,
     string WorkingDirectory,
     string SandboxRoot,
     string[] AllowedRoots,
@@ -931,21 +830,13 @@ packages/Scaffolder.AgentTools/
 |   +-- ApplyPatchTool.cs
 |   +-- CreateFileTool.cs
 |   +-- EditFileTool.cs
-|   +-- StoreMemoryTool.cs
-|   +-- VoteMemoryTool.cs
-|   +-- UpdateTodoTool.cs
 |   +-- ReportIntentTool.cs
-+-- Stores/
-    +-- SandboxMemoryStore.cs
-    +-- RunTodoState.cs
 ```
 
 Each class implements `ISandboxTool` and routes through the EXISTING in-proc primitives:
 - File tools -> `SandboxedFileTools` methods (TOCTOU-verified via `VerifyOpenedHandle`)
 - Search tools -> `SandboxedSearchTools` methods (path-validated enumeration)
 - Shell tool -> `ISandboxExecutor.StreamAsync(...)` (mxc-isolated)
-- Memory tools -> `SandboxMemoryStore` (file I/O through validated path)
-- Planning tools -> `RunTodoState` (in-memory) / event emission
 
 No tool reimplements behavior -- the refactor is structural (move inline lambda logic from `BuildCopilotCustomTools` / `BuildTools` into named classes).
 
@@ -965,7 +856,7 @@ public sealed class SandboxToolRegistry
 
     public SandboxToolRegistry(IEnumerable<ISandboxTool>? additionalTools = null)
     {
-        // Default tool set: all built-in sandboxed tools
+        // Default tool set: all built-in sandboxed tools (current increment)
         var tools = new List<ISandboxTool>
         {
             new RunCommandTool(),
@@ -976,9 +867,6 @@ public sealed class SandboxToolRegistry
             new ApplyPatchTool(),
             new CreateFileTool(),
             new EditFileTool(),
-            new StoreMemoryTool(),
-            new VoteMemoryTool(),
-            new UpdateTodoTool(),
             new ReportIntentTool(),
         };
         if (additionalTools is not null)
@@ -1003,7 +891,9 @@ public sealed class SandboxToolRegistry
             // is_override rule (RBD2/F-BT4): set ONLY when the tool's Name matches
             // an actual native Copilot CLI tool name from the bundle. run_command has
             // no native counterpart (native shell is "shell"/"bash"), so IsOverride=false.
-            // All file/search/memory/planning tools DO match native names and get true.
+            // All file/search tools AND report_intent DO match native names and get true.
+            // report_intent is unconditional (no isolation/shell gate) and emits the
+            // agent.intent event via context.EmitEvent.
             if (tool.IsOverride)
                 fn.AdditionalProperties["is_override"] = true;
             functions.Add(fn);
@@ -1040,7 +930,7 @@ Func<string, IReadOnlyDictionary<string, object>, (bool, string?)> evalToolCall 
     (toolName, args) => governance.EvaluateToolCall(agentId, toolName, args, logger);
 
 var context = new SandboxToolContext(executor, evalToolCall, fileTools, searchTools,
-    pathValidator, redactor, memoryStore, todoState,
+    pathValidator, redactor,
     workingDirectory, sandboxRoot, allowedRoots, shellEnabled, Emit, ct);
 
 var sessionConfig = new SessionConfig
@@ -1059,7 +949,7 @@ Func<string, IReadOnlyDictionary<string, object>, (bool, string?)> evalToolCall 
     (toolName, args) => governance.EvaluateToolCall(agentId, toolName, args, logger);
 
 var context = new SandboxToolContext(executor, evalToolCall, fileTools, searchTools,
-    pathValidator, redactor, memoryStore, todoState,
+    pathValidator, redactor,
     workingDirectory, sandboxRoot, allowedRoots, shellEnabled, Emit, ct);
 
 var tools = registry.Build(context);
@@ -1075,8 +965,9 @@ var tools = registry.Build(context);
 Set `AvailableTools` to an explicit list containing EXACTLY our custom tool names:
 - `run_command` (conditional on shell enabled)
 - `read_file`, `grep_search`, `file_search`, `str_replace_editor`, `apply_patch`, `create`, `edit`
-- `store_memory`, `vote_memory`
-- `update_todo`, `report_intent`
+- `report_intent` (UI observability -- emits the `agent.intent` event; performs no filesystem or shell action)
+
+That is 9 tools (8 unconditional + 1 conditional on shell). Memory tools (`store_memory`, `vote_memory`) and the todo tool (`update_todo`) are NOT listed -- they are out of scope for this feature (product decision). `report_intent` IS listed: it is a UI observability tool (emits `agent.intent`), not a memory or todo tool.
 
 Per the spike evidence (`specs/001-single-agent-run/spike-copilot-sandbox.md`, line 86-92): "`AvailableTools` is an allowlist. When set, it takes precedence over `ExcludedTools`." And line 179: "`AvailableTools` is enforced server-side: when set, tools not in the list are not offered to the model and cannot be called." This is the STRONGEST restriction mechanism.
 
@@ -1095,9 +986,10 @@ namespace Scaffolder.AgentTools;
 /// </summary>
 public static class NativeToolExclusion
 {
-    // From bundle v1.0.61 permission map (line ~1315, srn object):
+    // From bundle v1.0.61 permission map (line ~1315, srn object) + memory/todo tools:
     // bash, shell, write, edit, create, memory, store_memory, vote_memory,
-    // read, view, glob, grep, ls, task, webfetch, web_fetch, websearch, web_search
+    // update_todo, read, view, glob, grep, ls, task, webfetch,
+    // web_fetch, websearch, web_search
     private static readonly string[] KnownNativeTools =
     [
         "bash", "shell",                          // shell execution (native)
@@ -1107,6 +999,8 @@ public static class NativeToolExclusion
         "webfetch", "web_fetch",                  // network access
         "websearch", "web_search",                // network search
         "memory",                                 // legacy memory alias
+        "store_memory", "vote_memory",            // native memory tools (out of scope)
+        "update_todo",                            // native todo tool (out of scope)
         "semantic_search",                        // requires GitHub embeddings API
     ];
 
@@ -1154,9 +1048,9 @@ This is strictly easier than testing through a runner (no SDK/Foundry session se
 | II -- Model Sources | Copilot + Foundry only | No change; sandbox is orthogonal to model source |
 | III -- API-First | API is authoritative | Sandbox settings/status exposed via API; clients read from API |
 | IV -- Two Front-Ends at Parity | CLI and Web equal | Both runners consume `SandboxToolRegistry` (M5 parity). Same API surface for sandbox status/events |
-| V -- Observable Runs | Stream steps live | `sandbox.selected` + `sandbox.warning` + `tool.output` + `tool.exec_result` + `agent.intent` events stream to all clients |
+| V -- Observable Runs | Stream steps live | `sandbox.selected` + `sandbox.warning` + `tool.output` + `tool.exec_result` events stream to all clients |
 | VI -- Deployment Parity | Same build local+cloud | Four-executor factory: Windows-native, WSL2, Linux-native, Passthrough. Cloud hosts get `LinuxNativeMxcSandboxExecutor` |
-| VII -- No Mocks/Fakes/Placeholders | Functional from commit one | PassthroughExecutor is a real deny-by-default implementation, not a mock. Memory store is real persistent JSON. `exit_plan_mode` scoped OUT (not stubbed). |
+| VII -- No Mocks/Fakes/Placeholders | Functional from commit one | PassthroughExecutor is a real deny-by-default implementation, not a mock. Memory and planning tools cleanly out of scope (not stubbed). `exit_plan_mode` scoped OUT (not stubbed). |
 | IX -- Responsible AI | Human accountable, transparent | All sandbox decisions auditable; HITL approval gate for destructive commands (F6); output redaction for secrets/PII (F7) |
 | X -- Safe Execution | Enforced sandbox boundary | Defense-in-depth: mxc + in-proc path containment + AGT deny-by-default + executor IsRealIsolation gate + AvailableTools allowlist (M6) + human-approval gate for destructive commands |
 | XI -- Agent Governance Toolkit | MAF governance enforces policy | Shell allow/deny via AGT policy YAML + external backend + HITL; no ad hoc gates |
@@ -1174,7 +1068,6 @@ This is strictly easier than testing through a runner (no SDK/Foundry session se
 | In-process search tools (`SandboxedSearchTools`) | `grep_search`/`file_search` must not spawn `rg`/`grep` processes | Shell-spawned search bypasses sandbox path validation and introduces injection surface |
 | New package `Scaffolder.AgentTools` (M5) | DRY tool library shared by both runners (Constitution IV parity) | Inline lambdas in each runner duplicates logic, complicates testing, violates single-responsibility |
 | `AvailableTools` allowlist (M6) | Model must see ONLY sandboxed tools -- zero native tools | `ExcludedTools` alone is a blocklist (new tools slip through); `is_override` alone still exposes native tools the model could attempt to call. `is_override` is set only for tools matching a real native name (not `run_command`) |
-| Memory/planning tool AIFunctions (M7) | Complete native-tool elimination; model needs memory/planning capabilities | Leaving native memory/planning runs outside our control; stubbing violates Constitution VII |
 
 ---
 
@@ -1229,15 +1122,9 @@ packages/
 |   |   +-- ApplyPatchTool.cs
 |   |   +-- CreateFileTool.cs
 |   |   +-- EditFileTool.cs
-|   |   +-- StoreMemoryTool.cs
-|   |   +-- VoteMemoryTool.cs
-|   |   +-- UpdateTodoTool.cs
 |   |   +-- ReportIntentTool.cs
-|   +-- Stores/
-|       +-- SandboxMemoryStore.cs
-|       +-- RunTodoState.cs
 +-- Scaffolder.SandboxFs/        # Modified: KnownShellTools in SandboxPolicyBackend; new SandboxedSearchTools; extended SandboxedFileTools
-+-- Scaffolder.Domain/           # Modified: new event type constants (agent.intent)
++-- Scaffolder.Domain/           # Modified: (no new event types for this feature beyond sandbox/tool events)
 
 tests/
 +-- Scaffolder.Tests/
@@ -1258,9 +1145,6 @@ tests/
         +-- ApplyPatchToolTests.cs
         +-- CreateFileToolTests.cs
         +-- EditFileToolTests.cs
-        +-- StoreMemoryToolTests.cs
-        +-- VoteMemoryToolTests.cs
-        +-- UpdateTodoToolTests.cs
         +-- ReportIntentToolTests.cs
         +-- SandboxToolRegistryTests.cs
         +-- NativeToolExclusionTests.cs
@@ -1333,6 +1217,7 @@ tests/
 | T023 | Web UI: display sandbox status | Trinity | Run detail view shows sandbox backend selection and warnings. Settings page shows sandbox configuration. Both read from API. | T020, T021 |
 | T024 | CLI: display streamed command output | Trinity | `tool.output` events rendered inline during `scaffolder run watch` with stdout/stderr differentiation. `tool.exec_result` shows exit code. | T019 |
 | T025 | Web UI: display streamed command output | Trinity | `tool.output` events rendered in the run timeline with terminal-style formatting. `tool.exec_result` shows structured completion. | T019 |
+| T064a | Render `agent.intent` in the run UI | Trinity | Surface the `agent.intent` event (emitted by `report_intent`) in the run views: `scaffolder run watch` (CLI) shows the agent's current intent/plan inline; the Web UI run timeline shows it as an intent entry. Both read from the existing event stream (Principle V). | T019, T064 |
 
 ---
 
@@ -1369,7 +1254,7 @@ tests/
 | T046 | Implement in-process `file_search` tool body | Morpheus | In `SandboxedSearchTools`: glob matching via `Microsoft.Extensions.FileSystemGlobbing.Matcher` constrained to sandbox root. Rejects traversal patterns. Returns relative paths capped at `maxResults`. | T045 |
 | T047 | Register file/search AIFunctions in Copilot runner | Morpheus | Extend `BuildCopilotCustomTools` (section 4.3) to register `read_file`, `grep_search`, `file_search`, `str_replace_editor`, `apply_patch`, `create`, `edit` as AIFunctions. Each marked `is_override = true`. Each performs governance eval inline (same pattern as `run_command`). Deny native equivalents in permission handler. | T043, T044, T045, T046, T016 |
 | T048 | Register file/search AIFunctions in Foundry runner | Morpheus | Extend `BuildTools(...)` in `FoundryAgentRunner.cs` to register the same seven tools with identical schemas and implementation bodies. Symmetric with Copilot runner (Constitution IV). | T047, T015 |
-| T049 | Update `SandboxPolicyBackend` for new tools (three branches) | Morpheus | THREE distinct code changes in `SandboxPolicyBackend.Evaluate()`: (1) KnownFileTools set -- add `"filePath"` to `PathArgumentKeys`; add `"read_file"`, `"str_replace_editor"`, `"apply_patch"`, `"create"`, `"edit"` to `KnownFileTools` (keeping existing entries); path-arg validation applies. For `apply_patch`, per-path validation is deferred to the two-phase tool implementation. (2) KnownSearchTools set (NEW) -- add `"grep_search"` and `"file_search"`; validate working-directory containment only (no path arg to validate); if `includePattern` provided, tool implementation validates no escape. (3) KnownInternalTools set (NEW) -- add `"update_todo"` and `"report_intent"`; allow without path (unconditional allow, reason: "Internal tool, no filesystem access required"). Evaluation order: KnownFileTools -> KnownShellTools -> KnownSearchTools -> KnownInternalTools -> deny-by-default. | T014 |
+| T049 | Update `SandboxPolicyBackend` for new tools (two branches) | Morpheus | TWO distinct code changes in `SandboxPolicyBackend.Evaluate()`: (1) KnownFileTools set -- add `"filePath"` to `PathArgumentKeys`; add `"read_file"`, `"str_replace_editor"`, `"apply_patch"`, `"create"`, `"edit"` to `KnownFileTools` (keeping existing entries); path-arg validation applies. For `apply_patch`, per-path validation is deferred to the two-phase tool implementation. (2) KnownSearchTools set (NEW) -- add `"grep_search"` and `"file_search"`; validate working-directory containment only (no path arg to validate); if `includePattern` provided, tool implementation validates no escape. Evaluation order: KnownFileTools -> KnownShellTools -> KnownSearchTools -> deny-by-default. | T014 |
 | T050 | Unit tests: SandboxedFileTools extensions | Smith | Test `ReadFileRangeAsync` (line range, out-of-bounds, empty file), `CreateFileAsync` (success, fail-if-exists, path escape), `StrReplaceAsync` (unique match, non-unique rejected, not-found), `InsertAtLineAsync` (valid line, beyond EOF, negative). All with TOCTOU handle verification. | T043 |
 | T051 | Unit tests: ApplyPatchAsync (two-phase + Move-to) | Smith | Test Add File, Delete File, Update File hunks. Test two-phase validation: (a) `*** Move to: ../escape` rejected with zero mutation, (b) `*** Move to: /etc/passwd` rejected with zero mutation, (c) valid rename within sandbox succeeds, (d) mixed patch with one valid hunk and one escaping "Move to" -- entire patch rejected with zero files modified. Test partial paths: absolute path in "Add File:" rejected. Test binary-safety (content with special chars preserved). | T044 |
 | T052 | Unit tests: SandboxedSearchTools (grep + file search) | Smith | Test regex/literal matching, includePattern glob, maxResults cap, exclusion directories, path-escape rejected, empty results. | T045, T046 |
@@ -1378,31 +1263,24 @@ tests/
 
 ---
 
-### Phase 4b: Reusable Tool Library, Native Exclusion, and Memory/Planning (M5/M6/M7)
+### Phase 4b: Reusable Tool Library and Native Exclusion (M5/M6)
 
-> Prerequisite: Phase 4a tool implementations complete. This phase refactors them into the shared library, wires AvailableTools exclusion, and adds memory/planning tools.
+> Prerequisite: Phase 4a tool implementations complete. This phase refactors them into the shared library and wires AvailableTools exclusion.
 
 | ID | Task | Owner | Description | Depends On |
 |---|---|---|---|---|
 | T055 | Create `Scaffolder.AgentTools` package | Morpheus | New .csproj (net10.0), add to solution. References: `Scaffolder.SandboxFs`, `Scaffolder.SandboxExec`, `Scaffolder.Domain`, `Microsoft.Extensions.AI`. NO reference to `Scaffolder.AgentRuntime` (RBD1 resolution). Define `ISandboxTool` interface and `SandboxToolContext` record as specified in section 4.8.2 -- governance exposed as `Func<string, IReadOnlyDictionary<string, object>, (bool Allowed, string? Reason)> EvaluateToolCall` delegate, NOT the concrete `SandboxGovernance` type. Verify acyclic dependency graph: AgentTools -> {SandboxFs, SandboxExec, Domain}; AgentRuntime -> {AgentTools, SandboxFs, SandboxExec, Domain}. | T005 |
 | T056 | Implement `SandboxToolRegistry` | Morpheus | Assembles `IList<AIFunction>` from registered `ISandboxTool` classes. Conditionally includes `RunCommandTool` (gated on IsRealIsolation + ShellEnabled). Exposes `GetToolNames()` for `AvailableTools` construction. See section 4.8.4. | T055 |
 | T057 | Refactor existing tools into `ISandboxTool` classes | Morpheus | Move inline lambda logic from `BuildCopilotCustomTools` and `BuildTools` into named classes: `RunCommandTool`, `ReadFileTool`, `GrepSearchTool`, `FileSearchTool`, `StrReplaceEditorTool`, `ApplyPatchTool`, `CreateFileTool`, `EditFileTool`. Each implements `ISandboxTool`, routes through existing primitives (no behavior change). | T055, T047, T048 |
-| T058 | Implement `SandboxMemoryStore` | Morpheus | JSON-backed persistent store at `{sandboxRoot}/.scaffolder/memory.json`. Methods: `StoreAsync`, `VoteAsync`, `RecallAsync`. File I/O through `SandboxPathValidator`-verified path. File-level lock for concurrency. All return values from store/vote/recall MUST pass through `SandboxOutputRedactor.Redact()` before being returned to the LLM framework (F-BT2: prevents secret amplification if stored facts contain sensitive content). See section 4.7.8.2. | T055 |
-| T059 | Implement `StoreMemoryTool` and `VoteMemoryTool` | Morpheus | `ISandboxTool` classes backed by `SandboxMemoryStore`. `store_memory`: validates fields (fact <200 chars, subject <50 chars), appends entry, returns confirmation. `vote_memory`: finds matching fact, appends vote record, returns result or error. Both marked `IsOverride = true` (native `store_memory`/`vote_memory` exist in bundle). Return values pass through `SandboxOutputRedactor.Redact()` before return to model (F-BT2). | T058 |
-| T060 | Implement `RunTodoState`, `UpdateTodoTool`, `ReportIntentTool` | Morpheus | `RunTodoState`: in-memory markdown checklist parser (counts `- [x]` / `- [ ]` lines). `UpdateTodoTool`: stores checklist, returns counts, `IsOverride = true` (native `update_todo` exists). `ReportIntentTool`: emits `agent.intent` event, returns "Intent logged", `IsOverride = true` (native `report_intent` exists). Return values pass through `SandboxOutputRedactor.Redact()` (F-BT2). See section 4.7.8.3. | T055 |
-| T061 | Wire `AvailableTools` allowlist in Copilot runner | Morpheus | Set `SessionConfig.AvailableTools` to `registry.GetToolNames(includeShell)`. Set `SessionConfig.ExcludedTools` to `NativeToolExclusion.GetExcludedToolNames()`. Verify: model sees ONLY custom tools. Cite: spike doc line 86-92 confirms allowlist semantics. See section 4.8.6. | T056, T057, T059, T060 |
-| T062 | Implement `NativeToolExclusion` | Morpheus | Static class listing known native tool names from bundle permission map (line ~1315): `bash`, `shell`, `write`, `read`, `view`, `ls`, `glob`, `grep`, `task`, `webfetch`, `web_fetch`, `websearch`, `web_search`, `memory`, `semantic_search`. Returns `IList<string>` for `ExcludedTools`. | T055 |
-| T063 | Refactor runners to use `SandboxToolRegistry` | Morpheus | Replace `BuildCopilotCustomTools` and `BuildTools` inline tool construction in both runners with `registry.Build(context)`. Remove duplicated lambda code. Verify identical behavior (no functional change). Constitution IV parity confirmed. | T056, T057, T059, T060, T061, T062 |
-| T064 | Add `agent.intent` event type to Domain | Morpheus | Add `"agent.intent"` to `EventTypes.cs` in `Scaffolder.Domain`. Payload: `{ intent: string }`. Emitted by `ReportIntentTool`. Consumed by CLI/Web UI run-status display. | T060 |
-| T064a | CLI + Web UI render agent.intent as live status indicator | Trinity | Render `agent.intent` events as a live status line in `scaffolder run watch` (CLI) and as a real-time status badge/text in the run detail view (Web UI). Updates on each new `agent.intent` event. Depends on T064 (event exists), T022 (CLI run watch infrastructure), T023 (Web UI run detail infrastructure). Constitution V: no dead events -- every emitted event must have a consumer. | T064, T022, T023 |
-| T065 | Unit tests: `SandboxMemoryStore` | Smith | Test store (append, field validation, max-length enforcement), vote (found/not-found, upvote/downvote), recall (returns all entries), concurrent writes (file lock), path-escape on store path (rejected). | T058 |
-| T066 | Unit tests: `StoreMemoryTool` and `VoteMemoryTool` | Smith | Test via `ISandboxTool.CreateFunction` -- valid store, invalid fields rejected, vote on existing/missing fact. Verify `is_override = true` metadata. | T059 |
-| T067 | Unit tests: `UpdateTodoTool` and `ReportIntentTool` | Smith | Test checklist parsing (mixed completed/pending), empty input, intent event emission. Verify `is_override = true` metadata. | T060 |
-| T068 | Unit tests: `SandboxToolRegistry` (canonical names) | Smith | Test `Build` returns all tools with correct names. Test `RunCommandTool` excluded when shell disabled. Test `GetToolNames` matches `Build` output names. Test `is_override` set correctly: true for all tools EXCEPT `RunCommandTool` (which has `IsOverride = false`). CANONICAL NAME TEST (RBD4): assert that `registry.GetToolNames(includeDisabled: true)` equals a hardcoded constant array exactly matching the bundle names: `["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create", "edit", "store_memory", "vote_memory", "update_todo", "report_intent"]`. This array is the single source of truth, cross-referenced to `copilot-builtin-tools.md`. A name typo (e.g. "readFile" vs "read_file") fails the test and prevents silent allowlist lockout. | T056 |
+| T061 | Wire `AvailableTools` allowlist in Copilot runner | Morpheus | Set `SessionConfig.AvailableTools` to `registry.GetToolNames(includeShell)`. Set `SessionConfig.ExcludedTools` to `NativeToolExclusion.GetExcludedToolNames()`. Verify: model sees ONLY custom tools (9 tool names). Cite: spike doc line 86-92 confirms allowlist semantics. See section 4.8.6. | T056, T057 |
+| T062 | Implement `NativeToolExclusion` | Morpheus | Static class listing known native tool names from bundle permission map (line ~1315): `bash`, `shell`, `write`, `read`, `view`, `ls`, `glob`, `grep`, `task`, `webfetch`, `web_fetch`, `websearch`, `web_search`, `memory`, `store_memory`, `vote_memory`, `update_todo`, `semantic_search`. Note: `report_intent` is NOT in this blocklist -- it is an allowlisted custom override. Returns `IList<string>` for `ExcludedTools`. | T055 |
+| T063 | Refactor runners to use `SandboxToolRegistry` | Morpheus | Replace `BuildCopilotCustomTools` and `BuildTools` inline tool construction in both runners with `registry.Build(context)`. Remove duplicated lambda code. Verify identical behavior (no functional change). Constitution IV parity confirmed. | T056, T057, T061, T062 |
+| T064 | Implement `ReportIntentTool` (+ unit test) | Morpheus | Add `ReportIntentTool` to `packages/Scaffolder.AgentTools/Tools/`: custom `AIFunction` taking a single `intent` string arg, `IsOverride = true` (matches native bundle name). On invocation it emits an `agent.intent` event (`{ intent }`) via `SandboxToolContext.EmitEvent` and returns an acknowledgement string redacted through `SandboxOutputRedactor` (F-BT2). It performs NO filesystem or shell action and requires NO path validation or governance branch. Register it (unconditional) in `SandboxToolRegistry.Build`. Unit test (`ReportIntentToolTests.cs`): assert `agent.intent` is emitted with the supplied intent text, `IsOverride = true`, return value passes through redaction, and no filesystem/shell side effects occur. See section 4.7.8. | T055, T056 |
+| T068 | Unit tests: `SandboxToolRegistry` (canonical names) | Smith | Test `Build` returns all tools with correct names. Test `RunCommandTool` excluded when shell disabled. Test `GetToolNames` matches `Build` output names. Test `is_override` set correctly: true for all tools EXCEPT `RunCommandTool` (which has `IsOverride = false`). CANONICAL NAME TEST (RBD4): assert that `registry.GetToolNames(includeDisabled: true)` equals a hardcoded constant array exactly matching the bundle names: `["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create", "edit", "report_intent"]`. This array is the single source of truth for the current increment (9 tools), cross-referenced to `copilot-builtin-tools.md`. A name typo (e.g. "readFile" vs "read_file") fails the test and prevents silent allowlist lockout. | T056 |
 | T069 | Unit tests: `NativeToolExclusion` | Smith | Test `GetExcludedToolNames` returns known native names. Test no overlap with custom tool names from registry. | T062 |
-| T070 | Integration test: AvailableTools allowlist enforcement | Smith | Start a Copilot runner session. Verify `SessionConfig.AvailableTools` contains exactly our custom tool names. Attempt to invoke a native tool name (e.g. `bash`) -- verify it is rejected/invisible. Verify forward-compat: a fabricated tool name not in allowlist is also invisible. | T061, T063 |
-| T071 | Update copilot-builtin-tools.md evidence artifact | Morpheus | Add memory tool schemas (`store_memory`, `vote_memory`) and planning tool schemas (`update_todo`, `report_intent`) to the evidence artifact. Document `exit_plan_mode` as scoped-out (internal orchestration). | T042 |
-| T072 | Update documentation: memory/planning tools + exclusion strategy | Link | Extend `docs/architecture/sandboxed-execution.md` with: reusable tool library architecture, AvailableTools/ExcludedTools exclusion strategy, memory/planning tool specifications, scope-out rationale for `exit_plan_mode`/`task`/`notebook`/`web_*`/`sql`. | T063 |
+| T070 | Integration test: AvailableTools allowlist enforcement | Smith | Start a Copilot runner session. Verify `SessionConfig.AvailableTools` contains exactly our 9 custom tool names. Attempt to invoke a native tool name (e.g. `bash`) -- verify it is rejected/invisible. Verify forward-compat: a fabricated tool name not in allowlist is also invisible. | T061, T063 |
+| T071 | Update copilot-builtin-tools.md evidence artifact | Morpheus | Confirm the evidence artifact documents that memory tools (`store_memory`, `vote_memory`) and the todo tool (`update_todo`) are OUT OF SCOPE for this feature, and that `report_intent` IS reimplemented as a UI observability tool (emits `agent.intent`). Document `exit_plan_mode` as scoped-out (internal orchestration). | T042 |
+| T072 | Update documentation: exclusion strategy | Link | Extend `docs/architecture/sandboxed-execution.md` with: reusable tool library architecture, AvailableTools/ExcludedTools exclusion strategy (9-tool allowlist incl. `report_intent`), scope-out rationale for `exit_plan_mode`/`task`/`notebook`/`web_*`/`sql`/`update_todo`/`store_memory`/`vote_memory`. | T063 |
 
 ---
 
@@ -1417,6 +1295,11 @@ tests/
 | T039 | Pre-implementation security review | Seraph | Review the plan, abstraction contract, and governance changes for security gaps. Gate before Phase 2 integration begins. | T005-T012 |
 | T040 | Post-implementation security review | Seraph | Review the complete implementation for sandbox escapes, governance bypasses, redaction completeness, binary integrity, and audit completeness. Gate before merge. | All Phase 2-4 |
 | T041 | RAI review | Rai | Verify responsible-AI obligations: human accountability preserved (F6 HITL gate), all actions auditable, output redaction (F7) effective, no harmful content generation path introduced. | T040 |
+
+---
+
+**In-scope task totals:** 74 tasks across Phases 0-5.
+**Phase list:** 0, 1, 2, 3, 4, 4a, 4b, 5.
 
 ---
 
@@ -1477,15 +1360,24 @@ None blocking. All spec clarifications (FR-033 through FR-036) are resolved. Imp
 | **N1** | Binary licensing -- redistribution license verification | T012 now has prerequisite: verify mxc redistribution license + generate `NOTICE` attribution file. See task T012. |
 | **N2** | Event schema -- `tool.exec_result` vs extended `tool.result` | Distinct `tool.exec_result` event type chosen (preserves backward compat). See section 4.5, task T036. |
 | **N3** | Perf benchmark for file-tool sandbox routing | Added Phase 0 subtask T004a to benchmark per-op latency (mxc cat vs in-proc). Feeds M2 decision for future increment. See task T004a. |
-| **M4** | Built-in sandboxed tools supersede shell for file ops | Purpose-built AIFunction tools mirror Copilot CLI built-in names/schemas (`read_file`, `grep_search`, `file_search`, `str_replace_editor`, `apply_patch`, `create`, `edit`). Execute in-process via `SandboxedFileTools` (TOCTOU preserved) and `SandboxedSearchTools`. File/search/memory/planning tools registered with `is_override = true` (matching native names); `run_command` with `is_override = false` (no native counterpart). Native built-ins denied via AvailableTools allowlist as primary enforcement. `semantic_search` scoped OUT (requires GitHub embeddings API, not registered). Supersedes M2 deferral positively. See section 4.7, Phase 4a tasks T042-T054. |
+| **M4** | Built-in sandboxed tools supersede shell for file ops | Purpose-built AIFunction tools mirror Copilot CLI built-in names/schemas (`read_file`, `grep_search`, `file_search`, `str_replace_editor`, `apply_patch`, `create`, `edit`). Execute in-process via `SandboxedFileTools` (TOCTOU preserved) and `SandboxedSearchTools`. File/search tools registered with `is_override = true` (matching native names); `run_command` with `is_override = false` (no native counterpart). Native built-ins denied via AvailableTools allowlist as primary enforcement. `semantic_search` scoped OUT (requires GitHub embeddings API, not registered). Supersedes M2 deferral positively. See section 4.7, Phase 4a tasks T042-T054. |
 | **M5** | Reusable tool library -- DRY refactor (Constitution IV) | All custom tools refactored into `packages/Scaffolder.AgentTools/` with `ISandboxTool` contract and `SandboxToolRegistry`. Both runners consume registry output instead of building tools inline. Each tool is its own class, independently testable. See section 4.8, Phase 4b tasks T055-T057, T063. |
-| **M6** | Native-tool exclusion via AvailableTools allowlist | `SessionConfig.AvailableTools` set to explicit allowlist (ONLY our custom tool names). Confirmed allowlist semantics from spike doc (line 86-92, 179). `ExcludedTools` populated with known native names as defense-in-depth. Forward-compat guaranteed: new native tools auto-excluded by allowlist. See section 4.8.6, tasks T061, T062, T070. |
-| **M7** | Memory/planning tools reimplemented as custom AIFunctions | `store_memory`, `vote_memory` backed by sandbox-scoped JSON store (`{sandboxRoot}/.scaffolder/memory.json`). `update_todo` backed by in-memory `RunTodoState`. `report_intent` emits `agent.intent` event. `exit_plan_mode` scoped OUT (internal SDK orchestration, not model-callable). `task`/`notebook`/`web_*`/`sql` scoped OUT per user direction or irrelevance. See section 4.7.8, tasks T058-T060, T064-T067, T071. |
+| **M6** | Native-tool exclusion via AvailableTools allowlist | `SessionConfig.AvailableTools` set to explicit allowlist (ONLY our custom tool names -- 9 tools incl. `report_intent`). Confirmed allowlist semantics from spike doc (line 86-92, 179). `ExcludedTools` populated with known native names as defense-in-depth. Forward-compat guaranteed: new native tools auto-excluded by allowlist. See section 4.8.6, tasks T061, T062, T070. |
+| **M7** | Memory AND todo tools OUT OF SCOPE; report_intent IN SCOPE | Memory tools (`store_memory`, `vote_memory`, `SandboxMemoryStore`) and the todo tool (`update_todo`, `RunTodoState`) are OUT OF SCOPE for this feature per product decision (2026-06-10). `report_intent` is IN SCOPE as a UI observability tool: it emits the `agent.intent` event for the run view (Principle V) and is NOT a memory or todo tool. The model gets sandboxed shell + file + search tools plus `report_intent`; all native memory/todo meta-tools remain excluded via NativeToolExclusion. AvailableTools allowlist is 9 tools. `exit_plan_mode` scoped OUT (internal SDK orchestration, not model-callable). `task`/`notebook`/`web_*`/`sql` scoped OUT per user direction or irrelevance. The agent ships with no memory or todo capability in this increment -- that is intentional. |
 | **RBD1** | Circular package dependency: AgentTools references SandboxGovernance (internal in AgentRuntime) creating bidirectional dep | Replaced `SandboxGovernance Governance` field in `SandboxToolContext` with a delegate: `Func<string, IReadOnlyDictionary<string, object>, (bool Allowed, string? Reason)> EvaluateToolCall`. Runner binds at construction: `(toolName, args) => governance.EvaluateToolCall(agentId, toolName, args, logger)`. Post-fix dependency graph (acyclic): AgentTools -> {SandboxFs, SandboxExec, Domain}; AgentRuntime -> {AgentTools, SandboxFs, SandboxExec, Domain}; SandboxExec -> {SandboxFs, Domain}; SandboxFs -> {Domain}. No other type in SandboxToolContext lives in AgentRuntime. See section 4.8.2, task T055. |
-| **RBD2 / F-BT4** | `is_override=true` on run_command is incorrect -- no native tool named `run_command` exists | `RunCommandTool.IsOverride = false`. Native shell tools (`shell`/`bash`) are excluded via AvailableTools (not listed in allowlist) + ExcludedTools (blocklist). Rule: `IsOverride = true` ONLY for custom tools whose Name matches an actual native tool name in the bundle (verified against copilot-builtin-tools.md evidence artifact). All other tools (read_file, grep_search, file_search, str_replace_editor, apply_patch, create, edit, store_memory, vote_memory, update_todo, report_intent) DO match native names and retain `IsOverride = true`. See sections 4.3, 4.8.2, 4.8.4, task T068. |
+| **RBD2 / F-BT4** | `is_override=true` on run_command is incorrect -- no native tool named `run_command` exists | `RunCommandTool.IsOverride = false`. Native shell tools (`shell`/`bash`) are excluded via AvailableTools (not listed in allowlist) + ExcludedTools (blocklist). Rule: `IsOverride = true` ONLY for custom tools whose Name matches an actual native tool name in the bundle (verified against copilot-builtin-tools.md evidence artifact). All other current-increment tools (read_file, grep_search, file_search, str_replace_editor, apply_patch, create, edit) DO match native names and retain `IsOverride = true`. See sections 4.3, 4.8.2, 4.8.4, task T068. |
 | **RBD3 / F-BT1** | apply_patch path validation missing "Move to" rename destinations; partial-mutation-then-escape possible | TWO-PHASE apply: Phase 1 parses entire patch, collects ALL paths (Add/Delete/Update targets AND every `*** Move to: <path>` destination), validates EACH through full SandboxPathValidator chain; if ANY fails, reject entire patch with zero writes. Phase 2 applies hunks only after all paths pass. T044 and T051 explicitly name "Move to" as a validated path and include escape tests (`*** Move to: ../escape` and absolute-path escapes rejected with zero mutation). See sections 4.7.3, 4.7.5, tasks T044, T051. |
-| **F-BT2 / F-BT3** | Tool RETURN values (to LLM framework) not redacted -- only events were redacted; enables secret amplification via model echo | Every tool AIFunction runs its return value through `SandboxOutputRedactor.Redact()` BEFORE returning to the LLM framework. Applies to: read_file content, grep_search/file_search results, run_command output, store_memory/vote_memory echoes, RecallAsync content. Event-level redaction (F7) remains as defense-in-depth on top. See sections 4.7.5, 4.7.8.2, 4.7.8.4, tasks T058, T059, T060. |
-| **RBD4** | T068 self-referentially checks names so a typo passes tests but locks model out via allowlist | T068 adds a test asserting `registry.GetToolNames(includeDisabled: true)` equals a hardcoded canonical constant array: `["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create", "edit", "store_memory", "vote_memory", "update_todo", "report_intent"]`. This array is the single source of truth, cross-referenced to copilot-builtin-tools.md. A typo fails the test. See section 4.8.4, task T068. |
-| **RBD5** | No UI consumer task for `agent.intent` event -- dead event violates Constitution V | Added task T064a: "CLI + Web UI render agent.intent as a live status indicator in run watch / run detail". Depends on T064, T022, T023. Constitution V requires every emitted event to have a consumer. See task T064a. |
-| **RBD6** | T049 must enumerate three distinct backend branches -- without all three, implementer only does (1) | T049 description explicitly enumerates THREE code changes: (1) `KnownFileTools` with path-arg validation (add `"filePath"` to PathArgumentKeys), (2) `KnownSearchTools` set for grep_search/file_search with working-directory-containment-only validation, (3) `KnownInternalTools` set for update_todo/report_intent with allow-without-path. Evaluation order specified. See section 4.7.5, task T049. |
+| **F-BT2 / F-BT3** | Tool RETURN values (to LLM framework) not redacted -- only events were redacted; enables secret amplification via model echo | Every tool AIFunction runs its return value through `SandboxOutputRedactor.Redact()` BEFORE returning to the LLM framework. Applies to: read_file content, grep_search/file_search results, run_command output. Event-level redaction (F7) remains as defense-in-depth on top. See section 4.7.5. |
+| **RBD4** | T068 self-referentially checks names so a typo passes tests but locks model out via allowlist | T068 adds a test asserting `registry.GetToolNames(includeDisabled: true)` equals a hardcoded canonical constant array: `["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create", "edit", "report_intent"]`. This array is the single source of truth for the current increment (9 tools), cross-referenced to copilot-builtin-tools.md. A name typo fails the test. See section 4.8.4, task T068. |
+| **RBD5** | `agent.intent` event re-added with `report_intent` restored -- no dead events | `report_intent` is restored as a UI observability tool (M7). It emits the `agent.intent` event, which is consumed by the run UI (task T064a). The tool and its event have matching producer (T064) and consumer (T064a), so there is no dead-event concern. `report_intent` is NOT a memory or todo tool. See sections 4.5, 4.7.8, tasks T064, T064a. |
+| **RBD6** | T049 must enumerate distinct backend branches | T049 description explicitly enumerates TWO code changes: (1) `KnownFileTools` with path-arg validation (add `"filePath"` to PathArgumentKeys), (2) `KnownSearchTools` set for grep_search/file_search with working-directory-containment-only validation. Evaluation order specified. See section 4.7.5, task T049. |
 | **F-BT5** | semantic_search "if invoked" wording implies a stub/error-handler exists | Clarified: semantic_search is NOT registered, NOT stubbed. It is excluded from SandboxToolRegistry entirely. The model cannot invoke it (AvailableTools allowlist does not list it). If a future SDK version bypasses the allowlist, ExcludedTools and permission handler provide tertiary enforcement. See section 4.7.4, task T054. |
+
+---
+
+### Change Log
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-06-10 | report_intent restored | `report_intent` re-added as a UI observability tool (emits `agent.intent` for the run view); it is NOT a memory or todo tool. AvailableTools allowlist restored to 9 tools; section 4.7.8 re-added; tasks T064 (implement `ReportIntentTool`) and T064a (render `agent.intent` in run UI) re-added. In-scope total: 74 tasks across Phases 0-5. Memory tools (`store_memory`, `vote_memory`) and the todo tool (`update_todo`) REMAIN out of scope. |
+| 2026-06-10 | Memory + planning removal | Memory tools (`store_memory`, `vote_memory`, `SandboxMemoryStore`) AND planning/todo tools (`update_todo`, `report_intent`, `RunTodoState`) removed entirely from scope per product decision. AvailableTools allowlist reduced to 8 tools; section 4.7.8 removed; Phase 6 (deferred) removed; tasks T058-T060, T064-T067 deleted. In-scope total: 72 tasks across Phases 0-5. The agent ships with shell + file + search tools only; no memory or planning capability. |
