@@ -8,7 +8,7 @@ namespace Scaffolder.SandboxExec;
 /// <summary>
 /// Executes sandboxed commands on a native Linux host using bubblewrap (bwrap).
 /// Used when lxc-exec is not available but bwrap is installed.
-/// The workspace is bound read-write; /usr and /etc are read-only.
+/// The workspace is bound read-write; /usr and selected /etc files are read-only.
 /// Ubuntu ARM64 symlinks (bin→usr/bin etc.) are recreated — no /lib64 assumed.
 /// Verified on Ubuntu 24.04 aarch64.
 /// </summary>
@@ -52,7 +52,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
     private static string ShellSingleQuote(string s) =>
         "'" + s.Replace("'", "'\\''") + "'";
 
-    private static string BuildBwrapPayload(string command, string workdir)
+    internal static string BuildBwrapPayload(string command, string workdir)
     {
         var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
         var wd = ShellSingleQuote(workdir);
@@ -60,15 +60,22 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
             "exec bwrap" +
             $" --bind {wd} {wd}" +
             " --ro-bind /usr /usr" +
-            " --ro-bind /etc /etc" +
+            " --ro-bind-try /etc/resolv.conf /etc/resolv.conf" +
+            " --ro-bind-try /etc/passwd /etc/passwd" +
+            " --ro-bind-try /etc/group /etc/group" +
+            " --ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf" +
             " --symlink usr/bin /bin" +
             " --symlink usr/lib /lib" +
             " --symlink usr/sbin /sbin" +
             " --proc /proc" +
             " --dev /dev" +
             " --tmpfs /tmp" +
+            " --tmpfs /home" +
+            " --tmpfs /root" +
             $" --chdir {wd}" +
             " --unshare-pid" +
+            " --unshare-user" +
+            " --unshare-net" +
             " --new-session" +
             $" -- /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
     }

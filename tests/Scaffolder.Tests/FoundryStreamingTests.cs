@@ -114,6 +114,28 @@ public sealed class FoundryStreamingTests : IDisposable
         events.Should().NotContain(e => e.Type == "run.completed");
     }
 
+    [Fact]
+    public async Task FileToolCall_WithFilePathAlias_NormalizesPathBeforeGovernanceAndInvoke()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_workDir, "alias.txt"), "alias-content");
+        var client = new FakeStreamingChatClient(
+            new TurnSetup([FunctionCallUpdate("c-alias", "read_file", new() { ["file_path"] = "alias.txt" })]),
+            new TurnSetup([TextUpdate("Done.")]));
+
+        var (writer, drain) = MakeChannel();
+        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r-alias", writer, CancellationToken.None);
+        var events = drain();
+
+        events.Where(e =>
+                e.Type == "tool.error" &&
+                (Prop(e.Payload, "errorMessage")?.Contains("No path argument") ?? false))
+            .Should().BeEmpty();
+        events.Where(e =>
+                e.Type == "tool.result" &&
+                (Prop(e.Payload, "content")?.Contains("alias-content") ?? false))
+            .Should().NotBeEmpty();
+    }
+
     // ---- T-3 ----
 
     [Fact]

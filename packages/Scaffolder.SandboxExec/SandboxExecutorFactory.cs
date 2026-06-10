@@ -8,8 +8,9 @@ namespace Scaffolder.SandboxExec;
 /// platform and available backends. Selection order:
 ///   1. Windows: MxcSandboxExecutor (processcontainer)
 ///   2. Windows: WslMxcSandboxExecutor (WSL2 + bwrap/unshare)
-///   3. Linux:   LinuxNativeMxcSandboxExecutor (lxc-exec direct)
-///   4. Fallback: PassthroughExecutor (deny-by-default)
+///   3. Linux:   LinuxBwrapExecutor (selective bubblewrap mounts)
+///   4. Linux:   LinuxNativeMxcSandboxExecutor (lxc-exec direct)
+///   5. Fallback: PassthroughExecutor (deny-by-default)
 /// </summary>
 public static class SandboxExecutorFactory
 {
@@ -32,7 +33,16 @@ public static class SandboxExecutorFactory
             // The bundled lxc-exec is also checked as a separate fallback.
             var support = MxcSdk.GetPlatformSupport();
 
-            // Prefer lxc (bundled lxc-exec or system lxc infrastructure).
+            // Prefer bubblewrap: our bwrap executor uses a selective mount allowlist.
+            if (LinuxBwrapExecutor.IsBwrapAvailable() ||
+                support.AvailableMethods.Contains(ContainmentBackend.Bubblewrap))
+            {
+                logger.LogInformation(
+                    "SandboxExecutorFactory: selected linux-bwrap.");
+                return new LinuxBwrapExecutor(logger);
+            }
+
+            // Fall back to lxc only when bwrap is unavailable.
             var lxcPath = LinuxNativeMxcSandboxExecutor.IsLxcAvailable();
             if (lxcPath != null || support.AvailableMethods.Contains(ContainmentBackend.Lxc))
             {
@@ -40,14 +50,6 @@ public static class SandboxExecutorFactory
                     "SandboxExecutorFactory: selected lxc-native-linux (SDK tier={Tier}).",
                     support.IsolationTier);
                 return new LinuxNativeMxcSandboxExecutor(logger);
-            }
-
-            // Fall back to bubblewrap if the SDK probe detected it.
-            if (support.AvailableMethods.Contains(ContainmentBackend.Bubblewrap))
-            {
-                logger.LogInformation(
-                    "SandboxExecutorFactory: selected linux-bwrap (SDK detected bubblewrap).");
-                return new LinuxBwrapExecutor(logger);
             }
 
             logger.LogWarning(
@@ -58,7 +60,7 @@ public static class SandboxExecutorFactory
 
         var reason = OperatingSystem.IsWindows()
             ? "No isolation backend available (processcontainer unsupported, WSL2 not found)."
-            : "No isolation backend available (lxc-exec not found on this Linux host).";
+            : "No isolation backend available (bwrap/lxc-exec not found on this Linux host).";
 
         logger.LogWarning(
             "SandboxExecutorFactory: falling back to PassthroughExecutor. Reason: {Reason}",

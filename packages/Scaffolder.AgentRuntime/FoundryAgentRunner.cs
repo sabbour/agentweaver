@@ -242,6 +242,19 @@ public sealed class FoundryAgentRunner : IAgentRunner
                 if (call.Name == "run_command")
                     toolArgs["directory"] = workingDirectory;
 
+                if (call.Name is "edit" or "create" or "str_replace_editor" or "read_file")
+                {
+                    foreach (var alias in new[] { "file_path", "filename", "target", "file" })
+                    {
+                        if (!toolArgs.ContainsKey("path") &&
+                            toolArgs.TryGetValue(alias, out var aliasVal))
+                        {
+                            toolArgs["path"] = aliasVal;
+                            break;
+                        }
+                    }
+                }
+
                 var (allowed, reason) = governance.EvaluateToolCall(agentId, call.Name, toolArgs, _logger);
 
                 if (!allowed)
@@ -255,10 +268,15 @@ public sealed class FoundryAgentRunner : IAgentRunner
                 }
 
                 // Governance passed — invoke the tool (SandboxedFileTools provides defense-in-depth)
+                // Governance passed — invoke with original call.Arguments (not the governance-enriched toolArgs)
                 string resultText;
                 try
                 {
-                    var fnArgs = new AIFunctionArguments(call.Arguments!);
+                    // Use toolArgs (which contains path-alias normalization and governance
+                    // injections) rather than call.Arguments (which has the original un-normalized
+                    // keys from the model), so read_file with file_path=X resolves correctly.
+                    var fnArgs = new AIFunctionArguments(
+                        toolArgs.ToDictionary(k => k.Key, k => (object?)k.Value));
                     var raw = await tool.InvokeAsync(fnArgs, ct);
                     resultText = raw?.ToString() ?? string.Empty;
                     Emit("tool.result", new { callId = call.CallId, content = resultText });
@@ -288,4 +306,3 @@ public sealed class FoundryAgentRunner : IAgentRunner
     }
 
 }
-

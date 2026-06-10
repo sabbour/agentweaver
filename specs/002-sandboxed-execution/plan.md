@@ -1381,3 +1381,67 @@ None blocking. All spec clarifications (FR-033 through FR-036) are resolved. Imp
 |---|---|---|
 | 2026-06-10 | report_intent restored | `report_intent` re-added as a UI observability tool (emits `agent.intent` for the run view); it is NOT a memory or todo tool. AvailableTools allowlist restored to 9 tools; section 4.7.8 re-added; tasks T064 (implement `ReportIntentTool`) and T064a (render `agent.intent` in run UI) re-added. In-scope total: 74 tasks across Phases 0-5. Memory tools (`store_memory`, `vote_memory`) and the todo tool (`update_todo`) REMAIN out of scope. |
 | 2026-06-10 | Memory + planning removal | Memory tools (`store_memory`, `vote_memory`, `SandboxMemoryStore`) AND planning/todo tools (`update_todo`, `report_intent`, `RunTodoState`) removed entirely from scope per product decision. AvailableTools allowlist reduced to 8 tools; section 4.7.8 removed; Phase 6 (deferred) removed; tasks T058-T060, T064-T067 deleted. In-scope total: 72 tasks across Phases 0-5. The agent ships with shell + file + search tools only; no memory or planning capability. |
+
+---
+
+## Phase 6 — Replicate Copilot CLI Sandbox Policy (Spec-Compliant Filesystem Policy)
+
+> Owner: Morpheus (Runtime/Architecture). Added 2026-06-10 by @sabbour on branch `002-sandboxed-execution`.
+
+### Overview
+
+Phases 0–5 established a working sandbox abstraction (`ISandboxExecutor`) with a deliberately conservative, hand-rolled filesystem policy: an empty `ReadOnlyPaths` allowlist, a single workspace `ReadWritePaths` entry, and (on Linux/WSL2) a broad bwrap mount of `/usr` plus an all-outbound-network block. Reverse-engineering Copilot CLI's sandbox shows it constructs a *minimal, SDK-derived* allowlist instead of broad mounts: it never mounts the whole filesystem (`--ro-bind / /`), never mounts `/home` or `/etc` broadly, and instead composes its read-only set from three MXC SDK helpers — `GetAvailableToolsPolicy()`, `GetUserProfilePolicy()`, and `GetTemporaryFilesPolicy()` — each returning a tightly-scoped path list. Copilot also runs on policy schema `0.5.0-alpha`, allows outbound network by default, and sets `clearPolicyOnExit = true`.
+
+Phase 6 closes that gap. The goal is to reproduce Copilot CLI's *selective allowlist* model in scaffolders — replacing the broad `/usr` mount with detected tool paths, populating `ReadOnlyPaths` from the SDK helpers on Windows (and from equivalent path detection on Linux/WSL2), upgrading the policy schema to `0.5.0-alpha`, and exposing the new knobs (notably network outbound) through `.scaffolder/settings.yml`. Critically, scaffolders keeps a **safer-by-default posture than Copilot**: outbound network defaults to `false`, where Copilot defaults to `true`. All SDK helper calls happen once at executor construction and are cached on a `SandboxPolicyEnrichment` object; they are only invoked on Windows (they reach MXC internals), while Linux/WSL2 derives the equivalent path list directly for bwrap.
+
+### Tasks
+
+| T-ID | Title | Owner | Description | Deps |
+|---|---|---|---|---|
+| P6-T001 | Policy schema upgrade to `0.5.0-alpha` | Morpheus | Upgrade `SandboxPolicy.Version` from `0.4.0-alpha` to `0.5.0-alpha` in `MxcSandboxExecutor.ExecuteAsync()` (and `StreamAsync`). Update `spike-results.md` to note `0.5.0-alpha` uses the same AppContainer tier but with improved path normalization. **RISK:** `0.5.0-alpha` may behave differently on Win11 25H2 — add a spike re-validation step before promoting. | T008, T004 |
+| P6-T002 | `GetAvailableToolsPolicy`-based `ReadOnlyPaths` | Morpheus | `SandboxFsPolicyBuilder.Build()` currently has empty `ReadOnlyPaths` (only workspace in `ReadWritePaths`). Call `MxcSdk.GetAvailableToolsPolicy(toolEnvVars, new ToolsPolicyOptions())` to obtain the minimal read-only path set for available tools (git, curl, gh, etc.) and add it to `SandboxFsPolicy.ReadOnlyPaths`. Pass the user's current environment variables (filtered) as `toolEnvVars`. This replaces the broad `/usr` bwrap bind — the SDK returns only what is needed. | P6-T005 |
+| P6-T003 | `GetUserProfilePolicy`-based `ReadOnlyPaths` | Morpheus | Call `MxcSdk.GetUserProfilePolicy()` to obtain safe user-profile paths (credential helpers, tool configs — NOT the full home dir) and add them to `SandboxFsPolicy.ReadOnlyPaths`. Prevents over-exposure while enabling git credentials and tool configuration. | P6-T005 |
+| P6-T004 | `GetTemporaryFilesPolicy`-based `ReadWritePaths` | Morpheus | Call `MxcSdk.GetTemporaryFilesPolicy(envVars)` to obtain temp-dir paths (`/tmp` + platform temp dir) and add them to `SandboxFsPolicy.ReadWritePaths` alongside the workspace. Needed for tools that write scratch files during execution. | P6-T005 |
+| P6-T005 | Integrate enrichment into `SandboxFsPolicyBuilder` | Morpheus | Update `SandboxFsPolicyBuilder.Build()` to accept an optional `SandboxPolicyEnrichment` object holding the cached results of `GetAvailableToolsPolicy`, `GetUserProfilePolicy`, and `GetTemporaryFilesPolicy`. These helpers are invoked **once at executor construction** (not per-command) and cached. OS-appropriate: only call the SDK helpers on Windows (they use MXC internals); on Linux derive the equivalent path list for bwrap (see P6-T007). All enrichment paths normalized through `realpath`/`Path.GetFullPath` + reparse check and filtered to existing directories only. | P6-T002, P6-T003, P6-T004 |
+| P6-T006 | Network policy — configurable outbound | Morpheus | Copilot allows outbound by default; scaffolders blocks it. Add a `NetworkEnabled` bool to `SandboxPolicy` (surfaced via `.scaffolder/settings.yml`). **Default: `false`** (blocked — safer default for scaffolders). Document: "Copilot CLI defaults to `true`; scaffolders defaults to `false` for security." When `true`, pass `NetworkPolicy { AllowOutbound = true }` to mxc; emit the existing `sandbox.warning` event (F5) when outbound is open on Windows. | P6-T010 |
+| P6-T007 | Bwrap policy alignment for Linux/WSL2 | Morpheus | Replace the broad `--ro-bind /usr /usr` mount with detected tool directories. In `LinuxBwrapExecutor`/`LinuxNativeMxcSandboxExecutor` and `WslMxcSandboxExecutor`, detect tool binary paths (`which git`, `which curl`, `which gh`) and bind-mount only their parent dirs read-only. Keep `/home` hidden (`--tmpfs /home`). Keep the minimal `/etc` mounts already fixed (`resolv.conf`, `passwd`, `group`, `nsswitch.conf`). This is the Linux equivalent of the `GetAvailableToolsPolicy` allowlist. | P6-T002 |
+| P6-T008 | `addCurrentWorkingDirectory` alignment | Morpheus | Always include cwd as the PRIMARY read-write path (already done in scaffolders). Normalize via a `realpath` equivalent (`Path.GetFullPath` + reparse-point check, consistent with the F2-hardened `SandboxPathValidator` chain). Ensure relative paths in the policy are resolved before passing to MXC. | P6-T005 |
+| P6-T009 | `clearPolicyOnExit` | Morpheus | Set `SandboxPolicy.Filesystem.ClearPolicyOnExit = true` during policy construction in `MxcSandboxExecutor`. Tells MXC/bwrap to clean up filesystem ACL grants on exit (important for the AppContainer tier on Windows). | P6-T001 |
+| P6-T010 | Update `.scaffolder/settings.yml` schema + domain types | Tank | Add the new sandbox fields mirroring Copilot's schema (see snippet below). Update the `SandboxPolicy.cs` domain type with `NetworkEnabled`, `AllowedToolPaths`, `AddUserProfilePaths`, `AddTempPaths`, `ClearPolicyOnExit`. Update `ScaffolderSettingsDto` (YAML DTO) to bind them. Update README/docs to describe each field and the scaffolders-vs-Copilot default differences. | P6-T006, P6-T009 |
+
+`.scaffolder/settings.yml` additions (P6-T010):
+
+```yaml
+sandbox:
+  shell_enabled: true
+  network_enabled: false        # new: Copilot defaults true, scaffolders defaults false
+  allowed_tool_paths: []        # new: explicit overrides for GetAvailableToolsPolicy
+  add_user_profile_paths: true  # new: include GetUserProfilePolicy paths
+  add_temp_paths: true          # new: include GetTemporaryFilesPolicy paths
+  clear_policy_on_exit: true    # new: clean up ACLs on exit
+```
+
+### Alignment with Copilot CLI
+
+| Concern | Copilot CLI does | scaffolders will do (Phase 6) |
+|---|---|---|
+| Policy schema version | `0.5.0-alpha` | `0.5.0-alpha` (upgraded from `0.4.0-alpha`) — P6-T001 |
+| Read-only tool paths | `GetAvailableToolsPolicy(toolEnvVars, options)` — minimal allowlist | Same on Windows; detected tool dirs (`which git/curl/gh`) via bwrap on Linux — P6-T002, P6-T007 |
+| User-profile paths | `GetUserProfilePolicy()` — safe subset, not full home | Same on Windows; `/home` stays `--tmpfs` hidden on Linux — P6-T003, P6-T007 |
+| Temp paths (read-write) | `GetTemporaryFilesPolicy(envVars)` | Same — `/tmp` + platform temp added to `ReadWritePaths` — P6-T004 |
+| Whole-filesystem mount | Does NOT `--ro-bind / /` | Does NOT — selective allowlist only — P6-T002, P6-T007 |
+| Broad `/usr`, `/home`, `/etc` mounts | Does NOT mount broadly | Replaces `/usr` bind with detected tool dirs; `/home` hidden; minimal `/etc` — P6-T007 |
+| cwd read-write | Added unless `addCurrentWorkingDirectory === false` | Always added as PRIMARY read-write path, realpath-normalized — P6-T008 |
+| Outbound network | `network.allowOutbound = true` (default) | `false` by default (safer); opt-in via settings; warning event when open on Windows — P6-T006 |
+| UI windows | `ui.allowWindows = true` | Carried through unchanged in policy construction |
+| Cleanup on exit | `clearPolicyOnExit = true` | `clearPolicyOnExit = true` — P6-T009 |
+| Path hygiene | All paths `realpath`-normalized, existing dirs only | Same — reparse-safe normalization + existing-dir filter — P6-T005, P6-T008 |
+
+### Known gaps (NOT replicated in this increment)
+
+- **Raw `ContainerConfig` injection mode** — Copilot supports injecting an MXC `ContainerConfig` directly (mode 1). scaffolders only supports the generated base-policy path; raw config injection is out of scope.
+- **Raw `SandboxPolicy` pass-through mode** — Copilot's mode 2 (caller supplies a full `SandboxPolicy`, cwd appended unless opted out) is not exposed; scaffolders always builds the policy from settings + enrichment.
+- **Outbound-by-default** — intentionally NOT replicated; scaffolders keeps network blocked by default for security. This is a deliberate divergence, not a gap to close.
+- **Per-host network allowlisting on Windows** — the AppContainer tier cannot express per-destination outbound rules; only all-or-nothing outbound is available (existing F5 limitation, unchanged).
+- **`ui.allowWindows` semantics** — carried in policy but not independently configurable via settings in this increment.
+- **Custom `deniedPaths` from caller** — Copilot merges caller-supplied denied paths; scaffolders retains its existing sensitive-path deny list (F2) and does not yet accept arbitrary caller deny paths through settings.

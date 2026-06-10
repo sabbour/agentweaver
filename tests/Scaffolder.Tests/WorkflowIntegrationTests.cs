@@ -18,6 +18,7 @@ namespace Scaffolder.Tests.Api;
 /// Uses TestFileEditAgentRunner (real file ops, real git diff) and the full
 /// MAF workflow with checkpointing, watch loop, and PendingRequestStore.
 /// </summary>
+[Collection("WorkflowIntegration")]
 public sealed class WorkflowIntegrationTests : IDisposable
 {
     private readonly WorkflowWebApplicationFactory _factory;
@@ -432,3 +433,8 @@ public sealed class WorkflowIntegrationTests : IDisposable
         return repoPath;
     }
 }
+
+// Serializes WorkflowIntegrationTests with respect to other test collections that
+// share the worktrees base path, preventing parallel interference.
+[CollectionDefinition("WorkflowIntegration", DisableParallelization = true)]
+public sealed class WorkflowIntegrationCollection { }

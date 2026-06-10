@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Scaffolder.AgentRuntime;
+using Scaffolder.SandboxExec;
 using Scaffolder.SandboxFs;
 
 namespace Scaffolder.Tests.Sandbox;
@@ -25,6 +26,29 @@ public sealed class FoundryRegressionTests
         method.Should().BeNull(
             "ResolveSandboxedPath was DELETED as part of the containment fix — " +
             "Foundry must use the shared SandboxGovernance gate, not its own resolver");
+    }
+}
+
+public sealed class BubblewrapSandboxCommandTests
+{
+    [Theory]
+    [InlineData("native-linux")]
+    [InlineData("wsl")]
+    public void BwrapCommand_UsesSelectiveEtcMountsAndHidesHomes(string mode)
+    {
+        var payload = mode == "native-linux"
+            ? LinuxBwrapExecutor.BuildBwrapPayload("echo ok", "/workspace")
+            : WslMxcSandboxExecutor.BuildBwrapCommand("echo ok");
+
+        payload.Should().NotContain("--ro-bind /etc /etc");
+        payload.Should().Contain("--ro-bind-try /etc/resolv.conf /etc/resolv.conf");
+        payload.Should().Contain("--ro-bind-try /etc/passwd /etc/passwd");
+        payload.Should().Contain("--ro-bind-try /etc/group /etc/group");
+        payload.Should().Contain("--ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf");
+        payload.Should().Contain("--tmpfs /home");
+        payload.Should().Contain("--tmpfs /root");
+        payload.Should().Contain("--unshare-user");
+        payload.Should().Contain("--unshare-net");
     }
 }
 
