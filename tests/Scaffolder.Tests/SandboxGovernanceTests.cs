@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -327,5 +328,138 @@ public sealed class SandboxGovernanceTests : IDisposable
             _logger);
 
         result.Allowed.Should().BeTrue("governance should accept '.' as a valid contained path");
+    }
+
+    // ===================================================================
+    // T029 — run_command shell gate (C1 / C2)
+    // ===================================================================
+
+    /// <summary>
+    /// Fake executor that reports real isolation — allows testing Layer-C shell gate
+    /// without a live mxc binary.
+    /// </summary>
+    private sealed class FakeRealExecutor : ISandboxExecutor
+    {
+        public bool IsRealIsolation => true;
+        public string BackendName => "fake-real";
+        public string SelectionReason => "test";
+
+        public Task<SandboxExecResult> ExecuteAsync(SandboxCommand c, CancellationToken ct = default) =>
+            Task.FromResult(new SandboxExecResult(0, "ok", "", false, false));
+
+        public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand c,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, "0");
+        }
+    }
+
+    [Fact]
+    public void RunCommand_WithRealIsolation_ShellEnabled_ValidDir_IsAllowed()
+    {
+        var opts = new SandboxOptions { ShellEnabled = true };
+        using var gov = SandboxGovernance.Create(
+            _sandboxRoot, "test-shell-allow", new FakeRealExecutor(), opts, _logger);
+
+        var result = gov.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object>
+            {
+                ["command"] = "echo hi",
+                ["directory"] = _sandboxRoot,
+            },
+            _logger);
+
+        result.Allowed.Should().BeTrue(
+            "run_command with real isolation, shell enabled, and a valid directory must be allowed");
+    }
+
+    [Fact]
+    public void RunCommand_WithPassthrough_Executor_IsDenied()
+    {
+        // _governance uses PassthroughExecutor (IsRealIsolation = false)
+        var result = _governance.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object>
+            {
+                ["command"] = "echo hi",
+                ["directory"] = _sandboxRoot,
+            },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "run_command must be denied when the executor provides no real isolation");
+    }
+
+    [Fact]
+    public void RunCommand_WithShellDisabled_IsDenied()
+    {
+        var opts = new SandboxOptions { ShellEnabled = false };
+        using var gov = SandboxGovernance.Create(
+            _sandboxRoot, "test-shell-disabled", new FakeRealExecutor(), opts, _logger);
+
+        var result = gov.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object>
+            {
+                ["command"] = "echo hi",
+                ["directory"] = _sandboxRoot,
+            },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "run_command must be denied when Sandbox:ShellEnabled is false");
+    }
+
+    [Fact]
+    public void RunCommand_MissingDirectory_IsDenied()
+    {
+        // No "directory" argument — SandboxPolicyBackend must deny this at Layer B.
+        var result = _governance.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object> { ["command"] = "echo hi" },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "run_command without a 'directory' argument must be denied by the sandbox backend");
+    }
+
+    [Fact]
+    public void NativeShell_IsAlwaysDenied()
+    {
+        // tool_name="shell" is the native shell bypass — must be denied regardless of executor.
+        var result = _governance.EvaluateToolCall(
+            AgentId, "shell",
+            new Dictionary<string, object> { ["command"] = "ls -la" },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "the native 'shell' tool must always be denied (C1 resolution)");
+    }
+
+    [Fact]
+    public void ReadFile_WithValidPath_IsAllowed()
+    {
+        var result = _governance.EvaluateToolCall(
+            AgentId, "read_file",
+            new Dictionary<string, object> { ["path"] = "readme.md" },
+            _logger);
+
+        result.Allowed.Should().BeTrue(
+            "read_file with a valid relative in-sandbox path must be allowed");
+    }
+
+    [Fact]
+    public void UnknownTool_IsDenied()
+    {
+        var result = _governance.EvaluateToolCall(
+            AgentId, "unknown_custom_tool",
+            new Dictionary<string, object> { ["path"] = "file.txt" },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "tools not in the allowlist must be denied by the default-deny policy");
     }
 }
