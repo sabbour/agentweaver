@@ -27,12 +27,6 @@
     <Content Include="bin\x64\lxc-exec">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="bin\arm64\bfscfg.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="bin\x64\bfscfg.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
     <Content Include="wxc-exec.sha256">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
