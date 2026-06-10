@@ -49,3 +49,6 @@ obj/
 
 # Test results
 [Tt]est[Rr]esults/
+
+# Vite build cache
+apps/web/.vite/
