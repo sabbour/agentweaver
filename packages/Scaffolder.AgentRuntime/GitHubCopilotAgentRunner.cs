@@ -283,9 +283,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
     /// <summary>
     /// Builds the 9 custom AI tools registered in SessionConfig.Tools. Custom tools
-    /// are called directly by the SDK — they do NOT fire OnPermissionRequest. Path
-    /// containment is enforced by SandboxedFileTools/SandboxedSearchTools internals.
-    /// The run_command tool additionally calls governance inline before executing.
+    /// are called directly by the SDK — they do NOT fire OnPermissionRequest. Every
+    /// tool (including read/search/intent) calls governance.EvaluateToolCall for audit
+    /// and policy enforcement before execution. Path containment is enforced as
+    /// defense-in-depth by SandboxedFileTools/SandboxedSearchTools internals.
     /// </summary>
     private static List<AIFunction> BuildCopilotCustomTools(
         SandboxedFileTools fileTools,
@@ -299,8 +300,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         CancellationToken ct)
     {
         var tools = new List<AIFunction>();
-
-        if (executor.IsRealIsolation && options.ShellEnabled)
+        var agentId = $"did:mesh:scaffolder:copilot:{runId}";
         {
             tools.Add(AIFunctionFactory.Create(
                 async (
@@ -330,6 +330,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         tools.Add(AIFunctionFactory.Create(
             async ([Description("File path.")] string path) =>
             {
+                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "read_file" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "read_file", govArgs, governance.Logger);
+                if (!allowed) return $"Error: {denyReason}";
                 var (content, failure) = await fileTools.ReadFileAsync(path, ct);
                 return failure is not null ? $"Error: {failure.Message}" : content!;
             },
@@ -341,6 +344,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 [Description("String to replace (must be unique).")] string old_str,
                 [Description("Replacement string.")] string new_str) =>
             {
+                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "str_replace_editor" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "str_replace_editor", govArgs, governance.Logger);
+                if (!allowed) return $"Error: {denyReason}";
                 var (_, failure) = await fileTools.StrReplaceAsync(path, old_str, new_str, ct);
                 return failure is not null ? $"Error: {failure.Message}" : "ok";
             },
@@ -349,6 +355,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         tools.Add(AIFunctionFactory.Create(
             async ([Description("Patch in Copilot CLI patch grammar.")] string patch) =>
             {
+                // apply_patch is in KnownPreValidatedTools — backend allows without path check.
+                // Governance call still runs for the audit trail.
+                var govArgs = new Dictionary<string, object> { ["tool_name"] = "apply_patch" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "apply_patch", govArgs, governance.Logger);
+                if (!allowed) return $"Error: {denyReason}";
                 var result = await fileTools.ApplyPatchAsync(patch, ct);
                 if (!result.Success) return $"Error: {result.Reason}";
                 return "Patch applied.";
@@ -360,6 +371,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 [Description("File path.")] string path,
                 [Description("File content.")] string file_text) =>
             {
+                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "create" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "create", govArgs, governance.Logger);
+                if (!allowed) return $"Error: {denyReason}";
                 var (_, failure) = await fileTools.CreateFileAsync(path, file_text, ct);
                 return failure is not null ? $"Error: {failure.Message}" : "ok";
             },
@@ -370,6 +384,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 [Description("File path.")] string path,
                 [Description("Content to write.")] string content) =>
             {
+                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "edit" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "edit", govArgs, governance.Logger);
+                if (!allowed) return $"Error: {denyReason}";
                 var (_, failure) = await fileTools.WriteFileAsync(path, content, ct);
                 return failure is not null ? $"Error: {failure.Message}" : "ok";
             },
@@ -382,6 +399,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 [Description("File glob filter.")] string? include_pattern,
                 [Description("Max results.")] int? max_results) =>
             {
+                // grep_search is in KnownSearchTools — backend allows unconditionally.
+                // Governance call still runs for the audit trail.
+                var govArgs = new Dictionary<string, object> { ["tool_name"] = "grep_search" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "grep_search", govArgs, governance.Logger);
+                if (!allowed) return $"Error: {denyReason}";
                 var matches = await searchTools.GrepSearchAsync(pattern, is_regex ?? false, include_pattern, max_results ?? 50, false, ct);
                 if (matches.Count == 0) return "No matches found.";
                 return string.Join("\n", matches.Select(m => $"{m.RelativePath}:{m.LineNumber}: {m.LineContent}"));
@@ -393,6 +415,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 [Description("Glob pattern.")] string pattern,
                 [Description("Max results.")] int? max_results) =>
             {
+                // file_search is in KnownSearchTools — backend allows unconditionally.
+                // Governance call still runs for the audit trail.
+                var govArgs = new Dictionary<string, object> { ["tool_name"] = "file_search" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "file_search", govArgs, governance.Logger);
+                if (!allowed) return $"Error: {denyReason}";
                 var paths = await searchTools.FileSearchAsync(pattern, max_results ?? 200, ct);
                 if (paths.Count == 0) return "No files found.";
                 return string.Join("\n", paths);
@@ -402,6 +429,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         tools.Add(AIFunctionFactory.Create(
             ([Description("Current intent or plan step.")] string intent) =>
             {
+                var govArgs = new Dictionary<string, object> { ["tool_name"] = "report_intent" };
+                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "report_intent", govArgs, governance.Logger);
+                if (!allowed) return Task.FromResult<object?>($"Error: {denyReason}");
                 // UI-only observability — no filesystem or shell action.
                 _ = intent;
                 return Task.FromResult<object?>("ok");

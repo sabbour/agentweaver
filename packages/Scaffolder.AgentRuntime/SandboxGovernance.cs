@@ -215,7 +215,24 @@ internal sealed class SandboxGovernance : IDisposable
     }
 
     private static bool IsDestructiveCommand(string command, string[] patterns)
-        => patterns.Any(p => command.Contains(p, StringComparison.OrdinalIgnoreCase));
+    {
+        // Heuristic defense-in-depth: normalize whitespace before matching so simple
+        // bypass variants (double spaces, unicode whitespace, split flags like "rm -r -f")
+        // are caught. NOTE: this is NOT a complete solution — a real shell parser would be
+        // required. The mxc filesystem policy is the primary enforcement layer.
+        var normalized = System.Text.RegularExpressions.Regex.Replace(
+            command.Trim(), @"\s+", " ",
+            System.Text.RegularExpressions.RegexOptions.None,
+            TimeSpan.FromSeconds(1));
+        normalized = normalized.ToLowerInvariant();
+
+        return patterns.Any(p =>
+        {
+            var normalizedPattern = System.Text.RegularExpressions.Regex.Replace(
+                p.Trim(), @"\s+", " ").ToLowerInvariant();
+            return normalized.Contains(normalizedPattern, StringComparison.Ordinal);
+        });
+    }
 
     public void Dispose() => Kernel.Dispose();
 }

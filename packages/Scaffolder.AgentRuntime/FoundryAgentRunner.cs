@@ -194,8 +194,9 @@ public sealed class FoundryAgentRunner : IAgentRunner
                         toolArgs[kvp.Key] = kvp.Value ?? "";
                 }
 
-                // Inject working directory for shell tools (SandboxPolicyBackend validates it)
-                if (call.Name == "run_command" && !toolArgs.ContainsKey("directory"))
+                // Inject working directory unconditionally so governance always sees our value,
+                // not a model-supplied one (prevents policy/execution mismatch).
+                if (call.Name == "run_command")
                     toolArgs["directory"] = workingDirectory;
 
                 var (allowed, reason) = governance.EvaluateToolCall(agentId, call.Name, toolArgs, _logger);
