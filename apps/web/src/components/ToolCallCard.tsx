@@ -1,9 +1,5 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import {
-  Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
   Badge,
   Spinner,
   Text,
@@ -13,6 +9,8 @@ import {
 } from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
+  ChevronDownRegular,
+  ChevronRightRegular,
   ErrorCircleFilled,
   WarningFilled,
   WrenchRegular,
@@ -20,30 +18,40 @@ import {
 import type { ToolCallItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
 
-/** Characters displayed per content block before "show more" (Y-1). */
+/** Characters displayed per content block before truncation (Y-1). */
 const BLOCK_MAX = 50_000;
 
 const useStyles = makeStyles({
-  card: {
-    borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    overflow: 'hidden',
-    marginTop: '2px',
-    marginBottom: '2px',
-  },
-  cardError: {
-    border: `1px solid ${tokens.colorPaletteRedForeground2}`,
-    backgroundColor: tokens.colorPaletteRedBackground1,
-  },
-  cardSandbox: {
-    border: `1px solid ${tokens.colorPaletteYellowForeground2}`,
-    backgroundColor: tokens.colorPaletteYellowBackground1,
-  },
-  headerRow: {
+  row: {
     display: 'flex',
     alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
+    gap: tokens.spacingHorizontalXS,
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    cursor: 'pointer',
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    width: '100%',
+    textAlign: 'left',
+    ':hover': {
+      opacity: 0.75,
+    },
+  },
+  rowError: {
+    color: tokens.colorPaletteRedForeground1,
+  },
+  rowSandbox: {
+    color: tokens.colorPaletteYellowForeground1,
+  },
+  chevron: {
+    color: tokens.colorNeutralForeground3,
+    flexShrink: 0,
+    fontSize: '10px',
+  },
+  icon: {
+    color: tokens.colorNeutralForeground3,
+    flexShrink: 0,
   },
   statusIcon: {
     flexShrink: 0,
@@ -57,59 +65,45 @@ const useStyles = makeStyles({
   sandboxIcon: {
     color: tokens.colorPaletteYellowForeground1,
   },
-  titleText: {
+  title: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
-  },
-  block: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorNeutralBackground3,
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-all',
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  blockLabel: {
-    fontSize: tokens.fontSizeBase100,
-    color: tokens.colorNeutralForeground3,
-    marginBottom: tokens.spacingVerticalXS,
-    display: 'block',
-  },
-  truncatedNote: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase100,
-    marginTop: tokens.spacingVerticalXS,
-    display: 'block',
-  },
-  errorBlock: {
-    backgroundColor: tokens.colorPaletteRedBackground1,
-  },
-  sandboxBlock: {
-    backgroundColor: tokens.colorPaletteYellowBackground1,
-  },
-  completedOpacity: {
-    opacity: 0.6,
+    flexGrow: 1,
   },
   badge: {
     marginLeft: tokens.spacingHorizontalXS,
     flexShrink: 0,
+  },
+  detail: {
+    marginLeft: '20px',
+    paddingLeft: tokens.spacingHorizontalS,
+    borderLeft: `2px solid ${tokens.colorNeutralStroke2}`,
+    marginBottom: '2px',
+  },
+  block: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase100,
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
+    color: tokens.colorNeutralForeground1,
+  },
+  blockLabel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    marginRight: tokens.spacingHorizontalXS,
+  },
+  truncatedNote: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    display: 'block',
   },
 });
 
 interface ToolCallCardProps {
   item: ToolCallItem;
   streamStatus: StreamStatus;
-}
-
-function getAriaLabel(item: ToolCallItem): string {
-  if (!item.settled) return `Tool call: ${item.humanTitle} — pending`;
-  if (item.error) {
-    return item.error.isSandboxViolation
-      ? `Tool call: ${item.humanTitle} — sandbox violation`
-      : `Tool call: ${item.humanTitle} — failed`;
-  }
-  return `Tool call: ${item.humanTitle} — succeeded`;
 }
 
 function truncate(text: string) {
@@ -119,140 +113,91 @@ function truncate(text: string) {
 
 export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: ToolCallCardProps) {
   const styles = useStyles();
+  const [expanded, setExpanded] = useState(item.error?.isSandboxViolation ?? false);
 
   const isSandbox = item.error?.isSandboxViolation ?? false;
   const isError = item.error && !isSandbox;
-  const isSuccess = item.settled && !item.error;
-
-  const cardClass = mergeClasses(
-    styles.card,
-    isSandbox ? styles.cardSandbox : undefined,
-    isError ? styles.cardError : undefined,
-    isSuccess ? styles.completedOpacity : undefined,
-  );
-
-  // Sandbox violations expand by default (security-relevant, §7.2)
-  const defaultOpen = isSandbox ? ['tool'] : [];
 
   function StatusIcon() {
     if (!item.settled) {
       return streamStatus === 'error' ? (
-        <WarningFilled
-          className={mergeClasses(styles.statusIcon, styles.sandboxIcon)}
-          aria-label="Result not received"
-        />
+        <WarningFilled className={mergeClasses(styles.statusIcon, styles.sandboxIcon)} aria-label="Result not received" />
       ) : (
         <Spinner size="extra-tiny" aria-label="Pending" />
       );
     }
-    if (isSandbox) {
-      return (
-        <WarningFilled
-          className={mergeClasses(styles.statusIcon, styles.sandboxIcon)}
-          aria-hidden="true"
-        />
-      );
-    }
-    if (item.error) {
-      return (
-        <ErrorCircleFilled
-          className={mergeClasses(styles.statusIcon, styles.errorIcon)}
-          aria-hidden="true"
-        />
-      );
-    }
-    return (
-      <CheckmarkCircleFilled
-        className={mergeClasses(styles.statusIcon, styles.successIcon)}
-        aria-hidden="true"
-      />
-    );
+    if (isSandbox) return <WarningFilled className={mergeClasses(styles.statusIcon, styles.sandboxIcon)} aria-hidden="true" />;
+    if (item.error) return <ErrorCircleFilled className={mergeClasses(styles.statusIcon, styles.errorIcon)} aria-hidden="true" />;
+    return <CheckmarkCircleFilled className={mergeClasses(styles.statusIcon, styles.successIcon)} aria-hidden="true" />;
   }
 
+  const hasDetail = !!(item.args || item.result || item.error);
   const argsJson = JSON.stringify(item.args, null, 2);
   const { display: argsDisplay, truncated: argsTrunc, total: argsTotal } = truncate(argsJson);
 
   return (
-    <div className={cardClass}>
-      <Accordion collapsible defaultOpenItems={defaultOpen}>
-        <AccordionItem value="tool">
-          <AccordionHeader
-            aria-label={getAriaLabel(item)}
-            expandIconPosition="end"
-            size="small"
-          >
-            <div className={styles.headerRow}>
-              {/* SECURITY (Y-3): humanTitle and toolName rendered as text — no HTML */}
-              <WrenchRegular aria-hidden="true" />
-              <StatusIcon />
-              <Text className={styles.titleText}>{item.humanTitle}</Text>
-              {isSandbox && (
-                <Badge className={styles.badge} color="warning" shape="rounded" size="small">
-                  sandbox
-                </Badge>
-              )}
-              {isError && (
-                <Badge className={styles.badge} color="danger" shape="rounded" size="small">
-                  error
-                </Badge>
-              )}
-            </div>
-          </AccordionHeader>
-          <AccordionPanel>
-            {/* SECURITY (Y-3): args/results rendered as text nodes — no dangerouslySetInnerHTML */}
-            <div className={styles.block}>
-              <Text as="span" className={styles.blockLabel}>arguments</Text>
-              <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit' }}>
-                {argsDisplay}
-              </Text>
-              {argsTrunc && (
-                <Text as="span" className={styles.truncatedNote}>
-                  [Truncated — {argsTotal.toLocaleString()} chars total]
+    <div>
+      {/* SECURITY (Y-3): all user-controlled strings rendered as text nodes */}
+      <button
+        className={mergeClasses(
+          styles.row,
+          isSandbox ? styles.rowSandbox : undefined,
+          isError ? styles.rowError : undefined,
+        )}
+        onClick={() => hasDetail && setExpanded(e => !e)}
+        aria-expanded={hasDetail ? expanded : undefined}
+        aria-label={`${item.humanTitle} — ${!item.settled ? 'pending' : isSandbox ? 'sandbox violation' : item.error ? 'error' : 'ok'}`}
+      >
+        {hasDetail
+          ? (expanded
+              ? <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
+              : <ChevronRightRegular className={styles.chevron} aria-hidden="true" />)
+          : <span style={{ width: 10, display: 'inline-block', flexShrink: 0 }} aria-hidden="true" />
+        }
+        <WrenchRegular className={styles.icon} aria-hidden="true" />
+        <StatusIcon />
+        <Text className={styles.title}>{item.humanTitle}</Text>
+        {isSandbox && <Badge className={styles.badge} color="warning" shape="rounded" size="small">sandbox</Badge>}
+        {isError && <Badge className={styles.badge} color="danger" shape="rounded" size="small">error</Badge>}
+      </button>
+
+      {expanded && hasDetail && (
+        <div className={styles.detail}>
+          <div className={styles.block}>
+            <Text as="span" className={styles.blockLabel}>args</Text>
+            <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit', display: 'inline' }}>
+              {argsDisplay}
+            </Text>
+            {argsTrunc && <Text as="span" className={styles.truncatedNote}>[Truncated — {argsTotal.toLocaleString()} chars]</Text>}
+          </div>
+
+          {item.result && (() => {
+            const { display, truncated, total } = truncate(item.result.content);
+            return (
+              <div className={styles.block}>
+                <Text as="span" className={styles.blockLabel}>result</Text>
+                <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit', display: 'inline' }}>
+                  {display}
                 </Text>
-              )}
-            </div>
+                {truncated && <Text as="span" className={styles.truncatedNote}>[Truncated — {total.toLocaleString()} chars]</Text>}
+              </div>
+            );
+          })()}
 
-            {item.result && (() => {
-              const { display, truncated, total } = truncate(item.result.content);
-              return (
-                <div className={styles.block}>
-                  <Text as="span" className={styles.blockLabel}>result</Text>
-                  <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit' }}>
-                    {display}
-                  </Text>
-                  {truncated && (
-                    <Text as="span" className={styles.truncatedNote}>
-                      [Truncated — {total.toLocaleString()} chars total]
-                    </Text>
-                  )}
-                </div>
-              );
-            })()}
-
-            {item.error && (() => {
-              const { display, truncated, total } = truncate(item.error.errorMessage);
-              return (
-                <div
-                  className={mergeClasses(
-                    styles.block,
-                    isSandbox ? styles.sandboxBlock : styles.errorBlock,
-                  )}
-                >
-                  <Text as="span" className={styles.blockLabel}>error</Text>
-                  <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit' }}>
-                    {display}
-                  </Text>
-                  {truncated && (
-                    <Text as="span" className={styles.truncatedNote}>
-                      [Truncated — {total.toLocaleString()} chars total]
-                    </Text>
-                  )}
-                </div>
-              );
-            })()}
-          </AccordionPanel>
-        </AccordionItem>
-      </Accordion>
+          {item.error && (() => {
+            const { display, truncated, total } = truncate(item.error.errorMessage);
+            return (
+              <div className={styles.block}>
+                <Text as="span" className={styles.blockLabel}>{isSandbox ? 'violation' : 'error'}</Text>
+                <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit', display: 'inline', color: isSandbox ? tokens.colorPaletteYellowForeground1 : tokens.colorPaletteRedForeground1 }}>
+                  {display}
+                </Text>
+                {truncated && <Text as="span" className={styles.truncatedNote}>[Truncated — {total.toLocaleString()} chars]</Text>}
+              </div>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 });
