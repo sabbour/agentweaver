@@ -22,8 +22,18 @@ internal enum WslSandboxBackend
 
 /// <summary>
 /// Executes sandboxed commands inside WSL2 by wrapping the user command with a
-/// discovered isolation tool (bwrap or unshare). Does NOT use lxc-exec or the
-/// Mxc SDK — the command is run via <c>wsl.exe -- bash -c &lt;wrapper&gt;</c>.
+/// discovered isolation tool (bwrap or unshare). Runs via
+/// <c>wsl.exe -- bash -c &lt;wrapper&gt;</c>.
+///
+/// UPGRADE PATH — WSL 2.8.1+:
+/// When WSL 2.8.x ships as a public release (currently only tagged on GitHub,
+/// not yet in Windows Update / winget as of June 2026), this executor should
+/// be replaced with <c>MxcSdk.SpawnSandboxAsync</c> using containment type
+/// <c>"wslc"</c> (ContainmentBackend.Wslc). That path goes fully through the
+/// mxc SDK and uses the Wslc SDK (wslcsdk.dll) to spawn OCI containers inside
+/// WSL2 without needing a separate lxc-exec or bwrap invocation.
+/// See: https://github.com/microsoft/WSL/releases/tag/2.8.11
+/// Detected via: <c>PlatformSupport.AvailableMethods.Contains(SandboxingMethod.Wslc)</c>.
 /// </summary>
 internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
 {
