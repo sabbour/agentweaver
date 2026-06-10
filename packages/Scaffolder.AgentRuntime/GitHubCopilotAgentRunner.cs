@@ -232,7 +232,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
-            Tools = SandboxToolRegistry.Build(toolContext),
+            Tools = BuildCopilotTools(toolContext),
             AvailableTools = NativeToolExclusion.AvailableToolNames(_executor.IsRealIsolation && sandboxPolicy.ShellEnabled),
             ExcludedTools = NativeToolExclusion.ExcludedToolNames(),
         };
@@ -449,6 +449,58 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
 
         return ("read_file", args);
+    }
+
+    /// <summary>
+    /// Builds the tool list for the Copilot SDK session, stamping
+    /// <see cref="CopilotTool.OverridesBuiltInToolKey"/> on tools whose names match a
+    /// native Copilot built-in. Without this flag the SDK rejects them with
+    /// "conflicts with a built-in tool of the same name".
+    /// <c>run_command</c> is excluded from the override set — no native tool has that name.
+    /// </summary>
+    private static IList<AIFunction> BuildCopilotTools(SandboxToolContext context)
+    {
+        // Tools that share a name with a Copilot CLI native built-in must be marked
+        // as intentional overrides. run_command has no native equivalent — leave it unmarked.
+        var nativeOverrides = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "read_file", "str_replace_editor", "apply_patch",
+            "create", "edit", "grep_search", "file_search", "report_intent",
+        };
+
+        return SandboxToolRegistry.Build(context)
+            .Select(f => nativeOverrides.Contains(f.Name)
+                ? new CopilotOverrideAIFunction(f)
+                : f)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Wraps an <see cref="AIFunction"/> and injects
+    /// <see cref="CopilotTool.OverridesBuiltInToolKey"/> into <see cref="AITool.AdditionalProperties"/>
+    /// so the Copilot SDK accepts tools whose names match a native built-in.
+    /// </summary>
+    private sealed class CopilotOverrideAIFunction(AIFunction inner) : AIFunction
+    {
+        // The key expected by the Copilot SDK in AITool.AdditionalProperties.
+        // CopilotTool.OverridesBuiltInToolKey is internal in the SDK package;
+        // the string value is confirmed by the SDK's own error message:
+        // "Set overridesBuiltInTool: true to explicitly override it."
+        private const string OverridesBuiltInToolKey = "overridesBuiltInTool";
+
+        private readonly IReadOnlyDictionary<string, object?> _additionalProperties =
+            new Dictionary<string, object?>(inner.AdditionalProperties)
+            {
+                [OverridesBuiltInToolKey] = true,
+            };
+
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => _additionalProperties;
+
+        protected override ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+            inner.InvokeAsync(arguments, cancellationToken);
     }
 
     /// <summary>
