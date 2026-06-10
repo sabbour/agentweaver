@@ -79,9 +79,11 @@ echo "API process exited (code: \$?). Press Enter to close."
 read
 "@
 
-$tmpSh       = Join-Path $env:TEMP "scaffolder-start-api.sh"
-$wslTmpSh    = ($tmpSh -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
-Set-Content -Path $tmpSh -Value $bashScript -Encoding UTF8 -NoNewline
+$tmpSh    = Join-Path $env:TEMP "scaffolder-start-api.sh"
+$wslTmpSh = ($tmpSh -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
+# Write with LF-only line endings — PowerShell here-strings use CRLF on Windows
+# and bash treats the \r as part of directory names, breaking cd.
+[System.IO.File]::WriteAllText($tmpSh, ($bashScript -replace "`r`n", "`n"), [System.Text.UTF8Encoding]::new($false))
 
 # ── 4. Start API inside WSL2 ─────────────────────────────────────────────────
 Write-Host "Starting API in WSL2..." -ForegroundColor Yellow
