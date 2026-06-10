@@ -1,4 +1,5 @@
 using LibGit2Sharp;
+using Microsoft.Extensions.Logging;
 using Scaffolder.Api.Infrastructure;
 using Scaffolder.Domain;
 
@@ -14,9 +15,11 @@ public sealed class WorktreeManager
 {
     private readonly string _basePath;
     private readonly Signature _signature;
+    private readonly ILogger<WorktreeManager> _logger;
 
-    public WorktreeManager(IConfiguration configuration)
+    public WorktreeManager(IConfiguration configuration, ILogger<WorktreeManager> logger)
     {
+        _logger = logger;
         var configuredBase = configuration["Worktrees:BasePath"];
         _basePath = string.IsNullOrWhiteSpace(configuredBase)
             ? Path.Combine(AppPaths.DataDirectory, "worktrees")
@@ -248,19 +251,44 @@ public sealed class WorktreeManager
 
     public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch)
     {
-        using var repo = new Repository(repositoryPath);
-
-        var worktreeName = Path.GetFileName(worktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        var worktree = repo.Worktrees[worktreeName];
-        if (worktree is not null)
+        // Step 1: Delete the physical worktree directory to make the worktree STALE.
+        // This alone does NOT release the branch lock — git_branch_is_checked_out reads the
+        // admin entry at .git/worktrees/<name>/HEAD, not the physical directory. The directory
+        // must be gone so that Prune (Step 2) can remove the admin entry.
+        if (Directory.Exists(worktreePath))
         {
-            repo.Worktrees.Prune(worktree, true);
+            Directory.Delete(worktreePath, recursive: true);
         }
 
-        var branch = repo.Branches[worktreeBranch];
+        // Step 2: Prune the stale admin entry (.git/worktrees/<name>/HEAD).
+        // THIS is what actually releases the branch lock — once the admin entry is gone,
+        // git_branch_is_checked_out will no longer find a HEAD referencing the branch.
+        // Wrapped in try/catch so a missing/already-pruned entry does not abort branch removal.
+        var worktreeName = Path.GetFileName(worktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        try
+        {
+            using var pruneRepo = new Repository(repositoryPath);
+            var worktree = pruneRepo.Worktrees[worktreeName];
+            if (worktree is not null)
+            {
+                pruneRepo.Worktrees.Prune(worktree, true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Worktree prune failed for '{WorktreeName}' — continuing with branch removal", worktreeName);
+        }
+
+        // Step 3: Remove the branch using a FRESH Repository handle. A new handle is required
+        // because libgit2 caches the worktree list internally — reusing the prune handle would
+        // still see the (now-deleted) admin entry in its cache, causing Branches.Remove to fail
+        // with "current HEAD of a linked repository".
+        using var branchRepo = new Repository(repositoryPath);
+        var branch = branchRepo.Branches[worktreeBranch];
         if (branch is not null)
         {
-            repo.Branches.Remove(branch);
+            branchRepo.Branches.Remove(branch);
         }
     }
 

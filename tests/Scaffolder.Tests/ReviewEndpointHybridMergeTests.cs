@@ -321,6 +321,50 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
+    // HM-12 — RemoveWorktree teardown order: the branch must be deleted without
+    // a "Cannot delete branch as it is the current HEAD of a linked repository"
+    // error. Exercises the directory-delete-first + separate-handle fix.
+    // =========================================================================
+    [Fact]
+    public async Task RemoveWorktree_DeletesBranchWithoutHeadWarning()
+    {
+        // Create a run with a real worktree + branch through the full lifecycle.
+        var (run, repoPath) = await SetupRunAwaitingReviewAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-output.txt"), "teardown test"));
+
+        // Sanity: the worktree branch exists before merge.
+        using (var repo = new Repository(repoPath))
+            repo.Branches[run.WorktreeBranch].Should().NotBeNull(
+                "sanity: worktree branch must exist before the merge");
+
+        // Approve → triggers merge + RemoveWorktree (the code under test).
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+
+        // The worktree directory must be gone.
+        Directory.Exists(run.WorktreePath!).Should().BeFalse(
+            "RemoveWorktree must delete the physical worktree directory");
+
+        // The worktree branch must be deleted — this is the core assertion.
+        // Before the fix, this would throw or leave the branch behind.
+        using (var repoAfter = new Repository(repoPath))
+        {
+            repoAfter.Branches[run.WorktreeBranch].Should().BeNull(
+                "the worktree branch must be removed without a 'current HEAD of a linked repository' error");
+
+            // The worktree admin entry must be pruned.
+            var worktreeName = Path.GetFileName(
+                run.WorktreePath!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            repoAfter.Worktrees[worktreeName].Should().BeNull(
+                "the worktree admin entry must be pruned after removal");
+        }
+    }
+
+    // =========================================================================
     // HM-9 — Tree-hash mismatch (run changed after the review was requested) →
     // terminal merge_failed with conflict:... result.
     // =========================================================================
