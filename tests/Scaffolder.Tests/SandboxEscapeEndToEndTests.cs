@@ -59,7 +59,7 @@ public sealed class SandboxEscapeEndToEndTests
 
         var factory = new GitHubCopilotClientFactory(config);
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
         await RunEscapeScenarioAsync(ModelSource.GitHubCopilot, runner, logger.Lines);
     }
@@ -83,7 +83,7 @@ public sealed class SandboxEscapeEndToEndTests
 
         var factory = new FoundryClientFactory(config);
         var logger = new CapturingLogger<FoundryAgentRunner>();
-        var runner = new FoundryAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), logger);
+        var runner = new FoundryAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
         await RunEscapeScenarioAsync(ModelSource.MicrosoftFoundry, runner, logger.Lines);
     }

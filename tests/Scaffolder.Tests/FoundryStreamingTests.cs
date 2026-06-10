@@ -32,7 +32,7 @@ public sealed class FoundryStreamingTests : IDisposable
     // ---- Infrastructure ----
 
     private FoundryAgentRunner Runner(IChatClient client)
-        => new(client, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), NullLogger<FoundryAgentRunner>.Instance);
+        => new(client, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), NullLogger<FoundryAgentRunner>.Instance);
 
     private static (ChannelWriter<RunEvent> writer, Func<List<RunEvent>> drain) MakeChannel()
     {

@@ -39,17 +39,20 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private readonly GitHubCopilotClientFactory _factory;
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
+    private readonly IShellApprovalStore _approvalStore;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
     public GitHubCopilotAgentRunner(
         GitHubCopilotClientFactory factory,
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
+        IShellApprovalStore approvalStore,
         ILogger<GitHubCopilotAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
+        _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -219,7 +222,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             Options: toolOptions,
             EvaluateToolCall: (toolName, args) => governance.EvaluateToolCall(agentId, toolName, new Dictionary<string, object>(args), _logger),
             Logger: _logger,
-            EmitEvent: Emit);
+            EmitEvent: Emit,
+            RunId: runId,
+            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash));
 
         var sessionConfig = new SessionConfig
         {
@@ -237,6 +242,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
 
+        try
+        {
         try
         {
             await foreach (var chunk in agent.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
@@ -304,6 +311,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             deltaCount, result.Length);
 
         return result;
+        }
+        finally
+        {
+            _approvalStore.Clear(runId);
+        }
     }
 
     /// <summary>

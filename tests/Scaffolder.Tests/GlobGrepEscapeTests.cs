@@ -51,7 +51,7 @@ public sealed class GlobGrepEscapeTests
 
         var factory = new GitHubCopilotClientFactory(config);
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
         // The sandbox is a child of parentDir, so glob("parentDir/*") would find the canary
         // if glob truly operates on absolute host paths.
@@ -232,7 +232,7 @@ public sealed class GlobGrepEscapeTests
 
         var factory = new GitHubCopilotClientFactory(config);
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
         // Parent with canary; sandbox is a child.
         var parentDir = Path.Combine(Path.GetTempPath(), $"scaffolder-relglob-{Guid.NewGuid():N}");

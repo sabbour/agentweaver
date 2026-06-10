@@ -36,6 +36,7 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/runs/{id}` | Get current run state |
 | `GET` | `/api/runs/{id}/stream` | Stream ordered run events over SSE |
 | `POST` | `/api/runs/{id}/review` | Record an approve or decline decision |
+| `POST` | `/api/runs/{id}/shell-approvals` | Approve a pending destructive shell command |
 
 ### POST /api/runs
 
@@ -185,11 +186,11 @@ See [events.md](events.md) for the event types emitted on the stream for each ou
 
 ## Sandbox policy endpoints
 
-These endpoints read and write the per-project sandbox execution policy stored at `.scaffolder/sandbox.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
+These endpoints read and write the per-project sandbox execution policy stored at `.scaffolder/settings.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
 
 ### GET /api/sandbox-policy
 
-Returns the sandbox policy for the given repository path by reading `{repository_path}/.scaffolder/sandbox.yml`. If the file does not exist, returns the default policy.
+Returns the sandbox policy for the given repository path by reading `{repository_path}/.scaffolder/settings.yml`. If the file does not exist, returns the default policy.
 
 Query parameters:
 
@@ -218,7 +219,7 @@ Missing or malformed `repository_path` returns `400 Bad Request`.
 
 ### PUT /api/sandbox-policy
 
-Creates or replaces the sandbox policy for a repository path by writing `{repository_path}/.scaffolder/sandbox.yml`. The entire policy is replaced on each PUT; there is no partial-update merge. After a PUT, the operator should commit the updated file to the project repository to record the change in version history.
+Creates or replaces the sandbox policy for a repository path by writing `{repository_path}/.scaffolder/settings.yml`. The entire policy is replaced on each PUT; there is no partial-update merge. After a PUT, the operator should commit the updated file to the project repository to record the change in version history.
 
 Request body (all fields required):
 
@@ -312,7 +313,22 @@ Emitted when a `run_command` invocation matches a destructive command pattern or
 | `command_hash` | string | SHA-256 of the command line, prefixed with `sha256:` |
 | `message` | string | Human-readable reason the approval was triggered |
 
-The approval API endpoint (`POST /api/runs/{id}/shell-approve`) is not yet implemented (T017-api). Runs that reach this event will pause indefinitely.
+The approval API endpoint (`POST /api/runs/{id}/shell-approvals`) records operator approval for a pending shell command. Use the `commandHash` from the `shell.approval_required` event as the request body's `command_hash`. Once approved, the model may retry the command and it will execute immediately.
+
+```http
+POST /api/runs/{id}/shell-approvals
+Content-Type: application/json
+
+{ "command_hash": "a1b2c3d4e5f6a1b2" }
+```
+
+Response `200 OK`:
+
+```json
+{ "run_id": "f36800fd-...", "command_hash": "a1b2c3d4e5f6a1b2", "approved": true }
+```
+
+Returns `400 Bad Request` when `command_hash` is missing or empty.
 
 #### tool.output
 

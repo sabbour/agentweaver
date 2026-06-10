@@ -26,4 +26,11 @@ public sealed record SandboxToolContext(
     Func<string, IReadOnlyDictionary<string, object>, (bool Allowed, string? Reason)> EvaluateToolCall,
     ILogger Logger,
     /// <summary>Optional: emits a run event. Null in test/CLI contexts.</summary>
-    Action<string, object>? EmitEvent = null);
+    Action<string, object>? EmitEvent = null,
+    /// <summary>The run ID — used to scope shell approvals.</summary>
+    string RunId = "",
+    /// <summary>
+    /// Returns true if the given command hash has been approved for this run.
+    /// Null in test contexts (treated as not approved).
+    /// </summary>
+    Func<string, bool>? IsCommandApproved = null);

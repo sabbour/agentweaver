@@ -422,6 +422,18 @@ app.MapPost("/api/runs/{id}/review", async (
     return Results.Json(new ReviewResponse { RunId = id, Status = expectedStatus, MergeResult = null });
 });
 
+app.MapPost("/api/runs/{id}/shell-approvals", (
+    string id,
+    ShellApprovalRequest body,
+    IShellApprovalStore approvalStore) =>
+{
+    if (string.IsNullOrWhiteSpace(body.CommandHash))
+        return Results.BadRequest(new { error = "command_hash is required." });
+
+    approvalStore.Approve(id, body.CommandHash);
+    return Results.Ok(new { run_id = id, command_hash = body.CommandHash, approved = true });
+});
+
 app.MapGet("/api/sandbox-policy", async (
     string? repository_path,
     ISandboxPolicyStore policyStore,

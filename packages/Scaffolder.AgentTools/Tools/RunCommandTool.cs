@@ -26,30 +26,38 @@ internal sealed class RunCommandTool : ISandboxTool
                 if (!allowed) return $"Error: {reason}";
 
                 // HITL gate: destructive commands require operator approval before execution.
-                // TODO(T017-api): implement POST /api/runs/{id}/shell-approvals to expose
-                // approval/denial to operators and unblock the pending model turn.
                 if (ctx.Options.RequireApprovalForAllShell || IsDestructivePattern(command, ctx.Options.DestructiveCommandPatterns))
                 {
-                    var requestId = Guid.NewGuid().ToString("n")[..8];
-                    var commandHash = Convert.ToHexString(
-                        System.Security.Cryptography.SHA256.HashData(
-                            System.Text.Encoding.UTF8.GetBytes(command)))[..16];
+                    var commandHash = ComputeCommandHash(command);
+                    var requestId = commandHash[..8]; // stable prefix — same command → same requestId
 
-                    ctx.Logger.LogWarning(
-                        "Shell HITL approval required — requestId={RequestId} commandLength={Length} commandHash={Hash}",
-                        requestId, command.Length, commandHash);
-
-                    ctx.EmitEvent?.Invoke("shell.approval_required", new
+                    if (ctx.IsCommandApproved?.Invoke(commandHash) == true)
                     {
-                        requestId,
-                        commandLength = command.Length,
-                        commandHash,
-                        message = "Shell command requires operator approval before execution.",
-                    });
+                        // Approved — fall through to execution below.
+                        ctx.Logger.LogInformation(
+                            "Shell command approved — requestId={RequestId} commandHash={Hash}",
+                            requestId, commandHash);
+                    }
+                    else
+                    {
+                        ctx.Logger.LogWarning(
+                            "Shell HITL approval required — requestId={RequestId} commandLength={Length} commandHash={Hash}",
+                            requestId, command.Length, commandHash);
 
-                    return $"This command requires operator approval before it can execute " +
-                           $"(request ID: {requestId}). The operator has been notified. " +
-                           $"Please retry after approval is granted.";
+                        ctx.EmitEvent?.Invoke("shell.approval_required", new
+                        {
+                            requestId,
+                            commandLength = command.Length,
+                            commandHash,
+                            message = "Shell command requires operator approval before execution.",
+                        });
+
+                        return $"This command requires operator approval before it can execute " +
+                               $"(request ID: {requestId}). " +
+                               $"The operator can approve it via: POST /api/runs/{ctx.RunId}/shell-approvals " +
+                               $"with body {{\"command_hash\":\"{commandHash}\"}}. " +
+                               $"After approval, retry this command.";
+                    }
                 }
 
                 var fsPolicy = SandboxFsPolicyBuilder.Build(ctx.SandboxRoot, ctx.Options.AllowedRepositoryRoots);
@@ -66,6 +74,11 @@ internal sealed class RunCommandTool : ISandboxTool
                 return string.Join("\n", parts);
             },
             Name, "Run a shell command inside the sandbox.");
+
+    private static string ComputeCommandHash(string command) =>
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(command)))[..16].ToLowerInvariant();
 
     private static bool IsDestructivePattern(string command, string[] patterns)
     {

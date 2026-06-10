@@ -5,9 +5,10 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace Scaffolder.Api.Infrastructure;
 
 /// <summary>
-/// GitOps-backed <see cref="ISandboxPolicyStore"/>. Reads and writes
-/// <c>.scaffolder/sandbox.yml</c> in the project repository root.
-/// When the file does not exist, the default policy is returned.
+/// GitOps-backed <see cref="ISandboxPolicyStore"/>. Reads and writes the
+/// <c>sandbox:</c> section of <c>.scaffolder/settings.yml</c> in the project
+/// repository root. Other sections in the file are preserved on write.
+/// When the file does not exist or has no sandbox section, the default policy is returned.
 /// <see cref="SetPolicyAsync"/> writes the file; the operator commits it.
 /// </summary>
 public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
@@ -22,19 +23,20 @@ public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
         .DisableAliases()
         .Build();
 
-    private static string PolicyFilePath(string repositoryPath) =>
-        Path.Combine(repositoryPath, ".scaffolder", "sandbox.yml");
+    private static string SettingsFilePath(string repositoryPath) =>
+        Path.Combine(repositoryPath, ".scaffolder", "settings.yml");
 
     public Task<SandboxPolicy> GetPolicyAsync(string repositoryPath, CancellationToken ct = default)
     {
-        var filePath = PolicyFilePath(repositoryPath);
+        var filePath = SettingsFilePath(repositoryPath);
         if (!File.Exists(filePath))
             return Task.FromResult(SandboxPolicy.Default(repositoryPath));
 
         try
         {
             var yaml = File.ReadAllText(filePath);
-            var dto = Deserializer.Deserialize<SandboxPolicyYamlDto>(yaml) ?? new();
+            var root = Deserializer.Deserialize<ScaffolderSettingsDto>(yaml) ?? new();
+            var dto = root.Sandbox ?? new();
             return Task.FromResult(dto.ToDomain(repositoryPath));
         }
         catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException)
@@ -46,18 +48,45 @@ public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
 
     public Task SetPolicyAsync(SandboxPolicy policy, CancellationToken ct = default)
     {
-        var filePath = PolicyFilePath(policy.RepositoryPath);
+        var filePath = SettingsFilePath(policy.RepositoryPath);
         var dir = Path.GetDirectoryName(filePath)!;
         Directory.CreateDirectory(dir);
 
-        var dto = SandboxPolicyYamlDto.FromDomain(policy);
-        var yaml = Serializer.Serialize(dto);
+        // Preserve existing sections; only update the sandbox section.
+        ScaffolderSettingsDto root = new();
+        if (File.Exists(filePath))
+        {
+            try
+            {
+                var existing = File.ReadAllText(filePath);
+                root = Deserializer.Deserialize<ScaffolderSettingsDto>(existing) ?? new();
+            }
+            catch (YamlDotNet.Core.YamlException) { /* overwrite malformed file */ }
+        }
+
+        root.Sandbox = SandboxPolicyYamlDto.FromDomain(policy);
+        var yaml = Serializer.Serialize(root);
         File.WriteAllText(filePath, yaml);
         return Task.CompletedTask;
     }
 }
 
-/// <summary>YAML DTO — snake_case field names via UnderscoredNamingConvention.</summary>
+/// <summary>
+/// Root DTO for <c>.scaffolder/settings.yml</c>.
+/// Each top-level key is a settings group. Adding a new group here does not
+/// affect unrelated groups — existing sections are preserved on write.
+/// </summary>
+internal sealed class ScaffolderSettingsDto
+{
+    /// <summary>Sandbox execution policy.</summary>
+    public SandboxPolicyYamlDto? Sandbox { get; set; }
+
+    // Future groups:
+    // public ReviewSettingsDto? Review { get; set; }
+    // public AgentSettingsDto? Agents { get; set; }
+}
+
+/// <summary>YAML DTO for the sandbox section — snake_case via UnderscoredNamingConvention.</summary>
 internal sealed class SandboxPolicyYamlDto
 {
     public bool ShellEnabled { get; set; } = true;

@@ -108,6 +108,13 @@ public sealed record SandboxPolicyDto
     public int MaxOutputBytes { get; init; }
 }
 
+/// <summary>Request body for POST /api/runs/{id}/shell-approvals.</summary>
+public sealed record ShellApprovalRequest
+{
+    [JsonPropertyName("command_hash")]
+    public string? CommandHash { get; init; }
+}
+
 /// <summary>Request body for POST /api/runs/{id}/review.</summary>
 public sealed record ReviewRequest
 {
