@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Sabbour.Mxc.Sdk;
 
 namespace Scaffolder.SandboxExec;
 
@@ -26,21 +27,33 @@ public static class SandboxExecutorFactory
 
         if (OperatingSystem.IsLinux())
         {
-            // Ask the SDK what is available on this Linux host.
-            // Preference: lxc (if lxc-exec is available) > bubblewrap.
+            // Use the SDK's platform probe — same approach as Windows.
+            // ComputeLinuxSupport() checks bwrap + lxc in PATH.
+            // The bundled lxc-exec is also checked as a separate fallback.
+            var support = MxcSdk.GetPlatformSupport();
+
+            // Prefer lxc (bundled lxc-exec or system lxc infrastructure).
             var lxcPath = LinuxNativeMxcSandboxExecutor.IsLxcAvailable();
-            if (lxcPath != null)
+            if (lxcPath != null || support.AvailableMethods.Contains(ContainmentBackend.Lxc))
             {
-                logger.LogInformation("SandboxExecutorFactory: selected lxc-native-linux ({Path}).", lxcPath);
+                logger.LogInformation(
+                    "SandboxExecutorFactory: selected lxc-native-linux (SDK tier={Tier}).",
+                    support.IsolationTier);
                 return new LinuxNativeMxcSandboxExecutor(logger);
             }
 
-            // lxc-exec not found — fall back to bubblewrap if available.
-            if (LinuxBwrapExecutor.IsBwrapAvailable())
+            // Fall back to bubblewrap if the SDK probe detected it.
+            if (support.AvailableMethods.Contains(ContainmentBackend.Bubblewrap))
             {
-                logger.LogInformation("SandboxExecutorFactory: selected linux-bwrap.");
+                logger.LogInformation(
+                    "SandboxExecutorFactory: selected linux-bwrap (SDK detected bubblewrap).");
                 return new LinuxBwrapExecutor(logger);
             }
+
+            logger.LogWarning(
+                "SandboxExecutorFactory: GetPlatformSupport() found no usable Linux backend " +
+                "(methods={Methods}). Falling through to passthrough.",
+                string.Join(",", support.AvailableMethods));
         }
 
         var reason = OperatingSystem.IsWindows()
