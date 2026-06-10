@@ -90,6 +90,13 @@ internal sealed class ScaffolderSettingsDto
 internal sealed class SandboxPolicyYamlDto
 {
     public bool ShellEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Allow outbound network inside the sandbox.
+    /// Default: false (more restrictive than Copilot CLI which defaults to true).
+    /// </summary>
+    public bool NetworkEnabled { get; set; } = false;
+
     public List<string> AllowedRepositoryRoots { get; set; } = [];
     public List<string> DestructiveCommandPatterns { get; set; } =
     [
@@ -104,6 +111,7 @@ internal sealed class SandboxPolicyYamlDto
     {
         RepositoryPath = repositoryPath,
         ShellEnabled = ShellEnabled,
+        NetworkEnabled = NetworkEnabled,
         AllowedRepositoryRoots = AllowedRepositoryRoots,
         DestructiveCommandPatterns = DestructiveCommandPatterns,
         RequireApprovalForAllShell = RequireApprovalForAllShell,
@@ -114,8 +122,9 @@ internal sealed class SandboxPolicyYamlDto
     public static SandboxPolicyYamlDto FromDomain(SandboxPolicy p) => new()
     {
         ShellEnabled = p.ShellEnabled,
-        AllowedRepositoryRoots = [..p.AllowedRepositoryRoots],
-        DestructiveCommandPatterns = [..p.DestructiveCommandPatterns],
+        NetworkEnabled = p.NetworkEnabled,
+        AllowedRepositoryRoots = [.. p.AllowedRepositoryRoots],
+        DestructiveCommandPatterns = [.. p.DestructiveCommandPatterns],
         RequireApprovalForAllShell = p.RequireApprovalForAllShell,
         RedactPii = p.RedactPii,
         MaxOutputBytes = p.MaxOutputBytes,

@@ -13,6 +13,7 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
 {
     private readonly string _binaryPath;
     private readonly ILogger _logger;
+    private readonly SandboxPolicyEnrichment _enrichment;
 
     public bool IsRealIsolation => true;
     public string BackendName => "processcontainer";
@@ -22,10 +23,15 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
         ? "Sandbox running with unrestricted network on Windows (allowlist enforcement unavailable). Data exfiltration surface is open."
         : null;
 
-    private MxcSandboxExecutor(string selectionReason, string binaryPath, ILogger logger)
+    private MxcSandboxExecutor(
+        string selectionReason,
+        string binaryPath,
+        SandboxPolicyEnrichment enrichment,
+        ILogger logger)
     {
         SelectionReason = selectionReason;
         _binaryPath = binaryPath;
+        _enrichment = enrichment;
         _logger = logger;
     }
 
@@ -158,11 +164,12 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
         executor = new MxcSandboxExecutor(
             support.Reason ?? "processcontainer supported",
             binaryPath,
+            SandboxPolicyEnrichment.BuildForWindows(),
             logger);
         return true;
     }
 
-    private static FilesystemPolicy BuildMxcFilesystemPolicy(SandboxFsPolicy policy) =>
+    private FilesystemPolicy BuildMxcFilesystemPolicy(SandboxFsPolicy policy) =>
         new()
         {
             ReadwritePaths = [.. policy.ReadWritePaths],
@@ -173,11 +180,31 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
+        // Build policy with enrichment (cached at construction). The enrichment provides a
+        // selective tool-path allowlist via PolicyDiscovery.GetAvailableToolsPolicy(), replacing
+        // the broad /usr bind that Copilot CLI does NOT use (Phase 6 alignment).
+        var enrichedFsPolicy = SandboxFsPolicyBuilder.Build(
+            command.WorkingDirectory,
+            Array.Empty<string>(),
+            _enrichment);
+
+        // Merge in any additional RW/RO paths from the command's explicit filesystem policy.
+        var mergedRw = enrichedFsPolicy.ReadWritePaths.Union(command.FilesystemPolicy.ReadWritePaths).ToList();
+        var mergedRo = enrichedFsPolicy.ReadOnlyPaths.Union(command.FilesystemPolicy.ReadOnlyPaths).ToList();
+        var mergedPolicy = new SandboxFsPolicy(mergedRw, mergedRo, command.FilesystemPolicy.DeniedPaths);
+
         var policy = new SandboxPolicy
         {
-            Version = "0.4.0-alpha",
-            Network = new NetworkPolicy { AllowOutbound = false },
-            Filesystem = BuildMxcFilesystemPolicy(command.FilesystemPolicy),
+            // Schema 0.5.0-alpha: improved path normalization over 0.4.0-alpha.
+            Version = "0.5.0-alpha",
+            Network = new NetworkPolicy { AllowOutbound = command.NetworkEnabled },
+            Filesystem = new FilesystemPolicy
+            {
+                ReadwritePaths = [.. mergedPolicy.ReadWritePaths],
+                ReadonlyPaths = [.. mergedPolicy.ReadOnlyPaths],
+                DeniedPaths = [.. mergedPolicy.DeniedPaths],
+                ClearPolicyOnExit = true,
+            },
             TimeoutMs = command.TimeoutMs > 0 ? command.TimeoutMs : null,
         };
 

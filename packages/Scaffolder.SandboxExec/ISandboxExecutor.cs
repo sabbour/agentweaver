@@ -38,7 +38,8 @@ public sealed record SandboxCommand(
     string WorkingDirectory,
     IReadOnlyDictionary<string, string>? Environment,
     SandboxFsPolicy FilesystemPolicy,
-    int TimeoutMs);
+    int TimeoutMs,
+    bool NetworkEnabled = false);
 
 /// <summary>
 /// Filesystem policy handed to the sandbox engine. DeniedPaths maps to

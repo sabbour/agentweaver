@@ -56,10 +56,18 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
     {
         var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
         var wd = ShellSingleQuote(workdir);
+        // Replace broad --ro-bind /usr /usr with targeted mounts (Phase 6 alignment).
+        // /usr/share, /usr/include, /usr/src etc. are NOT needed at runtime.
+        // --ro-bind-try is used for all mounts so missing paths are silently skipped
+        // (graceful handling of minimal container environments).
         return
             "exec bwrap" +
             $" --bind {wd} {wd}" +
-            " --ro-bind /usr /usr" +
+            " --ro-bind-try /usr/bin /usr/bin" +
+            " --ro-bind-try /usr/lib /usr/lib" +
+            " --ro-bind-try /usr/lib64 /usr/lib64" +
+            " --ro-bind-try /usr/local/bin /usr/local/bin" +
+            " --ro-bind-try /usr/local/lib /usr/local/lib" +
             " --ro-bind-try /etc/resolv.conf /etc/resolv.conf" +
             " --ro-bind-try /etc/passwd /etc/passwd" +
             " --ro-bind-try /etc/group /etc/group" +

@@ -50,6 +50,23 @@ public sealed class BubblewrapSandboxCommandTests
         payload.Should().Contain("--unshare-user");
         payload.Should().Contain("--unshare-net");
     }
+
+    [Theory]
+    [InlineData("native-linux")]
+    [InlineData("wsl")]
+    public void BwrapCommand_UsesTargetedUsrMountsNotBroadBind(string mode)
+    {
+        // Phase 6 alignment: replace --ro-bind /usr /usr with selective mounts.
+        // This prevents exposing /usr/share/doc, /usr/include, etc. unnecessarily.
+        var payload = mode == "native-linux"
+            ? LinuxBwrapExecutor.BuildBwrapPayload("echo ok", "/workspace")
+            : WslMxcSandboxExecutor.BuildBwrapCommand("echo ok");
+
+        payload.Should().NotContain("--ro-bind /usr /usr",
+            "broad /usr mount replaced by targeted --ro-bind-try for bin/lib dirs");
+        payload.Should().Contain("--ro-bind-try /usr/bin /usr/bin");
+        payload.Should().Contain("--ro-bind-try /usr/lib /usr/lib");
+    }
 }
 
 /// <summary>

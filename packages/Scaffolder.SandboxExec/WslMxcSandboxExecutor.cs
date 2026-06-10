@@ -130,10 +130,15 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
     internal static string BuildBwrapCommand(string command)
     {
         var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
+        // Replace broad --ro-bind /usr /usr with targeted mounts (Phase 6 alignment).
         return
             "wd=$(pwd -P); exec bwrap" +
             " --bind \"$wd\" \"$wd\"" +
-            " --ro-bind /usr /usr" +
+            " --ro-bind-try /usr/bin /usr/bin" +
+            " --ro-bind-try /usr/lib /usr/lib" +
+            " --ro-bind-try /usr/lib64 /usr/lib64" +
+            " --ro-bind-try /usr/local/bin /usr/local/bin" +
+            " --ro-bind-try /usr/local/lib /usr/local/lib" +
             " --ro-bind-try /etc/resolv.conf /etc/resolv.conf" +
             " --ro-bind-try /etc/passwd /etc/passwd" +
             " --ro-bind-try /etc/group /etc/group" +

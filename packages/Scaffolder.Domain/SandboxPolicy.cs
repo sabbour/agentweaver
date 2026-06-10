@@ -13,6 +13,13 @@ public sealed record SandboxPolicy
     public bool ShellEnabled { get; init; } = true;
 
     /// <summary>
+    /// Allow outbound network access inside the sandbox.
+    /// Default: false (blocked — safer default for scaffolders vs Copilot CLI which defaults to true).
+    /// When true, passes <c>NetworkPolicy { AllowOutbound = true }</c> to the sandbox engine.
+    /// </summary>
+    public bool NetworkEnabled { get; init; } = false;
+
+    /// <summary>
     /// Additional repository roots accessible as read-only inside the sandbox.
     /// If empty, only the working directory is accessible. Default: empty.
     /// </summary>

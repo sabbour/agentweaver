@@ -92,6 +92,9 @@ public sealed record SandboxPolicyDto
     [JsonPropertyName("shell_enabled")]
     public bool ShellEnabled { get; init; }
 
+    [JsonPropertyName("network_enabled")]
+    public bool NetworkEnabled { get; init; }
+
     [JsonPropertyName("allowed_repository_roots")]
     public IReadOnlyList<string> AllowedRepositoryRoots { get; init; } = [];
 

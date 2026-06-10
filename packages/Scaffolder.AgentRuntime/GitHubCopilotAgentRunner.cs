@@ -210,6 +210,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            NetworkEnabled = sandboxPolicy.NetworkEnabled,
         };
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
