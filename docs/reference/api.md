@@ -185,11 +185,11 @@ See [events.md](events.md) for the event types emitted on the stream for each ou
 
 ## Sandbox policy endpoints
 
-These endpoints read and write the per-project sandbox execution policy. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
+These endpoints read and write the per-project sandbox execution policy stored at `.scaffolder/sandbox.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
 
 ### GET /api/sandbox-policy
 
-Returns the sandbox policy for the given repository path. If no policy has been stored for that path, returns the default policy.
+Returns the sandbox policy for the given repository path by reading `{repository_path}/.scaffolder/sandbox.yml`. If the file does not exist, returns the default policy.
 
 Query parameters:
 
@@ -218,7 +218,7 @@ Missing or malformed `repository_path` returns `400 Bad Request`.
 
 ### PUT /api/sandbox-policy
 
-Creates or replaces the sandbox policy for a repository path. The entire policy is replaced on each PUT; there is no partial-update merge.
+Creates or replaces the sandbox policy for a repository path by writing `{repository_path}/.scaffolder/sandbox.yml`. The entire policy is replaced on each PUT; there is no partial-update merge. After a PUT, the operator should commit the updated file to the project repository to record the change in version history.
 
 Request body (all fields required):
 

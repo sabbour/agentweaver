@@ -53,7 +53,29 @@ Install `lxc-exec` at one of those paths before starting the server. No environm
 
 ## Configuring sandbox policy
 
-Each project has a policy stored in SQLite, keyed by repository path. You can read and update it through the API.
+Each project's sandbox policy lives at `.scaffolder/sandbox.yml` in the project repository root. This file is version-controlled alongside the code: changes are reviewable via PR and auditable via `git log`. When the file does not exist, default values apply.
+
+### Example `.scaffolder/sandbox.yml`
+
+```yaml
+shell_enabled: true
+allowed_repository_roots: []
+destructive_command_patterns:
+  - rm -rf
+  - del /s
+  - "format "
+  - mkfs
+  - dd if=
+  - git push --force
+  - git reset --hard
+require_approval_for_all_shell: false
+redact_pii: true
+max_output_bytes: 4194304
+```
+
+The file is optional — default values apply when absent. Changes take effect on the next run; no server restart is needed.
+
+The API endpoints `GET /api/sandbox-policy` and `PUT /api/sandbox-policy` read and write this file. After a `PUT`, the operator should `git add .scaffolder/sandbox.yml && git commit` to record the change in the project history.
 
 ### Read the current policy
 

@@ -29,7 +29,7 @@ builder.Services.AddCors(options =>
 // Infrastructure
 builder.Services.AddSingleton<SqliteDb>();
 builder.Services.AddSingleton<SqliteRunStore>();
-builder.Services.AddSingleton<ISandboxPolicyStore, SqliteSandboxPolicyStore>();
+builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
