@@ -2,7 +2,6 @@ using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentTools;
 using Scaffolder.Domain;
@@ -34,18 +33,18 @@ public sealed class FoundryAgentRunner : IAgentRunner
     private readonly FoundryClientFactory? _factory;
     private readonly IChatClient? _chatClient;
     private readonly ISandboxExecutor _executor;
-    private readonly SandboxOptions _sandboxOptions;
+    private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly ILogger<FoundryAgentRunner> _logger;
 
     public FoundryAgentRunner(
         FoundryClientFactory factory,
         ISandboxExecutor executor,
-        IOptions<SandboxOptions> sandboxOptions,
+        ISandboxPolicyStore sandboxPolicyStore,
         ILogger<FoundryAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        _sandboxOptions = sandboxOptions?.Value ?? throw new ArgumentNullException(nameof(sandboxOptions));
+        _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -53,12 +52,12 @@ public sealed class FoundryAgentRunner : IAgentRunner
     internal FoundryAgentRunner(
         IChatClient chatClient,
         ISandboxExecutor executor,
-        IOptions<SandboxOptions> sandboxOptions,
+        ISandboxPolicyStore sandboxPolicyStore,
         ILogger<FoundryAgentRunner> logger)
     {
         _chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        _sandboxOptions = sandboxOptions?.Value ?? throw new ArgumentNullException(nameof(sandboxOptions));
+        _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -78,7 +77,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
         }
 
         // --- Per-run governance kernel (shared mechanism — FR-032) ---
-        using var governance = SandboxGovernance.Create(workingDirectory, runId, _executor, _sandboxOptions, _logger);
+        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(workingDirectory, ct);
+        using var governance = SandboxGovernance.Create(workingDirectory, runId, _executor, sandboxPolicy, _logger);
         var agentId = $"did:mesh:scaffolder:foundry:{runId}";
 
         // --- Emit sandbox backend selection event (T019) ---
@@ -95,11 +95,11 @@ public sealed class FoundryAgentRunner : IAgentRunner
         var sandboxRoot = workingDirectory;
 
         var toolOptions = new SandboxToolOptions(
-            ShellEnabled: _sandboxOptions.ShellEnabled)
+            ShellEnabled: sandboxPolicy.ShellEnabled)
         {
-            AllowedRepositoryRoots = _sandboxOptions.AllowedRepositoryRoots,
-            DestructiveCommandPatterns = _sandboxOptions.DestructiveCommandPatterns,
-            RequireApprovalForAllShell = _sandboxOptions.RequireApprovalForAllShell,
+            AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
+            DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
+            RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
         };
         var toolContext = new SandboxToolContext(
             AgentId: agentId,

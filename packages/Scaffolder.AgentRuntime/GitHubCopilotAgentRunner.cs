@@ -5,7 +5,6 @@ using GitHub.Copilot.SDK;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentTools;
 using Scaffolder.Domain;
@@ -39,18 +38,18 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
     private readonly GitHubCopilotClientFactory _factory;
     private readonly ISandboxExecutor _executor;
-    private readonly SandboxOptions _sandboxOptions;
+    private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
     public GitHubCopilotAgentRunner(
         GitHubCopilotClientFactory factory,
         ISandboxExecutor executor,
-        IOptions<SandboxOptions> sandboxOptions,
+        ISandboxPolicyStore sandboxPolicyStore,
         ILogger<GitHubCopilotAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        _sandboxOptions = sandboxOptions?.Value ?? throw new ArgumentNullException(nameof(sandboxOptions));
+        _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -61,7 +60,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _logger.LogDebug("Task content preview: {TaskPreview}", task.Length > 100 ? task[..100] : task);
 
         // --- Governance kernel (per-run) ---
-        using var governance = SandboxGovernance.Create(workingDirectory, runId, _executor, _sandboxOptions, _logger);
+        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(workingDirectory, ct);
+        using var governance = SandboxGovernance.Create(workingDirectory, runId, _executor, sandboxPolicy, _logger);
 
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
@@ -202,11 +202,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
 
         var toolOptions = new SandboxToolOptions(
-            ShellEnabled: _sandboxOptions.ShellEnabled)
+            ShellEnabled: sandboxPolicy.ShellEnabled)
         {
-            AllowedRepositoryRoots = _sandboxOptions.AllowedRepositoryRoots,
-            DestructiveCommandPatterns = _sandboxOptions.DestructiveCommandPatterns,
-            RequireApprovalForAllShell = _sandboxOptions.RequireApprovalForAllShell,
+            AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
+            DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
+            RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
         };
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
@@ -228,7 +228,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             EnableConfigDiscovery = false,
             Streaming = true,
             Tools = SandboxToolRegistry.Build(toolContext),
-            AvailableTools = NativeToolExclusion.AvailableToolNames(_executor.IsRealIsolation && _sandboxOptions.ShellEnabled),
+            AvailableTools = NativeToolExclusion.AvailableToolNames(_executor.IsRealIsolation && sandboxPolicy.ShellEnabled),
             ExcludedTools = NativeToolExclusion.ExcludedToolNames(),
         };
 

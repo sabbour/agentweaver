@@ -92,5 +92,16 @@ public sealed class SqliteDb
             step_count         INTEGER NOT NULL DEFAULT 0,
             diff               TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS sandbox_policies (
+            repository_path             TEXT PRIMARY KEY,
+            shell_enabled               INTEGER NOT NULL DEFAULT 1,
+            allowed_repository_roots    TEXT NOT NULL DEFAULT '[]',
+            destructive_command_patterns TEXT NOT NULL DEFAULT '["rm -rf","del /s","format ","mkfs","dd if=","git push --force","git reset --hard"]',
+            require_approval_for_all_shell INTEGER NOT NULL DEFAULT 0,
+            redact_pii                  INTEGER NOT NULL DEFAULT 1,
+            max_output_bytes            INTEGER NOT NULL DEFAULT 4194304,
+            updated_at                  TEXT NOT NULL
+        );
         """;
 }

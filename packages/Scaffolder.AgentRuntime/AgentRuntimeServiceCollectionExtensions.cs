@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Providers;
@@ -9,12 +8,13 @@ namespace Scaffolder.AgentRuntime;
 
 public static class AgentRuntimeServiceCollectionExtensions
 {
-    public static IServiceCollection AddAgentRuntime(this IServiceCollection services, IConfiguration configuration)
+    /// <summary>
+    /// Registers the agent runtime services. Callers must separately register an
+    /// <see cref="Scaffolder.Domain.ISandboxPolicyStore"/> implementation (e.g. the
+    /// API's SQLite-backed store) so runners can load per-project sandbox policies.
+    /// </summary>
+    public static IServiceCollection AddAgentRuntime(this IServiceCollection services)
     {
-        // Sandbox options
-        services.Configure<SandboxOptions>(opts =>
-            configuration.GetSection(SandboxOptions.Section).Bind(opts));
-
         // Sandbox executor (singleton — platform probe runs once at startup)
         services.AddSingleton<ISandboxExecutor>(sp =>
         {

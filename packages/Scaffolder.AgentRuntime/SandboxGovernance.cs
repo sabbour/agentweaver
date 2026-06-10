@@ -3,6 +3,7 @@ using AgentGovernance.Audit;
 using AgentGovernance.Integration;
 using AgentGovernance.Policy;
 using Microsoft.Extensions.Logging;
+using Scaffolder.Domain;
 using Scaffolder.SandboxExec;
 using Scaffolder.SandboxFs;
 
@@ -65,7 +66,7 @@ internal sealed class SandboxGovernance : IDisposable
     internal ILogger Logger { get; }
 
     private readonly ISandboxExecutor _executor;
-    private readonly SandboxOptions _options;
+    private readonly SandboxPolicy _policy;
 
     private SandboxGovernance(
         GovernanceKernel kernel,
@@ -73,14 +74,14 @@ internal sealed class SandboxGovernance : IDisposable
         string runId,
         ILogger logger,
         ISandboxExecutor executor,
-        SandboxOptions options)
+        SandboxPolicy policy)
     {
         Kernel = kernel;
         SandboxBackend = sandboxBackend;
         RunId = runId;
         Logger = logger;
         _executor = executor;
-        _options = options;
+        _policy = policy;
     }
 
     /// <summary>
@@ -91,7 +92,7 @@ internal sealed class SandboxGovernance : IDisposable
         string workingDirectory,
         string runId,
         ISandboxExecutor executor,
-        SandboxOptions options,
+        SandboxPolicy policy,
         ILogger logger)
     {
         var governanceOptions = new GovernanceOptions
@@ -128,7 +129,7 @@ internal sealed class SandboxGovernance : IDisposable
                     runId, ev.Type, ev.AgentId, ev.PolicyName, ev.EventId);
             });
 
-            return new SandboxGovernance(kernel, sandboxBackend, runId, logger, executor, options);
+            return new SandboxGovernance(kernel, sandboxBackend, runId, logger, executor, policy);
         }
         catch
         {
@@ -170,7 +171,7 @@ internal sealed class SandboxGovernance : IDisposable
                     allowed = false;
                     reason = $"Shell execution denied: executor '{_executor.BackendName}' provides no real isolation (IsRealIsolation = false).";
                 }
-                else if (!_options.ShellEnabled)
+                else if (!_policy.ShellEnabled)
                 {
                     allowed = false;
                     reason = "Shell execution denied: Sandbox:ShellEnabled is false.";

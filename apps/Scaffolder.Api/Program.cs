@@ -29,6 +29,7 @@ builder.Services.AddCors(options =>
 // Infrastructure
 builder.Services.AddSingleton<SqliteDb>();
 builder.Services.AddSingleton<SqliteRunStore>();
+builder.Services.AddSingleton<ISandboxPolicyStore, SqliteSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
@@ -46,7 +47,7 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 builder.Services.AddSingleton<RunOrchestrator>();
 
 // Agent runtime
-builder.Services.AddAgentRuntime(builder.Configuration);
+builder.Services.AddAgentRuntime();
 
 // Authentication
 builder.Services.AddSingleton<ApiKeyRegistry>();

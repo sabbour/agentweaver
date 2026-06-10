@@ -3,10 +3,10 @@ using System.Threading.Channels;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Scaffolder.AgentRuntime;
 using Scaffolder.Domain;
 using Scaffolder.SandboxExec;
+using Scaffolder.Tests.Helpers;
 
 namespace Scaffolder.Tests.Foundry;
 
@@ -32,7 +32,7 @@ public sealed class FoundryStreamingTests : IDisposable
     // ---- Infrastructure ----
 
     private FoundryAgentRunner Runner(IChatClient client)
-        => new(client, SandboxExecutorFactory.CreatePassthrough(), Options.Create(new SandboxOptions()), NullLogger<FoundryAgentRunner>.Instance);
+        => new(client, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), NullLogger<FoundryAgentRunner>.Instance);
 
     private static (ChannelWriter<RunEvent> writer, Func<List<RunEvent>> drain) MakeChannel()
     {
