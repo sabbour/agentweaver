@@ -20,12 +20,10 @@ public sealed class RunWorkflowFactory
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly Workflow _workflow;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
 
     public CheckpointManager CheckpointManager => _checkpointManager;
-    public Workflow Workflow => _workflow;
     public string CheckpointDirectory => _checkpointDir;
 
     public RunWorkflowFactory(
@@ -52,8 +50,6 @@ public sealed class RunWorkflowFactory
 
         var store = new FileSystemJsonCheckpointStore(new DirectoryInfo(_checkpointDir));
         _checkpointManager = CheckpointManager.CreateJson(store);
-
-        _workflow = BuildWorkflow();
     }
 
     public ChannelWriter<RunEvent>? GetRecordingWriter(string runId)
@@ -187,8 +183,9 @@ public sealed class RunWorkflowFactory
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct)
     {
+        var workflow = BuildWorkflow();
         return await InProcessExecution.RunStreamingAsync(
-            _workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
+            workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -196,8 +193,9 @@ public sealed class RunWorkflowFactory
     /// </summary>
     public async Task<StreamingRun> ResumeAsync(CheckpointInfo checkpointInfo, CancellationToken ct)
     {
+        var workflow = BuildWorkflow();
         return await InProcessExecution.ResumeStreamingAsync(
-            _workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
+            workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
     }
 
     /// <summary>
