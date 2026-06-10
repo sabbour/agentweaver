@@ -3,7 +3,7 @@ import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { AgentMessageBubble } from './AgentMessageBubble';
 import { ToolCallCard } from './ToolCallCard';
-import type { TurnGroupItem, TurnStep } from '../timeline/types';
+import type { TurnGroupItem, TurnStep, ToolCallItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
 
 const useStyles = makeStyles({
@@ -39,93 +39,146 @@ const useStyles = makeStyles({
   },
 });
 
+/** A non-tool step rendered inline (agent message or report_intent). */
+type InlineStep = { kind: 'inline'; step: TurnStep };
+/** A consecutive cluster of tool calls (excluding report_intent). */
+type ToolCluster = { kind: 'cluster'; steps: ToolCallItem[]; clusterIndex: number };
+type Cluster = InlineStep | ToolCluster;
+
+/** Split ordered steps into alternating inline/cluster segments. */
+function splitClusters(steps: TurnStep[]): Cluster[] {
+  const result: Cluster[] = [];
+  let clusterIndex = 0;
+  let i = 0;
+  while (i < steps.length) {
+    const step = steps[i];
+    if (step.kind === 'tool-call' && step.toolName !== 'report_intent') {
+      // Collect consecutive tool-call steps (excluding report_intent)
+      const cluster: ToolCallItem[] = [];
+      while (i < steps.length) {
+        const s = steps[i];
+        if (s.kind === 'tool-call' && s.toolName !== 'report_intent') {
+          cluster.push(s);
+          i++;
+        } else {
+          break;
+        }
+      }
+      result.push({ kind: 'cluster', steps: cluster, clusterIndex: clusterIndex++ });
+    } else {
+      result.push({ kind: 'inline', step });
+      i++;
+    }
+  }
+  return result;
+}
+
+interface ToolClusterRowProps {
+  cluster: ToolCluster;
+  defaultExpanded: boolean;
+  streamStatus: StreamStatus;
+}
+
+const ToolClusterRow = memo(function ToolClusterRow({ cluster, defaultExpanded, streamStatus }: ToolClusterRowProps) {
+  const styles = useStyles();
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const n = cluster.steps.length;
+
+  return (
+    <>
+      <button
+        className={styles.toolsHeader}
+        onClick={() => setExpanded(e => !e)}
+        aria-expanded={expanded}
+      >
+        {expanded
+          ? <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
+          : <ChevronRightRegular className={styles.chevron} aria-hidden="true" />}
+        <Text size={100} style={{ color: 'inherit' }}>
+          Used {n} tool{n === 1 ? '' : 's'}
+        </Text>
+      </button>
+      {expanded && (
+        <div className={styles.toolsList}>
+          {cluster.steps.map((step, i) => (
+            <ToolCallCard
+              key={step.callId != null ? String(step.callId) : "tc-" + i}
+              item={step}
+              streamStatus={streamStatus}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+});
+
 interface TurnGroupProps {
   item: TurnGroupItem;
   isLiveRun: boolean;
   streamStatus: StreamStatus;
 }
 
-// report_intent steps are shown inline as intent lines, not counted as "tools used"
-function isToolStep(step: TurnStep): boolean {
-  return step.kind === 'tool-call' && step.toolName !== 'report_intent';
-}
-
 export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus }: TurnGroupProps) {
   const styles = useStyles();
-
-  // Collapse completed tool groups by default; active turns always expanded
-  const [expanded, setExpanded] = useState(item.active);
 
   if (item.steps.length === 0 && item.active === false) {
     return null;
   }
 
-  const toolSteps = item.steps.filter(isToolStep) as import('../timeline/types').ToolCallItem[];
-  const otherSteps = item.steps.filter(s => !isToolStep(s));
+  const clusters = splitClusters(item.steps);
   const isComplete = !item.active;
-  const collapseTools = isComplete && toolSteps.length > 0;
 
   return (
     <div className={styles.steps}>
-      {/* Non-tool steps (agent messages, report_intent) always shown */}
-      {otherSteps.map((step, i) => {
-        if (step.kind === 'agent-message') {
+      {clusters.map((cluster, i) => {
+        if (cluster.kind === 'inline') {
+          const step = cluster.step;
+          if (step.kind === 'agent-message') {
+            return (
+              <AgentMessageBubble
+                key={step.messageId != null ? String(step.messageId) : "msg-" + i}
+                content={step.content}
+                streaming={step.streaming}
+                isLiveRun={isLiveRun}
+              />
+            );
+          }
+          // report_intent
           return (
-            <AgentMessageBubble
-              key={step.messageId != null ? String(step.messageId) : "msg-" + i}
-              content={step.content}
-              streaming={step.streaming}
-              isLiveRun={isLiveRun}
+            <ToolCallCard
+              key={(step as ToolCallItem).callId != null ? String((step as ToolCallItem).callId) : "ri-" + i}
+              item={step as ToolCallItem}
+              streamStatus={streamStatus}
             />
           );
         }
-        // report_intent tool steps
+
+        // Tool cluster — collapse when turn is complete, expand when active
+        if (isComplete) {
+          return (
+            <ToolClusterRow
+              key={"cluster-" + i}
+              cluster={cluster}
+              defaultExpanded={false}
+              streamStatus={streamStatus}
+            />
+          );
+        }
+
+        // Active turn: show tool calls inline
         return (
-          <ToolCallCard
-            key={step.callId != null ? String(step.callId) : "ri-" + i}
-            item={step}
-            streamStatus={streamStatus}
-          />
+          <div key={"cluster-" + i} className={styles.toolsList}>
+            {cluster.steps.map((step, j) => (
+              <ToolCallCard
+                key={step.callId != null ? String(step.callId) : "tc-" + j}
+                item={step}
+                streamStatus={streamStatus}
+              />
+            ))}
+          </div>
         );
       })}
-
-      {/* Tool steps: collapsible when turn is complete */}
-      {collapseTools ? (
-        <>
-          <button
-            className={styles.toolsHeader}
-            onClick={() => setExpanded(e => !e)}
-            aria-expanded={expanded}
-          >
-            {expanded
-              ? <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
-              : <ChevronRightRegular className={styles.chevron} aria-hidden="true" />}
-            <Text size={100} style={{ color: 'inherit' }}>
-              Used {toolSteps.length} tool{toolSteps.length === 1 ? '' : 's'}
-            </Text>
-          </button>
-          {expanded && (
-            <div className={styles.toolsList}>
-              {toolSteps.map((step, i) => (
-                <ToolCallCard
-                  key={step.callId != null ? String(step.callId) : "tc-" + i}
-                  item={step}
-                  streamStatus={streamStatus}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      ) : (
-        // Active turn: show tools inline
-        toolSteps.map((step, i) => (
-          <ToolCallCard
-            key={step.callId != null ? String(step.callId) : "tc-" + i}
-            item={step}
-            streamStatus={streamStatus}
-          />
-        ))
-      )}
     </div>
   );
 });
