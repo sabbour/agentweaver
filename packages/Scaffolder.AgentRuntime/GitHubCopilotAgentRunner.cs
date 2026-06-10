@@ -203,6 +203,17 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         {
             Emit("sandbox.warning", new { category = "network-open", message = _executor.NetworkWarningMessage, backend = _executor.BackendName });
         }
+        if (sandboxPolicy.NetworkEnabled)
+        {
+            Emit("sandbox.warning", new
+            {
+                category = "network-open",
+                message = "Sandbox is running with outbound network enabled (network_enabled: true in .scaffolder/settings.yml). " +
+                          "Network access is intentional but increases the attack surface. " +
+                          "Ensure this is required for the agent's task.",
+                backend = _executor.BackendName
+            });
+        }
 
         var toolOptions = new SandboxToolOptions(
             ShellEnabled: sandboxPolicy.ShellEnabled)

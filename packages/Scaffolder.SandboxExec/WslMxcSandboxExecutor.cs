@@ -127,7 +127,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             TimedOut: false, OutputTruncated: false);
     }
 
-    internal static string BuildBwrapCommand(string command)
+    internal static string BuildBwrapCommand(string command, bool networkEnabled = false)
     {
         var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
         // Replace broad --ro-bind /usr /usr with targeted mounts (Phase 6 alignment).
@@ -154,7 +154,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             " --chdir \"$wd\"" +
             " --unshare-pid" +
             " --unshare-user" +
-            " --unshare-net" +
+            (networkEnabled ? "" : " --unshare-net") +
             " --new-session" +
             $" -- /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
     }
@@ -178,7 +178,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             psi.ArgumentList.Add("--exec");
             psi.ArgumentList.Add("/bin/bash");
             psi.ArgumentList.Add("-lc");
-            psi.ArgumentList.Add(BuildBwrapCommand(command.CommandLine));
+            psi.ArgumentList.Add(BuildBwrapCommand(command.CommandLine, command.NetworkEnabled));
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             if (command.TimeoutMs > 0)

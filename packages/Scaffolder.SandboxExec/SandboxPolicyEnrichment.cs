@@ -7,9 +7,10 @@ namespace Scaffolder.SandboxExec;
 /// construction time using <see cref="PolicyDiscovery"/> helpers (replicating Copilot CLI's
 /// selective allowlist model — see specs/002-sandboxed-execution/plan.md § Phase 6).
 ///
-/// On Windows: uses <see cref="PolicyDiscovery.GetAvailableToolsPolicy"/>,
-/// <see cref="PolicyDiscovery.GetUserProfilePolicy"/>, and
-/// <see cref="PolicyDiscovery.GetTemporaryFilesPolicy"/>.
+/// On Windows: uses <see cref="PolicyDiscovery.GetAvailableToolsPolicy"/> and
+/// <see cref="PolicyDiscovery.GetUserProfilePolicy"/>. Temp directories are NOT
+/// added here — per-command isolated subdirs are injected in
+/// <see cref="MxcSandboxExecutor"/> at execution time.
 ///
 /// On Linux/WSL2: enrichment is derived directly inside the bwrap command builder
 /// (targeted <c>--ro-bind-try</c> mounts); this class is Windows-only.
@@ -45,8 +46,9 @@ public sealed class SandboxPolicyEnrichment
     ///   ALL_APPLICATION_PACKAGES so we don't duplicate implicit grants.</item>
     ///   <item><c>GetUserProfilePolicy</c> — safe user-profile dirs (e.g. LocalAppData\Programs
     ///   subdirectories) excluding the full home directory.</item>
-    ///   <item><c>GetTemporaryFilesPolicy</c> — the platform temp dir (%TEMP%) as read-write.</item>
     /// </list>
+    /// Temp directories are not included — <see cref="MxcSandboxExecutor"/> creates a
+    /// per-command isolated subdir at execution time (Finding 1 fix).
     /// All helpers fail-open: if discovery throws, the enrichment is empty (no paths added).
     /// </remarks>
     public static SandboxPolicyEnrichment BuildForWindows()
@@ -71,13 +73,8 @@ public sealed class SandboxPolicyEnrichment
         }
         catch { }
 
-        try
-        {
-            var tempPolicy = PolicyDiscovery.GetTemporaryFilesPolicy();
-            roPaths.AddRange(tempPolicy.ReadonlyPaths);
-            rwPaths.AddRange(tempPolicy.ReadwritePaths);
-        }
-        catch { }
+        // Temp dir is NOT added here — per-command isolated subdirs are injected in
+        // MxcSandboxExecutor.ExecuteAsync to prevent cross-sandbox temp contamination.
 
         return new SandboxPolicyEnrichment(
             FilterExisting(roPaths),

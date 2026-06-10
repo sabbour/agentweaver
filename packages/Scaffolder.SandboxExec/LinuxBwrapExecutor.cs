@@ -52,7 +52,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
     private static string ShellSingleQuote(string s) =>
         "'" + s.Replace("'", "'\\''") + "'";
 
-    internal static string BuildBwrapPayload(string command, string workdir)
+    internal static string BuildBwrapPayload(string command, string workdir, bool networkEnabled = false)
     {
         var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
         var wd = ShellSingleQuote(workdir);
@@ -83,7 +83,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
             $" --chdir {wd}" +
             " --unshare-pid" +
             " --unshare-user" +
-            " --unshare-net" +
+            (networkEnabled ? "" : " --unshare-net") +
             " --new-session" +
             $" -- /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
     }
@@ -91,7 +91,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
-        var payload = BuildBwrapPayload(command.CommandLine, command.WorkingDirectory);
+        var payload = BuildBwrapPayload(command.CommandLine, command.WorkingDirectory, command.NetworkEnabled);
         _logger.LogDebug("Executing sandbox command via {Backend}, length={Length}",
             BackendName, command.CommandLine.Length);
 

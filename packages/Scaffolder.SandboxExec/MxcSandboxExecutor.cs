@@ -188,8 +188,16 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
             Array.Empty<string>(),
             _enrichment);
 
+        // Per-command isolated temp subdir (Finding 1: prevents cross-sandbox temp contamination).
+        var perCmdTempDir = Path.Combine(
+            Path.GetTempPath(), "scaffolder-sandbox", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(perCmdTempDir);
+
         // Merge in any additional RW/RO paths from the command's explicit filesystem policy.
-        var mergedRw = enrichedFsPolicy.ReadWritePaths.Union(command.FilesystemPolicy.ReadWritePaths).ToList();
+        var mergedRw = enrichedFsPolicy.ReadWritePaths
+            .Union(command.FilesystemPolicy.ReadWritePaths)
+            .Append(perCmdTempDir)
+            .ToList();
         var mergedRo = enrichedFsPolicy.ReadOnlyPaths.Union(command.FilesystemPolicy.ReadOnlyPaths).ToList();
         var mergedPolicy = new SandboxFsPolicy(mergedRw, mergedRo, command.FilesystemPolicy.DeniedPaths);
 
@@ -248,6 +256,11 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
         {
             return new SandboxExecResult(-1, "", "Timed out.",
                 TimedOut: true, OutputTruncated: false);
+        }
+        finally
+        {
+            // Best-effort cleanup of the per-command isolated temp subdir.
+            try { Directory.Delete(perCmdTempDir, recursive: true); } catch { }
         }
     }
 
