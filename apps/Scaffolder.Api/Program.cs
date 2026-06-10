@@ -46,7 +46,7 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 builder.Services.AddSingleton<RunOrchestrator>();
 
 // Agent runtime
-builder.Services.AddAgentRuntime();
+builder.Services.AddAgentRuntime(builder.Configuration);
 
 // Authentication
 builder.Services.AddSingleton<ApiKeyRegistry>();

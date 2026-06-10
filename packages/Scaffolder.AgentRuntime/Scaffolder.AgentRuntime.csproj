@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Scaffolder.Domain\Scaffolder.Domain.csproj" />
+    <ProjectReference Include="..\Scaffolder.SandboxExec\Scaffolder.SandboxExec.csproj" />
     <ProjectReference Include="..\Scaffolder.SandboxFs\Scaffolder.SandboxFs.csproj" />
   </ItemGroup>
 

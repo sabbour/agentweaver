@@ -13,7 +13,7 @@ public sealed record GrepMatch(string RelativePath, int LineNumber, string LineC
 /// Sandboxed search operations. All enumeration is constrained to the sandbox
 /// root and never follows reparse points (symlinks or junctions).
 /// </summary>
-internal sealed class SandboxedSearchTools
+public sealed class SandboxedSearchTools
 {
     private readonly string _sandboxRoot;
 

@@ -1,6 +1,8 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Scaffolder.AgentRuntime;
+using Scaffolder.SandboxExec;
 using Scaffolder.Tests.Helpers;
 
 namespace Scaffolder.Tests.Sandbox;
@@ -23,7 +25,7 @@ public sealed class SandboxGovernanceTests : IDisposable
         _sandboxRoot = Path.Combine(Path.GetTempPath(), $"sandbox-gov-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_sandboxRoot);
         _logger = new CapturingLogger();
-        _governance = SandboxGovernance.Create(_sandboxRoot, "test-run-001", _logger);
+        _governance = SandboxGovernance.Create(_sandboxRoot, "test-run-001", SandboxExecutorFactory.CreatePassthrough(), new SandboxOptions(), _logger);
     }
 
     public void Dispose()
@@ -256,7 +258,7 @@ public sealed class SandboxGovernanceTests : IDisposable
     public void Audit_AllowEntry_ContainsAgentIdAndResolvedPath()
     {
         var auditLogger = new CapturingLogger();
-        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", auditLogger);
+        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", SandboxExecutorFactory.CreatePassthrough(), new SandboxOptions(), auditLogger);
 
         gov.EvaluateToolCall(AgentId, "read_file",
             new Dictionary<string, object> { ["path"] = "hello.txt" },
@@ -271,7 +273,7 @@ public sealed class SandboxGovernanceTests : IDisposable
     public void Audit_DenyEntry_ContainsAgentIdAndReason()
     {
         var auditLogger = new CapturingLogger();
-        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", auditLogger);
+        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", SandboxExecutorFactory.CreatePassthrough(), new SandboxOptions(), auditLogger);
 
         gov.EvaluateToolCall(AgentId, "read_file",
             new Dictionary<string, object> { ["path"] = @"C:\evil.txt" },
@@ -286,7 +288,7 @@ public sealed class SandboxGovernanceTests : IDisposable
     {
         // Verify that the AGT kernel emits an audit event (wired via AuditEmitter.OnAll)
         var auditLogger = new CapturingLogger();
-        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-kernel", auditLogger);
+        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-kernel", SandboxExecutorFactory.CreatePassthrough(), new SandboxOptions(), auditLogger);
 
         gov.EvaluateToolCall(AgentId, "read_file",
             new Dictionary<string, object> { ["path"] = "test.txt" },

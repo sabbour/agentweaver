@@ -25,6 +25,19 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
         "grep_search", "file_search",
     };
 
+    /// <summary>
+    /// Tools that are allowed without path argument inspection because path validation
+    /// is delegated to the tool implementation itself, or because the tool has no
+    /// filesystem action (observability-only).
+    /// </summary>
+    private static readonly HashSet<string> KnownPreValidatedTools = new(StringComparer.Ordinal)
+    {
+        // apply_patch validates each hunk path internally in ApplyPatchAsync.
+        "apply_patch",
+        // report_intent is UI-observability only; no filesystem or shell action.
+        "report_intent",
+    };
+
     /// <summary>Known shell-tool names that require working-directory containment.</summary>
     private static readonly HashSet<string> KnownShellTools = new(StringComparer.Ordinal)
     {
@@ -55,7 +68,8 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
 
             // Seraph Y-1: unrecognized/null tool names → denied
             if (toolName is null ||
-                (!KnownFileTools.Contains(toolName) && !KnownSearchTools.Contains(toolName) && !KnownShellTools.Contains(toolName)))
+                (!KnownFileTools.Contains(toolName) && !KnownSearchTools.Contains(toolName) &&
+                 !KnownShellTools.Contains(toolName) && !KnownPreValidatedTools.Contains(toolName)))
             {
                 return new ExternalPolicyDecision
                 {
@@ -74,6 +88,19 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
                     Backend = Name,
                     Allowed = true,
                     Reason = "Search tool allowed (enumerates sandbox root).",
+                    EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                };
+            }
+
+            // Pre-validated / no-op tools: path containment is delegated to the tool
+            // implementation (apply_patch) or the tool has no filesystem action (report_intent).
+            if (KnownPreValidatedTools.Contains(toolName))
+            {
+                return new ExternalPolicyDecision
+                {
+                    Backend = Name,
+                    Allowed = true,
+                    Reason = "Pre-validated tool allowed (internal path validation or no filesystem action).",
                     EvaluationMs = sw.Elapsed.TotalMilliseconds,
                 };
             }

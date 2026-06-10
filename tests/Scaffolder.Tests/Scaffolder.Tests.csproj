@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\packages\Scaffolder.Domain\Scaffolder.Domain.csproj" />
+    <ProjectReference Include="..\..\packages\Scaffolder.SandboxExec\Scaffolder.SandboxExec.csproj" />
     <ProjectReference Include="..\..\packages\Scaffolder.SandboxFs\Scaffolder.SandboxFs.csproj" />
     <ProjectReference Include="..\..\packages\Scaffolder.AgentRuntime\Scaffolder.AgentRuntime.csproj" />
     <ProjectReference Include="..\..\apps\Scaffolder.Api\Scaffolder.Api.csproj" />

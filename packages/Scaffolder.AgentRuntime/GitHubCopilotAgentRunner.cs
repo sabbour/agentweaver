@@ -1,12 +1,16 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Text;
 using System.Threading.Channels;
 using GitHub.Copilot.SDK;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
+using Scaffolder.SandboxFs;
 
 namespace Scaffolder.AgentRuntime;
 
@@ -34,11 +38,19 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         new(StringComparer.OrdinalIgnoreCase) { "report_intent", "glob" };
 
     private readonly GitHubCopilotClientFactory _factory;
+    private readonly ISandboxExecutor _executor;
+    private readonly SandboxOptions _sandboxOptions;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
-    public GitHubCopilotAgentRunner(GitHubCopilotClientFactory factory, ILogger<GitHubCopilotAgentRunner> logger)
+    public GitHubCopilotAgentRunner(
+        GitHubCopilotClientFactory factory,
+        ISandboxExecutor executor,
+        IOptions<SandboxOptions> sandboxOptions,
+        ILogger<GitHubCopilotAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        _sandboxOptions = sandboxOptions?.Value ?? throw new ArgumentNullException(nameof(sandboxOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -49,7 +61,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _logger.LogDebug("Task content preview: {TaskPreview}", task.Length > 100 ? task[..100] : task);
 
         // --- Governance kernel (per-run) ---
-        using var governance = SandboxGovernance.Create(workingDirectory, runId, _logger);
+        using var governance = SandboxGovernance.Create(workingDirectory, runId, _executor, _sandboxOptions, _logger);
 
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
@@ -96,9 +108,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         void Emit(string type, object payload)
         {
             if (stream is null) return;
+            var nonNullStream = stream;
             lock (emitLock)
             {
-                if (!stream.TryWrite(new RunEvent(++seq, type, payload)))
+                if (!nonNullStream.TryWrite(new RunEvent(++seq, type, payload)))
                     _logger.LogWarning("TryWrite false for {EventType}", type);
             }
         }
@@ -176,12 +189,22 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             }
         }
 
+        var fileTools = new SandboxedFileTools(workingDirectory);
+        var searchTools = new SandboxedSearchTools(workingDirectory);
+        var redactor = SandboxOutputRedactor.Default;
+
+        // --- Emit sandbox backend selection event (T019) ---
+        Emit("sandbox.selected", new { backend = _executor.BackendName, isRealIsolation = _executor.IsRealIsolation, reason = _executor.SelectionReason });
+
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(governance, runId, EmitToolCallOnce, EmitToolErrorOnce),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
+            Tools = BuildCopilotCustomTools(fileTools, searchTools, _executor, redactor, workingDirectory, _sandboxOptions, governance, runId, ct),
+            AvailableTools = NativeToolExclusion.AvailableToolNames(_executor.IsRealIsolation && _sandboxOptions.ShellEnabled),
+            ExcludedTools = NativeToolExclusion.ExcludedToolNames(),
         };
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
@@ -256,6 +279,136 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             deltaCount, result.Length);
 
         return result;
+    }
+
+    /// <summary>
+    /// Builds the 9 custom AI tools registered in SessionConfig.Tools. Custom tools
+    /// are called directly by the SDK — they do NOT fire OnPermissionRequest. Path
+    /// containment is enforced by SandboxedFileTools/SandboxedSearchTools internals.
+    /// The run_command tool additionally calls governance inline before executing.
+    /// </summary>
+    private static List<AIFunction> BuildCopilotCustomTools(
+        SandboxedFileTools fileTools,
+        SandboxedSearchTools searchTools,
+        ISandboxExecutor executor,
+        SandboxOutputRedactor redactor,
+        string workingDirectory,
+        SandboxOptions options,
+        SandboxGovernance governance,
+        string runId,
+        CancellationToken ct)
+    {
+        var tools = new List<AIFunction>();
+
+        if (executor.IsRealIsolation && options.ShellEnabled)
+        {
+            tools.Add(AIFunctionFactory.Create(
+                async (
+                    [Description("Shell command to execute inside the sandbox.")] string command,
+                    [Description("Timeout in milliseconds (default 30000).")] int? timeout_ms) =>
+                {
+                    // Custom tools bypass OnPermissionRequest — evaluate governance inline.
+                    var govArgs = new Dictionary<string, object>
+                    {
+                        ["command"] = command,
+                        ["directory"] = workingDirectory,
+                    };
+                    var (allowed, denyReason) = governance.EvaluateToolCall(
+                        $"did:mesh:scaffolder:copilot:{runId}", "run_command", govArgs, governance.Logger);
+                    if (!allowed) return $"Error: {denyReason}";
+
+                    var fsPolicy = SandboxFsPolicyBuilder.Build(workingDirectory, options.AllowedRepositoryRoots);
+                    var cmd = new SandboxCommand(command, workingDirectory, null, fsPolicy, timeout_ms ?? 30_000);
+                    var result = await executor.ExecuteAsync(cmd, ct);
+                    var stdout = redactor.Redact(result.Stdout);
+                    var stderr = redactor.Redact(result.Stderr);
+                    return $"exit_code: {result.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
+                },
+                "run_command", "Run a shell command inside the sandbox."));
+        }
+
+        tools.Add(AIFunctionFactory.Create(
+            async ([Description("File path.")] string path) =>
+            {
+                var (content, failure) = await fileTools.ReadFileAsync(path, ct);
+                return failure is not null ? $"Error: {failure.Message}" : content!;
+            },
+            "read_file", "Read the contents of a file."));
+
+        tools.Add(AIFunctionFactory.Create(
+            async (
+                [Description("File path.")] string path,
+                [Description("String to replace (must be unique).")] string old_str,
+                [Description("Replacement string.")] string new_str) =>
+            {
+                var (_, failure) = await fileTools.StrReplaceAsync(path, old_str, new_str, ct);
+                return failure is not null ? $"Error: {failure.Message}" : "ok";
+            },
+            "str_replace_editor", "Replace a unique string in a file."));
+
+        tools.Add(AIFunctionFactory.Create(
+            async ([Description("Patch in Copilot CLI patch grammar.")] string patch) =>
+            {
+                var result = await fileTools.ApplyPatchAsync(patch, ct);
+                if (!result.Success) return $"Error: {result.Reason}";
+                return "Patch applied.";
+            },
+            "apply_patch", "Apply a patch."));
+
+        tools.Add(AIFunctionFactory.Create(
+            async (
+                [Description("File path.")] string path,
+                [Description("File content.")] string file_text) =>
+            {
+                var (_, failure) = await fileTools.CreateFileAsync(path, file_text, ct);
+                return failure is not null ? $"Error: {failure.Message}" : "ok";
+            },
+            "create", "Create a new file."));
+
+        tools.Add(AIFunctionFactory.Create(
+            async (
+                [Description("File path.")] string path,
+                [Description("Content to write.")] string content) =>
+            {
+                var (_, failure) = await fileTools.WriteFileAsync(path, content, ct);
+                return failure is not null ? $"Error: {failure.Message}" : "ok";
+            },
+            "edit", "Write content to a file."));
+
+        tools.Add(AIFunctionFactory.Create(
+            async (
+                [Description("Search pattern.")] string pattern,
+                [Description("Is regex.")] bool? is_regex,
+                [Description("File glob filter.")] string? include_pattern,
+                [Description("Max results.")] int? max_results) =>
+            {
+                var matches = await searchTools.GrepSearchAsync(pattern, is_regex ?? false, include_pattern, max_results ?? 50, false, ct);
+                if (matches.Count == 0) return "No matches found.";
+                return string.Join("\n", matches.Select(m => $"{m.RelativePath}:{m.LineNumber}: {m.LineContent}"));
+            },
+            "grep_search", "Search for a pattern in files."));
+
+        tools.Add(AIFunctionFactory.Create(
+            async (
+                [Description("Glob pattern.")] string pattern,
+                [Description("Max results.")] int? max_results) =>
+            {
+                var paths = await searchTools.FileSearchAsync(pattern, max_results ?? 200, ct);
+                if (paths.Count == 0) return "No files found.";
+                return string.Join("\n", paths);
+            },
+            "file_search", "Find files matching a glob pattern."));
+
+        tools.Add(AIFunctionFactory.Create(
+            ([Description("Current intent or plan step.")] string intent) =>
+            {
+                // UI-only observability — no filesystem or shell action.
+                _ = intent;
+                return Task.FromResult<object?>("ok");
+            },
+            "report_intent", "Report the agent's current intent."));
+
+        return tools;
     }
 
     /// <summary>

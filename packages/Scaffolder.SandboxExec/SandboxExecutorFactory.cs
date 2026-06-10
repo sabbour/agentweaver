@@ -39,4 +39,12 @@ public static class SandboxExecutorFactory
 
         return new PassthroughExecutor(reason);
     }
+
+    /// <summary>
+    /// Creates a deny-by-default passthrough executor. Suitable for unit tests and
+    /// environments where no real isolation backend is available.
+    /// </summary>
+    public static ISandboxExecutor CreatePassthrough(
+        string reason = "no-isolation: passthrough-deny") =>
+        new PassthroughExecutor(reason);
 }
