@@ -29,8 +29,8 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     overflow: 'hidden',
-    marginTop: tokens.spacingVerticalXS,
-    marginBottom: tokens.spacingVerticalXS,
+    marginTop: '2px',
+    marginBottom: '2px',
   },
   cardError: {
     border: `1px solid ${tokens.colorPaletteRedForeground2}`,
@@ -179,6 +179,7 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: T
           <AccordionHeader
             aria-label={getAriaLabel(item)}
             expandIconPosition="end"
+            size="small"
           >
             <div className={styles.headerRow}>
               {/* SECURITY (Y-3): humanTitle and toolName rendered as text — no HTML */}

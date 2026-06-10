@@ -10,13 +10,13 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: '2px',
   },
   steps: {
     paddingLeft: tokens.spacingHorizontalM,
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: '2px',
   },
 });
 
