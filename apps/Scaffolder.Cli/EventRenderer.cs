@@ -11,7 +11,7 @@ public static class EventRenderer
     {
         var label = $"[{evt.Type}]".PadRight(20);
         var message = Describe(evt);
-        var color = ColorFor(evt.Type);
+        var color = ColorFor(evt);
         return $"[{color}]{Markup.Escape(label)}[/] {message}";
     }
 
@@ -55,9 +55,50 @@ public static class EventRenderer
                 return $"Merge completed: {Markup.Escape(Str(p, "merged_commit_hash"))}";
             case "merge.failed":
                 return $"Merge failed: {Markup.Escape(Str(p, "reason"))}";
+            case "sandbox.selected":
+            {
+                var backend = Str(p, "backend");
+                var isRealRaw = Str(p, "isRealIsolation");
+                var isReal = isRealRaw == "True" || isRealRaw == "true";
+                return isReal
+                    ? $"Sandbox: {Markup.Escape(backend)} (isolated)"
+                    : $"Sandbox: {Markup.Escape(backend)} (no isolation — shell commands denied)";
+            }
+            case "sandbox.warning":
+            {
+                var msg = Str(p, "message");
+                return $"Warning: {Markup.Escape(msg)}";
+            }
+            case "shell.approval_required":
+            {
+                var requestId = Str(p, "requestId");
+                return $"Shell approval required (request: {Markup.Escape(requestId)}) — use 'scaffolder run approve {Markup.Escape(requestId)}' to approve";
+            }
+            case "tool.output":
+            {
+                var streamType = Str(p, "stream");
+                var data = Str(p, "data");
+                var prefix = streamType == "stderr" ? "stderr" : "out";
+                return $"[{Markup.Escape(prefix)}] {Markup.Escape(Preview(data, 120))}";
+            }
+            case "tool.exec_result":
+            {
+                var exitCode = Str(p, "exitCode");
+                var timedOut = Str(p, "timedOut") == "True";
+                var truncated = Str(p, "outputTruncated") == "True";
+                var extra = timedOut ? " (timed out)" : truncated ? " (output truncated)" : "";
+                return $"Exit code: {Markup.Escape(exitCode)}{extra}";
+            }
             default:
                 return Markup.Escape(RawPayload(p));
         }
+    }
+
+    private static string ColorFor(RunEvent evt)
+    {
+        if (evt.Type == "tool.output")
+            return Str(evt.Payload, "stream") == "stderr" ? "red" : "grey";
+        return ColorFor(evt.Type);
     }
 
     private static string ColorFor(string type) => type switch
@@ -70,11 +111,16 @@ public static class EventRenderer
         "tool.call" => "cyan",
         "tool.result" => "green",
         "tool.error" => "red",
+        "tool.output" => "grey",
+        "tool.exec_result" => "blue",
         "review.requested" => "magenta",
         "review.approved" => "green",
         "review.declined" => "yellow",
         "merge.completed" => "green",
         "merge.failed" => "red",
+        "sandbox.selected" => "cyan",
+        "sandbox.warning" => "yellow",
+        "shell.approval_required" => "yellow",
         _ => "grey"
     };
 
@@ -116,11 +162,11 @@ public static class EventRenderer
         return string.Empty;
     }
 
-    /// <summary>Collapses content to a single trimmed line capped at 80 characters for console display.</summary>
-    private static string Preview(string value)
+    /// <summary>Collapses content to a single trimmed line capped at <paramref name="maxLength"/> characters for console display.</summary>
+    private static string Preview(string value, int maxLength = 80)
     {
         var single = value.ReplaceLineEndings(" ").Trim();
-        return single.Length <= 80 ? single : single[..80] + "...";
+        return single.Length <= maxLength ? single : single[..maxLength] + "...";
     }
 
     private static string Short(string? value) =>

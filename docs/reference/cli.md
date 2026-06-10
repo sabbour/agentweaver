@@ -75,6 +75,69 @@ If the merge reaches a terminal conflict the CLI prints `Merge failed.`, the rea
 
 Fetches the run and prints a table with the run id, status, model source, start and end times, step count, and whether a diff is available.
 
+### `scaffolder sandbox-policy`
+
+Commands for reading and writing the per-project sandbox execution policy. Policies control whether shell execution is enabled, which commands require human approval, and output handling. See [sandbox-setup.md](sandbox-setup.md) for full setup instructions.
+
+#### `scaffolder sandbox-policy get`
+
+Fetches and prints the sandbox policy for a repository.
+
+```text
+scaffolder sandbox-policy get --repository-path <path>
+```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--repository-path <path>` | Yes | Absolute path to the repository |
+
+Output is printed as a JSON object. If no policy has been stored for the repository, the default policy is returned.
+
+Example:
+
+```powershell
+scaffolder sandbox-policy get --repository-path C:\repos\myproject
+```
+
+```json
+{
+  "repository_path": "C:/repos/myproject",
+  "shell_enabled": true,
+  "require_approval_for_all_shell": false,
+  "redact_pii": true,
+  "max_output_bytes": 4194304,
+  "allowed_repository_roots": [],
+  "destructive_command_patterns": ["rm -rf", "del /s", "format ", "mkfs", "dd if=", "git push --force", "git reset --hard"]
+}
+```
+
+#### `scaffolder sandbox-policy set`
+
+Updates fields on the sandbox policy for a repository. The command fetches the current policy, applies the provided options, and writes the result back.
+
+```text
+scaffolder sandbox-policy set --repository-path <path> [options]
+```
+
+Options:
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `--repository-path <path>` | string | Required. Absolute path to the repository. |
+| `--shell-enabled <true\|false>` | bool | Whether `run_command` is available for runs on this repository. `false` disables shell regardless of whether the host has a real isolation backend. |
+
+Example — disable shell for a project:
+
+```powershell
+scaffolder sandbox-policy set --repository-path C:\repos\myproject --shell-enabled false
+```
+
+On success the command prints the updated policy as JSON and exits 0. API errors print the HTTP status and response body and exit 1.
+
+Additional policy fields (`destructive_command_patterns`, `require_approval_for_all_shell`, `redact_pii`, `max_output_bytes`, `allowed_repository_roots`) can only be set directly through the API (`PUT /api/sandbox-policy`) for now. The CLI exposes `--shell-enabled` as the most common operator action.
+
 ## Exit codes
 
 | Code | Meaning |

@@ -64,6 +64,48 @@ public sealed record RunResponse
 
     [JsonPropertyName("tree_hash")]
     public string? TreeHash { get; init; }
+
+    [JsonPropertyName("sandbox")]
+    public SandboxStatusDto? Sandbox { get; init; }
+}
+
+public sealed record SandboxStatusDto
+{
+    [JsonPropertyName("backend")]
+    public required string Backend { get; init; }
+
+    [JsonPropertyName("is_real_isolation")]
+    public required bool IsRealIsolation { get; init; }
+
+    [JsonPropertyName("selection_reason")]
+    public string? SelectionReason { get; init; }
+
+    [JsonPropertyName("has_network_warning")]
+    public bool HasNetworkWarning { get; init; }
+}
+
+public sealed record SandboxPolicyDto
+{
+    [JsonPropertyName("repository_path")]
+    public required string RepositoryPath { get; init; }
+
+    [JsonPropertyName("shell_enabled")]
+    public bool ShellEnabled { get; init; }
+
+    [JsonPropertyName("allowed_repository_roots")]
+    public IReadOnlyList<string> AllowedRepositoryRoots { get; init; } = [];
+
+    [JsonPropertyName("destructive_command_patterns")]
+    public IReadOnlyList<string> DestructiveCommandPatterns { get; init; } = [];
+
+    [JsonPropertyName("require_approval_for_all_shell")]
+    public bool RequireApprovalForAllShell { get; init; }
+
+    [JsonPropertyName("redact_pii")]
+    public bool RedactPii { get; init; }
+
+    [JsonPropertyName("max_output_bytes")]
+    public int MaxOutputBytes { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{id}/review.</summary>
