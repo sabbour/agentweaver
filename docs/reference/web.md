@@ -70,9 +70,9 @@ The review panel is embedded in the watch screen. When the agent emits a `review
 
 **Approve** can have three outcomes:
 
-- **Merge succeeds** — the run transitions to `merged` and a success badge appears.
+- **Merge succeeds** — the run transitions to `merged` and a green success badge appears showing the commit hash. The transition happens live via the `merge.completed` event on the SSE stream; you do not need to refresh the page.
 - **Retriable block** — the server returns a 409 with an error message (for example, because there are uncommitted local changes). The panel shows the server message as a warning bar and keeps Approve and Decline active so you can fix your working tree — commit or stash the changes — and approve again.
-- **Terminal merge failure** — if the merge fails in a way that cannot be retried, the panel is replaced by a `merge_failed` view showing the failure reason and a note that the worktree has been preserved for manual resolution.
+- **Terminal merge failure** — if the merge fails in a way that cannot be retried, a red `merge_failed` badge appears with the failure reason. The review panel re-appears so you can attempt another approve after resolving the conflict manually, or decline the run.
 
 **Decline** records the decision and the run transitions to `declined`.
 

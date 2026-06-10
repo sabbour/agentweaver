@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Badge, Divider, Spinner, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
@@ -56,10 +56,33 @@ export function RunWatcher({ runId }: RunWatcherProps) {
     }
   }, [hasReviewRequested, reviewRun, runId]);
 
-  const showReviewPanel = reviewRun?.status === 'awaiting_review' &&
-    (!reviewComplete || reviewComplete.status === 'merge_failed');
+  // Derive effective review status by bridging terminal merge SSE events.
+  const effectiveReviewComplete = useMemo((): ReviewResponse | null => {
+    if (reviewComplete && reviewComplete.status !== 'merging') return reviewComplete;
+    const mergeEvent = events.find(
+      (e) => e.type === 'merge.completed' || e.type === 'merge.failed',
+    );
+    if (!mergeEvent) return reviewComplete;
+    if (mergeEvent.type === 'merge.completed') {
+      const commitHash = mergeEvent.payload.merged_commit_hash as string | undefined;
+      return {
+        run_id: reviewComplete?.run_id ?? runId,
+        status: 'merged',
+        merge_result: commitHash ?? reviewComplete?.merge_result ?? null,
+      };
+    }
+    const reason = mergeEvent.payload.reason as string | undefined;
+    return {
+      run_id: reviewComplete?.run_id ?? runId,
+      status: 'merge_failed',
+      merge_result: reason ?? reviewComplete?.merge_result ?? null,
+    };
+  }, [reviewComplete, events, runId]);
 
-  const resolvedStatus = reviewComplete?.status ?? (reviewRun && reviewRun.status !== 'awaiting_review' ? reviewRun.status : null);
+  const showReviewPanel = reviewRun?.status === 'awaiting_review' &&
+    (!effectiveReviewComplete || effectiveReviewComplete.status === 'merge_failed');
+
+  const resolvedStatus = effectiveReviewComplete?.status ?? (reviewRun && reviewRun.status !== 'awaiting_review' ? reviewRun.status : null);
 
   return (
     <div className={styles.root}>
@@ -78,13 +101,13 @@ export function RunWatcher({ runId }: RunWatcherProps) {
                   onReviewComplete={setReviewComplete}
                 />
               )}
-              {resolvedStatus === 'merge_failed' ? null : resolvedStatus ? (
+              {resolvedStatus ? (
                 <Badge
                   className={styles.resolvedBadge}
                   color={resolvedBadgeColor(resolvedStatus)}
                 >
                   {resolvedStatus}
-                  {reviewComplete?.merge_result ? ` \u2014 ${reviewComplete.merge_result}` : ''}
+                  {effectiveReviewComplete?.merge_result ? ` \u2014 ${effectiveReviewComplete.merge_result}` : ''}
                 </Badge>
               ) : null}
             </>

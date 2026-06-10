@@ -13,6 +13,12 @@ interface PollState {
 const TERMINAL = new Set(['completed', 'failed', 'merged', 'declined', 'merge_failed']);
 const POLL_INTERVAL_MS = 2000;
 
+const SINGLETON_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'run.completed', 'run.failed', 'review.requested',
+  'review.approved', 'review.declined',
+  'merge.completed', 'merge.failed',
+]);
+
 export function useRunPoll(runId: string, apiKey: string, baseUrl: string): PollState {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [status, setStatus] = useState<PollStatus>('polling');
@@ -61,6 +67,7 @@ export type EventType =
   | 'review.requested'
   | 'review.approved'
   | 'review.declined'
+  | 'merge.started'
   | 'merge.completed'
   | 'merge.failed'
   | 'done'
@@ -154,6 +161,7 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
               const streamEvt: RunStreamEvent = { sequence: seq, type: evtType as EventType, payload };
               setEvents((prev) => {
                 if (seq > 0 && prev.some((e) => e.sequence === seq)) return prev;
+                if (seq === 0 && SINGLETON_EVENT_TYPES.has(evtType) && prev.some((e) => e.type === evtType)) return prev;
                 return [...prev, streamEvt];
               });
             }

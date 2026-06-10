@@ -348,6 +348,19 @@ app.MapPost("/api/runs/{id}/review", async (
         "Review decision: {Decision}. RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
         request.Approved ? "approved" : "declined", id, run.SubmittingUser, caller.User);
 
+    // Emit merge.started before handing the approval to the workflow so the SSE stream
+    // bridges the gap between the approve and the eventual merge.completed/merge.failed.
+    if (request.Approved)
+    {
+        var liveEntry = streamStore.Get(id);
+        if (liveEntry is not null)
+        {
+            var mergeStartedSeq = liveEntry.NextSequence();
+            liveEntry.Record(new RunEvent(mergeStartedSeq, EventTypes.MergeStarted,
+                new { tree_hash = run.TreeHash }));
+        }
+    }
+
     // Create the response and send it to the workflow to resume.
     var decision = new WorkflowReviewDecision(request.Approved);
     var externalResponse = pendingEntry.Request.CreateResponse(decision);
@@ -429,6 +442,13 @@ static async Task<IResult> ExecuteDirectReviewAsync(
     }
 
     // Consolidated merge execution via the coordinator.
+    if (entry is not null)
+    {
+        var mergeStartedSeq = entry.NextSequence();
+        entry.Record(new RunEvent(mergeStartedSeq, EventTypes.MergeStarted,
+            new { tree_hash = run.TreeHash }));
+    }
+
     var mergeInput = new MergeInput(id, run.TreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
     var mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, ct).ConfigureAwait(false);
 

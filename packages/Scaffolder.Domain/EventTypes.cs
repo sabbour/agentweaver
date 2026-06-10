@@ -12,6 +12,7 @@ public static class EventTypes
     public const string ReviewApproved  = "review.approved";
     public const string ReviewDeclined  = "review.declined";
 
+    public const string MergeStarted   = "merge.started";
     public const string MergeCompleted = "merge.completed";
     public const string MergeFailed    = "merge.failed";
 
