@@ -106,6 +106,10 @@ app.MapPost("/api/runs", async (
     {
         await orchestrator.StartRunAsync(run, ct);
     }
+    catch (RunSubmissionValidationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to start run {RunId}", run.Id);

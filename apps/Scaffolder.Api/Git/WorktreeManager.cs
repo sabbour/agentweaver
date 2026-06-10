@@ -1,6 +1,7 @@
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using Scaffolder.Api.Infrastructure;
+using Scaffolder.Api.Runs;
 using Scaffolder.Domain;
 
 namespace Scaffolder.Api.Git;
@@ -39,25 +40,38 @@ public sealed class WorktreeManager
 
     public WorktreeInfo AddWorktree(string repositoryPath, string originatingBranch, RunId runId)
     {
-        using var repo = new Repository(repositoryPath);
-
-        var origin = repo.Branches[originatingBranch]
-            ?? throw new InvalidOperationException($"Originating branch '{originatingBranch}' was not found.");
-
-        var branchName = BranchNameFor(runId);
-        if (repo.Branches[branchName] is null)
+        Repository repo;
+        try
         {
-            repo.CreateBranch(branchName, origin.Tip);
+            repo = new Repository(repositoryPath);
+        }
+        catch (RepositoryNotFoundException ex)
+        {
+            throw new RunSubmissionValidationException(
+                "Repository path is not a valid git repository.", ex);
         }
 
-        var worktreePath = Path.Combine(_basePath, runId.ToString());
-        repo.Worktrees.Add(branchName, runId.ToString(), worktreePath, isLocked: false);
-
-        return new WorktreeInfo
+        using (repo)
         {
-            WorktreePath = worktreePath,
-            BranchName = branchName
-        };
+            var origin = repo.Branches[originatingBranch]
+                ?? throw new RunSubmissionValidationException(
+                    $"Originating branch '{Truncate(originatingBranch, 200)}' was not found.");
+
+            var branchName = BranchNameFor(runId);
+            if (repo.Branches[branchName] is null)
+            {
+                repo.CreateBranch(branchName, origin.Tip);
+            }
+
+            var worktreePath = Path.Combine(_basePath, runId.ToString());
+            repo.Worktrees.Add(branchName, runId.ToString(), worktreePath, isLocked: false);
+
+            return new WorktreeInfo
+            {
+                WorktreePath = worktreePath,
+                BranchName = branchName
+            };
+        }
     }
 
     public string CommitChanges(string worktreePath, RunId runId)
@@ -423,4 +437,7 @@ public sealed class WorktreeManager
     }
 
     private Signature WithTimestamp() => new(_signature.Name, _signature.Email, DateTimeOffset.UtcNow);
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength] + "…";
 }

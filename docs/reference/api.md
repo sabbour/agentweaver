@@ -60,7 +60,7 @@ Response `202 Accepted`:
 { "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "status": "in_progress" }
 ```
 
-Validation failures return `400 Bad Request`. Invalid repositories or branches are recorded as failed runs so they do not stay stranded.
+Validation failures return `400 Bad Request`. If `repository_path` is not a valid git repository or `originating_branch` does not exist in that repository, the response is `400` with an `error` field describing the problem. Invalid repositories or branches are recorded as failed runs so they do not stay stranded.
 
 ### GET /api/runs/{id}
 

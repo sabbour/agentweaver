@@ -59,8 +59,9 @@ Response `202 Accepted`:
 { "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "status": "pending" }
 ```
 
-A missing field returns `400`. An invalid repository or branch returns `400`,
-and the run is recorded as failed rather than left stranded.
+A missing field returns `400`. An invalid `repository_path` (not a git repository)
+or a non-existent `originating_branch` also returns `400` with a descriptive
+`error` field. The run is recorded as failed rather than left stranded.
 
 ### GET /api/runs/{id}
 
