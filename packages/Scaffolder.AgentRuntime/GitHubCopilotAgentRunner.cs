@@ -24,6 +24,15 @@ namespace Scaffolder.AgentRuntime;
 /// </summary>
 public sealed class GitHubCopilotAgentRunner : IAgentRunner
 {
+    /// <summary>
+    /// SDK-internal tools whose lifecycle events are suppressed from the run stream.
+    /// These are housekeeping operations (not sandboxed file/shell ops) that would
+    /// confuse the frontend if rendered as ToolCallCards. This static allowlist is the
+    /// sole suppress decision source — never driven by model-controlled strings.
+    /// </summary>
+    private static readonly HashSet<string> SuppressedInternalTools =
+        new(StringComparer.OrdinalIgnoreCase) { "report_intent", "glob" };
+
     private readonly GitHubCopilotClientFactory _factory;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
@@ -100,6 +109,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var emittedCalls = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         var emittedTerminals = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
 
+        // Tracks ToolCallIds of suppressed SDK-internal tools for this run invocation.
+        // Scoped to ExecuteAsync so it is GC'd on return — no static/global mutable state.
+        var suppressedCallIds = new HashSet<string>(StringComparer.Ordinal);
+
         void EmitToolCallOnce(string callId, string toolName, object? arguments)
         {
             if (emittedCalls.TryAdd(callId, 0))
@@ -141,12 +154,19 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 case ToolExecutionStartEvent start when start.Data is not null:
                 {
                     var callId = start.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
+                    if (SuppressedInternalTools.Contains(start.Data.ToolName ?? ""))
+                    {
+                        suppressedCallIds.Add(callId);
+                        break;
+                    }
                     EmitToolCallOnce(callId, start.Data.ToolName ?? "unknown", start.Data.Arguments);
                     break;
                 }
                 case ToolExecutionCompleteEvent complete when complete.Data is not null:
                 {
                     var callId = complete.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
+                    if (suppressedCallIds.Contains(callId))
+                        break;
                     if (complete.Data.Success)
                         EmitToolResultOnce(callId, complete.Data.Result?.Content ?? string.Empty);
                     else
@@ -226,6 +246,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
 
         Emit("run.completed", new { });
+
+        if (suppressedCallIds.Count > 0)
+            _logger.LogInformation("Suppressed {Count} SDK-internal tool events", suppressedCallIds.Count);
 
         var result = sb.ToString();
         _logger.LogInformation(
