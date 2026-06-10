@@ -158,7 +158,7 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
         if (isComplete) {
           return (
             <ToolClusterRow
-              key={"cluster-" + i}
+              key={"cluster-" + i + (isComplete ? "-done" : "-live")}
               cluster={cluster}
               defaultExpanded={false}
               streamStatus={streamStatus}
