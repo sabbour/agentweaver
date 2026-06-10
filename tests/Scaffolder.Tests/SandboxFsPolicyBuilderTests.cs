@@ -67,23 +67,16 @@ public sealed class SandboxFsPolicyBuilderTests : IDisposable
     }
 
     [Fact]
-    public void SensitivePath_Ssh_IsInDeniedPaths()
+    public void DeniedPaths_IsAlwaysEmpty()
     {
         var policy = SandboxFsPolicyBuilder.Build(_sandboxRoot, []);
 
-        policy.DeniedPaths.Should().Contain(
-            p => p.EndsWith(".ssh", StringComparison.OrdinalIgnoreCase),
-            "the .ssh directory must always be in the denied path list as defense-in-depth");
-    }
-
-    [Fact]
-    public void SensitivePath_Gnupg_IsInDeniedPaths()
-    {
-        var policy = SandboxFsPolicyBuilder.Build(_sandboxRoot, []);
-
-        policy.DeniedPaths.Should().Contain(
-            p => p.EndsWith(".gnupg", StringComparison.OrdinalIgnoreCase),
-            "the .gnupg directory must always be in the denied path list as defense-in-depth");
+        // The sandbox allow-list (ReadWritePaths/ReadOnlyPaths) provides containment.
+        // An explicit deny list is redundant — on Windows it causes a deny-all fallback
+        // that blocks the workspace itself, and on all platforms the allow-list already
+        // restricts access to only what is explicitly granted.
+        policy.DeniedPaths.Should().BeEmpty(
+            "denied paths are not set; containment is enforced via the allow-list alone");
     }
 
     [Fact]

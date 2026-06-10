@@ -34,20 +34,6 @@ public static class SandboxFsPolicyBuilder
                 roPaths.Add(resolved);
         }
 
-        var deniedPaths = new List<string>();
-        if (OperatingSystem.IsWindows())
-        {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            deniedPaths.Add(Path.Combine(home, ".ssh"));
-            deniedPaths.Add(Path.Combine(home, ".gnupg"));
-        }
-        else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-        {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            deniedPaths.Add(Path.Combine(home, ".ssh"));
-            deniedPaths.Add(Path.Combine(home, ".gnupg"));
-        }
-
-        return new SandboxFsPolicy(rwPaths, roPaths, deniedPaths);
+        return new SandboxFsPolicy(rwPaths, roPaths, []);
     }
 }
