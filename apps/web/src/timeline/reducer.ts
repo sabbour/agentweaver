@@ -56,7 +56,23 @@ export function stripPathPrefix(value: string): string {
  * The path shown in the title has home/worktree prefix stripped.
  */
 export function deriveHumanTitle(toolName: string, args: Record<string, unknown>): string {
-  const pathArg = args['path'] ?? args['file'] ?? args['directory'] ?? args['dir'];
+  // report_intent: show the intent text directly — it IS the label
+  if (toolName === 'report_intent') {
+    const intent = args['intent'];
+    if (intent != null) return String(intent).slice(0, 120);
+    return 'Intent';
+  }
+
+  // run_command: always show the command, never the injected working directory
+  if (toolName === 'run_command') {
+    const cmd = args['command'] ?? args['cmd'];
+    if (cmd != null) return `Run command \u00b7 ${String(cmd).slice(0, 80)}`;
+    return 'Run command';
+  }
+
+  // For file/search tools, derive a display path from known path argument keys.
+  // Exclude 'directory' to avoid showing working directory injected for governance.
+  const pathArg = args['path'] ?? args['file'] ?? args['dir'];
   const pathStr = pathArg != null ? String(pathArg) : null;
   const displayPath = pathStr != null ? stripPathPrefix(pathStr) : null;
 
@@ -67,7 +83,6 @@ export function deriveHumanTitle(toolName: string, args: Record<string, unknown>
     create: 'Create file',
     delete_file: 'Delete file',
     list_directory: 'List directory',
-    run_command: 'Run command',
     search_files: 'Search files',
     grep_search: 'Search',
     file_search: 'Find files',
@@ -77,13 +92,6 @@ export function deriveHumanTitle(toolName: string, args: Record<string, unknown>
     apply_patch: 'Apply patch',
     move_file: 'Move file',
   };
-
-  // report_intent: show the intent text directly — it IS the label
-  if (toolName === 'report_intent') {
-    const intent = args['intent'];
-    if (intent != null) return String(intent).slice(0, 120);
-    return 'Intent';
-  }
 
   const label = knownTools[toolName] ?? toolName.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
