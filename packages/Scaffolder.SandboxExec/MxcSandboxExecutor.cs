@@ -158,7 +158,7 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
     {
         var policy = new SandboxPolicy
         {
-            Version = "0.6.0-alpha",
+            Version = "0.4.0-alpha",
             Network = new NetworkPolicy { AllowOutbound = false },
             Filesystem = BuildMxcFilesystemPolicy(command.FilesystemPolicy),
             TimeoutMs = command.TimeoutMs > 0 ? command.TimeoutMs : null,
