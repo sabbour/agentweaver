@@ -10,6 +10,7 @@ namespace Scaffolder.SandboxExec;
 internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
 {
     private readonly ILogger _logger;
+    private readonly string _lxcExecWslPath;
 
     public bool IsRealIsolation => true;
     public string BackendName => "wsl-lxc";
@@ -17,9 +18,10 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
     public bool HasNetworkWarning => false;
     public string? NetworkWarningMessage => null;
 
-    internal WslMxcSandboxExecutor(ILogger logger)
+    internal WslMxcSandboxExecutor(ILogger logger, string lxcExecWslPath)
     {
         _logger = logger;
+        _lxcExecWslPath = lxcExecWslPath;
     }
 
     internal static bool IsWslAvailable()
@@ -38,12 +40,77 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             using var proc = Process.Start(psi);
             if (proc is null) return false;
             proc.WaitForExit(5000);
-            return proc.ExitCode == 0;
+            if (proc.ExitCode != 0) return false;
+            // lxc-exec must be resolvable — either bundled (via WSL2 mount) or in WSL2 PATH.
+            return ResolveLxcExecWslPath() != null;
         }
         catch (Exception)
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Resolves the lxc-exec binary path as seen from inside WSL2. Checks:
+    ///   1. Assembly-adjacent bin/&lt;arch&gt;/lxc-exec (bundled Linux ELF, accessed via WSL2 /mnt/ mount).
+    ///   2. lxc-exec in WSL2 PATH (e.g. already installed at /usr/local/bin/lxc-exec).
+    /// Returns null when neither is available.
+    /// </summary>
+    internal static string? ResolveLxcExecWslPath()
+    {
+        // Priority 1: bundled Linux binary accessed via WSL2 /mnt/ mount.
+        var arch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+        {
+            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+            System.Runtime.InteropServices.Architecture.X64 => "x64",
+            _ => "x64",
+        };
+        var asmDir = System.IO.Path.GetDirectoryName(
+            System.Reflection.Assembly.GetExecutingAssembly().Location) ?? ".";
+        var winPath = System.IO.Path.Combine(asmDir, "bin", arch, "lxc-exec");
+        if (System.IO.File.Exists(winPath))
+        {
+            var wslPath = MapToLinuxPath(winPath);
+            // Verify WSL2 can actually reach and execute it.
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "wsl.exe",
+                    Arguments = $"-- bash -c \"chmod +x '{wslPath}' && '{wslPath}' --version 2>/dev/null; echo ok\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using var proc = Process.Start(psi);
+                if (proc is null) goto tryPath;
+                proc.WaitForExit(8000);
+                var output = proc.StandardOutput.ReadToEnd();
+                if (output.Contains("ok")) return wslPath;
+            }
+            catch { /* fall through */ }
+        }
+
+        tryPath:
+        // Priority 2: lxc-exec in WSL2 PATH.
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "wsl.exe",
+                Arguments = "-- which lxc-exec",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var proc = Process.Start(psi);
+            if (proc is null) return null;
+            var path = proc.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit(3000);
+            return proc.ExitCode == 0 && !string.IsNullOrEmpty(path) ? path : null;
+        }
+        catch { return null; }
     }
 
     // Maps a Windows absolute path to its WSL2 /mnt/<drive>/... equivalent.
@@ -108,7 +175,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             var psi = new ProcessStartInfo
             {
                 FileName = "wsl.exe",
-                Arguments = $"-- lxc-exec --experimental --config-base64 {b64}",
+                Arguments = $"-- '{_lxcExecWslPath}' --experimental --config-base64 {b64}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

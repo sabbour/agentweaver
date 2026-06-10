@@ -19,8 +19,9 @@ public static class SandboxExecutorFactory
             if (MxcSandboxExecutor.TryCreate(logger, out var mxc))
                 return mxc!;
 
-            if (WslMxcSandboxExecutor.IsWslAvailable())
-                return new WslMxcSandboxExecutor(logger);
+            var lxcPath = WslMxcSandboxExecutor.ResolveLxcExecWslPath();
+            if (lxcPath != null)
+                return new WslMxcSandboxExecutor(logger, lxcPath);
         }
 
         if (OperatingSystem.IsLinux())
