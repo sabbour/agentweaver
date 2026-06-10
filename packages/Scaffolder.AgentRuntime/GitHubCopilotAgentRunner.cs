@@ -228,7 +228,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = BuildPermissionHandler(governance, runId, EmitToolCallOnce, EmitToolErrorOnce),
+            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
@@ -331,24 +331,77 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private PermissionRequestHandler BuildPermissionHandler(
         SandboxGovernance governance,
         string runId,
+        string workingDirectory,
         Action<string, string, object?> emitToolCallOnce,
         Action<string, string> emitToolErrorOnce)
     {
         return (request, invocation) =>
         {
-            // Custom external tools registered in SessionConfig.Tools are invoked by the SDK
-            // and fire OnPermissionRequest with PermissionRequestCustomTool. They govern
-            // themselves inline — approve here so the tool lambda's own EvaluateToolCall runs.
+            // Custom external tools registered in SessionConfig.Tools fire OnPermissionRequest
+            // with PermissionRequestCustomTool. Run governance against the tool name + args
+            // from the request — same two-layer check as native tools — before approving.
+            // The inline EvaluateToolCall inside each tool lambda is a second defense-in-depth
+            // layer, not the primary gate.
             if (request is PermissionRequestCustomTool customTool)
             {
-                var customCallId = customTool.ToolCallId ?? Guid.NewGuid().ToString("n");
-                emitToolCallOnce(customCallId, customTool.ToolName ?? "custom-tool", null);
-                _logger.LogDebug(
-                    "Custom tool approved for execution — Tool={ToolName}", customTool.ToolName);
-                return Task.FromResult(new PermissionRequestResult
+                var realCustomCallId = customTool.ToolCallId;
+                var customCallId = realCustomCallId ?? Guid.NewGuid().ToString("n");
+                var toolName = customTool.ToolName ?? "unknown";
+                try
                 {
-                    Kind = PermissionRequestResultKind.Approved,
-                });
+                    // Deserialize the JSON args blob. Stamp tool_name first so it cannot be
+                    // overridden by a model-supplied key (Seraph hardening).
+                    var args = new Dictionary<string, object>();
+                    if (customTool.Args is System.Text.Json.JsonElement argsJson &&
+                        argsJson.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        foreach (var prop in argsJson.EnumerateObject())
+                            args[prop.Name] = prop.Value;
+                    }
+                    args["tool_name"] = toolName;  // overwrite after deserialization
+
+                    // Shell tools need "directory" for SandboxPolicyBackend to validate cwd.
+                    if (toolName == "run_command" && !args.ContainsKey("directory"))
+                        args["directory"] = workingDirectory;
+
+                    // Emit tool.call only when we hold the real ToolCallId — mirrors the native
+                    // path dedup logic. Approved custom tools emit their call via the SDK lifecycle
+                    // (ExternalToolRequestedEvent). Denied calls never reach the lifecycle so we
+                    // emit the call+error pair below regardless of whether we have a real ID.
+                    if (realCustomCallId is not null)
+                        emitToolCallOnce(customCallId, toolName, args);
+
+                    var (allowed, reason) = governance.EvaluateToolCall(
+                        agentId: $"did:mesh:scaffolder:copilot:{runId}",
+                        toolName: toolName,
+                        args: args,
+                        _logger);
+
+                    if (!allowed)
+                    {
+                        emitToolCallOnce(customCallId, toolName, args);
+                        emitToolErrorOnce(customCallId, reason ?? "Operation denied by sandbox policy.");
+                    }
+
+                    return Task.FromResult(new PermissionRequestResult
+                    {
+                        Kind = allowed
+                            ? PermissionRequestResultKind.Approved
+                            : PermissionRequestResultKind.Rejected,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Permission handler exception for custom tool (fail-closed deny) — Tool={ToolName} RunId={RunId}",
+                        toolName, runId);
+                    emitToolCallOnce(customCallId, toolName, null);
+                    emitToolErrorOnce(customCallId, "Operation denied: internal error evaluating sandbox policy.");
+                    return Task.FromResult(new PermissionRequestResult
+                    {
+                        Kind = PermissionRequestResultKind.Rejected,
+                    });
+                }
             }
 
             // The real SDK ToolCallId correlates this handler's events with the streaming
