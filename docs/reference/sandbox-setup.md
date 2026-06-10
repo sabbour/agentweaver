@@ -63,6 +63,11 @@ Each project's sandbox policy lives at `.scaffolder/settings.yml` in the project
 
 sandbox:
   shell_enabled: true
+  # Allow outbound network access inside the sandbox.
+  # Default: false. Scaffolders defaults to blocked for security;
+  # Copilot CLI defaults to true. Set to true only when agents need
+  # external package downloads (e.g. npm install, go get).
+  network_enabled: false
   allowed_repository_roots: []
   destructive_command_patterns:
     - rm -rf
@@ -104,6 +109,7 @@ Content-Type: application/json
 {
   "repository_path": "C:/path/to/repo",
   "shell_enabled": true,
+  "network_enabled": false,
   "require_approval_for_all_shell": false,
   "destructive_command_patterns": ["rm -rf", "del /s", "format ", "mkfs", "dd if="],
   "allowed_repository_roots": [],

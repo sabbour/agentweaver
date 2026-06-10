@@ -183,7 +183,14 @@ Expected output:
 
 ### Policy version
 
-`MxcSandboxExecutor` pins `SandboxPolicy.Version = "0.4.0-alpha"` when calling `MxcSdk.SpawnSandboxAsync`. This routes to the AppContainer fallback tier and does not require ViVeTool velocity keys (61389575, 61155944). Do not change this version until the base-container tier is confirmed available on all target hosts.
+`MxcSandboxExecutor` pins `SandboxPolicy.Version = "0.5.0-alpha"` when calling `MxcSdk.SpawnSandboxAsync`. This schema provides improved path normalization over `0.4.0-alpha` while still routing to the AppContainer fallback tier. `ClearPolicyOnExit = true` is always set so AppContainer ACL grants are cleaned up on process exit.
+
+At executor construction (once per process start), `SandboxPolicyEnrichment.BuildForWindows()` calls three `PolicyDiscovery` helpers from the mxc SDK:
+- `GetAvailableToolsPolicy` — minimal PATH-based tool directories (excludes paths already accessible to ALL_APPLICATION_PACKAGES)
+- `GetUserProfilePolicy` — safe user-profile directories (LocalAppData\Programs subdirectories, not the full home directory)
+- `GetTemporaryFilesPolicy` — the platform temp directory as read-write
+
+These enrichment paths are merged into the sandbox filesystem policy on every command, replacing the need for broad mounts.
 
 ### SDK execution path
 
