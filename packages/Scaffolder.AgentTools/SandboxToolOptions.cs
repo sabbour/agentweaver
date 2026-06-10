@@ -12,4 +12,13 @@ public sealed record SandboxToolOptions(
     /// If empty, only the working directory is accessible.
     /// </summary>
     public string[] AllowedRepositoryRoots { get; init; } = [];
+
+    /// <summary>
+    /// Command patterns that require human approval before execution.
+    /// Matched case-insensitively after whitespace normalization.
+    /// </summary>
+    public string[] DestructiveCommandPatterns { get; init; } = [];
+
+    /// <summary>When true, ALL shell commands require human approval (not just destructive ones).</summary>
+    public bool RequireApprovalForAllShell { get; init; } = false;
 }

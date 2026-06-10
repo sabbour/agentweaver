@@ -14,6 +14,8 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
     public bool IsRealIsolation => true;
     public string BackendName => "wsl-lxc";
     public string SelectionReason => "WSL2 with lxc-exec isolation.";
+    public bool HasNetworkWarning => false;
+    public string? NetworkWarningMessage => null;
 
     internal WslMxcSandboxExecutor(ILogger logger)
     {

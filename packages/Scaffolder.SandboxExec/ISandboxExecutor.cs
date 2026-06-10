@@ -15,6 +15,16 @@ public interface ISandboxExecutor
     /// <summary>Reason string from the platform probe or selection logic.</summary>
     string SelectionReason { get; }
 
+    /// <summary>
+    /// True when this executor is running with unrestricted network access and
+    /// cannot enforce a network allowlist (Windows gap — F5).
+    /// Callers should emit a sandbox.warning event when this is true.
+    /// </summary>
+    bool HasNetworkWarning { get; }
+
+    /// <summary>Warning message when HasNetworkWarning is true. Null otherwise.</summary>
+    string? NetworkWarningMessage { get; }
+
     /// <summary>Buffered one-shot execution.</summary>
     Task<SandboxExecResult> ExecuteAsync(SandboxCommand command, CancellationToken ct = default);
 

@@ -19,6 +19,8 @@ internal sealed class LinuxNativeMxcSandboxExecutor : ISandboxExecutor
     public bool IsRealIsolation => true;
     public string BackendName => "lxc-native-linux";
     public string SelectionReason => $"Native Linux lxc-exec at {_lxcExecPath}.";
+    public bool HasNetworkWarning => false;
+    public string? NetworkWarningMessage => null;
 
     internal LinuxNativeMxcSandboxExecutor(ILogger logger)
     {

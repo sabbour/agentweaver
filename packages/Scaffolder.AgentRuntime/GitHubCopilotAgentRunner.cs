@@ -196,11 +196,17 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = _executor.BackendName, isRealIsolation = _executor.IsRealIsolation, reason = _executor.SelectionReason });
+        if (_executor.HasNetworkWarning)
+        {
+            Emit("sandbox.warning", new { category = "network-open", message = _executor.NetworkWarningMessage, backend = _executor.BackendName });
+        }
 
         var toolOptions = new SandboxToolOptions(
             ShellEnabled: _sandboxOptions.ShellEnabled)
         {
             AllowedRepositoryRoots = _sandboxOptions.AllowedRepositoryRoots,
+            DestructiveCommandPatterns = _sandboxOptions.DestructiveCommandPatterns,
+            RequireApprovalForAllShell = _sandboxOptions.RequireApprovalForAllShell,
         };
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
@@ -212,7 +218,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             Redactor: redactor,
             Options: toolOptions,
             EvaluateToolCall: (toolName, args) => governance.EvaluateToolCall(agentId, toolName, new Dictionary<string, object>(args), _logger),
-            Logger: _logger);
+            Logger: _logger,
+            EmitEvent: Emit);
 
         var sessionConfig = new SessionConfig
         {

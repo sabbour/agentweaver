@@ -83,6 +83,10 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = _executor.BackendName, isRealIsolation = _executor.IsRealIsolation, reason = _executor.SelectionReason });
+        if (_executor.HasNetworkWarning)
+        {
+            Emit("sandbox.warning", new { category = "network-open", message = _executor.NetworkWarningMessage, backend = _executor.BackendName });
+        }
 
         var chatClient = _chatClient ?? _factory!.CreateChatClient();
         var fileTools = new SandboxedFileTools(workingDirectory);
@@ -94,6 +98,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
             ShellEnabled: _sandboxOptions.ShellEnabled)
         {
             AllowedRepositoryRoots = _sandboxOptions.AllowedRepositoryRoots,
+            DestructiveCommandPatterns = _sandboxOptions.DestructiveCommandPatterns,
+            RequireApprovalForAllShell = _sandboxOptions.RequireApprovalForAllShell,
         };
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
@@ -105,7 +111,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
             Redactor: redactor,
             Options: toolOptions,
             EvaluateToolCall: (toolName, args) => governance.EvaluateToolCall(agentId, toolName, new Dictionary<string, object>(args), _logger),
-            Logger: _logger);
+            Logger: _logger,
+            EmitEvent: Emit);
         var toolFunctions = SandboxToolRegistry.Build(toolContext);
         var tools = toolFunctions.Cast<AITool>().ToList();
 

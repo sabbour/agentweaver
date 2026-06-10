@@ -24,4 +24,6 @@ public sealed record SandboxToolContext(
     /// Backed by SandboxGovernance.EvaluateToolCall in production.
     /// </summary>
     Func<string, IReadOnlyDictionary<string, object>, (bool Allowed, string? Reason)> EvaluateToolCall,
-    ILogger Logger);
+    ILogger Logger,
+    /// <summary>Optional: emits a run event. Null in test/CLI contexts.</summary>
+    Action<string, object>? EmitEvent = null);

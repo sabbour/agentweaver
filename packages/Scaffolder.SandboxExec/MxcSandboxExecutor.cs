@@ -17,6 +17,10 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
     public bool IsRealIsolation => true;
     public string BackendName => "processcontainer";
     public string SelectionReason { get; }
+    public bool HasNetworkWarning => OperatingSystem.IsWindows();
+    public string? NetworkWarningMessage => OperatingSystem.IsWindows()
+        ? "Sandbox running with unrestricted network on Windows (allowlist enforcement unavailable). Data exfiltration surface is open."
+        : null;
 
     private MxcSandboxExecutor(string selectionReason, string binaryPath, ILogger logger)
     {

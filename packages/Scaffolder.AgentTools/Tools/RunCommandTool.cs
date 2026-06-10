@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Scaffolder.SandboxExec;
 
 namespace Scaffolder.AgentTools.Tools;
@@ -24,6 +25,33 @@ internal sealed class RunCommandTool : ISandboxTool
                 var (allowed, reason) = ctx.EvaluateToolCall(Name, govArgs);
                 if (!allowed) return $"Error: {reason}";
 
+                // HITL gate: destructive commands require operator approval before execution.
+                // TODO(T017-api): implement POST /api/runs/{id}/shell-approvals to expose
+                // approval/denial to operators and unblock the pending model turn.
+                if (ctx.Options.RequireApprovalForAllShell || IsDestructivePattern(command, ctx.Options.DestructiveCommandPatterns))
+                {
+                    var requestId = Guid.NewGuid().ToString("n")[..8];
+                    var commandHash = Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(
+                            System.Text.Encoding.UTF8.GetBytes(command)))[..16];
+
+                    ctx.Logger.LogWarning(
+                        "Shell HITL approval required — requestId={RequestId} commandLength={Length} commandHash={Hash}",
+                        requestId, command.Length, commandHash);
+
+                    ctx.EmitEvent?.Invoke("shell.approval_required", new
+                    {
+                        requestId,
+                        commandLength = command.Length,
+                        commandHash,
+                        message = "Shell command requires operator approval before execution.",
+                    });
+
+                    return $"This command requires operator approval before it can execute " +
+                           $"(request ID: {requestId}). The operator has been notified. " +
+                           $"Please retry after approval is granted.";
+                }
+
                 var fsPolicy = SandboxFsPolicyBuilder.Build(ctx.SandboxRoot, ctx.Options.AllowedRepositoryRoots);
                 var cmd = new SandboxCommand(command, ctx.WorkingDirectory, null, fsPolicy, timeout_ms ?? ctx.Options.DefaultTimeoutMs);
                 var result = await ctx.Executor.ExecuteAsync(cmd, ct);
@@ -38,4 +66,25 @@ internal sealed class RunCommandTool : ISandboxTool
                 return string.Join("\n", parts);
             },
             Name, "Run a shell command inside the sandbox.");
+
+    private static bool IsDestructivePattern(string command, string[] patterns)
+    {
+        if (patterns.Length == 0) return false;
+
+        // Normalize whitespace before matching so simple bypass variants
+        // (double spaces, split flags) are caught. The mxc filesystem policy
+        // remains the primary enforcement layer.
+        var normalized = System.Text.RegularExpressions.Regex.Replace(
+            command.Trim(), @"\s+", " ",
+            System.Text.RegularExpressions.RegexOptions.None,
+            TimeSpan.FromSeconds(1))
+            .ToLowerInvariant();
+
+        return patterns.Any(p =>
+        {
+            var np = System.Text.RegularExpressions.Regex.Replace(
+                p.Trim(), @"\s+", " ").ToLowerInvariant();
+            return normalized.Contains(np, StringComparison.Ordinal);
+        });
+    }
 }

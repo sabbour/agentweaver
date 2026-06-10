@@ -11,6 +11,8 @@ internal sealed class PassthroughExecutor : ISandboxExecutor
     public bool IsRealIsolation => false;
     public string BackendName => "passthrough-deny";
     public string SelectionReason { get; }
+    public bool HasNetworkWarning => false;
+    public string? NetworkWarningMessage => null;
 
     internal PassthroughExecutor(string reason)
     {

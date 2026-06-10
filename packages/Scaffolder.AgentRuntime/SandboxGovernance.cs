@@ -162,7 +162,7 @@ internal sealed class SandboxGovernance : IDisposable
             var allowed = agtResult.Allowed && directCheck.Allowed;
             var reason = allowed ? null : (directCheck.Reason ?? agtResult.Reason ?? "Denied by sandbox policy.");
 
-            // Layer C: Shell-specific triple gate (only for run_command)
+            // Layer C: Shell-specific gate (only for run_command)
             if (allowed && toolName == "run_command")
             {
                 if (!_executor.IsRealIsolation)
@@ -174,17 +174,6 @@ internal sealed class SandboxGovernance : IDisposable
                 {
                     allowed = false;
                     reason = "Shell execution denied: Sandbox:ShellEnabled is false.";
-                }
-                else
-                {
-                    var command = args.TryGetValue("command", out var cmd) ? cmd?.ToString() ?? "" : "";
-                    if (_options.RequireApprovalForAllShell || IsDestructiveCommand(command, _options.DestructiveCommandPatterns))
-                    {
-                        // TODO T017: wire MAF HITL here. For now, log and deny.
-                        logger.LogWarning("Destructive command pattern matched — denied pending HITL integration. Command length: {Length}", command.Length);
-                        allowed = false;
-                        reason = "Command requires human approval (destructive pattern matched). HITL integration pending.";
-                    }
                 }
             }
 
@@ -212,26 +201,6 @@ internal sealed class SandboxGovernance : IDisposable
             logger.LogError(ex, "Governance evaluation exception (fail-closed deny) — AgentId={AgentId}", agentId);
             return (false, "Internal governance error (fail-closed).");
         }
-    }
-
-    private static bool IsDestructiveCommand(string command, string[] patterns)
-    {
-        // Heuristic defense-in-depth: normalize whitespace before matching so simple
-        // bypass variants (double spaces, unicode whitespace, split flags like "rm -r -f")
-        // are caught. NOTE: this is NOT a complete solution — a real shell parser would be
-        // required. The mxc filesystem policy is the primary enforcement layer.
-        var normalized = System.Text.RegularExpressions.Regex.Replace(
-            command.Trim(), @"\s+", " ",
-            System.Text.RegularExpressions.RegexOptions.None,
-            TimeSpan.FromSeconds(1));
-        normalized = normalized.ToLowerInvariant();
-
-        return patterns.Any(p =>
-        {
-            var normalizedPattern = System.Text.RegularExpressions.Regex.Replace(
-                p.Trim(), @"\s+", " ").ToLowerInvariant();
-            return normalized.Contains(normalizedPattern, StringComparison.Ordinal);
-        });
     }
 
     public void Dispose() => Kernel.Dispose();

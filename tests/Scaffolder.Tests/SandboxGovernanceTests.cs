@@ -343,6 +343,8 @@ public sealed class SandboxGovernanceTests : IDisposable
         public bool IsRealIsolation => true;
         public string BackendName => "fake-real";
         public string SelectionReason => "test";
+        public bool HasNetworkWarning => false;
+        public string? NetworkWarningMessage => null;
 
         public Task<SandboxExecResult> ExecuteAsync(SandboxCommand c, CancellationToken ct = default) =>
             Task.FromResult(new SandboxExecResult(0, "ok", "", false, false));
