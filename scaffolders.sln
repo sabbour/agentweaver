@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Scaffolder.Tests", "tests\S
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Scaffolder.SandboxExec", "packages\Scaffolder.SandboxExec\Scaffolder.SandboxExec.csproj", "{08DB3B0D-9477-49C7-8D90-479E3828A0E7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Scaffolder.AgentTools", "packages\Scaffolder.AgentTools\Scaffolder.AgentTools.csproj", "{6853D040-55F5-4E45-B27D-C5CD07269A0B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -115,6 +117,18 @@ Global
 		{08DB3B0D-9477-49C7-8D90-479E3828A0E7}.Release|x64.Build.0 = Release|Any CPU
 		{08DB3B0D-9477-49C7-8D90-479E3828A0E7}.Release|x86.ActiveCfg = Release|Any CPU
 		{08DB3B0D-9477-49C7-8D90-479E3828A0E7}.Release|x86.Build.0 = Release|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Debug|x64.Build.0 = Debug|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Debug|x86.Build.0 = Debug|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Release|x64.ActiveCfg = Release|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Release|x64.Build.0 = Release|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Release|x86.ActiveCfg = Release|Any CPU
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -127,5 +141,6 @@ Global
 		{EF676E73-9938-441B-B0AB-25A1214AB417} = {809F86A1-1C4C-B159-0CD4-DF9D33D876CE}
 		{53F2B14F-5D58-4120-BCF5-AE691B1ACC10} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{08DB3B0D-9477-49C7-8D90-479E3828A0E7} = {809F86A1-1C4C-B159-0CD4-DF9D33D876CE}
+		{6853D040-55F5-4E45-B27D-C5CD07269A0B} = {809F86A1-1C4C-B159-0CD4-DF9D33D876CE}
 	EndGlobalSection
 EndGlobal

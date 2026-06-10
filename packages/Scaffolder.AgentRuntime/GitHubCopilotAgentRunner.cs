@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.ComponentModel;
 using System.Text;
 using System.Threading.Channels;
 using GitHub.Copilot.SDK;
@@ -8,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Scaffolder.AgentRuntime.Providers;
+using Scaffolder.AgentTools;
 using Scaffolder.Domain;
 using Scaffolder.SandboxExec;
 using Scaffolder.SandboxFs;
@@ -192,9 +192,27 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var fileTools = new SandboxedFileTools(workingDirectory);
         var searchTools = new SandboxedSearchTools(workingDirectory);
         var redactor = SandboxOutputRedactor.Default;
+        var agentId = $"did:mesh:scaffolder:copilot:{runId}";
 
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = _executor.BackendName, isRealIsolation = _executor.IsRealIsolation, reason = _executor.SelectionReason });
+
+        var toolOptions = new SandboxToolOptions(
+            ShellEnabled: _sandboxOptions.ShellEnabled)
+        {
+            AllowedRepositoryRoots = _sandboxOptions.AllowedRepositoryRoots,
+        };
+        var toolContext = new SandboxToolContext(
+            AgentId: agentId,
+            WorkingDirectory: workingDirectory,
+            SandboxRoot: workingDirectory,
+            Executor: _executor,
+            FileTools: fileTools,
+            SearchTools: searchTools,
+            Redactor: redactor,
+            Options: toolOptions,
+            EvaluateToolCall: (toolName, args) => governance.EvaluateToolCall(agentId, toolName, new Dictionary<string, object>(args), _logger),
+            Logger: _logger);
 
         var sessionConfig = new SessionConfig
         {
@@ -202,7 +220,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
-            Tools = BuildCopilotCustomTools(fileTools, searchTools, _executor, redactor, workingDirectory, _sandboxOptions, governance, runId, ct),
+            Tools = SandboxToolRegistry.Build(toolContext),
             AvailableTools = NativeToolExclusion.AvailableToolNames(_executor.IsRealIsolation && _sandboxOptions.ShellEnabled),
             ExcludedTools = NativeToolExclusion.ExcludedToolNames(),
         };
@@ -279,166 +297,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             deltaCount, result.Length);
 
         return result;
-    }
-
-    /// <summary>
-    /// Builds the 9 custom AI tools registered in SessionConfig.Tools. Custom tools
-    /// are called directly by the SDK — they do NOT fire OnPermissionRequest. Every
-    /// tool (including read/search/intent) calls governance.EvaluateToolCall for audit
-    /// and policy enforcement before execution. Path containment is enforced as
-    /// defense-in-depth by SandboxedFileTools/SandboxedSearchTools internals.
-    /// </summary>
-    private static List<AIFunction> BuildCopilotCustomTools(
-        SandboxedFileTools fileTools,
-        SandboxedSearchTools searchTools,
-        ISandboxExecutor executor,
-        SandboxOutputRedactor redactor,
-        string workingDirectory,
-        SandboxOptions options,
-        SandboxGovernance governance,
-        string runId,
-        CancellationToken ct)
-    {
-        var tools = new List<AIFunction>();
-        var agentId = $"did:mesh:scaffolder:copilot:{runId}";
-        {
-            tools.Add(AIFunctionFactory.Create(
-                async (
-                    [Description("Shell command to execute inside the sandbox.")] string command,
-                    [Description("Timeout in milliseconds (default 30000).")] int? timeout_ms) =>
-                {
-                    // Custom tools bypass OnPermissionRequest — evaluate governance inline.
-                    var govArgs = new Dictionary<string, object>
-                    {
-                        ["command"] = command,
-                        ["directory"] = workingDirectory,
-                    };
-                    var (allowed, denyReason) = governance.EvaluateToolCall(
-                        $"did:mesh:scaffolder:copilot:{runId}", "run_command", govArgs, governance.Logger);
-                    if (!allowed) return $"Error: {denyReason}";
-
-                    var fsPolicy = SandboxFsPolicyBuilder.Build(workingDirectory, options.AllowedRepositoryRoots);
-                    var cmd = new SandboxCommand(command, workingDirectory, null, fsPolicy, timeout_ms ?? 30_000);
-                    var result = await executor.ExecuteAsync(cmd, ct);
-                    var stdout = redactor.Redact(result.Stdout);
-                    var stderr = redactor.Redact(result.Stderr);
-                    return $"exit_code: {result.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
-                },
-                "run_command", "Run a shell command inside the sandbox."));
-        }
-
-        tools.Add(AIFunctionFactory.Create(
-            async ([Description("File path.")] string path) =>
-            {
-                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "read_file" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "read_file", govArgs, governance.Logger);
-                if (!allowed) return $"Error: {denyReason}";
-                var (content, failure) = await fileTools.ReadFileAsync(path, ct);
-                return failure is not null ? $"Error: {failure.Message}" : content!;
-            },
-            "read_file", "Read the contents of a file."));
-
-        tools.Add(AIFunctionFactory.Create(
-            async (
-                [Description("File path.")] string path,
-                [Description("String to replace (must be unique).")] string old_str,
-                [Description("Replacement string.")] string new_str) =>
-            {
-                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "str_replace_editor" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "str_replace_editor", govArgs, governance.Logger);
-                if (!allowed) return $"Error: {denyReason}";
-                var (_, failure) = await fileTools.StrReplaceAsync(path, old_str, new_str, ct);
-                return failure is not null ? $"Error: {failure.Message}" : "ok";
-            },
-            "str_replace_editor", "Replace a unique string in a file."));
-
-        tools.Add(AIFunctionFactory.Create(
-            async ([Description("Patch in Copilot CLI patch grammar.")] string patch) =>
-            {
-                // apply_patch is in KnownPreValidatedTools — backend allows without path check.
-                // Governance call still runs for the audit trail.
-                var govArgs = new Dictionary<string, object> { ["tool_name"] = "apply_patch" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "apply_patch", govArgs, governance.Logger);
-                if (!allowed) return $"Error: {denyReason}";
-                var result = await fileTools.ApplyPatchAsync(patch, ct);
-                if (!result.Success) return $"Error: {result.Reason}";
-                return "Patch applied.";
-            },
-            "apply_patch", "Apply a patch."));
-
-        tools.Add(AIFunctionFactory.Create(
-            async (
-                [Description("File path.")] string path,
-                [Description("File content.")] string file_text) =>
-            {
-                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "create" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "create", govArgs, governance.Logger);
-                if (!allowed) return $"Error: {denyReason}";
-                var (_, failure) = await fileTools.CreateFileAsync(path, file_text, ct);
-                return failure is not null ? $"Error: {failure.Message}" : "ok";
-            },
-            "create", "Create a new file."));
-
-        tools.Add(AIFunctionFactory.Create(
-            async (
-                [Description("File path.")] string path,
-                [Description("Content to write.")] string content) =>
-            {
-                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = "edit" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "edit", govArgs, governance.Logger);
-                if (!allowed) return $"Error: {denyReason}";
-                var (_, failure) = await fileTools.WriteFileAsync(path, content, ct);
-                return failure is not null ? $"Error: {failure.Message}" : "ok";
-            },
-            "edit", "Write content to a file."));
-
-        tools.Add(AIFunctionFactory.Create(
-            async (
-                [Description("Search pattern.")] string pattern,
-                [Description("Is regex.")] bool? is_regex,
-                [Description("File glob filter.")] string? include_pattern,
-                [Description("Max results.")] int? max_results) =>
-            {
-                // grep_search is in KnownSearchTools — backend allows unconditionally.
-                // Governance call still runs for the audit trail.
-                var govArgs = new Dictionary<string, object> { ["tool_name"] = "grep_search" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "grep_search", govArgs, governance.Logger);
-                if (!allowed) return $"Error: {denyReason}";
-                var matches = await searchTools.GrepSearchAsync(pattern, is_regex ?? false, include_pattern, max_results ?? 50, false, ct);
-                if (matches.Count == 0) return "No matches found.";
-                return string.Join("\n", matches.Select(m => $"{m.RelativePath}:{m.LineNumber}: {m.LineContent}"));
-            },
-            "grep_search", "Search for a pattern in files."));
-
-        tools.Add(AIFunctionFactory.Create(
-            async (
-                [Description("Glob pattern.")] string pattern,
-                [Description("Max results.")] int? max_results) =>
-            {
-                // file_search is in KnownSearchTools — backend allows unconditionally.
-                // Governance call still runs for the audit trail.
-                var govArgs = new Dictionary<string, object> { ["tool_name"] = "file_search" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "file_search", govArgs, governance.Logger);
-                if (!allowed) return $"Error: {denyReason}";
-                var paths = await searchTools.FileSearchAsync(pattern, max_results ?? 200, ct);
-                if (paths.Count == 0) return "No files found.";
-                return string.Join("\n", paths);
-            },
-            "file_search", "Find files matching a glob pattern."));
-
-        tools.Add(AIFunctionFactory.Create(
-            ([Description("Current intent or plan step.")] string intent) =>
-            {
-                var govArgs = new Dictionary<string, object> { ["tool_name"] = "report_intent" };
-                var (allowed, denyReason) = governance.EvaluateToolCall(agentId, "report_intent", govArgs, governance.Logger);
-                if (!allowed) return Task.FromResult<object?>($"Error: {denyReason}");
-                // UI-only observability — no filesystem or shell action.
-                _ = intent;
-                return Task.FromResult<object?>("ok");
-            },
-            "report_intent", "Report the agent's current intent."));
-
-        return tools;
     }
 
     /// <summary>

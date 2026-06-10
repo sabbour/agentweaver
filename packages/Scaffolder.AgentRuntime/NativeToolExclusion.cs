@@ -1,3 +1,5 @@
+using Scaffolder.AgentTools;
+
 namespace Scaffolder.AgentRuntime;
 
 /// <summary>
@@ -7,21 +9,9 @@ namespace Scaffolder.AgentRuntime;
 /// </summary>
 internal static class NativeToolExclusion
 {
-    // The canonical names of our 8 unconditional custom tools
-    private static readonly string[] UnconditionalTools =
-    [
-        "read_file", "grep_search", "file_search",
-        "str_replace_editor", "apply_patch", "create", "edit",
-        "report_intent",
-    ];
-
-    private const string ShellToolName = "run_command";
-
     /// <summary>Returns the AvailableTools allowlist. Conditionally includes run_command.</summary>
     public static string[] AvailableToolNames(bool includeShell) =>
-        includeShell
-            ? [ShellToolName, ..UnconditionalTools]
-            : UnconditionalTools;
+        SandboxToolRegistry.GetToolNames(includeShell);
 
     /// <summary>
     /// Returns native tool names to block as defense-in-depth (ExcludedTools).

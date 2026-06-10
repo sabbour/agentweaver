@@ -151,7 +151,7 @@ public sealed class FoundryStreamingTests : IDisposable
         // FunctionCallContent delivered in a single streaming update (ToChatResponse assembles it).
         // Using write_file so the tool actually succeeds within the sandbox.
         var client = new FakeStreamingChatClient(
-            new TurnSetup([FunctionCallUpdate("c4", "write_file",
+            new TurnSetup([FunctionCallUpdate("c4", "edit",
                 new() { ["path"] = "out.txt", ["content"] = "hello world" })]),
             new TurnSetup([TextUpdate("Wrote the file.")]));
 
@@ -162,7 +162,7 @@ public sealed class FoundryStreamingTests : IDisposable
         // tool.call carries correct arguments
         var toolCall = events.First(e => e.Type == "tool.call");
         Prop(toolCall.Payload, "callId").Should().Be("c4");
-        Prop(toolCall.Payload, "toolName").Should().Be("write_file");
+        Prop(toolCall.Payload, "toolName").Should().Be("edit");
 
         // tool.result (not tool.error) confirms the call succeeded
         events.Should().Contain(e => e.Type == "tool.result");
@@ -304,7 +304,7 @@ public sealed class FoundryStreamingTests : IDisposable
         // Turn 0 has a tool call; turn 1 is a plain text final turn.
         // tool.call and tool.result for turn 0 must appear BEFORE that turn's agent.turn.end.
         var client = new FakeStreamingChatClient(
-            new TurnSetup([FunctionCallUpdate("c10", "write_file",
+            new TurnSetup([FunctionCallUpdate("c10", "edit",
                 new() { ["path"] = "a.txt", ["content"] = "hi" })]),
             new TurnSetup([TextUpdate("Done.")]));
 
