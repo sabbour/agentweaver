@@ -247,8 +247,10 @@ public sealed class FoundryAgentRunner : IAgentRunner
                 if (!allowed)
                 {
                     var denyMsg = "Error: operation denied by sandbox policy.";
-                    Emit("tool.error", new { callId = call.CallId, errorMessage = reason ?? denyMsg });
-                    toolResults.Add(new FunctionResultContent(call.CallId, denyMsg));
+                    var modelReason = reason ?? denyMsg;
+                    Emit("tool.error", new { callId = call.CallId, errorMessage = modelReason });
+                    // Pass the actual reason to the model so it can correct its arguments and retry.
+                    toolResults.Add(new FunctionResultContent(call.CallId, modelReason));
                     continue;
                 }
 

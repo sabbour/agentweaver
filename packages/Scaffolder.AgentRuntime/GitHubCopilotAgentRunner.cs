@@ -336,6 +336,21 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     {
         return (request, invocation) =>
         {
+            // Custom external tools registered in SessionConfig.Tools are invoked by the SDK
+            // and fire OnPermissionRequest with PermissionRequestCustomTool. They govern
+            // themselves inline — approve here so the tool lambda's own EvaluateToolCall runs.
+            if (request is PermissionRequestCustomTool customTool)
+            {
+                var customCallId = customTool.ToolCallId ?? Guid.NewGuid().ToString("n");
+                emitToolCallOnce(customCallId, customTool.ToolName ?? "custom-tool", null);
+                _logger.LogDebug(
+                    "Custom tool approved for execution — Tool={ToolName}", customTool.ToolName);
+                return Task.FromResult(new PermissionRequestResult
+                {
+                    Kind = PermissionRequestResultKind.Approved,
+                });
+            }
+
             // The real SDK ToolCallId correlates this handler's events with the streaming
             // tool-execution lifecycle (which carries the same id). When it can't be read, we
             // fall back to a synthetic id that is local to this handler — the lifecycle cannot
