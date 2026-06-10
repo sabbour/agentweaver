@@ -138,6 +138,23 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
             return false;
         }
 
+        // The BaseContainer tier (Tier 1) requires ViVeTool velocity keys 61389575 and
+        // 61155944 on Windows 11 25H2+. The probe reports the tier from the installed DLL
+        // but cannot verify whether the velocity keys are active — that only fails at
+        // runtime with E_NOTIMPL. Rather than silently selecting an executor that will
+        // fail every run, refuse BaseContainer and let the factory fall through to WSL2
+        // (which provides real lxc isolation and works unconditionally on this OS build).
+        // Users who enable the velocity keys will get BaseContainer back: the probe will
+        // return a higher tier (AppContainerBfs or AppContainerDacl) instead.
+        if (support.IsolationTier == Sabbour.Mxc.Sdk.IsolationTier.BaseContainer)
+        {
+            logger.LogInformation(
+                "mxc probe reports base-container tier which requires ViVeTool velocity keys " +
+                "61389575+61155944 (not enabled on this host). Falling through to WSL2 backend. " +
+                "Enable the velocity keys to use BaseContainer.");
+            return false;
+        }
+
         executor = new MxcSandboxExecutor(
             support.Reason ?? "processcontainer supported",
             binaryPath,
