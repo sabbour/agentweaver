@@ -39,10 +39,22 @@ internal sealed class LinuxNativeMxcSandboxExecutor : ISandboxExecutor
         if (!OperatingSystem.IsLinux())
             return null;
 
+        // System-installed paths (absolute, never PATH).
         var candidates = new[]
         {
             "/usr/local/bin/lxc-exec",
             "/usr/bin/lxc-exec",
+            // Assembly-adjacent bundled binary (shipped with Scaffolder.SandboxExec).
+            Path.Combine(
+                Path.GetDirectoryName(typeof(LinuxNativeMxcSandboxExecutor).Assembly.Location) ?? ".",
+                "bin",
+                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+                {
+                    System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+                    System.Runtime.InteropServices.Architecture.X64   => "x64",
+                    _ => "x64",
+                },
+                "lxc-exec"),
         };
 
         foreach (var candidate in candidates)

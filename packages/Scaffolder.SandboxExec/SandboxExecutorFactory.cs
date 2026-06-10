@@ -26,8 +26,21 @@ public static class SandboxExecutorFactory
 
         if (OperatingSystem.IsLinux())
         {
-            if (LinuxNativeMxcSandboxExecutor.IsLxcAvailable() != null)
+            // Ask the SDK what is available on this Linux host.
+            // Preference: lxc (if lxc-exec is available) > bubblewrap.
+            var lxcPath = LinuxNativeMxcSandboxExecutor.IsLxcAvailable();
+            if (lxcPath != null)
+            {
+                logger.LogInformation("SandboxExecutorFactory: selected lxc-native-linux ({Path}).", lxcPath);
                 return new LinuxNativeMxcSandboxExecutor(logger);
+            }
+
+            // lxc-exec not found — fall back to bubblewrap if available.
+            if (LinuxBwrapExecutor.IsBwrapAvailable())
+            {
+                logger.LogInformation("SandboxExecutorFactory: selected linux-bwrap.");
+                return new LinuxBwrapExecutor(logger);
+            }
         }
 
         var reason = OperatingSystem.IsWindows()
