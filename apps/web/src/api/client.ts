@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SubmitRunRequest, SubmitRunResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -39,6 +39,15 @@ export class ScaffolderApiClient {
 
   getRun(runId: string): Promise<RunDetail> {
     return this.request<RunDetail>('GET', `/api/runs/${encodeURIComponent(runId)}`);
+  }
+
+  getSandboxPolicy(repositoryPath: string): Promise<SandboxPolicy> {
+    const encoded = encodeURIComponent(repositoryPath);
+    return this.request<SandboxPolicy>('GET', `/api/sandbox-policy?repository_path=${encoded}`);
+  }
+
+  updateSandboxPolicy(policy: Pick<SandboxPolicy, 'repository_path' | 'shell_enabled' | 'direct' | 'network_enabled'>): Promise<SandboxPolicy> {
+    return this.request<SandboxPolicy>('PUT', '/api/sandbox-policy', policy);
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

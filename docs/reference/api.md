@@ -36,6 +36,7 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/runs/{id}` | Get current run state |
 | `GET` | `/api/runs/{id}/stream` | Stream ordered run events over SSE |
 | `POST` | `/api/runs/{id}/review` | Record an approve or decline decision |
+| `POST` | `/api/runs/{id}/shell-approvals` | Approve a pending destructive shell command |
 
 ### POST /api/runs
 
@@ -183,11 +184,185 @@ After a server restart, if no workflow checkpoint is available to resume, the en
 
 See [events.md](events.md) for the event types emitted on the stream for each outcome.
 
+## Sandbox policy endpoints
+
+These endpoints read and write the per-project sandbox execution policy stored at `.scaffolder/settings.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
+
+### GET /api/sandbox-policy
+
+Returns the sandbox policy for the given repository path by reading `{repository_path}/.scaffolder/settings.yml`. If the file does not exist, returns the default policy.
+
+Query parameters:
+
+| Parameter | Required | Description |
+| --- | --- | --- |
+| `repository_path` | Yes | Absolute path to the repository |
+
+Response `200 OK`:
+
+```json
+{
+  "repository_path": "C:/repos/myproject",
+  "shell_enabled": true,
+  "allowed_repository_roots": [],
+  "destructive_command_patterns": [
+    "rm -rf", "del /s", "format ", "mkfs", "dd if=",
+    "git push --force", "git reset --hard"
+  ],
+  "require_approval_for_all_shell": false,
+  "redact_pii": true,
+  "max_output_bytes": 4194304
+}
+```
+
+Missing or malformed `repository_path` returns `400 Bad Request`.
+
+### PUT /api/sandbox-policy
+
+Creates or replaces the sandbox policy for a repository path by writing `{repository_path}/.scaffolder/settings.yml`. The entire policy is replaced on each PUT; there is no partial-update merge. After a PUT, the operator should commit the updated file to the project repository to record the change in version history.
+
+Request body (all fields required):
+
+```json
+{
+  "repository_path": "C:/repos/myproject",
+  "shell_enabled": true,
+  "allowed_repository_roots": [],
+  "destructive_command_patterns": ["rm -rf", "del /s"],
+  "require_approval_for_all_shell": false,
+  "redact_pii": true,
+  "max_output_bytes": 4194304
+}
+```
+
+Response `200 OK` returns the stored policy. Validation failures return `400 Bad Request`.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `repository_path` | string | — | Required. Lookup key. Must be an absolute path. |
+| `shell_enabled` | bool | `true` | When `false`, `run_command` is excluded from the model's tool list for this project and denied by the governance gate. |
+| `allowed_repository_roots` | string[] | `[]` | Additional paths mounted read-only inside the sandbox. |
+| `destructive_command_patterns` | string[] | see default | Command substrings that trigger a `shell.approval_required` pause. |
+| `require_approval_for_all_shell` | bool | `false` | When `true`, every shell command requires approval regardless of pattern matching. |
+| `redact_pii` | bool | `true` | When `true`, emails and IP addresses are removed from command output in addition to secrets. |
+| `max_output_bytes` | int | `4194304` | Output cap in bytes. Exceeded output is truncated and marked `output_truncated: true`. |
+
 ## Event types on the stream
 
 The full event taxonomy — types, payload fields, and per-event descriptions — is in [events.md](events.md).
 
 The `done` frame (no `id` field) signals the end of the stream.
+
+### Sandbox event types
+
+The following event types are added by the sandboxed execution feature. They appear on the existing SSE stream alongside the base event types.
+
+#### sandbox.selected
+
+Emitted at run start after the executor selection probe completes. Present on every run.
+
+```json
+{
+  "backend": "processcontainer",
+  "is_real_isolation": true,
+  "reason": "processcontainer supported"
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `backend` | string | One of `processcontainer`, `wsl-lxc`, `lxc-native-linux`, `passthrough-deny` |
+| `is_real_isolation` | bool | `true` when the backend provides real process isolation. `false` for `passthrough-deny`. Shell execution is denied when `false`. |
+| `reason` | string | Human-readable reason from the platform probe or selection logic |
+
+#### sandbox.warning
+
+Emitted when the selected executor has a known limitation that operators should be aware of.
+
+```json
+{
+  "category": "network-unrestricted",
+  "message": "Sandbox running with unrestricted network on Windows (allowlist enforcement unavailable). Data exfiltration surface is open.",
+  "backend": "processcontainer"
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `category` | string | Currently only `network-unrestricted` — the Windows AppContainer backend cannot enforce a network allowlist |
+| `message` | string | Human-readable description |
+| `backend` | string | The backend that produced the warning |
+
+#### shell.approval_required
+
+Emitted when a `run_command` invocation matches a destructive command pattern or when `require_approval_for_all_shell` is `true`. The run pauses pending human approval.
+
+```json
+{
+  "request_id": "apr-f36800fd",
+  "command_length": 42,
+  "command_hash": "sha256:a1b2c3...",
+  "message": "Command matches destructive pattern 'rm -rf'. Approve to proceed."
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `request_id` | string | Unique ID for this approval request. Used by the (pending) approval endpoint. |
+| `command_length` | int | Length of the command line in characters |
+| `command_hash` | string | SHA-256 of the command line, prefixed with `sha256:` |
+| `message` | string | Human-readable reason the approval was triggered |
+
+The approval API endpoint (`POST /api/runs/{id}/shell-approvals`) records operator approval for a pending shell command. Use the `commandHash` from the `shell.approval_required` event as the request body's `command_hash`. Once approved, the model may retry the command and it will execute immediately.
+
+```http
+POST /api/runs/{id}/shell-approvals
+Content-Type: application/json
+
+{ "command_hash": "a1b2c3d4e5f6a1b2" }
+```
+
+Response `200 OK`:
+
+```json
+{ "run_id": "f36800fd-...", "command_hash": "a1b2c3d4e5f6a1b2", "approved": true }
+```
+
+Returns `400 Bad Request` when `command_hash` is missing or empty.
+
+#### tool.output
+
+Emitted for each chunk of stdout or stderr produced by a sandboxed `run_command` invocation during streaming execution.
+
+```json
+{
+  "stream": "stdout",
+  "data": "Hello from sandbox\n"
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `stream` | string | `"stdout"` or `"stderr"` |
+| `data` | string | A line or chunk of output from the command. PII and secrets are redacted per the sandbox policy. |
+
+#### tool.exec_result
+
+Reports the terminal outcome of a `run_command` invocation. **Planned — not yet emitted separately from `tool.result`.**
+
+```json
+{
+  "exit_code": 0,
+  "timed_out": false,
+  "output_truncated": false
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `exit_code` | int | Process exit code. `-1` when the command timed out or was denied. |
+| `timed_out` | bool | `true` when the command was terminated because it exceeded the configured time limit |
+| `output_truncated` | bool | `true` when captured output exceeded `max_output_bytes` and was cut off |
 
 ## Persistence
 

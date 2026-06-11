@@ -106,6 +106,26 @@ public sealed record RetriableReviewErrorBody
     public required string Status { get; init; }
 }
 
+/// <summary>Sandbox policy for a repository.</summary>
+public sealed record SandboxPolicy
+{
+    [JsonPropertyName("repository_path")]
+    public required string RepositoryPath { get; init; }
+
+    [JsonPropertyName("shell_enabled")]
+    public required bool ShellEnabled { get; init; }
+}
+
+/// <summary>Request body for PUT /api/sandbox-policy.</summary>
+public sealed record SetSandboxPolicyRequest
+{
+    [JsonPropertyName("repository_path")]
+    public required string RepositoryPath { get; init; }
+
+    [JsonPropertyName("shell_enabled")]
+    public required bool ShellEnabled { get; init; }
+}
+
 /// <summary>Shared serialization settings for the CLI.</summary>
 public static class JsonConfig
 {

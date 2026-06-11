@@ -101,12 +101,14 @@ public sealed class CopilotMappingTests : IDisposable
     }
 
     [Fact]
-    public void MapToToolCall_ShellRequest_MapsToShell()
+    public void MapToToolCall_ShellRequest_MapsToRunCommand()
     {
         var request = MakeShellRequest("dotnet build");
         var (toolName, args) = GitHubCopilotAgentRunner.MapToToolCall(request);
 
-        toolName.Should().Be("shell");
+        // Shell requests now map to 'run_command' so the allow-shell-sandboxed
+        // YAML rule fires instead of the explicit deny-native-shell rule.
+        toolName.Should().Be("run_command");
         args["command"].Should().Be("dotnet build");
     }
 }

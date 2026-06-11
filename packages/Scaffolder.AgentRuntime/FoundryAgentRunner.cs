@@ -1,10 +1,11 @@
-using System.ComponentModel;
 using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Providers;
+using Scaffolder.AgentTools;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
 using Scaffolder.SandboxFs;
 
 namespace Scaffolder.AgentRuntime;
@@ -13,8 +14,12 @@ public sealed class FoundryAgentRunner : IAgentRunner
 {
     private const string SystemPrompt =
         """
-        You are a file-editing assistant. Complete the given task by using the read_file, write_file, and list_directory tools.
-        Work step by step. When you are done, produce a final message summarising what you changed and why.
+        You are a coding and file editing assistant. Complete the given task using the available tools.
+
+        Call report_intent(intent) before each major step to describe what you are about to do.
+        report_intent does NOT write files — always follow it with the actual tool call in the same response.
+
+        Work step by step. Do not produce a final summary until ALL writes are done.
         Do not ask clarifying questions — proceed with your best judgement.
         """;
 
@@ -22,24 +27,44 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
     private readonly FoundryClientFactory? _factory;
     private readonly IChatClient? _chatClient;
+    private readonly ISandboxExecutor _executor;
+    private readonly ISandboxPolicyStore _sandboxPolicyStore;
+    private readonly IShellApprovalStore _approvalStore;
     private readonly ILogger<FoundryAgentRunner> _logger;
 
-    public FoundryAgentRunner(FoundryClientFactory factory, ILogger<FoundryAgentRunner> logger)
+    public FoundryAgentRunner(
+        FoundryClientFactory factory,
+        ISandboxExecutor executor,
+        ISandboxPolicyStore sandboxPolicyStore,
+        IShellApprovalStore approvalStore,
+        ILogger<FoundryAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
+        _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <summary>Internal constructor for unit tests — injects a pre-built IChatClient directly.</summary>
-    internal FoundryAgentRunner(IChatClient chatClient, ILogger<FoundryAgentRunner> logger)
+    internal FoundryAgentRunner(
+        IChatClient chatClient,
+        ISandboxExecutor executor,
+        ISandboxPolicyStore sandboxPolicyStore,
+        IShellApprovalStore approvalStore,
+        ILogger<FoundryAgentRunner> logger)
     {
         _chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
+        _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<string> ExecuteAsync(
         string task,
         string workingDirectory,
+        string repositoryPath,
         ModelSource modelSource,
         string runId,
         ChannelWriter<RunEvent>? stream,
@@ -53,12 +78,65 @@ public sealed class FoundryAgentRunner : IAgentRunner
         }
 
         // --- Per-run governance kernel (shared mechanism — FR-032) ---
-        using var governance = SandboxGovernance.Create(workingDirectory, runId, _logger);
+        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(repositoryPath, ct);
+        // direct: true in settings.yml → bypass all sandbox machinery, run commands on host shell.
+        var executor = sandboxPolicy.Direct
+            ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
+            : _executor;
+        using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
         var agentId = $"did:mesh:scaffolder:foundry:{runId}";
+
+        // Emit sandbox + debug info — visible in the run stream and UI.
+        Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
+
+        Emit("agent.system_prompt", new { provider = "foundry", prompt = SystemPrompt });
+        var shellIncluded = (executor.IsRealIsolation || executor.BackendName == "direct") && sandboxPolicy.ShellEnabled;
+        Emit("agent.tools", new { provider = "foundry", tools = SandboxToolRegistry.GetToolNames(shellIncluded) });
+        if (executor.HasNetworkWarning)
+        {
+            Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
+        }
+        if (sandboxPolicy.NetworkEnabled)
+        {
+            Emit("sandbox.warning", new
+            {
+                category = "network-open",
+                message = "Sandbox is running with outbound network enabled (network_enabled: true in .scaffolder/settings.yml). " +
+                          "Network access is intentional but increases the attack surface. " +
+                          "Ensure this is required for the agent's task.",
+                backend = executor.BackendName
+            });
+        }
 
         var chatClient = _chatClient ?? _factory!.CreateChatClient();
         var fileTools = new SandboxedFileTools(workingDirectory);
-        var tools = BuildTools(fileTools);
+        var searchTools = new SandboxedSearchTools(workingDirectory);
+        var redactor = SandboxOutputRedactor.Default;
+        var sandboxRoot = workingDirectory;
+
+        var toolOptions = new SandboxToolOptions(
+            ShellEnabled: sandboxPolicy.ShellEnabled)
+        {
+            AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
+            DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
+            RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            NetworkEnabled = sandboxPolicy.NetworkEnabled,
+        };
+        var toolContext = new SandboxToolContext(
+            AgentId: agentId,
+            WorkingDirectory: workingDirectory,
+            SandboxRoot: sandboxRoot,
+            Executor: executor,
+            FileTools: fileTools,
+            SearchTools: searchTools,
+            Redactor: redactor,
+            Options: toolOptions,
+            Logger: _logger,
+            EmitEvent: Emit,
+            RunId: runId,
+            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash));
+        var toolFunctions = SandboxToolRegistry.Build(toolContext);
+        var tools = toolFunctions.Cast<AITool>().ToList();
 
         var messages = new List<ChatMessage>
         {
@@ -70,6 +148,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
         var sb = new StringBuilder();
         var completedNormally = false;
 
+        try
+        {
         for (var turn = 0; turn < MaxTurns; turn++)
         {
             Emit("agent.turn.start", new { turnId = turn.ToString() });
@@ -145,10 +225,21 @@ public sealed class FoundryAgentRunner : IAgentRunner
             {
                 Emit("tool.call", new { callId = call.CallId, toolName = call.Name, arguments = call.Arguments });
 
-                var tool = tools.OfType<AIFunction>().FirstOrDefault(t => t.Name == call.Name);
+                // Backward-compat aliases: GPT models have strong training on Copilot CLI's
+                // built-in tool names and may hallucinate them even when the schema says otherwise.
+                var resolvedName = call.Name switch
+                {
+                    "edit"        => "write_file",
+                    "create"      => "create_file",
+                    "view"        => "read_file",
+                    "write"       => "write_file",
+                    _ => call.Name,
+                };
+
+                var tool = tools.OfType<AIFunction>().FirstOrDefault(t => t.Name == resolvedName);
                 if (tool is null)
                 {
-                    var err = $"Unknown tool: {call.Name}";
+                    var err = $"Unknown tool: {call.Name}. Available tools: {string.Join(", ", tools.OfType<AIFunction>().Select(t => t.Name))}";
                     Emit("tool.error", new { callId = call.CallId, errorMessage = err });
                     toolResults.Add(new FunctionResultContent(call.CallId, err));
                     continue;
@@ -162,21 +253,52 @@ public sealed class FoundryAgentRunner : IAgentRunner
                         toolArgs[kvp.Key] = kvp.Value ?? "";
                 }
 
-                var (allowed, reason) = governance.EvaluateToolCall(agentId, call.Name, toolArgs, _logger);
+                // Inject working directory unconditionally so governance always sees our value,
+                // not a model-supplied one (prevents policy/execution mismatch).
+                if (resolvedName == "run_command")
+                    toolArgs["directory"] = workingDirectory;
+
+                if (resolvedName is "write_file" or "create_file" or "str_replace_editor" or "read_file")
+                {
+                    foreach (var alias in new[] { "file_path", "filename", "target", "file" })
+                    {
+                        if (!toolArgs.ContainsKey("path") &&
+                            toolArgs.TryGetValue(alias, out var aliasVal))
+                        {
+                            toolArgs["path"] = aliasVal;
+                            break;
+                        }
+                    }
+                }
+
+                var (allowed, reason) = governance.EvaluateToolCall(agentId, resolvedName, toolArgs, _logger);
 
                 if (!allowed)
                 {
+                    _logger.LogWarning(
+                        "Governance DENIED for tool {ToolName} (called as {CalledName}). ReceivedArgKeys=[{Keys}] Reason={Reason}",
+                        resolvedName,
+                        call.Name,
+                        string.Join(", ", toolArgs.Keys),
+                        reason);
                     var denyMsg = "Error: operation denied by sandbox policy.";
-                    Emit("tool.error", new { callId = call.CallId, errorMessage = reason ?? denyMsg });
-                    toolResults.Add(new FunctionResultContent(call.CallId, denyMsg));
+                    var modelReason = reason ?? denyMsg;
+                    Emit("tool.error", new { callId = call.CallId, errorMessage = modelReason });
+                    // Pass the actual reason to the model so it can correct its arguments and retry.
+                    toolResults.Add(new FunctionResultContent(call.CallId, modelReason));
                     continue;
                 }
 
                 // Governance passed — invoke the tool (SandboxedFileTools provides defense-in-depth)
+                // Governance passed — invoke with original call.Arguments (not the governance-enriched toolArgs)
                 string resultText;
                 try
                 {
-                    var fnArgs = new AIFunctionArguments(call.Arguments!);
+                    // Use toolArgs (which contains path-alias normalization and governance
+                    // injections) rather than call.Arguments (which has the original un-normalized
+                    // keys from the model), so read_file with file_path=X resolves correctly.
+                    var fnArgs = new AIFunctionArguments(
+                        toolArgs.ToDictionary(k => k.Key, k => (object?)k.Value));
                     var raw = await tool.InvokeAsync(fnArgs, ct);
                     resultText = raw?.ToString() ?? string.Empty;
                     Emit("tool.result", new { callId = call.CallId, content = resultText });
@@ -198,38 +320,11 @@ public sealed class FoundryAgentRunner : IAgentRunner
             Emit("run.failed", new { errorMessage = "Step limit reached." });
 
         return sb.ToString();
+        }
+        finally
+        {
+            _approvalStore.Clear(runId);
+        }
     }
 
-    private static List<AITool> BuildTools(SandboxedFileTools fileTools) =>
-    [
-        AIFunctionFactory.Create(
-            async ([Description("File path relative to the working directory.")] string path) =>
-            {
-                var (content, failure) = await fileTools.ReadFileAsync(path);
-                return failure is not null ? $"Error: {failure.Message}" : content!;
-            },
-            "read_file", "Read the contents of a file."),
-
-        AIFunctionFactory.Create(
-            async (
-                [Description("File path relative to the working directory.")] string path,
-                [Description("Content to write.")] string content) =>
-            {
-                var (_, failure) = await fileTools.WriteFileAsync(path, content);
-                return failure is not null ? $"Error: {failure.Message}" : "ok";
-            },
-            "write_file", "Write content to a file, creating it if it does not exist."),
-
-        AIFunctionFactory.Create(
-            async ([Description("Directory path relative to the working directory. Use \".\" for the root.")] string path) =>
-            {
-                var (entries, failure) = await fileTools.ListDirectoryAsync(path);
-                if (failure is not null) return $"Error: {failure.Message}";
-                var sb = new StringBuilder();
-                foreach (var entry in entries!)
-                    sb.AppendLine($"[{(entry.Kind == SandboxEntryKind.Directory ? "dir" : "file")}] {entry.Name}");
-                return sb.ToString();
-            },
-            "list_directory", "List the immediate contents of a directory."),
-    ];
 }

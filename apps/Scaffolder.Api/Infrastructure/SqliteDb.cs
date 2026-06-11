@@ -92,5 +92,6 @@ public sealed class SqliteDb
             step_count         INTEGER NOT NULL DEFAULT 0,
             diff               TEXT
         );
+
         """;
 }

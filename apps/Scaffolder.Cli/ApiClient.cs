@@ -123,4 +123,24 @@ public sealed class ApiClient
 
     /// <summary>Builds the SSE stream URL for a run.</summary>
     public string StreamUrl(string runId) => $"{_config.ApiUrl}/api/runs/{runId}/stream";
+
+    public async Task<SandboxPolicy> GetSandboxPolicyAsync(
+        string repositoryPath, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{_config.ApiUrl}/api/sandbox-policy?repository_path={Uri.EscapeDataString(repositoryPath)}", ct);
+        return await ReadJsonAsync<SandboxPolicy>(response, ct);
+    }
+
+    public async Task<SandboxPolicy> SetSandboxPolicyAsync(
+        SetSandboxPolicyRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Put, $"{_config.ApiUrl}/api/sandbox-policy")
+        {
+            Content = JsonContent.Create(request, options: JsonConfig.Options)
+        };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<SandboxPolicy>(response, ct);
+    }
 }

@@ -174,14 +174,15 @@ public sealed class RunWatchLoopService
 
         if (woe.Is<NoChangesOutput>(out _))
         {
+            // No-changes runs must not leak worktrees (Issue 5).
+            // Cleanup before status update ensures pollers see a clean directory.
+            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
+
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, "no_changes", CancellationToken.None).ConfigureAwait(false);
 
             var seq = entry.NextSequence();
             entry.Record(new RunEvent(seq, EventTypes.RunCompleted, new { result = "no_changes" }));
-
-            // No-changes runs must not leak worktrees (Issue 5).
-            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
             _streamStore.Complete(runId);
             return true;
@@ -201,14 +202,16 @@ public sealed class RunWatchLoopService
 
         if (woe.Is<ContentSafetyFailedOutput>())
         {
+            // Content-safety-failed runs must not leak worktrees (Issue 5).
+            // Cleanup must complete BEFORE status is set to "failed" so any poller
+            // that detects the terminal status observes a clean worktree directory.
+            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
+
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "content_safety", CancellationToken.None).ConfigureAwait(false);
 
             var seq = entry.NextSequence();
             entry.Record(new RunEvent(seq, EventTypes.RunFailed, new { reason = "content_safety" }));
-
-            // Content-safety-failed runs must not leak worktrees (Issue 5).
-            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
             _streamStore.Complete(runId);
             return true;

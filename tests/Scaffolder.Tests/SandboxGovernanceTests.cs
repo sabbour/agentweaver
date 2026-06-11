@@ -1,6 +1,9 @@
+using System.Runtime.CompilerServices;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using Scaffolder.Domain;
 using Scaffolder.AgentRuntime;
+using Scaffolder.SandboxExec;
 using Scaffolder.Tests.Helpers;
 
 namespace Scaffolder.Tests.Sandbox;
@@ -23,7 +26,7 @@ public sealed class SandboxGovernanceTests : IDisposable
         _sandboxRoot = Path.Combine(Path.GetTempPath(), $"sandbox-gov-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_sandboxRoot);
         _logger = new CapturingLogger();
-        _governance = SandboxGovernance.Create(_sandboxRoot, "test-run-001", _logger);
+        _governance = SandboxGovernance.Create(_sandboxRoot, "test-run-001", SandboxExecutorFactory.CreatePassthrough(), SandboxPolicy.Default(_sandboxRoot), _logger);
     }
 
     public void Dispose()
@@ -69,9 +72,9 @@ public sealed class SandboxGovernanceTests : IDisposable
 
     [Theory]
     [InlineData("read_file", "file.txt")]
-    [InlineData("list_directory", "subdir")]
     [InlineData("write_file", "output.cs")]
-    [InlineData("edit_file", "Program.cs")]
+    [InlineData("create_file", "Program.cs")]
+    [InlineData("str_replace_editor", "app.cs")]
     public void Allow_KnownTool_InSandboxRelativePath(string toolName, string relativePath)
     {
         var result = _governance.EvaluateToolCall(
@@ -83,12 +86,12 @@ public sealed class SandboxGovernanceTests : IDisposable
     }
 
     [Fact]
-    public void Allow_ListDirectory_SubdirectoryInSandbox()
+    public void Allow_WriteFile_SubdirectoryInSandbox()
     {
-        // list_directory on a subdirectory within the sandbox
+        // write_file on a path within a sandbox subdirectory
         var result = _governance.EvaluateToolCall(
-            AgentId, "list_directory",
-            new Dictionary<string, object> { ["path"] = "src" },
+            AgentId, "write_file",
+            new Dictionary<string, object> { ["path"] = "src/output.cs" },
             _logger);
 
         result.Allowed.Should().BeTrue();
@@ -256,7 +259,7 @@ public sealed class SandboxGovernanceTests : IDisposable
     public void Audit_AllowEntry_ContainsAgentIdAndResolvedPath()
     {
         var auditLogger = new CapturingLogger();
-        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", auditLogger);
+        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", SandboxExecutorFactory.CreatePassthrough(), SandboxPolicy.Default(_sandboxRoot), auditLogger);
 
         gov.EvaluateToolCall(AgentId, "read_file",
             new Dictionary<string, object> { ["path"] = "hello.txt" },
@@ -271,7 +274,7 @@ public sealed class SandboxGovernanceTests : IDisposable
     public void Audit_DenyEntry_ContainsAgentIdAndReason()
     {
         var auditLogger = new CapturingLogger();
-        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", auditLogger);
+        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-run", SandboxExecutorFactory.CreatePassthrough(), SandboxPolicy.Default(_sandboxRoot), auditLogger);
 
         gov.EvaluateToolCall(AgentId, "read_file",
             new Dictionary<string, object> { ["path"] = @"C:\evil.txt" },
@@ -286,7 +289,7 @@ public sealed class SandboxGovernanceTests : IDisposable
     {
         // Verify that the AGT kernel emits an audit event (wired via AuditEmitter.OnAll)
         var auditLogger = new CapturingLogger();
-        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-kernel", auditLogger);
+        using var gov = SandboxGovernance.Create(_sandboxRoot, "audit-kernel", SandboxExecutorFactory.CreatePassthrough(), SandboxPolicy.Default(_sandboxRoot), auditLogger);
 
         gov.EvaluateToolCall(AgentId, "read_file",
             new Dictionary<string, object> { ["path"] = "test.txt" },
@@ -297,20 +300,20 @@ public sealed class SandboxGovernanceTests : IDisposable
     }
 
     // ===================================================================
-    // I. Issue 3 — "." and "./" acceptance for list_directory
+    // I. Issue 3 — "." and "./" acceptance for write_file
     // ===================================================================
 
     [Theory]
     [InlineData(".")]
     [InlineData("./")]
-    public void Allow_ListDirectory_DotPath(string dotPath)
+    public void Allow_WriteFile_DotPath(string dotPath)
     {
         var result = _governance.EvaluateToolCall(
-            AgentId, "list_directory",
+            AgentId, "write_file",
             new Dictionary<string, object> { ["path"] = dotPath },
             _logger);
 
-        result.Allowed.Should().BeTrue($"list_directory with path \"{dotPath}\" should resolve to sandbox root and be allowed");
+        result.Allowed.Should().BeTrue($"write_file with path \"{dotPath}\" should resolve to sandbox root and be allowed");
     }
 
     [Theory]
@@ -325,5 +328,141 @@ public sealed class SandboxGovernanceTests : IDisposable
             _logger);
 
         result.Allowed.Should().BeTrue("governance should accept '.' as a valid contained path");
+    }
+
+    // ===================================================================
+    // T029 — run_command shell gate (C1 / C2)
+    // ===================================================================
+
+    /// <summary>
+    /// Fake executor that reports real isolation — allows testing Layer-C shell gate
+    /// without a live mxc binary.
+    /// </summary>
+    private sealed class FakeRealExecutor : ISandboxExecutor
+    {
+        public bool IsRealIsolation => true;
+        public string BackendName => "fake-real";
+        public string SelectionReason => "test";
+        public bool HasNetworkWarning => false;
+        public string? NetworkWarningMessage => null;
+
+        public Task<SandboxExecResult> ExecuteAsync(SandboxCommand c, CancellationToken ct = default) =>
+            Task.FromResult(new SandboxExecResult(0, "ok", "", false, false));
+
+        public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand c,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, "0");
+        }
+    }
+
+    [Fact]
+    public void RunCommand_WithRealIsolation_ShellEnabled_ValidDir_IsAllowed()
+    {
+        var opts = SandboxPolicy.Default(_sandboxRoot) with { ShellEnabled = true };
+        using var gov = SandboxGovernance.Create(
+            _sandboxRoot, "test-shell-allow", new FakeRealExecutor(), opts, _logger);
+
+        var result = gov.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object>
+            {
+                ["command"] = "echo hi",
+                ["directory"] = _sandboxRoot,
+            },
+            _logger);
+
+        result.Allowed.Should().BeTrue(
+            "run_command with real isolation, shell enabled, and a valid directory must be allowed");
+    }
+
+    [Fact]
+    public void RunCommand_WithPassthrough_DirectMode_IsAllowed()
+    {
+        // _governance uses PassthroughExecutor (BackendName = "direct") — direct mode bypasses
+        // the IsRealIsolation gate so run_command is allowed.
+        var result = _governance.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object>
+            {
+                ["command"] = "echo hi",
+                ["directory"] = _sandboxRoot,
+            },
+            _logger);
+
+        result.Allowed.Should().BeTrue(
+            "run_command must be allowed in direct mode (BackendName='direct') even without real isolation");
+    }
+
+    [Fact]
+    public void RunCommand_WithShellDisabled_IsDenied()
+    {
+        var opts = SandboxPolicy.Default(_sandboxRoot) with { ShellEnabled = false };
+        using var gov = SandboxGovernance.Create(
+            _sandboxRoot, "test-shell-disabled", new FakeRealExecutor(), opts, _logger);
+
+        var result = gov.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object>
+            {
+                ["command"] = "echo hi",
+                ["directory"] = _sandboxRoot,
+            },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "run_command must be denied when Sandbox:ShellEnabled is false");
+    }
+
+    [Fact]
+    public void RunCommand_MissingDirectory_IsDenied()
+    {
+        // No "directory" argument — SandboxPolicyBackend must deny this at Layer B.
+        var result = _governance.EvaluateToolCall(
+            AgentId, "run_command",
+            new Dictionary<string, object> { ["command"] = "echo hi" },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "run_command without a 'directory' argument must be denied by the sandbox backend");
+    }
+
+    [Fact]
+    public void NativeShell_IsAlwaysDenied()
+    {
+        // tool_name="shell" is the native shell bypass — must be denied regardless of executor.
+        var result = _governance.EvaluateToolCall(
+            AgentId, "shell",
+            new Dictionary<string, object> { ["command"] = "ls -la" },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "the native 'shell' tool must always be denied (C1 resolution)");
+    }
+
+    [Fact]
+    public void ReadFile_WithValidPath_IsAllowed()
+    {
+        var result = _governance.EvaluateToolCall(
+            AgentId, "read_file",
+            new Dictionary<string, object> { ["path"] = "readme.md" },
+            _logger);
+
+        result.Allowed.Should().BeTrue(
+            "read_file with a valid relative in-sandbox path must be allowed");
+    }
+
+    [Fact]
+    public void UnknownTool_IsDenied()
+    {
+        var result = _governance.EvaluateToolCall(
+            AgentId, "unknown_custom_tool",
+            new Dictionary<string, object> { ["path"] = "file.txt" },
+            _logger);
+
+        result.Allowed.Should().BeFalse(
+            "tools not in the allowlist must be denied by the default-deny policy");
     }
 }

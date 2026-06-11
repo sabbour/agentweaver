@@ -56,7 +56,23 @@ export function stripPathPrefix(value: string): string {
  * The path shown in the title has home/worktree prefix stripped.
  */
 export function deriveHumanTitle(toolName: string, args: Record<string, unknown>): string {
-  const pathArg = args['path'] ?? args['file'] ?? args['directory'] ?? args['dir'];
+  // report_intent: show the intent text directly — it IS the label
+  if (toolName === 'report_intent') {
+    const intent = args['intent'];
+    if (intent != null) return String(intent).slice(0, 120);
+    return 'Intent';
+  }
+
+  // run_command: always show the command, never the injected working directory
+  if (toolName === 'run_command') {
+    const cmd = args['command'] ?? args['cmd'];
+    if (cmd != null) return `Run command \u00b7 ${String(cmd).slice(0, 80)}`;
+    return 'Run command';
+  }
+
+  // For file/search tools, derive a display path from known path argument keys.
+  // Exclude 'directory' to avoid showing working directory injected for governance.
+  const pathArg = args['path'] ?? args['file'] ?? args['dir'];
   const pathStr = pathArg != null ? String(pathArg) : null;
   const displayPath = pathStr != null ? stripPathPrefix(pathStr) : null;
 
@@ -64,11 +80,16 @@ export function deriveHumanTitle(toolName: string, args: Record<string, unknown>
     read_file: 'Read file',
     write_file: 'Write file',
     create_file: 'Create file',
+    create: 'Create file',
     delete_file: 'Delete file',
     list_directory: 'List directory',
-    run_command: 'Run command',
     search_files: 'Search files',
+    grep_search: 'Search',
+    file_search: 'Find files',
     edit_file: 'Edit file',
+    edit: 'Edit file',
+    str_replace_editor: 'Edit file',
+    apply_patch: 'Apply patch',
     move_file: 'Move file',
   };
 
@@ -77,7 +98,10 @@ export function deriveHumanTitle(toolName: string, args: Record<string, unknown>
   if (displayPath) return `${label} \u00b7 ${displayPath}`;
   // For run_command, show the command arg instead
   const cmdArg = args['command'] ?? args['cmd'];
-  if (cmdArg != null) return `${label} \u00b7 ${String(cmdArg).slice(0, 60)}`;
+  if (cmdArg != null) return `${label} \u00b7 ${String(cmdArg).slice(0, 80)}`;
+  // For search tools, show the pattern
+  const patternArg = args['pattern'] ?? args['query'];
+  if (patternArg != null) return `${label} \u00b7 ${String(patternArg).slice(0, 60)}`;
   return label;
 }
 
@@ -353,6 +377,15 @@ function processEvent(
       const s = closeOpenTurn(state);
       return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
     }
+
+    case 'tool.output':
+    case 'tool.exec_result':
+    case 'shell.approval_required':
+    case 'sandbox.selected':
+    case 'sandbox.warning':
+    case 'agent.system_prompt':
+    case 'agent.tools':
+      return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
 
     default:
       return state;

@@ -20,16 +20,12 @@ internal static class CliEntryPoint
             return args.Length == 0 ? 1 : 0;
         }
 
-        if (!string.Equals(args[0], "run", StringComparison.Ordinal))
+        var topCommand = args[0];
+
+        if (!string.Equals(topCommand, "run", StringComparison.Ordinal) &&
+            !string.Equals(topCommand, "sandbox-policy", StringComparison.Ordinal))
         {
             AnsiConsole.MarkupLine($"[red]Unknown command:[/] {Markup.Escape(args[0])}");
-            PrintUsage();
-            return 1;
-        }
-
-        if (args.Length < 2)
-        {
-            AnsiConsole.MarkupLine("[red]Missing subcommand for 'run'.[/]");
             PrintUsage();
             return 1;
         }
@@ -46,10 +42,23 @@ internal static class CliEntryPoint
         }
 
         var api = new ApiClient(config);
-        var subcommand = args[1];
+        var subcommand = args.Length >= 2 ? args[1] : string.Empty;
 
         try
         {
+            if (string.Equals(topCommand, "sandbox-policy", StringComparison.Ordinal))
+            {
+                return await HandleSandboxPolicyAsync(api, subcommand, args, cts.Token);
+            }
+
+            // run subcommands
+            if (string.IsNullOrEmpty(subcommand))
+            {
+                AnsiConsole.MarkupLine("[red]Missing subcommand for 'run'.[/]");
+                PrintUsage();
+                return 1;
+            }
+
             switch (subcommand)
             {
                 case "submit":
@@ -99,6 +108,64 @@ internal static class CliEntryPoint
         }
     }
 
+    private static async Task<int> HandleSandboxPolicyAsync(
+        ApiClient api, string subcommand, string[] args, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(subcommand) || IsHelp(subcommand))
+        {
+            AnsiConsole.MarkupLine("[red]Missing subcommand for 'sandbox-policy'.[/]");
+            AnsiConsole.MarkupLine("Usage:");
+            AnsiConsole.MarkupLine("  scaffolder sandbox-policy get --repository-path <path>");
+            AnsiConsole.MarkupLine("  scaffolder sandbox-policy set --repository-path <path> --shell-enabled true|false");
+            return 1;
+        }
+
+        var repoPath = GetFlag(args, "--repository-path");
+        if (string.IsNullOrEmpty(repoPath))
+        {
+            AnsiConsole.MarkupLine("[red]Missing required flag --repository-path.[/]");
+            return 1;
+        }
+
+        switch (subcommand)
+        {
+            case "get":
+                return await SandboxPolicyCommands.GetAsync(api, Path.GetFullPath(repoPath), ct);
+
+            case "set":
+            {
+                var shellEnabledStr = GetFlag(args, "--shell-enabled");
+                if (string.IsNullOrEmpty(shellEnabledStr))
+                {
+                    AnsiConsole.MarkupLine("[red]Missing required flag --shell-enabled (true|false).[/]");
+                    return 1;
+                }
+
+                if (!bool.TryParse(shellEnabledStr, out var shellEnabled))
+                {
+                    AnsiConsole.MarkupLine($"[red]Invalid value for --shell-enabled:[/] {Markup.Escape(shellEnabledStr)} (expected true or false)");
+                    return 1;
+                }
+
+                return await SandboxPolicyCommands.SetAsync(api, Path.GetFullPath(repoPath), shellEnabled, ct);
+            }
+
+            default:
+                AnsiConsole.MarkupLine($"[red]Unknown subcommand for 'sandbox-policy':[/] {Markup.Escape(subcommand)}");
+                return 1;
+        }
+    }
+
+    private static string? GetFlag(string[] args, string flag)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
+                return args[i + 1];
+        }
+        return null;
+    }
+
     private static bool TryGetRunId(string[] args, out string runId)
     {
         if (args.Length >= 3 && !string.IsNullOrWhiteSpace(args[2]))
@@ -130,6 +197,9 @@ internal static class CliEntryPoint
         AnsiConsole.WriteLine("  scaffolder run watch <run-id>    Stream events for a run");
         AnsiConsole.WriteLine("  scaffolder run review <run-id>   Review a run's diff and approve or decline");
         AnsiConsole.WriteLine("  scaffolder run show <run-id>     Show run details");
+        AnsiConsole.WriteLine();
+        AnsiConsole.WriteLine("  scaffolder sandbox-policy get --repository-path <path>");
+        AnsiConsole.WriteLine("  scaffolder sandbox-policy set --repository-path <path> --shell-enabled true|false");
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("Environment:");
         AnsiConsole.WriteLine("  SCAFFOLDER_API_URL   API base URL (default: http://localhost:5000)");

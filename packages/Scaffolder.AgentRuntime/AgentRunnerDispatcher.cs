@@ -17,14 +17,15 @@ public sealed class AgentRunnerDispatcher : IAgentRunner
     public Task<string> ExecuteAsync(
         string task,
         string workingDirectory,
+        string repositoryPath,
         ModelSource modelSource,
         string runId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct) =>
         modelSource switch
         {
-            ModelSource.GitHubCopilot => _copilot.ExecuteAsync(task, workingDirectory, modelSource, runId, stream, ct),
-            ModelSource.MicrosoftFoundry => _foundry.ExecuteAsync(task, workingDirectory, modelSource, runId, stream, ct),
+            ModelSource.GitHubCopilot => _copilot.ExecuteAsync(task, workingDirectory, repositoryPath, modelSource, runId, stream, ct),
+            ModelSource.MicrosoftFoundry => _foundry.ExecuteAsync(task, workingDirectory, repositoryPath, modelSource, runId, stream, ct),
             _ => throw new NotSupportedException($"Model source '{modelSource}' is not configured."),
         };
 }

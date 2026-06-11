@@ -6,7 +6,10 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Providers;
+using Scaffolder.AgentTools;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
+using Scaffolder.SandboxFs;
 
 namespace Scaffolder.AgentRuntime;
 
@@ -25,6 +28,21 @@ namespace Scaffolder.AgentRuntime;
 public sealed class GitHubCopilotAgentRunner : IAgentRunner
 {
     /// <summary>
+    /// System prompt appended as a system message via AsAIAgent(instructions:...).
+    /// Tells the Claude model to use our custom tools instead of native CLI tools.
+    /// </summary>
+    private const string CopilotSystemPrompt =
+        """
+        You are a coding and file editing assistant. Complete the given task using the available tools.
+
+        Call report_intent(intent) before each major step to describe what you are about to do.
+        report_intent does NOT write files — always follow it with the actual tool call in the same response.
+
+        Work step by step. Do not produce a final summary until ALL writes are done.
+        Do not ask clarifying questions — proceed with your best judgement.
+        """;
+
+    /// <summary>
     /// SDK-internal tools whose lifecycle events are suppressed from the run stream.
     /// These are housekeeping operations (not sandboxed file/shell ops) that would
     /// confuse the frontend if rendered as ToolCallCards. This static allowlist is the
@@ -34,22 +52,37 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         new(StringComparer.OrdinalIgnoreCase) { "report_intent", "glob" };
 
     private readonly GitHubCopilotClientFactory _factory;
+    private readonly ISandboxExecutor _executor;
+    private readonly ISandboxPolicyStore _sandboxPolicyStore;
+    private readonly IShellApprovalStore _approvalStore;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
-    public GitHubCopilotAgentRunner(GitHubCopilotClientFactory factory, ILogger<GitHubCopilotAgentRunner> logger)
+    public GitHubCopilotAgentRunner(
+        GitHubCopilotClientFactory factory,
+        ISandboxExecutor executor,
+        ISandboxPolicyStore sandboxPolicyStore,
+        IShellApprovalStore approvalStore,
+        ILogger<GitHubCopilotAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
+        _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct)
     {
         _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, runId={RunId}, streamIsNull={StreamIsNull}",
             workingDirectory, task.Length, runId, stream is null);
         _logger.LogDebug("Task content preview: {TaskPreview}", task.Length > 100 ? task[..100] : task);
 
         // --- Governance kernel (per-run) ---
-        using var governance = SandboxGovernance.Create(workingDirectory, runId, _logger);
+        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(repositoryPath, ct);
+        var executor = sandboxPolicy.Direct
+            ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
+            : _executor;
+        using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
@@ -96,9 +129,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         void Emit(string type, object payload)
         {
             if (stream is null) return;
+            var nonNullStream = stream;
             lock (emitLock)
             {
-                if (!stream.TryWrite(new RunEvent(++seq, type, payload)))
+                if (!nonNullStream.TryWrite(new RunEvent(++seq, type, payload)))
                     _logger.LogWarning("TryWrite false for {EventType}", type);
             }
         }
@@ -176,19 +210,72 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             }
         }
 
+        var fileTools = new SandboxedFileTools(workingDirectory);
+        var searchTools = new SandboxedSearchTools(workingDirectory);
+        var redactor = SandboxOutputRedactor.Default;
+        var agentId = $"did:mesh:scaffolder:copilot:{runId}";
+
+        // --- Emit sandbox backend selection event (T019) ---
+        Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
+
+        // Emit configuration snapshot for debuggability.
+        Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt });
+        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)" } });
+        if (executor.HasNetworkWarning)
+        {
+            Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
+        }
+        if (sandboxPolicy.NetworkEnabled)
+        {
+            Emit("sandbox.warning", new
+            {
+                category = "network-open",
+                message = "Sandbox is running with outbound network enabled (network_enabled: true in .scaffolder/settings.yml). " +
+                          "Network access is intentional but increases the attack surface. " +
+                          "Ensure this is required for the agent's task.",
+                backend = executor.BackendName
+            });
+        }
+
+        var toolOptions = new SandboxToolOptions(
+            ShellEnabled: sandboxPolicy.ShellEnabled)
+        {
+            AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
+            DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
+            RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            NetworkEnabled = sandboxPolicy.NetworkEnabled,
+        };
+        var toolContext = new SandboxToolContext(
+            AgentId: agentId,
+            WorkingDirectory: workingDirectory,
+            SandboxRoot: workingDirectory,
+            Executor: executor,
+            FileTools: fileTools,
+            SearchTools: searchTools,
+            Redactor: redactor,
+            Options: toolOptions,
+            Logger: _logger,
+            EmitEvent: Emit,
+            RunId: runId,
+            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash));
+
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = BuildPermissionHandler(governance, runId, EmitToolCallOnce, EmitToolErrorOnce),
+            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
+            // Do not register custom tools or restrict AvailableTools/ExcludedTools.
+            // Let Copilot CLI use its own native tools; governance runs via OnPermissionRequest.
         };
 
-        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
+        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: CopilotSystemPrompt);
         var session = await agent.CreateSessionAsync(ct);
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
 
+        try
+        {
         try
         {
             await foreach (var chunk in agent.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
@@ -256,6 +343,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             deltaCount, result.Length);
 
         return result;
+        }
+        finally
+        {
+            _approvalStore.Clear(runId);
+        }
     }
 
     /// <summary>
@@ -271,11 +363,79 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private PermissionRequestHandler BuildPermissionHandler(
         SandboxGovernance governance,
         string runId,
+        string workingDirectory,
         Action<string, string, object?> emitToolCallOnce,
         Action<string, string> emitToolErrorOnce)
     {
         return (request, invocation) =>
         {
+            // Custom external tools registered in SessionConfig.Tools fire OnPermissionRequest
+            // with PermissionRequestCustomTool. Run governance against the tool name + args
+            // from the request — same two-layer check as native tools — before approving.
+            // The inline EvaluateToolCall inside each tool lambda is a second defense-in-depth
+            // layer, not the primary gate.
+            if (request is PermissionRequestCustomTool customTool)
+            {
+                var realCustomCallId = customTool.ToolCallId;
+                var customCallId = realCustomCallId ?? Guid.NewGuid().ToString("n");
+                var toolName = customTool.ToolName ?? "unknown";
+                try
+                {
+                    // Deserialize the JSON args blob. Stamp tool_name first so it cannot be
+                    // overridden by a model-supplied key (Seraph hardening).
+                    var args = new Dictionary<string, object>();
+                    if (customTool.Args is System.Text.Json.JsonElement argsJson &&
+                        argsJson.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        foreach (var prop in argsJson.EnumerateObject())
+                            args[prop.Name] = prop.Value;
+                    }
+                    args["tool_name"] = toolName;  // overwrite after deserialization
+
+                    // Shell tools need "directory" for SandboxPolicyBackend to validate cwd.
+                    if (toolName == "run_command" && !args.ContainsKey("directory"))
+                        args["directory"] = workingDirectory;
+
+                    // Emit tool.call only when we hold the real ToolCallId — mirrors the native
+                    // path dedup logic. Approved custom tools emit their call via the SDK lifecycle
+                    // (ExternalToolRequestedEvent). Denied calls never reach the lifecycle so we
+                    // emit the call+error pair below regardless of whether we have a real ID.
+                    if (realCustomCallId is not null)
+                        emitToolCallOnce(customCallId, toolName, args);
+
+                    var (allowed, reason) = governance.EvaluateToolCall(
+                        agentId: $"did:mesh:scaffolder:copilot:{runId}",
+                        toolName: toolName,
+                        args: args,
+                        _logger);
+
+                    if (!allowed)
+                    {
+                        emitToolCallOnce(customCallId, toolName, args);
+                        emitToolErrorOnce(customCallId, reason ?? "Operation denied by sandbox policy.");
+                    }
+
+                    return Task.FromResult(new PermissionRequestResult
+                    {
+                        Kind = allowed
+                            ? PermissionRequestResultKind.Approved
+                            : PermissionRequestResultKind.Rejected,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Permission handler exception for custom tool (fail-closed deny) — Tool={ToolName} RunId={RunId}",
+                        toolName, runId);
+                    emitToolCallOnce(customCallId, toolName, null);
+                    emitToolErrorOnce(customCallId, "Operation denied: internal error evaluating sandbox policy.");
+                    return Task.FromResult(new PermissionRequestResult
+                    {
+                        Kind = PermissionRequestResultKind.Rejected,
+                    });
+                }
+            }
+
             // The real SDK ToolCallId correlates this handler's events with the streaming
             // tool-execution lifecycle (which carries the same id). When it can't be read, we
             // fall back to a synthetic id that is local to this handler — the lifecycle cannot
@@ -285,6 +445,12 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             try
             {
                 var (toolName, args) = MapToToolCall(request);
+
+                // Shell tools need "directory" for SandboxPolicyBackend to validate cwd.
+                // PermissionRequestShell maps to run_command via MapToToolCall but flows through
+                // this general path (not the custom-tool branch), so inject directory here too.
+                if (toolName == "run_command" && !args.ContainsKey("directory"))
+                    args["directory"] = workingDirectory;
 
                 // Surface the call from this source ONLY when we hold the real ToolCallId, so it
                 // dedups against the streaming lifecycle. With a synthetic id we stay silent on
@@ -357,7 +523,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             {
                 ["path"] = write.FileName ?? "",
             }),
-            PermissionRequestShell shell => ("shell", new Dictionary<string, object>
+            // Shell → run_command so the allow-shell-sandboxed rule fires.
+            // directory is NOT set here — the permission handler injects workingDirectory below.
+            PermissionRequestShell shell => ("run_command", new Dictionary<string, object>
             {
                 ["command"] = shell.FullCommandText ?? "",
             }),
@@ -389,6 +557,58 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
 
         return ("read_file", args);
+    }
+
+    /// <summary>
+    /// Builds the tool list for the Copilot SDK session, stamping
+    /// <see cref="CopilotTool.OverridesBuiltInToolKey"/> on tools whose names match a
+    /// native Copilot built-in. Without this flag the SDK rejects them with
+    /// "conflicts with a built-in tool of the same name".
+    /// <c>run_command</c> is excluded from the override set — no native tool has that name.
+    /// </summary>
+    private static IList<AIFunction> BuildCopilotTools(SandboxToolContext context)
+    {
+        // Tools that share a name with a Copilot CLI native built-in must be marked
+        // as intentional overrides. run_command has no native equivalent — leave it unmarked.
+        var nativeOverrides = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "read_file", "str_replace_editor", "apply_patch",
+            "create_file", "write_file", "grep_search", "file_search", "report_intent",
+        };
+
+        return SandboxToolRegistry.Build(context)
+            .Select(f => nativeOverrides.Contains(f.Name)
+                ? new CopilotOverrideAIFunction(f)
+                : f)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Wraps an <see cref="AIFunction"/> and injects
+    /// <see cref="CopilotTool.OverridesBuiltInToolKey"/> into <see cref="AITool.AdditionalProperties"/>
+    /// so the Copilot SDK accepts tools whose names match a native built-in.
+    /// </summary>
+    private sealed class CopilotOverrideAIFunction(AIFunction inner) : AIFunction
+    {
+        // The key expected by the Copilot SDK in AITool.AdditionalProperties.
+        // CopilotTool.OverridesBuiltInToolKey is internal in the SDK package;
+        // the string value is confirmed by the SDK's own error message:
+        // "Set overridesBuiltInTool: true to explicitly override it."
+        private const string OverridesBuiltInToolKey = "overridesBuiltInTool";
+
+        private readonly IReadOnlyDictionary<string, object?> _additionalProperties =
+            new Dictionary<string, object?>(inner.AdditionalProperties)
+            {
+                [OverridesBuiltInToolKey] = true,
+            };
+
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => _additionalProperties;
+
+        protected override ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+            inner.InvokeAsync(arguments, cancellationToken);
     }
 
     /// <summary>

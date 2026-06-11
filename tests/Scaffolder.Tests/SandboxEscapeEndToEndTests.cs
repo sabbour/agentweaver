@@ -5,6 +5,8 @@ using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
+using Scaffolder.Tests.Helpers;
 using Xunit.Abstractions;
 
 namespace Scaffolder.Tests;
@@ -57,7 +59,7 @@ public sealed class SandboxEscapeEndToEndTests
 
         var factory = new GitHubCopilotClientFactory(config);
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
         await RunEscapeScenarioAsync(ModelSource.GitHubCopilot, runner, logger.Lines);
     }
@@ -81,7 +83,7 @@ public sealed class SandboxEscapeEndToEndTests
 
         var factory = new FoundryClientFactory(config);
         var logger = new CapturingLogger<FoundryAgentRunner>();
-        var runner = new FoundryAgentRunner(factory, logger);
+        var runner = new FoundryAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
         await RunEscapeScenarioAsync(ModelSource.MicrosoftFoundry, runner, logger.Lines);
     }
@@ -124,7 +126,7 @@ public sealed class SandboxEscapeEndToEndTests
         try
         {
             response = await runner.ExecuteAsync(
-                task, sandbox, provider, runId: Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
+                task, sandbox, "", provider, Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
         }
         finally
         {

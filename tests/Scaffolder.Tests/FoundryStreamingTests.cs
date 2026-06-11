@@ -5,6 +5,8 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scaffolder.AgentRuntime;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
+using Scaffolder.Tests.Helpers;
 
 namespace Scaffolder.Tests.Foundry;
 
@@ -30,7 +32,7 @@ public sealed class FoundryStreamingTests : IDisposable
     // ---- Infrastructure ----
 
     private FoundryAgentRunner Runner(IChatClient client)
-        => new(client, NullLogger<FoundryAgentRunner>.Instance);
+        => new(client, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), NullLogger<FoundryAgentRunner>.Instance);
 
     private static (ChannelWriter<RunEvent> writer, Func<List<RunEvent>> drain) MakeChannel()
     {
@@ -67,7 +69,7 @@ public sealed class FoundryStreamingTests : IDisposable
             new TurnSetup([TextUpdate("hello"), TextUpdate(" "), TextUpdate("world")]));
 
         var (writer, drain) = MakeChannel();
-        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r1", writer, CancellationToken.None);
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r1", writer, CancellationToken.None);
         var events = drain();
 
         var deltas = events.Where(e => e.Type == "agent.message.delta").ToList();
@@ -91,7 +93,7 @@ public sealed class FoundryStreamingTests : IDisposable
             new TurnSetup([TextUpdate("Done.")]));
 
         var (writer, drain) = MakeChannel();
-        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r2", writer, CancellationToken.None);
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r2", writer, CancellationToken.None);
         var events = drain();
 
         // tool.call for turn-1 tool call
@@ -112,6 +114,28 @@ public sealed class FoundryStreamingTests : IDisposable
         events.Should().NotContain(e => e.Type == "run.completed");
     }
 
+    [Fact]
+    public async Task FileToolCall_WithFilePathAlias_NormalizesPathBeforeGovernanceAndInvoke()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_workDir, "alias.txt"), "alias-content");
+        var client = new FakeStreamingChatClient(
+            new TurnSetup([FunctionCallUpdate("c-alias", "read_file", new() { ["file_path"] = "alias.txt" })]),
+            new TurnSetup([TextUpdate("Done.")]));
+
+        var (writer, drain) = MakeChannel();
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r-alias", writer, CancellationToken.None);
+        var events = drain();
+
+        events.Where(e =>
+                e.Type == "tool.error" &&
+                (Prop(e.Payload, "errorMessage")?.Contains("No path argument") ?? false))
+            .Should().BeEmpty();
+        events.Where(e =>
+                e.Type == "tool.result" &&
+                (Prop(e.Payload, "content")?.Contains("alias-content") ?? false))
+            .Should().NotBeEmpty();
+    }
+
     // ---- T-3 ----
 
     [Fact]
@@ -124,7 +148,7 @@ public sealed class FoundryStreamingTests : IDisposable
             new TurnSetup([TextUpdate("Summary.")]));
 
         var (writer, drain) = MakeChannel();
-        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r3", writer, CancellationToken.None);
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r3", writer, CancellationToken.None);
         var events = drain();
 
         // Exactly one delta (from turn 2 "Summary."), none from turn 1
@@ -154,7 +178,7 @@ public sealed class FoundryStreamingTests : IDisposable
             new TurnSetup([TextUpdate("Wrote the file.")]));
 
         var (writer, drain) = MakeChannel();
-        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r4", writer, CancellationToken.None);
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r4", writer, CancellationToken.None);
         var events = drain();
 
         // tool.call carries correct arguments
@@ -188,7 +212,7 @@ public sealed class FoundryStreamingTests : IDisposable
         var runner = Runner(client);
 
         Func<Task> act = () => runner.ExecuteAsync(
-            "task", _workDir, ModelSource.MicrosoftFoundry, "r5", writer, CancellationToken.None);
+            "task", _workDir, "", ModelSource.MicrosoftFoundry, "r5", writer, CancellationToken.None);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
 
@@ -212,7 +236,7 @@ public sealed class FoundryStreamingTests : IDisposable
         var runner = Runner(client);
 
         Func<Task> act = () => runner.ExecuteAsync(
-            "task", _workDir, ModelSource.MicrosoftFoundry, "r6", writer, CancellationToken.None);
+            "task", _workDir, "", ModelSource.MicrosoftFoundry, "r6", writer, CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("boom");
 
@@ -232,7 +256,7 @@ public sealed class FoundryStreamingTests : IDisposable
 
         var (writer, drain) = MakeChannel();
         var result = await Runner(client).ExecuteAsync(
-            "task", _workDir, ModelSource.MicrosoftFoundry, "r7", writer, CancellationToken.None);
+            "task", _workDir, "", ModelSource.MicrosoftFoundry, "r7", writer, CancellationToken.None);
 
         var events = drain();
         // Runner no longer emits run.completed — the watch loop does that.
@@ -259,7 +283,7 @@ public sealed class FoundryStreamingTests : IDisposable
             ]));
 
         var (writer, drain) = MakeChannel();
-        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r8", writer, CancellationToken.None);
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r8", writer, CancellationToken.None);
         var events = drain();
 
         var deltas = events.Where(e => e.Type == "agent.message.delta").ToList();
@@ -282,7 +306,7 @@ public sealed class FoundryStreamingTests : IDisposable
         var (writer, drain) = MakeChannel();
 
         await Runner(client).ExecuteAsync(
-            "task", _workDir, ModelSource.MicrosoftFoundry, "r9", writer, CancellationToken.None);
+            "task", _workDir, "", ModelSource.MicrosoftFoundry, "r9", writer, CancellationToken.None);
 
         var events = drain();
         var failed = events.FirstOrDefault(e => e.Type == "run.failed");
@@ -307,7 +331,7 @@ public sealed class FoundryStreamingTests : IDisposable
             new TurnSetup([TextUpdate("Done.")]));
 
         var (writer, drain) = MakeChannel();
-        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r10", writer, CancellationToken.None);
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r10", writer, CancellationToken.None);
         var events = drain();
 
         var toolCallSeq  = events.First(e => e.Type == "tool.call").Sequence;
@@ -330,7 +354,7 @@ public sealed class FoundryStreamingTests : IDisposable
             new TurnSetup([TextUpdate("Final answer.")]));
 
         var (writer, drain) = MakeChannel();
-        await Runner(client).ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r11", writer, CancellationToken.None);
+        await Runner(client).ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r11", writer, CancellationToken.None);
         var events = drain();
 
         // Runner must emit agent.turn.end to close the turn bubble.
@@ -357,7 +381,7 @@ public sealed class FoundryStreamingTests : IDisposable
 
         var (writer, drain) = MakeChannel();
         var result = await Runner(client).ExecuteAsync(
-            "task", _workDir, ModelSource.MicrosoftFoundry, "r-mf1", writer, CancellationToken.None);
+            "task", _workDir, "", ModelSource.MicrosoftFoundry, "r-mf1", writer, CancellationToken.None);
 
         // MF1: only the last turn's text is returned
         result.Should().Be("SECOND");

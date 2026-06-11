@@ -11,6 +11,20 @@ export type RunStatus =
   | 'declined'
   | 'merge_failed';
 
+export interface RunSandboxInfo {
+  backend: string;
+  isRealIsolation: boolean;
+}
+
+export interface SandboxPolicy {
+  repository_path: string;
+  shell_enabled: boolean;
+  direct: boolean;
+  network_enabled: boolean;
+  allowed_repository_roots: string[];
+  destructive_command_patterns: string[];
+}
+
 export interface SubmitRunRequest {
   repository_path: string;
   originating_branch: string;
@@ -33,6 +47,7 @@ export interface RunDetail {
   diff: string | null;
   step_count: number;
   tree_hash: string | null;
+  sandbox?: RunSandboxInfo | null;
 }
 
 export interface ReviewRequest {

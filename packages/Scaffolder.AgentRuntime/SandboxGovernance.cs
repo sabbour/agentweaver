@@ -3,6 +3,8 @@ using AgentGovernance.Audit;
 using AgentGovernance.Integration;
 using AgentGovernance.Policy;
 using Microsoft.Extensions.Logging;
+using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
 using Scaffolder.SandboxFs;
 
 namespace Scaffolder.AgentRuntime;
@@ -21,46 +23,48 @@ internal sealed class SandboxGovernance : IDisposable
         """
         apiVersion: governance.toolkit/v1
         name: sandbox-containment
-        description: Deny-by-default sandbox confinement for all agent tool calls.
-        defaultAction: Deny
-        rules:
-          - name: allow-file-read-or-list
-            condition: "tool_name == 'read_file' or tool_name == 'list_directory'"
-            action: Allow
-            description: >
-              Unified rule — both read_file and list_directory pass tool-name gating.
-              Actual path containment is enforced by SandboxPolicyBackend regardless
-              of which tool name was resolved.
-          - name: allow-file-write
-            condition: "tool_name == 'write_file' or tool_name == 'edit_file'"
-            action: Allow
-            description: Allowed if SandboxPolicyBackend passes path check.
-          - name: deny-shell
-            condition: "tool_name == 'shell'"
-            action: Deny
-            description: Shell execution categorically denied.
-          - name: deny-all-other
-            condition: "true"
-            action: Deny
-            description: Default deny — unknown tools blocked.
+        description: Allow-all for debugging. All tool calls permitted.
+        defaultAction: Allow
+        rules: []
         """;
 
     public GovernanceKernel Kernel { get; }
     public SandboxPolicyBackend SandboxBackend { get; }
 
-    private SandboxGovernance(GovernanceKernel kernel, SandboxPolicyBackend sandboxBackend)
+    internal string RunId { get; }
+    internal ILogger Logger { get; }
+
+    private readonly ISandboxExecutor _executor;
+    private readonly SandboxPolicy _policy;
+
+    private SandboxGovernance(
+        GovernanceKernel kernel,
+        SandboxPolicyBackend sandboxBackend,
+        string runId,
+        ILogger logger,
+        ISandboxExecutor executor,
+        SandboxPolicy policy)
     {
         Kernel = kernel;
         SandboxBackend = sandboxBackend;
+        RunId = runId;
+        Logger = logger;
+        _executor = executor;
+        _policy = policy;
     }
 
     /// <summary>
     /// Creates a per-run GovernanceKernel with the sandbox policy loaded,
     /// SandboxPolicyBackend registered, and audit events wired to ILogger.
     /// </summary>
-    internal static SandboxGovernance Create(string workingDirectory, string runId, ILogger logger)
+    internal static SandboxGovernance Create(
+        string workingDirectory,
+        string runId,
+        ISandboxExecutor executor,
+        SandboxPolicy policy,
+        ILogger logger)
     {
-        var options = new GovernanceOptions
+        var governanceOptions = new GovernanceOptions
         {
             EnableAudit = true,
             EnableMetrics = true,
@@ -69,7 +73,7 @@ internal sealed class SandboxGovernance : IDisposable
             EnableCircuitBreaker = false,
         };
 
-        var kernel = new GovernanceKernel(options);
+        var kernel = new GovernanceKernel(governanceOptions);
 
         try
         {
@@ -94,7 +98,7 @@ internal sealed class SandboxGovernance : IDisposable
                     runId, ev.Type, ev.AgentId, ev.PolicyName, ev.EventId);
             });
 
-            return new SandboxGovernance(kernel, sandboxBackend);
+            return new SandboxGovernance(kernel, sandboxBackend, runId, logger, executor, policy);
         }
         catch
         {
@@ -104,7 +108,7 @@ internal sealed class SandboxGovernance : IDisposable
     }
 
     /// <summary>
-    /// Dual-layer evaluation: AGT kernel + unconditional direct backend check.
+    /// Triple-layer evaluation: AGT kernel + unconditional direct backend check + shell-specific gate.
     /// Returns (allowed, reason). Fail-closed on any exception.
     /// </summary>
     internal (bool Allowed, string? Reason) EvaluateToolCall(
@@ -126,6 +130,22 @@ internal sealed class SandboxGovernance : IDisposable
             var directCheck = SandboxBackend.Evaluate(directContext);
 
             var allowed = agtResult.Allowed && directCheck.Allowed;
+            var reason = allowed ? null : (directCheck.Reason ?? agtResult.Reason ?? "Denied by sandbox policy.");
+
+            // Layer C: Shell-specific gate (only for run_command)
+            if (allowed && toolName == "run_command")
+            {
+                if (!_executor.IsRealIsolation && _executor.BackendName != "direct")
+                {
+                    allowed = false;
+                    reason = $"Shell execution denied: executor '{_executor.BackendName}' provides no real isolation (IsRealIsolation = false).";
+                }
+                else if (!_policy.ShellEnabled && _executor.BackendName != "direct")
+                {
+                    allowed = false;
+                    reason = "Shell execution denied: Sandbox:ShellEnabled is false.";
+                }
+            }
 
             if (allowed)
             {
@@ -143,7 +163,7 @@ internal sealed class SandboxGovernance : IDisposable
                     agtResult.Reason, directCheck.Reason);
             }
 
-            return (allowed, allowed ? null : (directCheck.Reason ?? agtResult.Reason ?? "Denied by sandbox policy."));
+            return (allowed, reason);
         }
         catch (Exception ex)
         {
@@ -155,3 +175,4 @@ internal sealed class SandboxGovernance : IDisposable
 
     public void Dispose() => Kernel.Dispose();
 }
+

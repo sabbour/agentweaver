@@ -29,6 +29,7 @@ builder.Services.AddCors(options =>
 // Infrastructure
 builder.Services.AddSingleton<SqliteDb>();
 builder.Services.AddSingleton<SqliteRunStore>();
+builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
@@ -138,6 +139,7 @@ app.MapGet("/api/runs/{id}", async (
     HttpContext httpContext,
     string id,
     SqliteRunStore runStore,
+    RunStreamStore streamStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -171,6 +173,35 @@ app.MapGet("/api/runs/{id}", async (
         ? run.Diff
         : null;
 
+    // Populate sandbox status from the in-memory event stream (sandbox.selected /
+    // sandbox.warning events emitted by the agent runner at startup).
+    // Returns null for older runs whose stream entries have been evicted.
+    SandboxStatusDto? sandboxStatus = null;
+    var streamEntry = streamStore.Get(id);
+    if (streamEntry is not null)
+    {
+        var events = streamEntry.GetSnapshotSince(0).Events;
+        var selectedEvt = events.FirstOrDefault(e => e.Type == "sandbox.selected");
+        if (selectedEvt is not null)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(selectedEvt.Payload,
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<SandboxSelectedPayload>(json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (parsed is not null)
+            {
+                var hasNetworkWarning = events.Any(e => e.Type == "sandbox.warning");
+                sandboxStatus = new SandboxStatusDto
+                {
+                    Backend = parsed.Backend ?? string.Empty,
+                    IsRealIsolation = parsed.IsRealIsolation,
+                    SelectionReason = parsed.Reason,
+                    HasNetworkWarning = hasNetworkWarning,
+                };
+            }
+        }
+    }
+
     return Results.Json(new RunResponse
     {
         RunId = run.Id.ToString(),
@@ -182,6 +213,7 @@ app.MapGet("/api/runs/{id}", async (
         Diff = diff,
         StepCount = run.StepCount,
         TreeHash = run.TreeHash,
+        Sandbox = sandboxStatus,
     });
 });
 
@@ -390,6 +422,63 @@ app.MapPost("/api/runs/{id}/review", async (
     return Results.Json(new ReviewResponse { RunId = id, Status = expectedStatus, MergeResult = null });
 });
 
+app.MapPost("/api/runs/{id}/shell-approvals", (
+    string id,
+    ShellApprovalRequest body,
+    IShellApprovalStore approvalStore) =>
+{
+    if (string.IsNullOrWhiteSpace(body.CommandHash))
+        return Results.BadRequest(new { error = "command_hash is required." });
+
+    approvalStore.Approve(id, body.CommandHash);
+    return Results.Ok(new { run_id = id, command_hash = body.CommandHash, approved = true });
+});
+
+app.MapGet("/api/sandbox-policy", async (
+    string? repository_path,
+    ISandboxPolicyStore policyStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(repository_path))
+        return Results.BadRequest(new { error = "repository_path is required." });
+
+    try
+    {
+        var policy = await policyStore.GetPolicyAsync(repository_path, ct);
+        return Results.Json(ToSandboxPolicyDto(policy));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to get sandbox policy for {RepositoryPath}", repository_path);
+        return Results.Problem("Failed to retrieve the sandbox policy.", statusCode: 500);
+    }
+});
+
+app.MapPut("/api/sandbox-policy", async (
+    SandboxPolicyDto request,
+    ISandboxPolicyStore policyStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.RepositoryPath))
+        return Results.BadRequest(new { error = "repository_path is required." });
+
+    var policy = ToSandboxPolicyDomain(request);
+
+    try
+    {
+        await policyStore.SetPolicyAsync(policy, ct);
+        var saved = await policyStore.GetPolicyAsync(policy.RepositoryPath, ct);
+        return Results.Json(ToSandboxPolicyDto(saved));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to save sandbox policy for {RepositoryPath}", request.RepositoryPath);
+        return Results.Problem("Failed to save the sandbox policy.", statusCode: 500);
+    }
+});
+
 app.Run();
 
 static bool IsOwner(HttpContext context, Run run) =>
@@ -543,4 +632,42 @@ static async Task WriteSseDoneAsync(HttpResponse response, CancellationToken ct)
     await response.Body.FlushAsync(ct);
 }
 
+static SandboxPolicyDto ToSandboxPolicyDto(SandboxPolicy policy) => new()
+{
+    RepositoryPath             = policy.RepositoryPath,
+    ShellEnabled               = policy.ShellEnabled,
+    Direct                     = policy.Direct,
+    NetworkEnabled             = policy.NetworkEnabled,
+    AllowedRepositoryRoots     = policy.AllowedRepositoryRoots,
+    DestructiveCommandPatterns = policy.DestructiveCommandPatterns,
+    RequireApprovalForAllShell = policy.RequireApprovalForAllShell,
+    RedactPii                  = policy.RedactPii,
+    MaxOutputBytes             = policy.MaxOutputBytes,
+};
+
+static SandboxPolicy ToSandboxPolicyDomain(SandboxPolicyDto dto) => new()
+{
+    RepositoryPath             = dto.RepositoryPath,
+    ShellEnabled               = dto.ShellEnabled,
+    Direct                     = dto.Direct,
+    NetworkEnabled             = dto.NetworkEnabled,
+    AllowedRepositoryRoots     = dto.AllowedRepositoryRoots,
+    DestructiveCommandPatterns = dto.DestructiveCommandPatterns,
+    RequireApprovalForAllShell = dto.RequireApprovalForAllShell,
+    RedactPii                  = dto.RedactPii,
+    MaxOutputBytes             = dto.MaxOutputBytes,
+};
+
 public partial class Program { }
+
+/// <summary>
+/// Typed record for deserializing the <c>sandbox.selected</c> event payload.
+/// The payload is stored as an anonymous object and serialized with camelCase,
+/// so <see cref="System.Text.Json.JsonSerializerOptions.PropertyNameCaseInsensitive"/> is used.
+/// </summary>
+file sealed class SandboxSelectedPayload
+{
+    public string? Backend { get; init; }
+    public bool IsRealIsolation { get; init; }
+    public string? Reason { get; init; }
+}

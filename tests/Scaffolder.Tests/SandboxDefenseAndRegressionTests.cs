@@ -1,6 +1,9 @@
 using FluentAssertions;
 using Scaffolder.AgentRuntime;
+using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
 using Scaffolder.SandboxFs;
+using Scaffolder.Tests.Helpers;
 
 namespace Scaffolder.Tests.Sandbox;
 
@@ -27,6 +30,93 @@ public sealed class FoundryRegressionTests
             "Foundry must use the shared SandboxGovernance gate, not its own resolver");
     }
 }
+
+public sealed class BubblewrapSandboxCommandTests
+{
+    [Theory]
+    [InlineData("native-linux")]
+    [InlineData("wsl")]
+    public void BwrapCommand_UsesSelectiveEtcMountsAndHidesHomes(string mode)
+    {
+        var payload = mode == "native-linux"
+            ? LinuxBwrapExecutor.BuildBwrapPayload("echo ok", "/workspace", networkEnabled: false)
+            : WslMxcSandboxExecutor.BuildBwrapCommand("echo ok", networkEnabled: false);
+
+        payload.Should().NotContain("--ro-bind /etc /etc");
+        payload.Should().Contain("--ro-bind-try /etc/resolv.conf /etc/resolv.conf");
+        payload.Should().Contain("--ro-bind-try /etc/passwd /etc/passwd");
+        payload.Should().Contain("--ro-bind-try /etc/group /etc/group");
+        payload.Should().Contain("--ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf");
+        payload.Should().Contain("--tmpfs /home");
+        payload.Should().Contain("--tmpfs /root");
+        payload.Should().Contain("--unshare-user");
+        payload.Should().Contain("--unshare-net");
+    }
+
+    [Theory]
+    [InlineData("native-linux")]
+    [InlineData("wsl")]
+    public void BwrapCommand_UsesTargetedUsrMountsNotBroadBind(string mode)
+    {
+        // Phase 6 alignment: replace --ro-bind /usr /usr with selective mounts.
+        // This prevents exposing /usr/share/doc, /usr/include, etc. unnecessarily.
+        var payload = mode == "native-linux"
+            ? LinuxBwrapExecutor.BuildBwrapPayload("echo ok", "/workspace", networkEnabled: false)
+            : WslMxcSandboxExecutor.BuildBwrapCommand("echo ok", networkEnabled: false);
+
+        payload.Should().NotContain("--ro-bind /usr /usr",
+            "broad /usr mount replaced by targeted --ro-bind-try for bin/lib dirs");
+        payload.Should().Contain("--ro-bind-try /usr/bin /usr/bin");
+        payload.Should().Contain("--ro-bind-try /usr/lib /usr/lib");
+    }
+
+    [Theory]
+    [InlineData("native-linux")]
+    [InlineData("wsl")]
+    public void BwrapCommand_NetworkDisabled_IncludesUnshareNet(string mode)
+    {
+        var payload = mode == "native-linux"
+            ? LinuxBwrapExecutor.BuildBwrapPayload("echo ok", "/workspace", networkEnabled: false)
+            : WslMxcSandboxExecutor.BuildBwrapCommand("echo ok", networkEnabled: false);
+
+        payload.Should().Contain("--unshare-net",
+            "network namespace must be unshared when networkEnabled=false");
+    }
+
+    [Theory]
+    [InlineData("native-linux")]
+    [InlineData("wsl")]
+    public void BwrapCommand_NetworkEnabled_OmitsUnshareNet(string mode)
+    {
+        var payload = mode == "native-linux"
+            ? LinuxBwrapExecutor.BuildBwrapPayload("echo ok", "/workspace", networkEnabled: true)
+            : WslMxcSandboxExecutor.BuildBwrapCommand("echo ok", networkEnabled: true);
+
+        payload.Should().NotContain("--unshare-net",
+            "--unshare-net must be absent when networkEnabled=true");
+    }
+
+    [Fact]
+    public void BwrapPayload_WorktreePath_MountedAtWorkspaceNotHomePath()
+    {
+        // Simulate a worktree path under /home — the masking bug scenario.
+        var homeWorktree = "/home/asabbour/.local/share/scaffolder/worktrees/run-abc123";
+        var payload = LinuxBwrapExecutor.BuildBwrapPayload("echo ok", homeWorktree, networkEnabled: false);
+
+        // The destination bind path must NOT stay inside /home (masked by --tmpfs /home).
+        payload.Should().NotContain($"--bind '{homeWorktree}' '{homeWorktree}'",
+            "binding the worktree at its original /home path is masked by --tmpfs /home");
+
+        // The worktree must instead be mounted at /workspace.
+        payload.Should().Contain($"--bind '{homeWorktree}' /workspace",
+            "worktree must be re-mounted at /workspace to escape --tmpfs /home masking");
+
+        // Working directory inside the sandbox must be /workspace.
+        payload.Should().Contain("--chdir /workspace",
+            "chdir must point to /workspace, not the original host path under /home");
+    }
+}
+
 
 /// <summary>
 /// F. SandboxedFileTools defense-in-depth: in-tool validation provides an
@@ -224,5 +314,154 @@ public sealed class SandboxedFileToolsDefenseTests : IDisposable
         {
             try { Directory.Delete(symlinkDir); } catch { }
         }
+    }
+}
+
+/// <summary>
+/// Finding 1 regression: per-command temp dir isolation.
+/// Verifies that SandboxPolicyEnrichment no longer grants the shared %TEMP% root as RW,
+/// and that the MxcSandboxExecutor per-command subdir is created under a "scaffolder-sandbox"
+/// prefix (structural contract test — does not require the mxc binary).
+/// </summary>
+public sealed class PerCommandTempDirTests
+{
+    [Fact]
+    public void SandboxPolicyEnrichment_BuildForWindows_DoesNotIncludeTempRoot()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var enrichment = SandboxPolicyEnrichment.BuildForWindows();
+        var tempRoot = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+
+        // The raw %TEMP% root must NOT appear as a read-write path.
+        enrichment.AdditionalReadWritePaths.Should().NotContain(
+            p => string.Equals(
+                p.TrimEnd(Path.DirectorySeparatorChar),
+                tempRoot,
+                StringComparison.OrdinalIgnoreCase),
+            "the shared temp root grants cross-sandbox write access and must be replaced " +
+            "by per-command isolated subdirs injected at execution time");
+    }
+
+    [Fact]
+    public void PerCommandTempSubdir_IsCreatedUnderScaffolderSandboxPrefix()
+    {
+        // Reproduce the naming logic from MxcSandboxExecutor.ExecuteAsync to verify
+        // the structural contract: subdir lives under Path.GetTempPath()/scaffolder-sandbox/<guid>.
+        var perCmdTempDir = Path.Combine(
+            Path.GetTempPath(), "scaffolder-sandbox", Guid.NewGuid().ToString("N"));
+
+        Directory.CreateDirectory(perCmdTempDir);
+        try
+        {
+            Directory.Exists(perCmdTempDir).Should().BeTrue(
+                "per-command temp subdir must exist after Directory.CreateDirectory");
+
+            perCmdTempDir.Should().StartWith(
+                Path.Combine(Path.GetTempPath(), "scaffolder-sandbox"),
+                "subdir must be scoped under scaffolder-sandbox to avoid polluting temp root");
+        }
+        finally
+        {
+            try { Directory.Delete(perCmdTempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void PerCommandTempSubdir_IsCleanedUpAfterDelete()
+    {
+        var perCmdTempDir = Path.Combine(
+            Path.GetTempPath(), "scaffolder-sandbox", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(perCmdTempDir);
+        File.WriteAllText(Path.Combine(perCmdTempDir, "artifact.txt"), "data");
+
+        // Simulate the best-effort cleanup in MxcSandboxExecutor's finally block.
+        try { Directory.Delete(perCmdTempDir, recursive: true); } catch { }
+
+        Directory.Exists(perCmdTempDir).Should().BeFalse(
+            "per-command temp subdir must be deleted after the command completes");
+    }
+}
+
+/// <summary>
+/// Finding 2 regression: network_enabled=true emits a sandbox.warning event
+/// from both FoundryAgentRunner and (structurally) GitHubCopilotAgentRunner.
+/// </summary>
+public sealed class NetworkOpenWarningTests : IDisposable
+{
+    private readonly string _workDir;
+
+    public NetworkOpenWarningTests()
+    {
+        _workDir = Path.Combine(Path.GetTempPath(), $"net-warn-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_workDir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_workDir, recursive: true); } catch { }
+    }
+
+    [Fact]
+    public async Task FoundryRunner_NetworkEnabled_EmitsSandboxWarning()
+    {
+        // Policy with NetworkEnabled = true
+        var policy = new SandboxPolicy
+        {
+            RepositoryPath = _workDir,
+            NetworkEnabled = true,
+        };
+
+        var client = new FakeNetworkWarningChatClient();
+        var runner = new FoundryAgentRunner(
+            client,
+            SandboxExecutorFactory.CreatePassthrough("unit-test"),
+            new StubPolicyStore(policy),
+            new InMemoryShellApprovalStore(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<FoundryAgentRunner>.Instance);
+
+        var ch = System.Threading.Channels.Channel.CreateUnbounded<RunEvent>();
+        await runner.ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r-net", ch.Writer, CancellationToken.None);
+        ch.Writer.TryComplete();
+
+        var events = new List<RunEvent>();
+        while (ch.Reader.TryRead(out var e)) events.Add(e);
+
+        var warnings = events
+            .Where(e => e.Type == "sandbox.warning")
+            .ToList();
+
+        warnings.Should().Contain(
+            e => GetProp(e.Payload, "category") == "network-open" &&
+                 (GetProp(e.Payload, "message") ?? "").Contains("network_enabled: true"),
+            "a sandbox.warning with category=network-open must be emitted when network_enabled=true");
+    }
+
+    private static string? GetProp(object payload, string name)
+        => payload.GetType().GetProperty(name)?.GetValue(payload)?.ToString();
+
+    /// <summary>Minimal chat client that immediately ends the turn with no text.</summary>
+    private sealed class FakeNetworkWarningChatClient : Microsoft.Extensions.AI.IChatClient
+    {
+        public Microsoft.Extensions.AI.ChatClientMetadata Metadata => new("fake", null, null);
+        public object? GetService(Type serviceType, object? serviceKey) => null;
+
+        public Task<Microsoft.Extensions.AI.ChatResponse> GetResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            Microsoft.Extensions.AI.ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public async IAsyncEnumerable<Microsoft.Extensions.AI.ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            Microsoft.Extensions.AI.ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            yield return new Microsoft.Extensions.AI.ChatResponseUpdate(
+                Microsoft.Extensions.AI.ChatRole.Assistant, "done") { MessageId = "m1" };
+        }
+
+        public void Dispose() { }
     }
 }

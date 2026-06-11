@@ -5,3 +5,10 @@
 .squad/orchestration-log/** merge=union
 # Squad: union merge for append-only team state files
 .squad/rai/audit-trail.md merge=union
+
+# Web source files: always LF (Vite/esbuild requires consistent line endings;
+# CRLF in .tsx/.ts files causes Vite HMR to fail on Windows with autocrlf=true)
+apps/web/**/*.ts  text eol=lf
+apps/web/**/*.tsx text eol=lf
+apps/web/**/*.css text eol=lf
+apps/web/**/*.json text eol=lf

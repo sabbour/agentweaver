@@ -39,11 +39,13 @@ public sealed class TestFileEditAgentRunner : IAgentRunner
     public Task<string> ExecuteAsync(
         string task,
         string workingDirectory,
+        string repositoryPath,
         ModelSource modelSource,
         string runId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct)
     {
+        _ = repositoryPath;
         return Mode switch
         {
             AgentMode.MakesChange => ExecuteWithChangeAsync(workingDirectory, stream),

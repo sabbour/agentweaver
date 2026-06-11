@@ -5,6 +5,8 @@ using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
+using Scaffolder.Tests.Helpers;
 using Xunit.Abstractions;
 
 namespace Scaffolder.Tests;
@@ -49,9 +51,8 @@ public sealed class GlobGrepEscapeTests
 
         var factory = new GitHubCopilotClientFactory(config);
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
-        // Create a parent directory with a uniquely-named canary file OUTSIDE the sandbox.
         // The sandbox is a child of parentDir, so glob("parentDir/*") would find the canary
         // if glob truly operates on absolute host paths.
         var parentDir = Path.Combine(Path.GetTempPath(), $"scaffolder-glob-parent-{Guid.NewGuid():N}");
@@ -89,7 +90,7 @@ public sealed class GlobGrepEscapeTests
         try
         {
             response = await runner.ExecuteAsync(
-                task, sandbox, ModelSource.GitHubCopilot, runId: Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
+                task, sandbox, "", ModelSource.GitHubCopilot, Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
         }
         finally
         {
@@ -231,7 +232,7 @@ public sealed class GlobGrepEscapeTests
 
         var factory = new GitHubCopilotClientFactory(config);
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
         // Parent with canary; sandbox is a child.
         var parentDir = Path.Combine(Path.GetTempPath(), $"scaffolder-relglob-{Guid.NewGuid():N}");
@@ -263,7 +264,7 @@ public sealed class GlobGrepEscapeTests
         try
         {
             response = await runner.ExecuteAsync(
-                task, sandbox, ModelSource.GitHubCopilot, runId: Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
+                task, sandbox, "", ModelSource.GitHubCopilot, Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
         }
         finally
         {

@@ -37,7 +37,7 @@ describe('TurnGroup empty-turn suppression', () => {
   });
 
   // TG-02: active turn with zero steps still renders (no suppression during live streaming)
-  it('renders the turn divider for an active turn with no steps', () => {
+  it('renders the steps container for an active turn with no steps', () => {
     const { container } = render(
       <Wrapper>
         <TurnGroup
@@ -47,8 +47,7 @@ describe('TurnGroup empty-turn suppression', () => {
         />
       </Wrapper>,
     );
-    // The TurnDivider should be present with "Turn 1" text
-    const text = container.textContent ?? '';
-    expect(text).toContain('Turn 1');
+    // Turn dividers are no longer shown; the container itself should render (not null)
+    expect(container.firstChild).not.toBeNull();
   });
 });

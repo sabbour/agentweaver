@@ -117,8 +117,8 @@ public sealed class SandboxPolicyBackendTests : IDisposable
     [Theory]
     [InlineData("read_file")]
     [InlineData("write_file")]
-    [InlineData("edit_file")]
-    [InlineData("list_directory")]
+    [InlineData("create_file")]
+    [InlineData("str_replace_editor")]
     public void AllowCase_PopulatesResolvedPath(string toolName)
     {
         var context = new Dictionary<string, object>
@@ -201,8 +201,8 @@ public sealed class SandboxPolicyBackendTests : IDisposable
     // ===================================================================
 
     [Theory]
-    [InlineData("list_directory", ".")]
-    [InlineData("list_directory", "./")]
+    [InlineData("write_file", ".")]
+    [InlineData("write_file", "./")]
     [InlineData("read_file", ".")]
     public void DotPath_KnownTool_Allowed(string toolName, string dotPath)
     {
