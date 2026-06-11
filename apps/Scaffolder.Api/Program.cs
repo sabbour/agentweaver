@@ -529,6 +529,9 @@ app.MapGet("/api/runs/{id}/workspace", async (
         // Build a path → status map from the changed-file set.
         var changedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
 
+        IReadOnlyDictionary<string, (int Added, int Removed)> committedLineCounts   = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+        IReadOnlyDictionary<string, (int Added, int Removed)> uncommittedLineCounts = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+
         if (!string.IsNullOrEmpty(run.WorktreeBranch))
         {
             try
@@ -536,6 +539,8 @@ app.MapGet("/api/runs/{id}/workspace", async (
                 var committed = worktreeManager.GetCommittedFileEntries(
                     run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch);
                 foreach (var e in committed) changedFiles[e.Path] = e.Status;
+                committedLineCounts = worktreeManager.GetFileDiffLineCounts(
+                    run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch);
             }
             catch (Exception ex)
             {
@@ -547,6 +552,7 @@ app.MapGet("/api/runs/{id}/workspace", async (
         {
             var uncommitted = worktreeManager.GetUncommittedFileEntries(run.WorktreePath);
             foreach (var e in uncommitted) changedFiles[e.Path] = e.Status;
+            uncommittedLineCounts = worktreeManager.GetUncommittedFileDiffLineCounts(run.WorktreePath);
         }
         catch (Exception ex)
         {
@@ -576,7 +582,18 @@ app.MapGet("/api/runs/{id}/workspace", async (
                           .Replace('\\', '/');
             if (rel == ".git" || rel.StartsWith(".git/", StringComparison.Ordinal)) continue;
             changedFiles.TryGetValue(rel, out var status);
-            nodes.Add(new WorkspaceNode { Path = rel, IsFolder = false, Status = status });
+
+            var (cAdded, cRemoved) = committedLineCounts.TryGetValue(rel, out var cc) ? cc : (0, 0);
+            var (uAdded, uRemoved) = uncommittedLineCounts.TryGetValue(rel, out var uc) ? uc : (0, 0);
+
+            nodes.Add(new WorkspaceNode
+            {
+                Path         = rel,
+                IsFolder     = false,
+                Status       = status,
+                AddedLines   = Math.Max(0, cAdded   + uAdded),
+                RemovedLines = Math.Max(0, cRemoved + uRemoved),
+            });
         }
 
         // Sort: folders first (alphabetically), then files (alphabetically).
@@ -716,6 +733,12 @@ app.MapGet("/api/runs/{id}/files", async (
                                  worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch),
                                  worktreeManager.GetUncommittedFileEntries(run.WorktreePath)),
         };
+
+        // Populate per-file line counts with a single Patch comparison per scope.
+        var committedCounts   = worktreeManager.GetFileDiffLineCounts(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch);
+        var uncommittedCounts = worktreeManager.GetUncommittedFileDiffLineCounts(run.WorktreePath);
+        result = ApplyLineCounts(result, committedCounts, uncommittedCounts);
+
         return Results.Json(result);
     }
     catch (Exception ex)
@@ -725,7 +748,13 @@ app.MapGet("/api/runs/{id}/files", async (
     }
 });
 
-// GET /api/runs/{id}/files/{**path} — returns a per-file unified diff (FR-035)
+// GET /api/runs/{id}/files/{**path} — unified handler for per-file diff (FR-035) and file content.
+// Content endpoint: GET /api/runs/{id}/files/{**path}/content
+// Note: ASP.NET Core route templates cannot have a literal suffix after a catch-all parameter,
+// so the content endpoint is handled here by detecting the "/content" suffix on the path parameter.
+// A URL of /files/src/app.ts/content arrives with path="src/app.ts/content"; the handler strips
+// the suffix to obtain the real file path. Known edge case: a file literally named "content"
+// inside a subdirectory (e.g. src/content) will be treated as a content request for its parent.
 app.MapGet("/api/runs/{id}/files/{**path}", async (
     HttpContext httpContext,
     string id,
@@ -750,8 +779,13 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     if (run is null) return Results.NotFound();
     if (!IsOwner(httpContext, run)) return Results.NotFound();
 
+    // Detect whether this is a content request (URL ends with "/content").
+    const string contentSuffix = "/content";
+    bool isContentRequest = path.EndsWith(contentSuffix, StringComparison.Ordinal);
+    string pathForValidation = isContentRequest ? path[..^contentSuffix.Length] : path;
+
     // Path validation after ownership check to prevent leaking run existence via error-code differences.
-    if (!TryValidateRelativePath(path, out var normalizedPath))
+    if (!TryValidateRelativePath(pathForValidation, out var normalizedPath))
         return Results.BadRequest(new { error = "Invalid file path." });
 
     // Post-open path containment check using the stored worktree root.
@@ -769,6 +803,77 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     if (run.Status is RunStatus.Pending or RunStatus.Failed)
         return Results.NotFound();
 
+    // --- Content endpoint branch ---
+    if (isContentRequest)
+    {
+        // Content is only available for live runs that have an accessible worktree.
+        // Terminal-state runs (merged, declined) no longer have a worktree on disk.
+        if (run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed)
+            return Results.NotFound();
+
+        if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+            return Results.Conflict(new { error = "Worktree not available." });
+
+        var worktreeRoot2 = run.WorktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullPath = Path.GetFullPath(Path.Combine(worktreeRoot2, normalizedPath));
+
+        if (!File.Exists(fullPath))
+            return Results.NotFound();
+
+        try
+        {
+            const int maxContentBytes = 1 * 1024 * 1024; // 1 MB
+            const int binaryProbeBytes = 8192;
+
+            // Binary detection: check the first 8 KB for null bytes.
+            bool isBinaryFile;
+            using (var probe = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var buf = new byte[binaryProbeBytes];
+                int read = await probe.ReadAsync(buf, 0, binaryProbeBytes, ct);
+                isBinaryFile = buf.AsSpan(0, read).IndexOf((byte)0) >= 0;
+            }
+
+            if (isBinaryFile)
+            {
+                return Results.Json(new WorkspaceFileContent
+                {
+                    Path     = normalizedPath,
+                    Content  = null,
+                    IsBinary = true,
+                    Language = DetectLanguage(normalizedPath),
+                });
+            }
+
+            var fileInfo = new FileInfo(fullPath);
+            if (fileInfo.Length > maxContentBytes)
+            {
+                return Results.Json(new WorkspaceFileContent
+                {
+                    Path     = normalizedPath,
+                    Content  = null,
+                    IsBinary = false,
+                    Language = "too_large",
+                });
+            }
+
+            var content = await File.ReadAllTextAsync(fullPath, ct);
+            return Results.Json(new WorkspaceFileContent
+            {
+                Path     = normalizedPath,
+                Content  = content,
+                IsBinary = false,
+                Language = DetectLanguage(normalizedPath),
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to read file content for run {RunId} path {Path}", runId, normalizedPath);
+            return Results.Problem("Failed to read file content.", statusCode: 500);
+        }
+    }
+
+    // --- Diff endpoint branch ---
     bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined;
 
     IReadOnlyList<WorkspaceFileEntry> allEntries;
@@ -817,7 +922,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
 
     try
     {
-        var (fileDiff, isBinaryFile) = worktreeManager.GetFileDiffEntry(
+        var (fileDiff, isBinaryFile2) = worktreeManager.GetFileDiffEntry(
             run.RepositoryPath, run.WorktreePath!, run.OriginatingBranch, run.WorktreeBranch!, normalizedPath);
 
         return Results.Json(new WorkspaceFileDiff
@@ -825,7 +930,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
             Path     = normalizedPath,
             Diff     = fileDiff,
             Status   = whitelistEntry.Status,
-            IsBinary = isBinaryFile,
+            IsBinary = isBinaryFile2,
         });
     }
     catch (Exception ex)
@@ -1082,6 +1187,58 @@ static IReadOnlyList<WorkspaceFileEntry> MergeFileEntries(
     foreach (var e in committed)   merged[e.Path] = e;
     foreach (var e in uncommitted) merged[e.Path] = e;
     return [.. merged.Values];
+}
+
+/// <summary>
+/// Applies per-file line counts to a list of file entries, merging committed and uncommitted
+/// counts per path. Counts are capped at zero to guard against any negative values.
+/// </summary>
+static IReadOnlyList<WorkspaceFileEntry> ApplyLineCounts(
+    IReadOnlyList<WorkspaceFileEntry> entries,
+    IReadOnlyDictionary<string, (int Added, int Removed)> committedCounts,
+    IReadOnlyDictionary<string, (int Added, int Removed)> uncommittedCounts)
+{
+    return entries.Select(e =>
+    {
+        var (cAdded, cRemoved) = committedCounts.TryGetValue(e.Path,   out var cc) ? cc : (0, 0);
+        var (uAdded, uRemoved) = uncommittedCounts.TryGetValue(e.Path, out var uc) ? uc : (0, 0);
+        return e with
+        {
+            AddedLines   = Math.Max(0, cAdded   + uAdded),
+            RemovedLines = Math.Max(0, cRemoved + uRemoved),
+        };
+    }).ToList();
+}
+
+/// <summary>
+/// Maps a file extension to a language identifier accepted by react-syntax-highlighter.
+/// Returns null for unknown extensions.
+/// </summary>
+static string? DetectLanguage(string path)
+{
+    var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+    return ext switch
+    {
+        "cs"                                    => "csharp",
+        "ts" or "tsx"                           => "typescript",
+        "js" or "jsx"                           => "javascript",
+        "json"                                  => "json",
+        "md"                                    => "markdown",
+        "css"                                   => "css",
+        "html"                                  => "html",
+        "xml" or "csproj" or "props" or "targets" => "xml",
+        "yaml" or "yml"                         => "yaml",
+        "sh" or "bash"                          => "bash",
+        "ps1"                                   => "powershell",
+        "py"                                    => "python",
+        "go"                                    => "go",
+        "rs"                                    => "rust",
+        "java"                                  => "java",
+        "cpp" or "cc" or "cxx" or "c" or "h" or "hpp" => "cpp",
+        "sql"                                   => "sql",
+        "txt"                                   => "plaintext",
+        _                                       => null
+    };
 }
 
 public partial class Program { }

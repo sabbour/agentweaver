@@ -275,6 +275,62 @@ public sealed class WorktreeManager
         return (string.IsNullOrEmpty(result) ? null : result, false);
     }
 
+    /// <summary>
+    /// Returns per-file line counts from the committed diff between the originating branch
+    /// and the worktree branch. Uses a single Patch comparison and LibGit2Sharp's built-in
+    /// LinesAdded/LinesDeleted counters. Returns an empty dictionary on any error.
+    /// </summary>
+    public IReadOnlyDictionary<string, (int Added, int Removed)> GetFileDiffLineCounts(
+        string repositoryPath, string originatingBranch, string worktreeBranch)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            var origin   = repo.Branches[originatingBranch];
+            var worktree = repo.Branches[worktreeBranch];
+            if (origin is null || worktree is null)
+                return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+
+            using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, worktree.Tip.Tree);
+            var counts = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+            foreach (var entry in patch)
+                counts[NormalizePathSeparators(entry.Path)] = (entry.LinesAdded, entry.LinesDeleted);
+            return counts;
+        }
+        catch
+        {
+            return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Returns per-file line counts for uncommitted changes in the worktree (working directory
+    /// and index vs HEAD). Returns an empty dictionary on any error.
+    /// </summary>
+    public IReadOnlyDictionary<string, (int Added, int Removed)> GetUncommittedFileDiffLineCounts(
+        string worktreePath)
+    {
+        try
+        {
+            using var repo = new Repository(worktreePath);
+            var head = repo.Head.Tip;
+            if (head is null)
+                return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+
+            using var patch = repo.Diff.Compare<Patch>(
+                head.Tree,
+                DiffTargets.WorkingDirectory | DiffTargets.Index);
+            var counts = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+            foreach (var entry in patch)
+                counts[NormalizePathSeparators(entry.Path)] = (entry.LinesAdded, entry.LinesDeleted);
+            return counts;
+        }
+        catch
+        {
+            return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+        }
+    }
+
     private static string NormalizePathSeparators(string path) =>
         path.Replace('\\', '/');
 

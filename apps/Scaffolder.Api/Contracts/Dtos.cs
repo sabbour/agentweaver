@@ -152,6 +152,12 @@ public sealed record WorkspaceFileEntry
 
     [JsonPropertyName("scope")]
     public required string Scope { get; init; }    // "committed" | "uncommitted" | "merged"
+
+    [JsonPropertyName("added_lines")]
+    public int AddedLines { get; init; }
+
+    [JsonPropertyName("removed_lines")]
+    public int RemovedLines { get; init; }
 }
 
 /// <summary>Per-file unified diff for a single file in a run's worktree (FR-035).</summary>
@@ -191,4 +197,26 @@ public sealed record WorkspaceNode
 
     [JsonPropertyName("status")]
     public string? Status { get; init; }           // "added" | "modified" | "deleted" | null (unchanged)
+
+    [JsonPropertyName("added_lines")]
+    public int AddedLines { get; init; }
+
+    [JsonPropertyName("removed_lines")]
+    public int RemovedLines { get; init; }
+}
+
+/// <summary>Response body for GET /api/runs/{id}/files/{path}/content.</summary>
+public sealed record WorkspaceFileContent
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("content")]
+    public string? Content { get; init; }    // null if binary or deleted
+
+    [JsonPropertyName("is_binary")]
+    public bool IsBinary { get; init; }
+
+    [JsonPropertyName("language")]
+    public string? Language { get; init; }   // language hint for syntax highlighting
 }

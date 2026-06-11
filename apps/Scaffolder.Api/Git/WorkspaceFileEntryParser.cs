@@ -85,16 +85,37 @@ public static class WorkspaceFileEntryParser
 
             if (filePath is not null)
             {
+                CountDiffLines(section, out int added, out int removed);
                 entries.Add(new WorkspaceFileEntry
                 {
-                    Path   = filePath,
-                    Status = status,
-                    Scope  = "merged",
+                    Path         = filePath,
+                    Status       = status,
+                    Scope        = "merged",
+                    AddedLines   = added,
+                    RemovedLines = removed,
                 });
             }
         }
 
         return entries;
+    }
+
+    /// <summary>
+    /// Counts added and removed lines in a single-file unified diff section.
+    /// Lines starting with '+' (excluding '+++' headers) count as added;
+    /// lines starting with '-' (excluding '---' headers) count as removed.
+    /// </summary>
+    public static void CountDiffLines(string section, out int added, out int removed)
+    {
+        added   = 0;
+        removed = 0;
+        if (string.IsNullOrEmpty(section)) return;
+
+        foreach (var line in section.Split('\n'))
+        {
+            if (line.StartsWith('+') && !line.StartsWith("+++")) added++;
+            else if (line.StartsWith('-') && !line.StartsWith("---")) removed++;
+        }
     }
 
     /// <summary>

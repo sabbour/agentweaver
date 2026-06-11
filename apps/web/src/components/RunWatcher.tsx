@@ -86,9 +86,13 @@ export function RunWatcher({ runId }: RunWatcherProps) {
   }, [events, runId]);
 
   // Derive a stable run status string for the artifact browser panels.
-  const derivedRunStatus = isLiveRun
-    ? 'in_progress'
-    : (resolvedReview?.status ?? (hasReviewRequested ? 'awaiting_review' : 'completed'));
+  // review.requested takes priority over isLiveRun — once the agent has requested
+  // review, the live-streaming phase is over from the agent's perspective.
+  const derivedRunStatus = hasReviewRequested
+    ? (resolvedReview?.status ?? 'awaiting_review')
+    : isLiveRun
+      ? 'in_progress'
+      : 'completed';
 
   const centerContent = (
     <div className={styles.centerContent}>
