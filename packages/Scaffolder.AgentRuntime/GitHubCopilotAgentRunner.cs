@@ -28,6 +28,30 @@ namespace Scaffolder.AgentRuntime;
 public sealed class GitHubCopilotAgentRunner : IAgentRunner
 {
     /// <summary>
+    /// System prompt appended as a system message via AsAIAgent(instructions:...).
+    /// Tells the Claude model to use our custom tools instead of native CLI tools.
+    /// </summary>
+    private const string CopilotSystemPrompt =
+        """
+        IMPORTANT: Use ONLY the custom tools listed below. Do NOT call bash, view, glob, ls,
+        grep, curl, git, gh, or any other native tool — they are disabled and will error.
+
+        Available tools:
+        - read_file(path): read a file (relative path from working directory)
+        - write_file(path, content): overwrite or create a file with full content
+        - create_file(path, file_text): create a new file (fails if already exists)
+        - str_replace_editor(path, old_str, new_str): replace a unique string in a file
+        - apply_patch(patch): apply a Copilot CLI patch
+        - grep_search(pattern): search files for a pattern
+        - file_search(pattern): find files by glob pattern
+        - run_command(command): run a shell command
+        - report_intent(intent): describe what you are about to do
+
+        All path arguments must be RELATIVE — no absolute paths.
+        Work step by step. Complete the full task including all file writes.
+        """;
+
+    /// <summary>
     /// SDK-internal tools whose lifecycle events are suppressed from the run stream.
     /// These are housekeeping operations (not sandboxed file/shell ops) that would
     /// confuse the frontend if rendered as ToolCallCards. This static allowlist is the
@@ -251,7 +275,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             ExcludedTools = NativeToolExclusion.ExcludedToolNames(),
         };
 
-        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
+        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: CopilotSystemPrompt);
         var session = await agent.CreateSessionAsync(ct);
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
