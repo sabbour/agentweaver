@@ -154,6 +154,15 @@ export function ArtifactBrowser({ runId, runStatus }: ArtifactBrowserProps) {
 
   const activeFilter = isHistorical ? 'all' : filter;
 
+  // Clear all local state when runId changes so stale data from the previous run
+  // is never visible while the new fetch is in flight.
+  useEffect(() => {
+    setFiles([]); // eslint-disable-line react-hooks/set-state-in-effect
+    setSelectedPath(null); // eslint-disable-line react-hooks/set-state-in-effect
+    setDiff(null); // eslint-disable-line react-hooks/set-state-in-effect
+    setFilter('all'); // eslint-disable-line react-hooks/set-state-in-effect
+  }, [runId]);
+
   // Fetch file list whenever filter or runId changes.
   // Loading/error state is reset in event handlers to avoid synchronous setState in effect body.
   useEffect(() => {

@@ -52,7 +52,8 @@ export class ScaffolderApiClient {
   }
 
   getRunFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
-    return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encodeURIComponent(path)}`);
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}`);
   }
 
   updateSandboxPolicy(policy: Pick<SandboxPolicy, 'repository_path' | 'shell_enabled' | 'direct' | 'network_enabled'>): Promise<SandboxPolicy> {

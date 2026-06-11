@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -155,7 +156,7 @@ public sealed class ApiClient
     public async Task<WorkspaceFileDiff> GetRunFileDiffAsync(
         string runId, string path, CancellationToken ct = default)
     {
-        var url = $"{_config.ApiUrl}/api/runs/{Uri.EscapeDataString(runId)}/files/{Uri.EscapeDataString(path)}";
+        var url = $"{_config.ApiUrl}/api/runs/{Uri.EscapeDataString(runId)}/files/{string.Join("/", path.Split('/').Select(Uri.EscapeDataString))}";
         using var response = await _http.GetAsync(url, ct);
         return await ReadJsonAsync<WorkspaceFileDiff>(response, ct);
     }
