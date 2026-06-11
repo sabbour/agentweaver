@@ -38,8 +38,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         Call report_intent(intent) before each major step to describe what you are about to do.
         report_intent does NOT write files — always follow it with the actual tool call in the same response.
 
+        Only write files within the current working directory. Do not write files to any path outside it.
         Work step by step. Do not produce a final summary until ALL writes are done.
         Do not ask clarifying questions — proceed with your best judgement.
+
+        When your work is complete, call report_outcome(achieved, reason) once to self-assess:
+        - achieved: true if the task was fully completed, false if any critical step failed or was blocked
+        - reason: one-sentence explanation
+        Call this as your final tool call before writing any summary.
         """;
 
     /// <summary>
@@ -49,12 +55,13 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// sole suppress decision source — never driven by model-controlled strings.
     /// </summary>
     private static readonly HashSet<string> SuppressedInternalTools =
-        new(StringComparer.OrdinalIgnoreCase) { "report_intent", "glob" };
+        new(StringComparer.OrdinalIgnoreCase) { "report_intent", "report_outcome", "glob" };
 
     private readonly GitHubCopilotClientFactory _factory;
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
+    private readonly IToolApprovalGate _toolApprovalGate;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
     public GitHubCopilotAgentRunner(
@@ -62,12 +69,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
+        IToolApprovalGate toolApprovalGate,
         ILogger<GitHubCopilotAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
+        _toolApprovalGate = toolApprovalGate ?? throw new ArgumentNullException(nameof(toolApprovalGate));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -220,7 +229,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         // Emit configuration snapshot for debuggability.
         Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt });
-        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)" } });
+        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -261,15 +270,29 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce),
+            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
-            // Do not register custom tools or restrict AvailableTools/ExcludedTools.
-            // Let Copilot CLI use its own native tools; governance runs via OnPermissionRequest.
+            // Deterministic session ID enables history replay via ResumeSessionAsync.
+            // Format: "scaffolder-run-{runId}" — unique per run, stable across restarts.
+            SessionId = $"scaffolder-run-{runId}",
+            // Register only report_intent so the SDK knows about it as a custom tool
+            // and routes it through OnPermissionRequest. The full SandboxToolRegistry
+            // is NOT registered wholesale — that would conflict with native tools and
+            // bypass governance for sandbox operations.
+            Tools = BuildSessionConfigTools(toolContext),
+            // Append workflow instructions as a system message so the model receives them
+            // before any user turn. SystemMessageMode.Append preserves Copilot's built-in
+            // guardrails and tool-use guidance while layering our scaffold instructions on top.
+            SystemMessage = new SystemMessageConfig
+            {
+                Mode = SystemMessageMode.Append,
+                Content = CopilotSystemPrompt,
+            },
         };
 
-        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: CopilotSystemPrompt);
+        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
         var session = await agent.CreateSessionAsync(ct);
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
@@ -347,6 +370,12 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         finally
         {
             _approvalStore.Clear(runId);
+            _toolApprovalGate.Clear(runId);
+            // Dispose (not delete) the agent so the SDK persists session events for history replay.
+            // Cast to IAsyncDisposable since AIAgent base class does not declare it,
+            // but the concrete GitHubCopilotAgent implementation does.
+            if (agent is IAsyncDisposable disposableAgent)
+                await disposableAgent.DisposeAsync();
         }
     }
 
@@ -360,15 +389,74 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// the streaming loop (call + real result); the handler only co-emits its tool.call when it
     /// holds the SDK's real ToolCallId, so the two sources dedup instead of diverging.
     /// </summary>
-    private PermissionRequestHandler BuildPermissionHandler(
+    internal PermissionRequestHandler BuildPermissionHandler(
         SandboxGovernance governance,
         string runId,
         string workingDirectory,
         Action<string, string, object?> emitToolCallOnce,
-        Action<string, string> emitToolErrorOnce)
+        Action<string, string> emitToolErrorOnce,
+        Action<string, object> emit,
+        CancellationToken runCt)
     {
         return (request, invocation) =>
         {
+            // URL fetch (web_fetch) — surface a HITL approval gate rather than silently denying.
+            // The handler blocks on the gate (RunContinuationsAsynchronously, no SyncContext on
+            // SDK callback thread — safe to .GetAwaiter().GetResult()); the frontend renders a
+            // HITL card and the operator grants or denies via POST /api/runs/{id}/tool-approvals.
+            if (request is PermissionRequestUrl urlRequest)
+            {
+                var urlCallId = urlRequest.ToolCallId ?? Guid.NewGuid().ToString("n");
+                var requestId = urlCallId;  // full ID is the key — no truncation, no collision risk
+                var displayId = requestId.Length >= 8 ? requestId[..8] : requestId;
+                var rawUrl = urlRequest.Url ?? "";
+                var intention = urlRequest.Intention ?? "";
+
+                emitToolCallOnce(urlCallId, "web_fetch", new Dictionary<string, object>
+                {
+                    ["url"] = rawUrl,
+                });
+
+                // Short-circuit: skip the HITL card if a run-scoped or always-allowed policy already covers this tool+URL.
+                if (_toolApprovalGate.IsAutoApproved(runId, "web_fetch", rawUrl))
+                {
+                    _logger.LogInformation(
+                        "Tool HITL auto-approved (policy) — url={Url} runId={RunId}",
+                        rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
+                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                }
+
+                // Atomically register context and gate in one call so GrantAsync can record
+                // scope-based allow policies even if approval arrives immediately after registration.
+                var approvalTask = _toolApprovalGate.WaitForApprovalAsync(runId, requestId, "web_fetch", rawUrl, TimeSpan.FromMinutes(5), runCt);
+
+                emit(EventTypes.ToolApprovalRequired, new
+                {
+                    requestId,
+                    displayId,
+                    toolName = "web_fetch",
+                    url = SanitizeUrl(rawUrl),
+                    intention = SanitizeIntent(intention),
+                    message = "The agent wants to fetch a URL. Operator approval required.",
+                });
+
+                _logger.LogInformation(
+                    "Tool HITL gate — waiting for operator approval: requestId={RequestId} url={Url} runId={RunId}",
+                    displayId, rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
+
+                var approved = approvalTask.ConfigureAwait(false).GetAwaiter().GetResult();
+
+                if (!approved)
+                {
+                    emitToolErrorOnce(urlCallId, "URL fetch was denied by the operator.");
+                    _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
+                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Rejected });
+                }
+
+                _logger.LogInformation("Tool HITL approved — requestId={RequestId} runId={RunId}", displayId, runId);
+                return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+            }
+
             // Custom external tools registered in SessionConfig.Tools fire OnPermissionRequest
             // with PermissionRequestCustomTool. Run governance against the tool name + args
             // from the request — same two-layer check as native tools — before approving.
@@ -381,6 +469,49 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 var toolName = customTool.ToolName ?? "unknown";
                 try
                 {
+                    // report_intent is a side-effect-free observability call: approve without
+                    // governance, emit agent.intent (not tool.call / tool.result), and return.
+                    if (string.Equals(toolName, "report_intent", StringComparison.Ordinal))
+                    {
+                        string intentRaw = "";
+                        if (customTool.Args is System.Text.Json.JsonElement intentEl &&
+                            intentEl.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                            intentEl.TryGetProperty("intent", out var intentProp))
+                            intentRaw = intentProp.GetString() ?? "";
+
+                        emit(EventTypes.AgentIntent, new { intent = SanitizeIntent(intentRaw) });
+
+                        return Task.FromResult(new PermissionRequestResult
+                        {
+                            Kind = PermissionRequestResultKind.Approved,
+                        });
+                    }
+
+                    // report_outcome is a side-effect-free self-assessment call: approve without
+                    // governance, emit run.outcome (not tool.call / tool.result), and return.
+                    if (string.Equals(toolName, "report_outcome", StringComparison.Ordinal))
+                    {
+                        bool achieved = false;
+                        string reasonRaw = "";
+                        if (customTool.Args is System.Text.Json.JsonElement outcomeEl &&
+                            outcomeEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            if (outcomeEl.TryGetProperty("achieved", out var achievedProp) &&
+                                (achievedProp.ValueKind == System.Text.Json.JsonValueKind.True ||
+                                 achievedProp.ValueKind == System.Text.Json.JsonValueKind.False))
+                                achieved = achievedProp.GetBoolean();
+                            if (outcomeEl.TryGetProperty("reason", out var reasonProp))
+                                reasonRaw = reasonProp.GetString() ?? "";
+                        }
+
+                        emit(EventTypes.RunOutcome, new { achieved, reason = SanitizeIntent(reasonRaw) });
+
+                        return Task.FromResult(new PermissionRequestResult
+                        {
+                            Kind = PermissionRequestResultKind.Approved,
+                        });
+                    }
+
                     // Deserialize the JSON args blob. Stamp tool_name first so it cannot be
                     // overridden by a model-supplied key (Seraph hardening).
                     var args = new Dictionary<string, object>();
@@ -573,7 +704,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var nativeOverrides = new HashSet<string>(StringComparer.Ordinal)
         {
             "read_file", "str_replace_editor", "apply_patch",
-            "create_file", "write_file", "grep_search", "file_search", "report_intent",
+            "create_file", "write_file", "grep_search", "file_search", "report_intent", "report_outcome",
         };
 
         return SandboxToolRegistry.Build(context)
@@ -609,6 +740,59 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         protected override ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments, CancellationToken cancellationToken) =>
             inner.InvokeAsync(arguments, cancellationToken);
+    }
+
+    /// <summary>
+    /// Builds the tool list for <see cref="SessionConfig.Tools"/>:
+    /// only <c>report_intent</c> and <c>report_outcome</c>, wrapped as native overrides so
+    /// the SDK accepts them. Registering only these functions (not the full
+    /// <see cref="SandboxToolRegistry.Build"/> list) prevents conflicts with native tools
+    /// and keeps governance tight.
+    /// </summary>
+    internal static IList<AIFunction> BuildSessionConfigTools(SandboxToolContext context)
+    {
+        var all = SandboxToolRegistry.Build(context);
+        var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
+        var outcomeFn = all.First(f => string.Equals(f.Name, "report_outcome", StringComparison.Ordinal));
+        return [new CopilotOverrideAIFunction(intentFn), new CopilotOverrideAIFunction(outcomeFn)];
+    }
+
+    /// <summary>
+    /// Strips userinfo credentials from a URL and caps its length at 200 characters.
+    /// Falls back to truncation if the input is not a valid absolute URI.
+    /// </summary>
+    internal static string SanitizeUrl(string rawUrl)
+    {
+        if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))
+            return rawUrl.Length > 200 ? rawUrl[..200] + "…" : rawUrl;
+
+        // Strip embedded credentials (userinfo) such as https://user:pass@host/
+        var builder = new UriBuilder(uri) { UserName = "", Password = "" };
+        var sanitized = builder.Uri.ToString();
+        return sanitized.Length > 200 ? sanitized[..200] + "…" : sanitized;
+    }
+
+    /// <summary>
+    /// Sanitizes an intent string received from the model before surfacing it in the
+    /// run stream. Keeps only printable characters plus horizontal tab and newline;
+    /// normalizes all line endings to LF; caps at 2000 characters.
+    /// </summary>
+    internal static string SanitizeIntent(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return "";
+        if (raw.Length > 2000) raw = raw[..2000];
+        raw = raw.Replace("\r\n", "\n", StringComparison.Ordinal)
+                 .Replace("\r", "\n", StringComparison.Ordinal);
+        var sb = new StringBuilder(raw.Length);
+        foreach (var c in raw)
+        {
+            // Keep horizontal tab (U+0009) and line feed (U+000A).
+            if (c == '\t' || c == '\n') { sb.Append(c); continue; }
+            // Strip NUL, remaining C0 (U+0001–U+001F), DEL (U+007F), C1 (U+0080–U+009F).
+            if (c < 0x20 || c == 0x7F || (c >= 0x80 && c <= 0x9F)) continue;
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     /// <summary>

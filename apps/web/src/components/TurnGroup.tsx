@@ -3,7 +3,8 @@ import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { AgentMessageBubble } from './AgentMessageBubble';
 import { ToolCallCard } from './ToolCallCard';
-import type { TurnGroupItem, TurnStep, ToolCallItem } from '../timeline/types';
+import { LifecycleEventCard } from './LifecycleEventCard';
+import type { TurnGroupItem, TurnStep, ToolCallItem, ApprovalRequestItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
 
 const useStyles = makeStyles({
@@ -11,7 +12,7 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalM,
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: tokens.spacingVerticalXXS,
   },
   toolsHeader: {
     display: 'flex',
@@ -28,14 +29,14 @@ const useStyles = makeStyles({
   },
   chevron: {
     color: tokens.colorNeutralForeground4,
-    fontSize: '10px',
+    fontSize: tokens.fontSizeBase100,
     flexShrink: 0,
   },
   toolsList: {
     paddingLeft: tokens.spacingHorizontalM,
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: tokens.spacingVerticalXXS,
   },
 });
 
@@ -117,9 +118,10 @@ interface TurnGroupProps {
   item: TurnGroupItem;
   isLiveRun: boolean;
   streamStatus: StreamStatus;
+  runId?: string;
 }
 
-export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus }: TurnGroupProps) {
+export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus, runId }: TurnGroupProps) {
   const styles = useStyles();
 
   if (item.steps.length === 0 && item.active === false) {
@@ -144,6 +146,26 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
               />
             );
           }
+          if (step.kind === 'approval-request') {
+            const aprStep = step as ApprovalRequestItem;
+            return (
+              <LifecycleEventCard
+                key={`approval-${aprStep.requestId}`}
+                event={{
+                  sequence: -1,
+                  type: 'tool.approval_required',
+                  payload: {
+                    request_id: aprStep.requestId,
+                    tool_name: aprStep.toolName,
+                    url: aprStep.url ?? '',
+                  },
+                }}
+                runId={runId}
+                isResolved={aprStep.resolved}
+                resolvedScope={aprStep.resolvedScope}
+              />
+            );
+          }
           // report_intent — show ⚠ if the immediately following tool cluster has failures
           const nextCluster = clusters[i + 1];
           const hasFollowingErrors =
@@ -161,12 +183,18 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
         }
 
         // Tool cluster — collapse when turn is complete, expand when active
+        // Auto-expand if any step has an error or non-zero exit code
         if (isComplete) {
+          const hasErrors = cluster.steps.some(s =>
+            s.error != null ||
+            (s.result?.content?.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== undefined &&
+             s.result.content.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== '0')
+          );
           return (
             <ToolClusterRow
               key={"cluster-" + i + (isComplete ? "-done" : "-live")}
               cluster={cluster}
-              defaultExpanded={false}
+              defaultExpanded={hasErrors}
               streamStatus={streamStatus}
             />
           );

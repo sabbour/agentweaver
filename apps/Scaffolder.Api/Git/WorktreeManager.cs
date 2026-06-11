@@ -1,5 +1,6 @@
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
+using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Infrastructure;
 using Scaffolder.Api.Runs;
 using Scaffolder.Domain;
@@ -104,6 +105,266 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
+    /// Returns files that differ between the originating branch tip and the worktree branch tip
+    /// (committed changes in this run).
+    /// </summary>
+    public IReadOnlyList<WorkspaceFileEntry> GetCommittedFileEntries(
+        string repositoryPath, string originatingBranch, string worktreeBranch)
+    {
+        using var repo = new Repository(repositoryPath);
+
+        var origin = repo.Branches[originatingBranch]
+            ?? throw new InvalidOperationException($"Originating branch '{originatingBranch}' was not found.");
+        var worktree = repo.Branches[worktreeBranch]
+            ?? throw new InvalidOperationException($"Worktree branch '{worktreeBranch}' was not found.");
+
+        using var diff = repo.Diff.Compare<TreeChanges>(origin.Tip.Tree, worktree.Tip.Tree);
+        var entries = new List<WorkspaceFileEntry>();
+
+        foreach (var change in diff)
+        {
+            if (change.Status == ChangeKind.Unmodified) continue;
+            entries.Add(new WorkspaceFileEntry
+            {
+                Path   = NormalizePathSeparators(change.Path),
+                Status = MapChangeKindToStatus(change.Status),
+                Scope  = "committed",
+            });
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Returns files that have staged or working-directory changes in the worktree
+    /// compared to the worktree HEAD (uncommitted changes).
+    /// </summary>
+    public IReadOnlyList<WorkspaceFileEntry> GetUncommittedFileEntries(string worktreePath)
+    {
+        using var repo = new Repository(worktreePath);
+
+        var status = repo.RetrieveStatus(new StatusOptions
+        {
+            IncludeUntracked     = true,
+            IncludeIgnored       = false,
+            RecurseUntrackedDirs = true,
+            RecurseIgnoredDirs   = false,
+        });
+
+        // Index changes are inserted first; working-directory changes overwrite them
+        // because the working directory represents the most current state.
+        var byPath = new Dictionary<string, WorkspaceFileEntry>(StringComparer.Ordinal);
+
+        foreach (var entry in status)
+        {
+            var indexStatus = MapFileStatusToEntryStatus(entry.State, staged: true);
+            if (indexStatus is not null)
+            {
+                var p = NormalizePathSeparators(entry.FilePath);
+                byPath[p] = new WorkspaceFileEntry { Path = p, Status = indexStatus, Scope = "uncommitted" };
+            }
+        }
+
+        foreach (var entry in status)
+        {
+            var workdirStatus = MapFileStatusToEntryStatus(entry.State, staged: false);
+            if (workdirStatus is not null)
+            {
+                var p = NormalizePathSeparators(entry.FilePath);
+                byPath[p] = new WorkspaceFileEntry { Path = p, Status = workdirStatus, Scope = "uncommitted" };
+            }
+        }
+
+        return [.. byPath.Values];
+    }
+
+    /// <summary>
+    /// Returns files changed in the most recent commit on the worktree branch vs its parent.
+    /// Returns an empty list when the worktree HEAD has no parent (initial commit).
+    /// </summary>
+    public IReadOnlyList<WorkspaceFileEntry> GetLastCommitFileEntries(string worktreePath)
+    {
+        using var repo = new Repository(worktreePath);
+
+        var head = repo.Head.Tip;
+        if (head is null) return [];
+
+        var parent = head.Parents.FirstOrDefault();
+        if (parent is null) return [];
+
+        using var diff = repo.Diff.Compare<TreeChanges>(parent.Tree, head.Tree);
+        var entries = new List<WorkspaceFileEntry>();
+
+        foreach (var change in diff)
+        {
+            if (change.Status == ChangeKind.Unmodified) continue;
+            entries.Add(new WorkspaceFileEntry
+            {
+                Path   = NormalizePathSeparators(change.Path),
+                Status = MapChangeKindToStatus(change.Status),
+                Scope  = "committed",
+            });
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Returns the unified diff for a single file relative to the originating branch tip,
+    /// including both committed and any uncommitted working-directory changes.
+    /// Returns (null, true) when the file is binary; (null, false) when no diff was produced.
+    /// </summary>
+    public (string? Diff, bool IsBinary) GetFileDiffEntry(
+        string repositoryPath,
+        string worktreePath,
+        string originatingBranch,
+        string worktreeBranch,
+        string relativeFilePath)
+    {
+        var parts = new System.Text.StringBuilder();
+        bool isBinary = false;
+
+        // Committed diff: origin branch tip to worktree branch tip.
+        using (var repo = new Repository(repositoryPath))
+        {
+            var origin   = repo.Branches[originatingBranch];
+            var worktree = repo.Branches[worktreeBranch];
+
+            if (origin is not null && worktree is not null)
+            {
+                using var patch = repo.Diff.Compare<Patch>(
+                    origin.Tip.Tree,
+                    worktree.Tip.Tree,
+                    new[] { relativeFilePath },
+                    new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false });
+
+                var entry = patch[relativeFilePath];
+                if (entry is not null)
+                {
+                    if (entry.IsBinaryComparison) isBinary = true;
+                    else if (!string.IsNullOrEmpty(entry.Patch)) parts.Append(entry.Patch);
+                }
+            }
+        }
+
+        // Uncommitted diff: worktree HEAD to working directory and index.
+        if (!isBinary && Directory.Exists(worktreePath))
+        {
+            using var repo = new Repository(worktreePath);
+            var headTree = repo.Head.Tip?.Tree;
+
+            if (headTree is not null)
+            {
+                using var patch = repo.Diff.Compare<Patch>(
+                    headTree,
+                    DiffTargets.WorkingDirectory | DiffTargets.Index,
+                    new[] { relativeFilePath },
+                    new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false });
+
+                var entry = patch[relativeFilePath];
+                if (entry is not null)
+                {
+                    if (entry.IsBinaryComparison) isBinary = true;
+                    else if (!string.IsNullOrEmpty(entry.Patch)) parts.Append(entry.Patch);
+                }
+            }
+        }
+
+        if (isBinary) return (null, true);
+        var result = parts.ToString();
+        return (string.IsNullOrEmpty(result) ? null : result, false);
+    }
+
+    /// <summary>
+    /// Returns per-file line counts from the committed diff between the originating branch
+    /// and the worktree branch. Uses a single Patch comparison and LibGit2Sharp's built-in
+    /// LinesAdded/LinesDeleted counters. Returns an empty dictionary on any error.
+    /// </summary>
+    public IReadOnlyDictionary<string, (int Added, int Removed)> GetFileDiffLineCounts(
+        string repositoryPath, string originatingBranch, string worktreeBranch)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            var origin   = repo.Branches[originatingBranch];
+            var worktree = repo.Branches[worktreeBranch];
+            if (origin is null || worktree is null)
+                return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+
+            using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, worktree.Tip.Tree);
+            var counts = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+            foreach (var entry in patch)
+                counts[NormalizePathSeparators(entry.Path)] = (entry.LinesAdded, entry.LinesDeleted);
+            return counts;
+        }
+        catch
+        {
+            return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Returns per-file line counts for uncommitted changes in the worktree (working directory
+    /// and index vs HEAD). Returns an empty dictionary on any error.
+    /// </summary>
+    public IReadOnlyDictionary<string, (int Added, int Removed)> GetUncommittedFileDiffLineCounts(
+        string worktreePath)
+    {
+        try
+        {
+            using var repo = new Repository(worktreePath);
+            var head = repo.Head.Tip;
+            if (head is null)
+                return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+
+            using var patch = repo.Diff.Compare<Patch>(
+                head.Tree,
+                DiffTargets.WorkingDirectory | DiffTargets.Index);
+            var counts = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+            foreach (var entry in patch)
+                counts[NormalizePathSeparators(entry.Path)] = (entry.LinesAdded, entry.LinesDeleted);
+            return counts;
+        }
+        catch
+        {
+            return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+        }
+    }
+
+    private static string NormalizePathSeparators(string path) =>
+        path.Replace('\\', '/');
+
+    private static string MapChangeKindToStatus(ChangeKind kind) => kind switch
+    {
+        ChangeKind.Added       => "added",
+        ChangeKind.Deleted     => "deleted",
+        ChangeKind.Renamed     => "modified",
+        ChangeKind.Copied      => "added",
+        ChangeKind.TypeChanged => "modified",
+        _                      => "modified",
+    };
+
+    private static string? MapFileStatusToEntryStatus(FileStatus state, bool staged)
+    {
+        if (staged)
+        {
+            if ((state & FileStatus.NewInIndex)        != 0) return "added";
+            if ((state & FileStatus.ModifiedInIndex)   != 0) return "modified";
+            if ((state & FileStatus.DeletedFromIndex)  != 0) return "deleted";
+            if ((state & FileStatus.RenamedInIndex)    != 0) return "modified";
+            if ((state & FileStatus.TypeChangeInIndex) != 0) return "modified";
+            return null;
+        }
+
+        if ((state & FileStatus.NewInWorkdir)        != 0) return "added";
+        if ((state & FileStatus.ModifiedInWorkdir)   != 0) return "modified";
+        if ((state & FileStatus.DeletedFromWorkdir)  != 0) return "deleted";
+        if ((state & FileStatus.RenamedInWorkdir)    != 0) return "modified";
+        if ((state & FileStatus.TypeChangeInWorkdir) != 0) return "modified";
+        return null;
+    }
+
+    /// <summary>
     /// Attempts to merge the run's worktree branch back into the originating branch.
     /// Returns a trichotomy outcome:
     ///   Merged   — succeeded; ref (and working tree if checked out) updated.
@@ -178,7 +439,26 @@ public sealed class WorktreeManager
     {
         // (d-1) Full clean-check before any mutation.
         if (!IsWorkingTreeMergeSafe(repo, origin.Tip, worktree.Tip.Tree, out var blockReason))
-            return MergeOutcome.Blocked(blockReason);
+        {
+            // A sequencer in progress (MERGE_HEAD, REBASE_HEAD, etc.) cannot be bypassed
+            // via the ref-only path — the user must resolve it first.
+            if (blockReason.Contains("a git operation is in progress", StringComparison.Ordinal))
+                return MergeOutcome.Blocked(blockReason);
+
+            // A conflicted index also cannot be bypassed via the ref-only path — advancing
+            // the branch ref underneath unresolved conflicts is unsafe.
+            if (blockReason.Contains("conflicted", StringComparison.Ordinal))
+                return MergeOutcome.Blocked(blockReason);
+
+            // For all other cases (dirty working tree, staged changes, untracked collisions),
+            // fall back to the ref-only path. MergeRefOnly never touches the working tree,
+            // so local changes are irrelevant and preserved. The user will need a `git pull`
+            // to sync their working tree after the merge.
+            _logger.LogWarning(
+                "Main working tree has uncommitted changes — using ref-only merge. " +
+                "A `git pull` in the repository is needed to reflect the merged changes locally.");
+            return MergeRefOnly(repo, origin, worktree, mergeBase, originatingBranch);
+        }
 
         var prevSha = origin.Tip.Sha;
 
@@ -196,7 +476,8 @@ public sealed class WorktreeManager
         if (result.Status == MergeTreeStatus.Conflicts)
         {
             return MergeOutcome.Conflict(
-                "The originating branch has diverged and the merge has conflicts that require human resolution.");
+                "The originating branch has diverged and the merge has conflicts that require human resolution.",
+                ExtractConflictingFiles(result));
         }
 
         var signature = WithTimestamp();
@@ -219,9 +500,11 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
-    /// Merges when the originating branch is NOT checked out (bare repo or HEAD on a different
-    /// branch). Uses UpdateTarget to move the ref without touching any working tree or index.
-    /// NEVER called when the branch is checked out — that would leave the working tree stale.
+    /// Merges by updating only the branch ref — no working tree or index is touched.
+    /// Used when the originating branch is NOT checked out (bare repo or HEAD on a different branch),
+    /// OR as a fallback when the branch IS checked out but the working tree has uncommitted changes
+    /// (dirty working tree, staged changes, untracked collisions). In the fallback case the user's
+    /// local changes are left untouched; a <c>git pull</c> is required to sync the working tree.
     /// </summary>
     private MergeOutcome MergeRefOnly(
         Repository repo,
@@ -246,7 +529,8 @@ public sealed class WorktreeManager
         if (result.Status == MergeTreeStatus.Conflicts)
         {
             return MergeOutcome.Conflict(
-                "The originating branch has diverged and the merge has conflicts that require human resolution.");
+                "The originating branch has diverged and the merge has conflicts that require human resolution.",
+                ExtractConflictingFiles(result));
         }
 
         var signature = WithTimestamp();
@@ -344,14 +628,14 @@ public sealed class WorktreeManager
 
         // Check for in-progress sequencer state against the real git directory.
         var gitDir = repo.Info.Path;
-        var sequencerFiles = new[] { "MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "BISECT_LOG" };
+        var sequencerFiles = new[] { "MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG" };
         var sequencerDirs  = new[] { "rebase-merge", "rebase-apply" };
 
         foreach (var file in sequencerFiles)
         {
             if (File.Exists(Path.Combine(gitDir, file)))
             {
-                blockReason = "a merge or rebase is already in progress";
+                blockReason = "a git operation is in progress (merge, rebase, cherry-pick, revert, bisect)";
                 return false;
             }
         }
@@ -359,7 +643,7 @@ public sealed class WorktreeManager
         {
             if (Directory.Exists(Path.Combine(gitDir, dir)))
             {
-                blockReason = "a merge or rebase is already in progress";
+                blockReason = "a git operation is in progress (merge, rebase, cherry-pick, revert, bisect)";
                 return false;
             }
         }
@@ -437,6 +721,41 @@ public sealed class WorktreeManager
     }
 
     private Signature WithTimestamp() => new(_signature.Name, _signature.Email, DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// Extracts the list of conflicting relative file paths from a <see cref="MergeTreeResult"/>
+    /// that has <see cref="MergeTreeStatus.Conflicts"/>. Paths are normalised to forward slashes.
+    /// Uses Ours path when available, Theirs as fallback, Ancestor as last resort.
+    /// Paths are validated to reject rooted paths, traversal sequences, and control characters.
+    /// Results are capped at 50 entries.
+    /// </summary>
+    private static IReadOnlyList<string> ExtractConflictingFiles(MergeTreeResult mergeResult)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var conflict in mergeResult.Conflicts)
+        {
+            if (paths.Count >= 50) break;
+
+            var path = conflict.Ours?.Path
+                    ?? conflict.Theirs?.Path
+                    ?? conflict.Ancestor?.Path;
+            if (string.IsNullOrEmpty(path)) continue;
+
+            var normalized = NormalizePathSeparators(path);
+
+            // Reject rooted paths (absolute paths starting with / or drive letters like C:\).
+            if (Path.IsPathRooted(normalized)) continue;
+
+            // Reject paths containing .. traversal segments.
+            if (normalized.Split('/').Any(seg => seg == "..")) continue;
+
+            // Reject paths with null bytes or C0/C1 control characters.
+            if (normalized.Any(c => c == '\0' || (c < 0x20 && c != '\t') || (c >= 0x7F && c <= 0x9F))) continue;
+
+            paths.Add(normalized);
+        }
+        return [.. paths];
+    }
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength] + "…";

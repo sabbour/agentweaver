@@ -21,4 +21,10 @@ public sealed record Run
     public string? TreeHash { get; init; }
     public int StepCount { get; init; }
     public string? Diff { get; init; }
+    /// <summary>
+    /// JSON array of conflicting file paths when the run is in MergeFailed due to a merge conflict.
+    /// Null when there are no conflicts or when the status is not MergeFailed.
+    /// Example: ["src/foo.cs","src/bar.cs"]
+    /// </summary>
+    public string? MergeConflicts { get; init; }
 }

@@ -66,7 +66,8 @@ public sealed class WorktreeOperationsAdapter : IWorktreeOperations
             MergeOutcomeKind.Conflict => new WorkflowMergeResult(
                 MergeResultKind.Conflict,
                 null, null, null, null, false,
-                outcome.Reason),
+                outcome.Reason,
+                outcome.ConflictingFiles),
             _ => throw new InvalidOperationException($"Unknown merge outcome kind: {outcome.Kind}")
         };
     }

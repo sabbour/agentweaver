@@ -29,7 +29,7 @@ public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>
         return result.Outcome switch
         {
             MergeExecutionOutcome.Merged =>
-                new MergeOutput(input.RunId, "merged", result.MergeResult),
+                new MergeOutput(input.RunId, "merged", result.MergeResult, result.MergeMode),
 
             MergeExecutionOutcome.Blocked =>
                 new MergeOutput(input.RunId, "blocked", result.Reason),

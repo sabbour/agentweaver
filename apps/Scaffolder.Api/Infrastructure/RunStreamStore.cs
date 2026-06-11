@@ -27,6 +27,9 @@ public sealed class RunStreamEntry
     private readonly List<RunEvent> _history = [];
     private bool _isCompleted;
     private bool _isAwaitingReview;
+    private bool _evicted;
+    private int _generation = 1;
+    private DateTimeOffset _lastActiveAt = DateTimeOffset.UtcNow;
     private readonly Lock _lock = new();
     private readonly TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile TaskCompletionSource _eventSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -34,6 +37,17 @@ public sealed class RunStreamEntry
     public RunStreamEntry(string owner)
     {
         Owner = owner ?? throw new ArgumentNullException(nameof(owner));
+    }
+
+    /// <summary>
+    /// The last time an event was recorded into this entry. Updated atomically on every
+    /// <see cref="Record"/> and <see cref="RecordNext"/> call so the eviction sweep uses
+    /// real activity time rather than immutable creation time. This prevents sweeping an
+    /// entry that is still actively written to during a long-lived revision cycle.
+    /// </summary>
+    public DateTimeOffset LastActiveAt
+    {
+        get { lock (_lock) return _lastActiveAt; }
     }
 
     public bool IsCompleted
@@ -50,6 +64,11 @@ public sealed class RunStreamEntry
         get { lock (_lock) return _isAwaitingReview; }
     }
 
+    public int Generation
+    {
+        get { lock (_lock) return _generation; }
+    }
+
     /// <summary>
     /// Marks this entry as awaiting a review decision. Must be called before emitting
     /// review.requested so the stale sweep cannot evict the entry while it waits (A1).
@@ -57,6 +76,67 @@ public sealed class RunStreamEntry
     public void MarkAwaitingReview()
     {
         lock (_lock) _isAwaitingReview = true;
+    }
+
+    /// <summary>
+    /// Clears the awaiting-review flag after a request-changes decision so the entry
+    /// is treated as live again (in_progress) and is eligible for normal eviction.
+    /// Also refreshes <see cref="_lastActiveAt"/> under the same lock so the entry is
+    /// not immediately eligible for stale eviction if it sat awaiting review longer than
+    /// <c>maxInProgressAge</c>. Returns <see langword="false"/> if the entry was already
+    /// evicted (caller should treat this as a no-op but may log a warning).
+    /// </summary>
+    public bool ClearAwaitingReview()
+    {
+        lock (_lock)
+        {
+            _lastActiveAt = DateTimeOffset.UtcNow;
+            _isAwaitingReview = false;
+            return !_evicted;
+        }
+    }
+
+    /// <summary>
+    /// Atomically checks whether this entry is stale and, if so, marks it evicted so that
+    /// subsequent <see cref="Record"/>/<see cref="RecordNext"/> calls are no-ops. Returns
+    /// <see langword="true"/> only if the entry was actually marked by this call, in which case
+    /// the caller must remove it from the store dictionary. Eliminates the TOCTOU window
+    /// between the stale predicate and <see cref="ConcurrentDictionary{TKey,TValue}.TryRemove"/>
+    /// (Fix 2 / A1): once this method returns <see langword="true"/>, no concurrent writer can
+    /// resurface the entry.
+    /// </summary>
+    public bool TryMarkEvicted(DateTimeOffset cutoff)
+    {
+        lock (_lock)
+        {
+            if (_evicted || _isCompleted || _isAwaitingReview || _lastActiveAt >= cutoff)
+                return false;
+            _evicted = true;
+            return true;
+        }
+    }
+
+    public int BumpGeneration()
+    {
+        lock (_lock)
+            return ++_generation;
+    }
+
+    /// <summary>
+    /// Atomically checks whether this entry is still live and, if so, increments the
+    /// generation counter. Returns <c>(true, newGeneration)</c> when the entry is live,
+    /// or <c>(false, currentGeneration)</c> when the entry has already been marked evicted
+    /// so the caller can detect the dead entry and recreate a fresh one before starting a
+    /// new revision cycle. This prevents a revision from silently writing to an evicted
+    /// entry whose <see cref="Record"/>/<see cref="RecordNext"/> calls are all no-ops.
+    /// </summary>
+    public (bool Success, int Generation) TryBumpGeneration()
+    {
+        lock (_lock)
+        {
+            if (_evicted) return (false, _generation);
+            return (true, ++_generation);
+        }
     }
 
     /// <summary>
@@ -71,6 +151,27 @@ public sealed class RunStreamEntry
     }
 
     /// <summary>
+    /// Atomically allocates the next sequence number and records the event under a
+    /// single lock acquisition, preventing a race between <see cref="NextSequence"/>
+    /// and <see cref="Record"/>. Use this when the caller does not already hold the
+    /// lock (e.g. recovery paths that emit a single synthetic event).
+    /// </summary>
+    public void RecordNext(string type, object payload)
+    {
+        TaskCompletionSource? previous;
+        lock (_lock)
+        {
+            if (_evicted) return;                   // Fix 2: no-op on evicted entries
+            _lastActiveAt = DateTimeOffset.UtcNow;  // Fix 1: refresh before cap check
+            if (_history.Count >= MaxEventsPerRun) return;
+            var seq = _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
+            _history.Add(new RunEvent(seq, type, payload));
+            previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+        previous.TrySetResult();
+    }
+
+    /// <summary>
     /// Records an event into the history and wakes all clients currently blocked in
     /// <see cref="WaitForChangeAsync"/>. Called by the orchestrator's recording writer.
     /// </summary>
@@ -79,6 +180,8 @@ public sealed class RunStreamEntry
         TaskCompletionSource? previous;
         lock (_lock)
         {
+            if (_evicted) return;                   // Fix 2: no-op on evicted entries
+            _lastActiveAt = DateTimeOffset.UtcNow;  // Fix 1: refresh before cap check
             if (_history.Count >= MaxEventsPerRun) return;
             _history.Add(evt);
             previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
@@ -98,6 +201,17 @@ public sealed class RunStreamEntry
             var events = _history.Where(e => e.Sequence > lastSeen).ToList();
             return new StreamSnapshot(events, _isCompleted);
         }
+    }
+
+    /// <summary>
+    /// Returns true if any recorded event has the specified <paramref name="type"/>.
+    /// Used by the SSE loop to detect reconnects at or after a known event type so
+    /// the stream can break immediately instead of polling indefinitely.
+    /// </summary>
+    public bool HasEventType(string type)
+    {
+        lock (_lock)
+            return _history.Any(e => string.Equals(e.Type, type, StringComparison.Ordinal));
     }
 
     public void MarkCompleted()
@@ -128,14 +242,22 @@ public sealed class RunStreamStore
     // full recorded event sequence (Principle V) rather than a single collapsed message.
     private const int MaxRetainedCompleted = 256;
 
-    /// <summary>
-    /// Maximum age for in-progress entries before they are considered leaked and eligible for
-    /// eviction. Prevents permanent memory leaks from runs that never complete.
-    /// </summary>
-    private static readonly TimeSpan MaxInProgressAge = TimeSpan.FromHours(2);
+    private readonly TimeSpan _maxInProgressAge;
 
     private readonly ConcurrentDictionary<string, (RunStreamEntry Entry, DateTimeOffset CreatedAt)> _entries = new();
     private readonly ConcurrentQueue<string> _completedOrder = new();
+
+    /// <summary>Production constructor — uses a 2-hour stale-entry threshold.</summary>
+    public RunStreamStore() : this(TimeSpan.FromHours(2)) { }
+
+    /// <summary>
+    /// Test constructor allowing a custom stale-entry threshold so eviction behaviour
+    /// can be exercised without waiting two hours.
+    /// </summary>
+    public RunStreamStore(TimeSpan maxInProgressAge)
+    {
+        _maxInProgressAge = maxInProgressAge;
+    }
 
     public RunStreamEntry Create(string runId, string owner)
     {
@@ -146,6 +268,13 @@ public sealed class RunStreamStore
 
     public RunStreamEntry? Get(string runId) =>
         _entries.TryGetValue(runId, out var pair) ? pair.Entry : null;
+
+    /// <summary>
+    /// Removes a run's stream entry from the store. Used by
+    /// <see cref="Runs.RunOrchestrator.StartRevisionAsync"/> to discard an evicted entry
+    /// before creating a fresh one so the new entry is visible to <see cref="Get"/>.
+    /// </summary>
+    public void Remove(string runId) => _entries.TryRemove(runId, out _);
 
     /// <summary>
     /// Marks a run's stream as finished and retains its recorded history for replay, evicting the
@@ -172,10 +301,14 @@ public sealed class RunStreamStore
         // Merging entries inherit this exemption: MarkAwaitingReview() is set before
         // the approve flow enters the Merging state, so IsAwaitingReview is already
         // true for any in-flight merge. No separate flag is needed.
-        var cutoff = DateTimeOffset.UtcNow - MaxInProgressAge;
+        // LastActiveAt (updated on every Record/RecordNext) is used instead of the
+        // immutable CreatedAt so a long-lived revision cycle — where the entry was
+        // created hours ago but is still actively written to — is not evicted while
+        // the watch loop is still streaming events to connected clients.
+        var cutoff = DateTimeOffset.UtcNow - _maxInProgressAge;
         foreach (var kvp in _entries)
         {
-            if (!kvp.Value.Entry.IsCompleted && !kvp.Value.Entry.IsAwaitingReview && kvp.Value.CreatedAt < cutoff)
+            if (kvp.Value.Entry.TryMarkEvicted(cutoff))
                 _entries.TryRemove(kvp.Key, out _);
         }
     }

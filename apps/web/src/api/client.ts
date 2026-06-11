@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -44,6 +44,33 @@ export class ScaffolderApiClient {
   getSandboxPolicy(repositoryPath: string): Promise<SandboxPolicy> {
     const encoded = encodeURIComponent(repositoryPath);
     return this.request<SandboxPolicy>('GET', `/api/sandbox-policy?repository_path=${encoded}`);
+  }
+
+  getRunFiles(runId: string, filter?: string): Promise<WorkspaceFileEntry[]> {
+    const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
+    return this.request<WorkspaceFileEntry[]>('GET', `/api/runs/${encodeURIComponent(runId)}/files${query}`);
+  }
+
+  getRunFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}`);
+  }
+
+  getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<WorkspaceFileContent>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
+  }
+
+  getRunWorkspace(runId: string): Promise<WorkspaceNode[]> {
+    return this.request<WorkspaceNode[]>('GET', `/api/runs/${encodeURIComponent(runId)}/workspace`);
+  }
+
+  commitRun(runId: string): Promise<CommitResponse> {
+    return this.request<CommitResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/commit`, {});
+  }
+
+  requestChanges(runId: string, comment: string): Promise<RequestChangesResponse> {
+    return this.request<RequestChangesResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/request-changes`, { comment });
   }
 
   updateSandboxPolicy(policy: Pick<SandboxPolicy, 'repository_path' | 'shell_enabled' | 'direct' | 'network_enabled'>): Promise<SandboxPolicy> {

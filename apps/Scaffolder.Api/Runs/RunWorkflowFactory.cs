@@ -247,7 +247,7 @@ internal sealed class RecordingChannelWriter(RunStreamEntry entry) : ChannelWrit
 {
     public override bool TryWrite(RunEvent item)
     {
-        entry.Record(item);
+        entry.RecordNext(item.Type, item.Payload);
         return true;
     }
 

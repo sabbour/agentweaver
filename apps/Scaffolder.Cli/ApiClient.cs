@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -142,5 +143,39 @@ public sealed class ApiClient
         };
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<SandboxPolicy>(response, ct);
+    }
+
+    public async Task<IReadOnlyList<WorkspaceFileEntry>> GetRunFilesAsync(
+        string runId, string filter = "all", CancellationToken ct = default)
+    {
+        var url = $"{_config.ApiUrl}/api/runs/{Uri.EscapeDataString(runId)}/files?filter={Uri.EscapeDataString(filter)}";
+        using var response = await _http.GetAsync(url, ct);
+        return await ReadJsonAsync<List<WorkspaceFileEntry>>(response, ct);
+    }
+
+    public async Task<WorkspaceFileDiff> GetRunFileDiffAsync(
+        string runId, string path, CancellationToken ct = default)
+    {
+        var url = $"{_config.ApiUrl}/api/runs/{Uri.EscapeDataString(runId)}/files/{string.Join("/", path.Split('/').Select(Uri.EscapeDataString))}";
+        using var response = await _http.GetAsync(url, ct);
+        return await ReadJsonAsync<WorkspaceFileDiff>(response, ct);
+    }
+
+    /// <summary>
+    /// Posts a request-changes decision for the given run.
+    /// Returns the updated run status (in_progress) on success (202).
+    /// Throws ApiException for 400/403/404/409 responses.
+    /// </summary>
+    public async Task<RequestChangesResponse> RequestChangesAsync(
+        string runId, string comment, CancellationToken ct = default)
+    {
+        var request = new RequestChangesRequest { Comment = comment };
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post, $"{_config.ApiUrl}/api/runs/{runId}/request-changes")
+        {
+            Content = JsonContent.Create(request, options: JsonConfig.Options)
+        };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<RequestChangesResponse>(response, ct);
     }
 }

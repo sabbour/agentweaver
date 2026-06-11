@@ -71,9 +71,34 @@ After a run completes, a human reviews the run's output (the set of changes the 
 
 **Acceptance Scenarios**:
 
-1. **Given** a completed run, **When** the human opens the result, **Then** the human sees the set of changes the run made relative to the originating branch.
+1. **Given** a completed run, **When** the human opens the result, **Then** the artifact browser opens showing the file tree of all changes the run made relative to the originating branch, and the human can select individual files to inspect their diffs or rendered content.
 2. **Given** a reviewed run, **When** the human approves, **Then** the run's changes are merged into the originating branch.
 3. **Given** a reviewed run, **When** the human declines, **Then** the originating branch remains unchanged and the run's working area is left intact for reference.
+4. **Given** the artifact browser is open on a completed run, **When** the human selects a source file, **Then** the readonly diff view shows additions and removals relative to the originating branch with line-level annotation.
+5. **Given** the artifact browser is open on a completed run, **When** the human selects a Markdown file, **Then** the readonly panel renders the file as formatted CommonMark rather than showing a raw diff.
+
+---
+
+### User Story 5 - Browse artifacts from run start through history (Priority: P5)
+
+From the moment a run is created, the user can navigate to that run — for example, by clicking it in the run list — and immediately open the artifact browser without waiting for the run to complete. The browser shows the current workspace state at that instant: a file tree on the left listing every file touched so far (empty if the agent has not yet written anything), with each file annotated as new, modified, or deleted relative to the originating branch. Filter tabs narrow the view to all touched files, committed changes, uncommitted changes, or only the last commit. Selecting a file opens it in a readonly panel on the right with live change indicators: source files show a line-level diff against the originating branch; Markdown files are rendered as formatted CommonMark. The file tree and editor/preview panel update live as the agent writes files, so the user always sees the current workspace state without manually refreshing. The same browser that serves as the live workspace view during a run becomes the primary review interface when the run completes, and transitions to a readonly historical view after the run is approved or declined. Both the CLI client and the Web UI expose this artifact browser.
+
+**Why this priority**: The artifact browser is the primary mechanism through which a human understands what the agent has done. It is essential for the review-and-approve flow (Story 4) and also enables live monitoring of agent progress from the very start of a run. It builds on the run lifecycle from Story 1 and the live stream from Story 2, so it sits at P5.
+
+**Independent Test**: Submit a run and immediately open the artifact browser before the agent has completed any step — confirm the browser opens and the file tree is accessible (empty if no writes have occurred yet); confirm the tree and editor/preview panel update live as the agent writes files; wait for the run to complete and confirm the final state matches the run's output; approve the run and confirm the browser transitions to a readonly historical view showing the same set of changes.
+
+**Acceptance Scenarios**:
+
+1. **Given** a run has just been submitted and is in progress, **When** the user navigates to that run (for example by clicking it in the run list), **Then** the artifact browser opens immediately — without waiting for the run to complete — showing the current workspace state; if no files have been touched yet, the file tree is empty but the browser is fully accessible.
+2. **Given** a run is in progress and the artifact browser is open, **When** the agent writes a file, **Then** the file tree updates to include that file, annotated as new, modified, or deleted relative to the originating branch, without the user refreshing manually.
+3. **Given** the artifact browser is open on a live run and a file has been written, **When** the user selects that file, **Then** the readonly diff view and Markdown preview are immediately available, reflecting the current content of the file as it stands in the workspace.
+4. **Given** the artifact browser is open, **When** the user applies the "Committed" filter tab, **Then** only files whose changes have been committed in the worktree are shown in the tree.
+5. **Given** the artifact browser is open, **When** the user applies the "Uncommitted" filter tab, **Then** only files with uncommitted changes relative to the worktree HEAD are shown in the tree.
+6. **Given** the artifact browser is open, **When** the user applies the "Last commit" filter tab, **Then** only files changed in the most recent commit in the worktree are shown in the tree.
+7. **Given** the artifact browser is open and a source file is selected, **When** the file panel renders, **Then** the panel shows a readonly diff of the file relative to the originating branch, with additions and removals annotated line by line and line numbers visible.
+8. **Given** the artifact browser is open and a Markdown file is selected, **When** the file panel renders, **Then** the panel shows the file content rendered as formatted CommonMark rather than a raw diff.
+9. **Given** a run has been approved or declined, **When** the user opens the artifact browser for that run, **Then** the browser displays the historical set of changes in readonly mode and does not allow any editing or approval action.
+10. **Given** the artifact browser is needed, **When** accessed from the CLI client, **Then** the CLI exposes the full artifact browser capability — file tree, filter tabs, and file view — equivalent to the Web UI.
 
 ---
 
@@ -91,6 +116,10 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **Provider-native non-file tool reaching the host**: The agent invokes any provider-native tool (not only file read or write) whose effect would escape the artifact directory. The operation is denied by the shared governance policy before execution and the denial is audited in the operational record.
 
 ## Clarifications
+
+### Session 2026-06-10
+
+- Q: Must the artifact browser wait until a run completes before it can be opened? → A: No. The artifact browser must be accessible from the moment a run is created. A user can navigate to any in-progress run (e.g., by clicking it in the run list) and immediately see the current workspace state — with live change indicators and the file editor/preview panel — without waiting for the run to complete. If no files have been written yet, the file tree is empty but fully accessible. The browser, editor, and preview are always on; they do not appear only on completion.
 
 ### Session 2026-06-07
 
@@ -135,6 +164,14 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **FR-031**: For every run, the agent's available toolset MUST be restricted to operations that can be validated against the sandbox boundary (sandboxed file operations). A provider's native tools that cannot be confined to the artifact directory MUST NOT be exposed to the agent.
 - **FR-032**: Sandbox-boundary enforcement MUST be identical across both supported providers (GitHub Copilot SDK and Microsoft Foundry) and MUST NOT depend on which provider's native toolset is active. A single shared governance policy and a single path-validation mechanism MUST back enforcement for both providers. This extends the uniform-enforcement guarantee of FR-027 to provider-native tools.
 - **FR-033**: Every sandbox-boundary policy decision — allow or deny — for any provider-native operation MUST be recorded in the operational record with enough detail to reconstruct what was attempted and why it was allowed or denied. This extends FR-028 and SC-010 to provider-native operations.
+- **FR-034**: The system MUST provide an artifact browser view that lists all files touched by a run in a navigable file tree, with each file annotated to indicate whether it is new, modified, or deleted relative to the originating branch.
+- **FR-035**: The artifact browser MUST provide four filter tabs — All, Committed, Uncommitted, and Last commit — that narrow the file tree to the respective subset of touched files. "Committed" shows files with committed changes in the worktree; "Uncommitted" shows files with uncommitted changes relative to the worktree HEAD; "Last commit" shows only files changed in the most recent worktree commit.
+- **FR-036**: When a source file is selected in the artifact browser, the system MUST display the file contents in a readonly diff view that highlights additions and removals relative to the originating branch with line-level annotation and visible line numbers.
+- **FR-037**: When a Markdown file is selected in the artifact browser, the system MUST render the file content as formatted CommonMark in the readonly panel rather than showing a raw diff.
+- **FR-038**: The artifact browser MUST be available from the moment a run is created — before any files have been written and without waiting for the run to complete — and MUST remain available throughout the run's lifetime. While a run is in progress the browser MUST reflect live worktree state, updating the file tree and editor/preview panel as the agent writes files without requiring the user to manually refresh.
+- **FR-039**: The artifact browser MUST be available as the primary review interface when a run completes, allowing a human to inspect all changes before making an approval or decline decision (see FR-015).
+- **FR-040**: The artifact browser MUST be available as a readonly historical view after a run is approved or declined, preserving the state of the changes for post-decision reference.
+- **FR-041**: Both the CLI client and the Web UI MUST expose the full artifact browser capability — file tree with filter tabs, readonly diff view for source files, and readonly rendered CommonMark for Markdown files — with equivalent functionality in both clients.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -148,6 +185,7 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **Model Source**: The provider selected for a run; one of the two supported providers.
 - **Local Git Repository**: The folder on disk chosen by the user at run submission time; it must already be a valid git repository (initialized with `git init` or cloned from another repository). All branches and worktrees for a run are resolved within this folder.
 - **Originating Branch**: The branch within the chosen local git repository that a run starts from and that an approved run merges back into.
+- **Artifact Browser**: The view presented to the user for inspecting a run's file changes. Accessible from the moment a run is created — without waiting for the run to complete — by navigating to any run (e.g., clicking it from a run list). Consists of a navigable file tree (with filter tabs: All, Committed, Uncommitted, Last commit) and a readonly file panel that renders source files as line-level diffs against the originating branch and Markdown files as formatted CommonMark. Live change indicators and the editor/preview panel are available immediately; the file tree updates without manual refresh as the agent writes files. Also serves as the review interface on completion and as a readonly historical view after approval or decline.
 
 ### Non-Functional Requirements
 
@@ -171,6 +209,11 @@ After a run completes, a human reviews the run's output (the set of changes the 
 - **SC-010**: Every governance policy decision (tool permission, model-source validation, sandbox boundary enforcement, and human-approval gate) produces a traceable entry in the operational record, enabling a compliance reviewer to reconstruct all policy outcomes for any run within the retention window.
 - **SC-011**: 100% of provider-native operations (including shell or command execution) that target a path or resource outside the session's artifact directory are denied before execution, with zero such operations reaching the host, across both supported providers. This extends SC-002 beyond the two core file tools.
 - **SC-012**: Every denied provider-native escape attempt produces a traceable audit entry in the operational record identifying the attempted operation and the deny decision. This extends SC-010 to provider-native operations.
+- **SC-013**: When the artifact browser is open during a live run, a file written by the agent appears in the file tree within 5 seconds of the write, without the user manually refreshing, across both clients.
+- **SC-014**: 100% of filter tabs (All, Committed, Uncommitted, Last commit) correctly narrow the file tree to the expected subset of touched files across both clients.
+- **SC-015**: For every source file displayed in the artifact browser, the readonly diff view accurately reflects the changes relative to the originating branch, with no missing or extraneous lines, across both clients.
+- **SC-016**: A user can complete a full artifact-browser session — navigate the file tree, apply all four filter tabs, and open both source and Markdown files — entirely from the CLI, and separately entirely from the Web UI, with equivalent results.
+- **SC-017**: After a run is approved or declined, the artifact browser displays the historical changes in readonly mode and no approval or editing action is accessible to the user.
 
 ## Assumptions
 

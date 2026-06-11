@@ -64,6 +64,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN tree_hash TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN diff TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merge_conflicts TEXT;", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
@@ -92,6 +93,29 @@ public sealed class SqliteDb
             step_count         INTEGER NOT NULL DEFAULT 0,
             diff               TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS run_revisions (
+            run_id              TEXT NOT NULL,
+            revision_number     INTEGER NOT NULL,
+            reviewer_user       TEXT NOT NULL,
+            created_at          TEXT NOT NULL,
+            raw_comment         TEXT NOT NULL,
+            sanitized_comment   TEXT NOT NULL,
+            previous_tree_hash  TEXT NOT NULL,
+            PRIMARY KEY (run_id, revision_number)
+        );
+
+        CREATE TRIGGER IF NOT EXISTS trg_run_revisions_no_update
+            BEFORE UPDATE ON run_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_revisions is append-only: UPDATE is not permitted');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_run_revisions_no_delete
+            BEFORE DELETE ON run_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_revisions is append-only: DELETE is not permitted');
+        END;
 
         """;
 }

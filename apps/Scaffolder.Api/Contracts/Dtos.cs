@@ -65,8 +65,36 @@ public sealed record RunResponse
     [JsonPropertyName("tree_hash")]
     public string? TreeHash { get; init; }
 
+    /// <summary>
+    /// JSON array of conflicting file paths when the run is in merge_failed status due to a conflict.
+    /// Null for all other statuses.
+    /// </summary>
+    [JsonPropertyName("merge_conflicts")]
+    public string? MergeConflicts { get; init; }
+
     [JsonPropertyName("sandbox")]
     public SandboxStatusDto? Sandbox { get; init; }
+
+    /// <summary>
+    /// Worktree branch name (e.g. "scaffolder-run-{runId}").
+    /// Null for runs that have no worktree or have been cleaned up.
+    /// </summary>
+    [JsonPropertyName("worktree_branch")]
+    public string? WorktreeBranch { get; init; }
+
+    /// <summary>
+    /// Whether the agent self-assessed the task as achieved (from report_outcome tool call).
+    /// Null when the agent never called report_outcome (older runs or no-change runs).
+    /// </summary>
+    [JsonPropertyName("outcome_achieved")]
+    public bool? OutcomeAchieved { get; init; }
+
+    /// <summary>
+    /// One-sentence explanation of the outcome from the agent's self-assessment.
+    /// Null when OutcomeAchieved is null.
+    /// </summary>
+    [JsonPropertyName("outcome_reason")]
+    public string? OutcomeReason { get; init; }
 }
 
 public sealed record SandboxStatusDto
@@ -121,6 +149,22 @@ public sealed record ShellApprovalRequest
     public string? CommandHash { get; init; }
 }
 
+/// <summary>Request body for POST /api/runs/{id}/tool-approvals and tool-denials.</summary>
+public sealed record ToolApprovalRequest
+{
+    [JsonPropertyName("request_id")]
+    public string? RequestId { get; init; }
+
+    /// <summary>
+    /// How broadly the approval applies.
+    /// <c>"once"</c> (default) — this request only.
+    /// <c>"run"</c> — auto-approve the same tool+URL for the remainder of this run.
+    /// <c>"always"</c> — permanently allow the same tool+URL across all runs.
+    /// </summary>
+    [JsonPropertyName("scope")]
+    public string Scope { get; init; } = "once";
+}
+
 /// <summary>Request body for POST /api/runs/{id}/review.</summary>
 public sealed record ReviewRequest
 {
@@ -139,4 +183,114 @@ public sealed record ReviewResponse
 
     [JsonPropertyName("merge_result")]
     public string? MergeResult { get; init; }
+}
+
+/// <summary>One file entry in the changed-file set for a run (FR-034).</summary>
+public sealed record WorkspaceFileEntry
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }   // "added" | "modified" | "deleted"
+
+    [JsonPropertyName("scope")]
+    public required string Scope { get; init; }    // "committed" | "uncommitted" | "merged"
+
+    [JsonPropertyName("added_lines")]
+    public int AddedLines { get; init; }
+
+    [JsonPropertyName("removed_lines")]
+    public int RemovedLines { get; init; }
+}
+
+/// <summary>Per-file unified diff for a single file in a run's worktree (FR-035).</summary>
+public sealed record WorkspaceFileDiff
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("diff")]
+    public string? Diff { get; init; }             // unified diff chunk; null if binary or unavailable
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }   // "added" | "modified" | "deleted"
+
+    [JsonPropertyName("is_binary")]
+    public bool IsBinary { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs/{id}/commit.</summary>
+public sealed record CommitResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    /// <summary>
+    /// Merge result string (e.g. "merged:&lt;sha&gt;", "conflict:&lt;reason&gt;").
+    /// Null when the merge could not complete and the run has been reverted.
+    /// </summary>
+    [JsonPropertyName("merge_result")]
+    public string? MergeResult { get; init; }
+
+    /// <summary>
+    /// JSON array of conflicting file paths, populated when Status is "merge_failed".
+    /// </summary>
+    [JsonPropertyName("conflicting_files")]
+    public IReadOnlyList<string>? ConflictingFiles { get; init; }
+}
+
+/// <summary>Request body for POST /api/runs/{id}/request-changes.</summary>
+public sealed record RequestChangesRequest
+{
+    [JsonPropertyName("comment")]
+    public string? Comment { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs/{id}/request-changes.</summary>
+public sealed record RequestChangesResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
+/// <summary>One entry in the flat workspace listing returned by GET /api/runs/{id}/workspace.</summary>
+public sealed record WorkspaceNode
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }     // relative path, forward slashes
+
+    [JsonPropertyName("is_folder")]
+    public bool IsFolder { get; init; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }           // "added" | "modified" | "deleted" | null (unchanged)
+
+    [JsonPropertyName("added_lines")]
+    public int AddedLines { get; init; }
+
+    [JsonPropertyName("removed_lines")]
+    public int RemovedLines { get; init; }
+}
+
+/// <summary>Response body for GET /api/runs/{id}/files/{path}/content.</summary>
+public sealed record WorkspaceFileContent
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("content")]
+    public string? Content { get; init; }    // null if binary or deleted
+
+    [JsonPropertyName("is_binary")]
+    public bool IsBinary { get; init; }
+
+    [JsonPropertyName("language")]
+    public string? Language { get; init; }   // language hint for syntax highlighting
 }

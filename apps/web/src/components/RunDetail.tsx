@@ -13,15 +13,19 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { ReviewResponse, RunDetail as RunDetailModel, RunStatus } from '../api/types';
-import { DiffViewer } from './DiffViewer';
-import { ReviewPanel } from './ReviewPanel';
+import type { RunDetail as RunDetailModel } from '../api/types';
+import { RunLayout } from './RunLayout';
 
 const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
+  },
+  centerContent: {
+    display: 'flex',
+    flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalM,
     maxWidth: '720px',
   },
   label: {
@@ -81,14 +85,6 @@ export function RunDetail({ runId }: RunDetailProps) {
     };
   }, [runId]);
 
-  const handleReviewComplete = (resp: ReviewResponse) => {
-    setRun((prev) =>
-      prev
-        ? { ...prev, status: resp.status as RunStatus, result: resp.merge_result }
-        : null,
-    );
-  };
-
   if (loading) {
     return <Spinner label="Loading run" />;
   }
@@ -111,8 +107,8 @@ export function RunDetail({ runId }: RunDetailProps) {
     ['Result', run.result ?? '-'],
   ];
 
-  return (
-    <div className={styles.root}>
+  const centerContent = (
+    <div className={styles.centerContent}>
       <Table aria-label="Run details">
         <TableBody>
           {rows.map(([label, value]) => (
@@ -123,27 +119,31 @@ export function RunDetail({ runId }: RunDetailProps) {
           ))}
         </TableBody>
       </Table>
+      {run.status === 'pending' && <Text>Run has not started yet.</Text>}
       {run.status === 'awaiting_review' && (
         <div className={styles.reviewSection}>
           <Divider />
           <Badge color="warning">Awaiting review</Badge>
-          <DiffViewer diff={run.diff} />
-          <ReviewPanel
-            runId={runId}
-            treeHash={run.tree_hash}
-            onReviewComplete={handleReviewComplete}
-          />
         </div>
       )}
       {run.status === 'merge_failed' && (
         <div className={styles.reviewSection}>
           <Divider />
           <Badge color="danger">Merge failed</Badge>
-          <DiffViewer diff={run.diff} />
           {run.result && <Text className={styles.mergeResult}>{run.result}</Text>}
           <Text>The worktree has been preserved for manual resolution.</Text>
         </div>
       )}
+    </div>
+  );
+
+  return (
+    <div className={styles.root}>
+      <RunLayout
+        runId={runId}
+        runStatus={run.status === 'pending' ? 'completed' : run.status}
+        centerContent={centerContent}
+      />
     </div>
   );
 }

@@ -57,6 +57,11 @@ public sealed record MergeOutcome
     /// </summary>
     public string? Reason { get; init; }
 
+    /// <summary>
+    /// List of relative file paths that had merge conflicts. Populated when Kind == Conflict.
+    /// </summary>
+    public IReadOnlyList<string>? ConflictingFiles { get; init; }
+
     public static MergeOutcome Merged(
         string commitHash,
         string mergeMode,
@@ -78,9 +83,10 @@ public sealed record MergeOutcome
         Reason = reason,
     };
 
-    public static MergeOutcome Conflict(string reason) => new()
+    public static MergeOutcome Conflict(string reason, IReadOnlyList<string>? conflictingFiles = null) => new()
     {
-        Kind   = MergeOutcomeKind.Conflict,
-        Reason = reason,
+        Kind            = MergeOutcomeKind.Conflict,
+        Reason          = reason,
+        ConflictingFiles = conflictingFiles,
     };
 }

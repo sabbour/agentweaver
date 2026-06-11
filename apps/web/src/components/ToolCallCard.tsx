@@ -47,7 +47,7 @@ const useStyles = makeStyles({
   chevron: {
     color: tokens.colorNeutralForeground3,
     flexShrink: 0,
-    fontSize: '10px',
+    fontSize: tokens.fontSizeBase100,
   },
   icon: {
     color: tokens.colorNeutralForeground3,
@@ -68,6 +68,7 @@ const useStyles = makeStyles({
   title: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
     flexGrow: 1,
   },
   badge: {
@@ -75,16 +76,16 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   detail: {
-    marginLeft: '20px',
+    marginLeft: tokens.spacingHorizontalXL,
     paddingLeft: tokens.spacingHorizontalS,
     borderLeft: `2px solid ${tokens.colorNeutralStroke2}`,
-    marginBottom: '2px',
+    marginBottom: tokens.spacingVerticalXXS,
   },
   block: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase100,
-    paddingTop: '2px',
-    paddingBottom: '2px',
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-all',
     color: tokens.colorNeutralForeground1,
@@ -115,7 +116,7 @@ function truncate(text: string) {
 
 export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, hasFollowingErrors }: ToolCallCardProps) {
   const styles = useStyles();
-  const [expanded, setExpanded] = useState(item.error?.isSandboxViolation ?? false);
+  const [expanded, setExpanded] = useState(false);
 
   const isSandbox = item.error?.isSandboxViolation ?? false;
   const isError = item.error && !isSandbox;

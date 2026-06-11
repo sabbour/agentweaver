@@ -37,6 +37,14 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/runs/{id}/stream` | Stream ordered run events over SSE |
 | `POST` | `/api/runs/{id}/review` | Record an approve or decline decision |
 | `POST` | `/api/runs/{id}/shell-approvals` | Approve a pending destructive shell command |
+| `GET` | `/api/runs/{id}/history` | Replay persisted session events for terminal runs |
+| `POST` | `/api/runs/{id}/commit` | Commit worktree changes and merge into originating branch |
+| `POST` | `/api/runs/{id}/request-changes` | Request a revision cycle: agent rewrites in place |
+| `GET` | `/api/runs/{id}/workspace` | List workspace files with change status and line counts |
+| `GET` | `/api/runs/{id}/files` | List changed files (flat, with filter) |
+| `GET` | `/api/runs/{id}/files/{path}` | Get diff or content for a specific file |
+| `POST` | `/api/runs/{id}/tool-approvals` | Approve a pending tool call |
+| `POST` | `/api/runs/{id}/tool-denials` | Deny a pending tool call |
 
 ### POST /api/runs
 
@@ -184,6 +192,71 @@ After a server restart, if no workflow checkpoint is available to resume, the en
 
 See [events.md](events.md) for the event types emitted on the stream for each outcome.
 
+### GET /api/runs/{id}/history
+
+Replays persisted Copilot SDK session events for a terminal run. The session is identified by `scaffolder-run-{runId}`. Returns a JSON array of run events in stream order. Only available for terminal runs. Returns `404` if the run is not terminal or the session is not found.
+
+### POST /api/runs/{id}/commit
+
+Commits any remaining uncommitted worktree changes and immediately merges the worktree branch into the originating branch. The run must be in `awaiting_review`. Uses CAS `AwaitingReview → Committing → Merging` to prevent concurrent commits.
+
+Response:
+
+- `200 OK` `{ run_id, status: "merged", merge_result: "merged:{hash}" }` on success
+- `200 OK` `{ run_id, status: "merge_failed", merge_result: "conflict:{reason}", conflicting_files: [...] }` on conflict
+- `409 Conflict` `{ error, status: "awaiting_review" }` on retriable block (dirty working tree, concurrent request, etc.)
+- `409 Conflict` `{ error }` if the run is not in `awaiting_review`
+
+### POST /api/runs/{id}/request-changes
+
+Requests a revision cycle. The agent is given the reviewer's comment and re-runs on the same worktree without creating a new branch. The run returns to `in_progress`.
+
+Request body:
+
+```json
+{ "comment": "string" }
+```
+
+Response: `202 Accepted` with the updated run.
+
+### GET /api/runs/{id}/workspace
+
+Returns a tree of all files in the run's worktree (folders + files). Files include `path`, `is_folder`, `status` (added/modified/deleted, null for unchanged), `added_lines`, `removed_lines`. Returns `404` for terminal runs whose worktrees have been removed (failed/merged/declined/merge_failed). Returns empty array for `pending`. Returns `409` while the worktree does not exist for an active run.
+
+### GET /api/runs/{id}/files
+
+Flat list of changed files. Query param `filter`: `all` (committed + uncommitted), `committed`, `uncommitted`, `last-commit`. Returns `409` for non-terminal runs with no worktree.
+
+### GET /api/runs/{id}/files/{path}
+
+Returns diff and content for a specific file. Response includes `path`, `status`, `diff`, `content`, `is_binary`.
+
+### POST /api/runs/{id}/tool-approvals
+
+Approves a pending tool call.
+
+Request:
+
+```json
+{ "request_id": "string", "scope": "once" | "run" | "always" | "tool" }
+```
+
+Scope values: `once` = this call only; `run` = all calls to the same tool+url this run; `always` = all calls this server session; `tool` = all calls to this tool regardless of url.
+
+Response: `200 OK`.
+
+### POST /api/runs/{id}/tool-denials
+
+Denies a pending tool call.
+
+Request:
+
+```json
+{ "request_id": "string" }
+```
+
+Response: `200 OK`.
+
 ## Sandbox policy endpoints
 
 These endpoints read and write the per-project sandbox execution policy stored at `.scaffolder/settings.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
@@ -252,6 +325,8 @@ Response `200 OK` returns the stored policy. Validation failures return `400 Bad
 The full event taxonomy — types, payload fields, and per-event descriptions — is in [events.md](events.md).
 
 The `done` frame (no `id` field) signals the end of the stream.
+
+The `run.outcome` event is emitted by the agent just before `run.completed` when the agent supports self-assessment. See [events.md](events.md) for the full payload.
 
 ### Sandbox event types
 
@@ -372,7 +447,7 @@ One SQLite table backs the API, created on startup with WAL enabled:
 | --- | --- |
 | `runs` | Run records with status, timing, submitting user, task, model source, and the final result text |
 
-The run's event stream is held in memory by `RunStreamStore` and is not persisted to SQLite. After a process restart, the granular event history is unavailable — only the final `result` text survives. A durable append-only event log (`run_events`) is specified but not yet implemented.
+The run's event stream is held in memory by `RunStreamStore` and is not persisted to SQLite. After a process restart, the granular event history is unavailable — only the final `result` text survives. Completed runs are persisted via the Copilot SDK session store (session ID = `scaffolder-run-{runId}`). The `GET /api/runs/{id}/history` endpoint replays persisted session events for terminal runs.
 
 ## Configuration keys
 

@@ -90,6 +90,73 @@ public sealed class SqliteRunStoreCasTests
     }
 
     // =========================================================================
+    // Fix 3 regression: when SendResponseAsync throws after TryStartMergingAsync
+    // succeeds, the recovery path must be able to transition Merging -> Failed via
+    // TrySetTerminalStatusAsync so the run is never permanently stranded.
+    // =========================================================================
+    [Fact]
+    public async Task ApproveSendResponseFailure_MergingToFailed_RecoverySucceeds()
+    {
+        // Arrange: run at awaiting_review (the state just before the approve CAS).
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var runId = await InsertAwaitingReviewRunAsync(store);
+
+        // Act step 1: CAS succeeds — run enters Merging, as the approve endpoint does.
+        var casWon = await store.TryStartMergingAsync(runId);
+        casWon.Should().BeTrue("CAS must succeed on an awaiting_review run");
+
+        // Act step 2: SendResponseAsync (simulated) throws. The catch block calls
+        // TrySetTerminalStatusAsync to deterministically set the run to Failed.
+        var recovered = await store.TrySetTerminalStatusAsync(
+            runId, RunStatus.Failed, DateTimeOffset.UtcNow, "send_response_failed");
+
+        // Assert: recovery must succeed because Merging is a non-terminal status.
+        recovered.Should().BeTrue(
+            "TrySetTerminalStatusAsync must succeed on a Merging run — it is non-terminal");
+
+        var run = await store.GetAsync(runId);
+        run!.Status.Should().Be(RunStatus.Failed,
+            "the run must end in Failed when SendResponseAsync throws after the CAS");
+        run.Result.Should().Be("send_response_failed",
+            "the recovery reason must be persisted so operators can diagnose the failure");
+    }
+
+    // =========================================================================
+    // Fix 3 stream half: stream must carry run.failed and be marked completed
+    // when the SendResponseAsync catch block fires.
+    // =========================================================================
+    [Fact]
+    public void ApproveSendResponseFailure_StreamCompletesWithRunFailedEvent()
+    {
+        var streamStore = new RunStreamStore();
+        var runId = Guid.NewGuid().ToString();
+        var entry = streamStore.Create(runId, "user");
+
+        // Simulate the events the approve endpoint emits before SendResponseAsync.
+        entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = "abc123" });
+
+        // Simulate the catch block: emit run.failed and complete the stream.
+        entry.RecordNext(EventTypes.RunFailed, new { reason = "send_response_failed" });
+        streamStore.Complete(runId);
+
+        var retrieved = streamStore.Get(runId);
+        retrieved.Should().NotBeNull();
+        retrieved!.IsCompleted.Should().BeTrue(
+            "the stream must be marked completed by the catch block");
+
+        var snapshot = retrieved.GetSnapshotSince(0);
+        snapshot.IsCompleted.Should().BeTrue();
+        snapshot.Events.Should().ContainSingle(e => e.Type == EventTypes.RunFailed,
+            "run.failed must be emitted to the stream when SendResponseAsync throws");
+        snapshot.Events.First(e => e.Type == EventTypes.RunFailed)
+            .Payload.GetType().GetProperty("reason")!.GetValue(
+                snapshot.Events.First(e => e.Type == EventTypes.RunFailed).Payload)
+            !.ToString()
+            .Should().Be("send_response_failed");
+    }
+
+    // =========================================================================
     // Helper
     // =========================================================================
 

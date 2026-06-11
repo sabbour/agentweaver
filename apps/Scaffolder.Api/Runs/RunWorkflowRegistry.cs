@@ -9,12 +9,42 @@ namespace Scaffolder.Api.Runs;
 /// </summary>
 public sealed class RunWorkflowRegistry
 {
-    private readonly ConcurrentDictionary<string, StreamingRun> _runs = new();
+    private readonly ConcurrentDictionary<string, (StreamingRun Run, CancellationTokenSource Cts)> _runs = new();
 
-    public void Register(string runId, StreamingRun run) => _runs[runId] = run;
+    public CancellationToken Register(string runId, StreamingRun run)
+    {
+        var cts = new CancellationTokenSource();
+        (StreamingRun Run, CancellationTokenSource Cts)? replaced = null;
+        _runs.AddOrUpdate(
+            runId,
+            _ => (run, cts),
+            (_, existing) =>
+            {
+                replaced = existing;
+                return (run, cts);
+            });
+
+        if (replaced is { } previous)
+        {
+            previous.Cts.Cancel();
+            previous.Cts.Dispose();
+        }
+
+        return cts.Token;
+    }
 
     public StreamingRun? Get(string runId) =>
-        _runs.TryGetValue(runId, out var run) ? run : null;
+        _runs.TryGetValue(runId, out var pair) ? pair.Run : null;
 
-    public bool Remove(string runId) => _runs.TryRemove(runId, out _);
+    public bool Abandon(string runId)
+    {
+        if (!_runs.TryRemove(runId, out var pair))
+            return false;
+
+        pair.Cts.Cancel();
+        pair.Cts.Dispose();
+        return true;
+    }
+
+    public bool Remove(string runId) => Abandon(runId);
 }

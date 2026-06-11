@@ -48,6 +48,7 @@ export interface RunDetail {
   step_count: number;
   tree_hash: string | null;
   sandbox?: RunSandboxInfo | null;
+  worktree_branch?: string | null;
 }
 
 export interface ReviewRequest {
@@ -62,5 +63,45 @@ export interface ReviewResponse {
 
 export interface RetriableReviewErrorBody {
   error: string;
+  status: string;
+}
+
+export interface WorkspaceFileEntry {
+  path: string;
+  status: 'added' | 'modified' | 'deleted';
+  scope: 'committed' | 'uncommitted' | 'merged';
+  added_lines: number;
+  removed_lines: number;
+}
+
+export interface WorkspaceFileContent {
+  path: string;
+  content: string | null;
+  is_binary: boolean;
+  language: string | null;
+}
+
+export interface WorkspaceFileDiff {
+  path: string;
+  diff: string | null;
+  status: 'added' | 'modified' | 'deleted';
+  is_binary: boolean;
+}
+
+export interface WorkspaceNode {
+  path: string;
+  is_folder: boolean;
+  status: 'added' | 'modified' | 'deleted' | null;
+}
+
+export interface CommitResponse {
+  run_id: string;
+  status: string;
+  merge_result: string | null;
+  conflicting_files: string[] | null;
+}
+
+export interface RequestChangesResponse {
+  run_id: string;
   status: string;
 }

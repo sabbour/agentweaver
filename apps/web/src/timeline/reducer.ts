@@ -10,8 +10,10 @@ import type { RunStreamEvent } from '../api/sse';
 import type {
   TimelineReducerState,
   TurnGroupItem,
+  TurnStep,
   AgentMessageItem,
   ToolCallItem,
+  ApprovalRequestItem,
 } from './types';
 
 /** Maximum characters stored per content field (Y-1: prevent unbounded DOM growth). */
@@ -26,6 +28,7 @@ export const initialTimelineState: TimelineReducerState = {
   turnCounter: 0,
   currentTurnIndex: null,
   pendingToolCalls: new Map(),
+  pendingApprovals: new Map(),
   streamingMessage: null,
 };
 
@@ -129,7 +132,7 @@ function ensureOpenTurn(state: TimelineReducerState): TimelineReducerState {
 
 function addStepToCurrentTurn(
   state: TimelineReducerState,
-  step: AgentMessageItem | ToolCallItem,
+  step: TurnStep,
 ): TimelineReducerState {
   const s = ensureOpenTurn(state);
   const ti = s.currentTurnIndex!;
@@ -202,10 +205,29 @@ function settleToolCall(
   const updated: ToolCallItem = { ...call, ...patch };
   const newSteps = [...turn.steps.slice(0, si), updated, ...turn.steps.slice(si + 1)];
   const newTurn: TurnGroupItem = { ...turn, steps: newSteps };
-  const items = [...state.items.slice(0, ti), newTurn, ...state.items.slice(ti + 1)];
+  let items = [...state.items.slice(0, ti), newTurn, ...state.items.slice(ti + 1)];
   const pendingToolCalls = new Map(state.pendingToolCalls);
   pendingToolCalls.delete(callId);
-  return { ...state, items, pendingToolCalls };
+
+  // Resolve any pending approval card for the same callId/requestId
+  const pendingApprovals = new Map(state.pendingApprovals);
+  const approvalLoc = pendingApprovals.get(callId);
+  if (approvalLoc) {
+    const [ati, asi] = approvalLoc;
+    const aTurn = items[ati] as TurnGroupItem;
+    const approvalStep = aTurn.steps[asi] as ApprovalRequestItem;
+    const resolvedApproval: ApprovalRequestItem = {
+      ...approvalStep,
+      resolved: true,
+      resolvedScope: patch.result ? 'once' : 'deny',
+    };
+    const newSteps2 = [...aTurn.steps.slice(0, asi), resolvedApproval, ...aTurn.steps.slice(asi + 1)];
+    const newTurn2 = { ...aTurn, steps: newSteps2 };
+    items = [...items.slice(0, ati), newTurn2, ...items.slice(ati + 1)];
+    pendingApprovals.delete(callId);
+  }
+
+  return { ...state, items, pendingToolCalls, pendingApprovals };
 }
 
 /**
@@ -359,6 +381,12 @@ function processEvent(
       return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
     }
 
+    case 'run.error': {
+      // Non-terminal: run was reverted to AwaitingReview and is retryable.
+      // Add a visible error card without closing or completing the stream.
+      return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
+    }
+
     case 'run.completed': {
       // The watch loop emits run.completed at the workflow terminal; close any lingering
       // open turn defensively (should already be closed by agent.turn.end from the runner).
@@ -369,6 +397,8 @@ function processEvent(
     case 'review.requested':
     case 'review.approved':
     case 'review.declined':
+    case 'review.changes_requested':
+    case 'revision.started':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
 
     case 'merge.completed':
@@ -385,7 +415,39 @@ function processEvent(
     case 'sandbox.warning':
     case 'agent.system_prompt':
     case 'agent.tools':
+    case 'agent.intent':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
+
+    case 'run.outcome': {
+      const achieved = event.payload['achieved'] as boolean;
+      const reason = String(event.payload['reason'] ?? '');
+      return { ...state, runOutcome: { achieved, reason } };
+    }
+
+    case 'tool.approval_required': {
+      // Server emits camelCase (requestId, toolName); accept both for resilience.
+      const requestId = String(event.payload['request_id'] ?? event.payload['requestId'] ?? '');
+      const toolName = String(event.payload['tool_name'] ?? event.payload['toolName'] ?? '');
+      const url = event.payload['url'] != null ? String(event.payload['url']) : null;
+      const approvalItem: ApprovalRequestItem = {
+        kind: 'approval-request',
+        requestId,
+        toolName,
+        url,
+        resolved: false,
+        resolvedScope: null,
+      };
+      if (state.currentTurnIndex !== null) {
+        const s = addStepToCurrentTurn(state, approvalItem);
+        const ti = s.currentTurnIndex!;
+        const stepIndex = (s.items[ti] as TurnGroupItem).steps.length - 1;
+        const pendingApprovals = new Map(s.pendingApprovals);
+        pendingApprovals.set(requestId, [ti, stepIndex]);
+        return { ...s, pendingApprovals };
+      }
+      // Fallback: no open turn → lifecycle
+      return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
+    }
 
     default:
       return state;

@@ -42,8 +42,6 @@ const useStyles = makeStyles({
   },
   main: {
     padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
-    maxWidth: '960px',
-    margin: '0 auto',
   },
 });
 

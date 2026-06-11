@@ -72,7 +72,54 @@ public sealed class RunOrchestrator
             run.ModelSource.ToApiString());
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
-        _registry.Register(run.Id.ToString(), streamingRun);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser);
+        var runCt = _registry.Register(run.Id.ToString(), streamingRun);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
+    }
+
+    /// <summary>
+    /// Starts a fresh workflow execution against the SAME worktree for a revision cycle
+    /// (B3 / request-changes). Skips worktree creation — the existing worktree and branch
+    /// are reused so the agent builds on top of prior commits. The stream entry is reused
+    /// (or recreated if evicted) to preserve full event history for replay. The caller is
+    /// responsible for the CAS transition, checkpoint deletion, and audit row insertion
+    /// BEFORE invoking this method.
+    /// </summary>
+    public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(run.WorktreePath))
+            throw new InvalidOperationException($"Run {run.Id} has no worktree path; cannot start revision.");
+        if (string.IsNullOrEmpty(run.WorktreeBranch))
+            throw new InvalidOperationException($"Run {run.Id} has no worktree branch; cannot start revision.");
+
+        // Reuse the existing stream entry so prior events are preserved for replay.
+        // If the entry was evicted (rare but possible: TryMarkEvicted ran between Get and
+        // BumpGeneration), discard the dead entry and create a fresh live one so that
+        // RecordNext calls from the new revision are not silently dropped.
+        var entry = _streamStore.Get(run.Id.ToString())
+            ?? _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+
+        var (bumped, generation) = entry.TryBumpGeneration();
+        if (!bumped)
+        {
+            _logger.LogWarning(
+                "Stream entry for run {RunId} was evicted before BumpGeneration; recreating a fresh entry.",
+                run.Id);
+            _streamStore.Remove(run.Id.ToString());
+            entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+            generation = entry.BumpGeneration();
+        }
+
+        var input = new AgentTurnInput(
+            run.Id.ToString(),
+            revisedTask,
+            run.WorktreePath,
+            run.WorktreeBranch,
+            run.RepositoryPath,
+            run.OriginatingBranch,
+            run.ModelSource.ToApiString());
+
+        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
+        var runCt = _registry.Register(run.Id.ToString(), streamingRun);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, generation, runCt);
     }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
 import { ScaffolderApiClient } from './client';
 
@@ -13,8 +13,10 @@ interface PollState {
 const TERMINAL = new Set(['completed', 'failed', 'merged', 'declined', 'merge_failed']);
 const POLL_INTERVAL_MS = 2000;
 
+// review.requested is intentionally excluded: multiple review gates occur in
+// a revision cycle, so the second review.requested must not be deduplicated away.
 const SINGLETON_EVENT_TYPES: ReadonlySet<string> = new Set([
-  'run.completed', 'run.failed', 'review.requested',
+  'run.completed', 'run.failed',
   'review.approved', 'review.declined',
   'merge.completed', 'merge.failed',
 ]);
@@ -63,19 +65,25 @@ export type EventType =
   | 'agent.message'
   | 'agent.system_prompt'
   | 'agent.tools'
+  | 'agent.intent'
   | 'tool.call'
   | 'tool.result'
   | 'tool.error'
   | 'tool.output'
   | 'tool.exec_result'
   | 'shell.approval_required'
+  | 'tool.approval_required'
   | 'sandbox.selected'
   | 'sandbox.warning'
   | 'run.completed'
   | 'run.failed'
+  | 'run.error'
+  | 'run.outcome'
   | 'review.requested'
   | 'review.approved'
   | 'review.declined'
+  | 'review.changes_requested'
+  | 'revision.started'
   | 'merge.started'
   | 'merge.completed'
   | 'merge.failed'
@@ -94,25 +102,39 @@ interface StreamState {
   events: RunStreamEvent[];
   status: StreamStatus;
   error: string | null;
+  reconnect: () => void;
 }
 
 export function useRunStream(runId: string, apiKey: string, baseUrl: string): StreamState {
   const [events, setEvents] = useState<RunStreamEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const [error, setError] = useState<string | null>(null);
-  const stopRef = useRef(false);
+  const [reconnectKey, setReconnectKey] = useState(0);
   const lastSeqRef = useRef(0);
+  const prevRunIdRef = useRef<string>(runId);
+
+  const reconnect = useCallback(() => {
+    setReconnectKey((k) => k + 1);
+  }, []);
 
   useEffect(() => {
-    stopRef.current = false;
-    lastSeqRef.current = 0;
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    // On a genuine run change, clear accumulated events and reset the sequence
+    // cursor so the new stream starts from the beginning. On a reconnect of the
+    // same run (reconnectKey changed), keep existing events and the last known
+    // sequence so the server resumes from where the previous stream ended.
+    if (prevRunIdRef.current !== runId) {
+      prevRunIdRef.current = runId;
+      lastSeqRef.current = 0;
+      setEvents([]);
+    }
+
+    setStatus('connecting');
+    setError(null);
 
     const connect = async () => {
-      // Reset connection state at the start of each connection attempt
-      setEvents([]);
-      setStatus('connecting');
-      setError(null);
-
       const url = `${baseUrl.replace(/\/+$/, '')}/api/runs/${encodeURIComponent(runId)}/stream`;
       try {
         const headers: Record<string, string> = {
@@ -121,7 +143,7 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
         };
         if (lastSeqRef.current > 0) headers['Last-Event-ID'] = String(lastSeqRef.current);
 
-        const response = await fetch(url, { headers });
+        const response = await fetch(url, { headers, signal });
         if (!response.ok) throw new Error(`status ${response.status}`);
         if (!response.body) throw new Error('no body');
 
@@ -130,7 +152,7 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
         const decoder = new TextDecoder();
         let buffer = '';
 
-        while (!stopRef.current) {
+        while (!signal.aborted) {
           const { value, done } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -151,14 +173,12 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
 
             if (evtType === 'done') {
               setStatus('done');
-              stopRef.current = true;
-              break;
+              return;
             }
             if (evtType === 'error') {
               setStatus('error');
               setError('Stream error from server');
-              stopRef.current = true;
-              break;
+              return;
             }
 
             const seq = evtId ? parseInt(evtId, 10) : 0;
@@ -178,17 +198,17 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
             sep = buffer.indexOf('\n\n');
           }
         }
-        if (!stopRef.current) setStatus('done');
+        if (!signal.aborted) setStatus('done');
       } catch (err) {
-        if (stopRef.current) return;
+        if (signal.aborted) return;
         setStatus('error');
         setError(err instanceof Error ? err.message : String(err));
       }
     };
 
     void connect();
-    return () => { stopRef.current = true; };
-  }, [runId, apiKey, baseUrl]);
+    return () => { controller.abort(); };
+  }, [runId, apiKey, baseUrl, reconnectKey]);
 
-  return { events, status, error };
+  return { events, status, error, reconnect };
 }

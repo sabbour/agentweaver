@@ -16,7 +16,10 @@ public sealed class InMemoryShellApprovalStore : IShellApprovalStore
         => _approvals.GetOrAdd(runId, _ => new()).TryAdd(commandHash, 0);
 
     public bool IsApproved(string runId, string commandHash)
-        => _approvals.TryGetValue(runId, out var hashes) && hashes.ContainsKey(commandHash);
+    {
+        if (!_approvals.TryGetValue(runId, out var hashes)) return false;
+        return hashes.TryRemove(commandHash, out _);
+    }
 
     public void Clear(string runId)
         => _approvals.TryRemove(runId, out _);

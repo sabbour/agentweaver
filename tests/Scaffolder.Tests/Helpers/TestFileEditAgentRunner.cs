@@ -36,6 +36,11 @@ public sealed class TestFileEditAgentRunner : IAgentRunner
     /// </summary>
     public string FileContent { get; set; } = "deterministic agent output for testing";
 
+    private long _invocationCount;
+
+    public string? LastTask { get; private set; }
+    public long InvocationCount => Interlocked.Read(ref _invocationCount);
+
     public Task<string> ExecuteAsync(
         string task,
         string workingDirectory,
@@ -46,6 +51,8 @@ public sealed class TestFileEditAgentRunner : IAgentRunner
         CancellationToken ct)
     {
         _ = repositoryPath;
+        LastTask = task;
+        Interlocked.Increment(ref _invocationCount);
         return Mode switch
         {
             AgentMode.MakesChange => ExecuteWithChangeAsync(workingDirectory, stream),

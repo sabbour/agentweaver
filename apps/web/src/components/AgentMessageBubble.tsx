@@ -21,7 +21,7 @@ const useStyles = makeStyles({
   icon: {
     color: tokens.colorNeutralForeground3,
     flexShrink: 0,
-    marginTop: '2px',
+    marginTop: tokens.spacingVerticalXXS,
   },
   bubble: {
     backgroundColor: tokens.colorNeutralBackground3,
@@ -29,6 +29,8 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     maxWidth: '80%',
     wordBreak: 'break-word',
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightRegular,
   },
   // Plain-text streaming view preserves whitespace (pre-wrap), markdown view does not need it.
   plainText: {
