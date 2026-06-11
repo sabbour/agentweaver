@@ -172,6 +172,132 @@ public sealed record RequestChangesResponse
     public required string Status { get; init; }
 }
 
+// -----------------------------------------------------------------------
+// Projects
+// -----------------------------------------------------------------------
+
+public sealed record CreateProjectRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string? Name { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("origin")]
+    public string? Origin { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("source_repository")]
+    public string? SourceRepository { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("working_directory")]
+    public string? WorkingDirectory { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_provider")]
+    public string? DefaultProvider { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model_github_copilot")]
+    public string? DefaultModelGitHubCopilot { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model_microsoft_foundry")]
+    public string? DefaultModelMicrosoftFoundry { get; init; }
+}
+
+public sealed record UpdateProjectProviderSettingsRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("default_provider")]
+    public string? DefaultProvider { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model_github_copilot")]
+    public string? DefaultModelGitHubCopilot { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model_microsoft_foundry")]
+    public string? DefaultModelMicrosoftFoundry { get; init; }
+}
+
+public sealed record CreateProjectRunRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("task")]
+    public string? Task { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("model_source")]
+    public string? ModelSource { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("model_id")]
+    public string? ModelId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("base_branch")]
+    public string? BaseBranch { get; init; }
+}
+
+public sealed record ProjectDetail
+{
+    [System.Text.Json.Serialization.JsonPropertyName("project_id")]
+    public required string ProjectId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public required string Name { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("origin")]
+    public required string Origin { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("source_repository")]
+    public string? SourceRepository { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("working_directory")]
+    public required string WorkingDirectory { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_branch")]
+    public required string DefaultBranch { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("owner")]
+    public required string Owner { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_provider")]
+    public required string DefaultProvider { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model_github_copilot")]
+    public string? DefaultModelGitHubCopilot { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model_microsoft_foundry")]
+    public string? DefaultModelMicrosoftFoundry { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("available")]
+    public bool Available { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("state")]
+    public required string State { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("created_at")]
+    public DateTimeOffset CreatedAt { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("updated_at")]
+    public DateTimeOffset UpdatedAt { get; init; }
+}
+
+public sealed record ProjectRunSummary
+{
+    [System.Text.Json.Serialization.JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required string Status { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("model_source")]
+    public required string ModelSource { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("model_id")]
+    public string? ModelId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("task")]
+    public string? Task { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("started_at")]
+    public DateTimeOffset StartedAt { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("ended_at")]
+    public DateTimeOffset? EndedAt { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// GitHub auth
+// -----------------------------------------------------------------------
+
+public sealed record GitHubDeviceFlowResponse
+{
+    [System.Text.Json.Serialization.JsonPropertyName("user_code")]
+    public required string UserCode { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("verification_uri")]
+    public required string VerificationUri { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("expires_in")]
+    public int ExpiresIn { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("interval")]
+    public int Interval { get; init; }
+}
+
+public sealed record GitHubPollResponse
+{
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required string Status { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("login")]
+    public string? Login { get; init; }
+}
+
+public sealed record GitHubAuthStatusResponse
+{
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required string Status { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("login")]
+    public string? Login { get; init; }
+}
+
 /// <summary>Shared serialization settings for the CLI.</summary>
 public static class JsonConfig
 {

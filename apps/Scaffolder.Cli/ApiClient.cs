@@ -178,4 +178,128 @@ public sealed class ApiClient
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<RequestChangesResponse>(response, ct);
     }
+
+    // -----------------------------------------------------------------------
+    // Projects
+    // -----------------------------------------------------------------------
+
+    public async Task<ProjectDetail> CreateProjectAsync(CreateProjectRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Post, $"{_config.ApiUrl}/api/projects")
+            { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<ProjectDetail>(response, ct);
+    }
+
+    public async Task<IReadOnlyList<ProjectDetail>> ListProjectsAsync(CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync($"{_config.ApiUrl}/api/projects", ct);
+        return await ReadJsonAsync<List<ProjectDetail>>(response, ct);
+    }
+
+    public async Task<ProjectDetail> GetProjectAsync(string projectId, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}", ct);
+        return await ReadJsonAsync<ProjectDetail>(response, ct);
+    }
+
+    public async Task RenameProjectAsync(string projectId, string name, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            new HttpMethod("PATCH"), $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}")
+            { Content = JsonContent.Create(new { name }, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task UpdateProjectProviderSettingsAsync(
+        string projectId, UpdateProjectProviderSettingsRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/provider-settings")
+            { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task RelinkProjectAsync(string projectId, string workingDirectory, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/relink")
+            { Content = JsonContent.Create(new { working_directory = workingDirectory }, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task DeleteProjectAsync(string projectId, CancellationToken ct = default)
+    {
+        using var response = await _http.DeleteAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}?confirm=true", ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task<SubmitRunResponse> StartProjectRunAsync(
+        string projectId, CreateProjectRunRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/runs")
+            { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<SubmitRunResponse>(response, ct);
+    }
+
+    public async Task<IReadOnlyList<ProjectRunSummary>> ListProjectRunsAsync(
+        string projectId, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/runs", ct);
+        return await ReadJsonAsync<List<ProjectRunSummary>>(response, ct);
+    }
+
+    // -----------------------------------------------------------------------
+    // GitHub auth
+    // -----------------------------------------------------------------------
+
+    public async Task<GitHubDeviceFlowResponse> StartGitHubDeviceFlowAsync(CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Post, $"{_config.ApiUrl}/api/auth/github/device")
+            { Content = JsonContent.Create(new { }, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<GitHubDeviceFlowResponse>(response, ct);
+    }
+
+    public async Task<GitHubPollResponse> PollGitHubAuthAsync(CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Post, $"{_config.ApiUrl}/api/auth/github/poll")
+            { Content = JsonContent.Create(new { }, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<GitHubPollResponse>(response, ct);
+    }
+
+    public async Task<GitHubAuthStatusResponse> GetGitHubAuthStatusAsync(CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync($"{_config.ApiUrl}/api/auth/github", ct);
+        return await ReadJsonAsync<GitHubAuthStatusResponse>(response, ct);
+    }
+
+    public async Task SignOutGitHubAsync(CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Post, $"{_config.ApiUrl}/api/auth/github/sign-out")
+            { Content = JsonContent.Create(new { }, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new ApiException((int)response.StatusCode, body);
+        }
+    }
 }
