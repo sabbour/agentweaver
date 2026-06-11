@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,12 +31,13 @@
 
 ## Notes
 
-- **One `[NEEDS CLARIFICATION]` marker remains**: FR-025 — cloud project-storage location for the
-  hosted-cloud deployment (Deployment Parity). All other markers (FR-003, FR-005, FR-006, FR-016,
-  FR-019) were resolved in the Session 2026-06-11 clarification interview.
-- All other requirement-completeness and feature-readiness items pass. Once FR-025 is resolved,
-  the "No [NEEDS CLARIFICATION] markers remain" item can be checked and the spec is ready for
-  `/speckit.plan`.
+- **All `[NEEDS CLARIFICATION]` markers resolved (16/16 checklist items pass)**: FR-025 — the
+  hosted-cloud project-storage location (Deployment Parity) — is now resolved: a project's working
+  directory is stored on a managed per-project persistent volume mounted at the working-directory
+  path, resolved through a workspace storage abstraction that keeps the local-directory model
+  unchanged and does not preclude cloud (Principle VI). The earlier markers (FR-003, FR-005, FR-006,
+  FR-016, FR-019) were resolved in the Session 2026-06-11 clarification interview. The spec contains
+  zero `[NEEDS CLARIFICATION]` markers and is ready for planning/implementation.
 - **Additional Session 2026-06-11 clarifications** further resolved, without adding any new
   `[NEEDS CLARIFICATION]` markers: delete-with-in-flight-runs behavior (FR-019 — explicit
   confirmation plus cancel-to-visible-terminal-state before record removal); non-empty/existing

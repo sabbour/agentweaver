@@ -29,6 +29,7 @@ The provider and model a project stores are defaults only: consistent with the t
 - Q: Chosen working directory already exists and is non-empty (FR-003, FR-004) → A: For both a blank project and one created from a GitHub repository, the chosen directory MUST be empty or non-existent; if it already exists and is non-empty, the system MUST reject creation with a clear reason and MUST NOT overwrite or adopt the existing content. (Importing a pre-existing local folder remains out of scope.)
 - Q: Recorded working directory missing or inaccessible at list or open time (FR-022) → A: The system MUST still list the project but mark it unavailable, MUST block its runs because the sandbox boundary is invalid, and MUST offer the user a choice to relink the project to a new working directory or remove the project record; any existing files MUST be preserved.
 - Q: Source of the accountable human owner (FR-024) → A: The accountable human MUST be the GitHub-signed-in user when a GitHub sign-in is present; otherwise it MUST be the local operating-system/installation user identity, and this identity MUST be recorded on the project for accountability and audit.
+- Q: Hosted-cloud project-storage location when there is no local developer machine (FR-025) → A: In a hosted-cloud deployment, a project's working directory is stored on a managed per-project persistent volume mounted at the project's working-directory path. Storage is resolved through a workspace storage abstraction: the local-developer implementation keeps the current local-directory behavior unchanged, and the hosted-cloud implementation maps the same working-directory path to that mounted persistent volume. The "working directory is the run sandbox boundary" model (FR-022) is therefore identical in both deployments, and the local-directory model does not preclude hosted-cloud execution (Principle VI).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -197,7 +198,7 @@ A user can update a project after creating it — change its name, change its AI
 
 #### Deployment parity
 
-- **FR-025**: The same build MUST support projects in both the local-developer environment and a hosted-cloud deployment; the local-directory model MUST NOT preclude hosted-cloud execution. In a hosted-cloud deployment, project storage MUST be located at [NEEDS CLARIFICATION: cloud project-storage location when there is no local developer machine].
+- **FR-025**: The same build MUST support projects in both the local-developer environment and a hosted-cloud deployment; the local-directory model MUST NOT preclude hosted-cloud execution. In a hosted-cloud deployment, a project's working directory MUST be stored on a managed per-project persistent volume mounted at the project's working-directory path. The system MUST resolve project storage through a workspace storage abstraction whose local-developer implementation keeps the current local-directory behavior unchanged and whose hosted-cloud implementation maps the same working-directory path to that mounted persistent volume, so that the "working directory is the run sandbox boundary" model (FR-022) is identical in both deployments and the local-directory model does not preclude hosted-cloud execution (Principle VI).
 
 ### Key Entities *(include if feature involves data)*
 
@@ -230,7 +231,7 @@ A user can update a project after creating it — change its name, change its AI
 - Project names are user-facing labels and need not be globally unique; each project has a stable internal identifier used to address it.
 - A single named human owns and is accountable for each project; multi-user sharing and per-project access control are not part of this phase.
 - Only GitHub is supported as an external repository source for "create from repo"; other hosts and arbitrary git URLs are out of scope.
-- The local-developer environment is the primary target for this phase; hosted-cloud behavior must remain possible, but its storage specifics are pending clarification (FR-025).
+- The local-developer environment is the primary target for this phase; hosted-cloud behavior remains supported, with project storage on a managed per-project persistent volume mounted at the working-directory path, resolved through a workspace storage abstraction so the local-directory model is unchanged and does not preclude cloud (FR-025, Principle VI).
 
 ## Dependencies
 
