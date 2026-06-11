@@ -6,6 +6,7 @@ using Scaffolder.Api.Auth;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Git;
 using Scaffolder.Api.Infrastructure;
+using Scaffolder.Api.Projects;
 using Scaffolder.Api.Runs;
 using Scaffolder.Api.Security;
 using Scaffolder.Domain;
@@ -54,6 +55,13 @@ builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenSto
 builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
+
+// Project infrastructure (must be before AddAgentRuntime)
+builder.Services.AddSingleton<SqliteProjectStore>();
+builder.Services.AddSingleton<IProjectStore>(sp => sp.GetRequiredService<SqliteProjectStore>());
+builder.Services.AddSingleton<IProjectWorkspaceProvider, LocalFilesystemWorkspaceProvider>();
+builder.Services.AddSingleton<ProjectGitInitializer>();
+builder.Services.AddSingleton<ProjectService>();
 
 // Agent runtime
 builder.Services.AddAgentRuntime();
@@ -1430,10 +1438,425 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     }
 });
 
+// POST /api/projects — create blank or from GitHub
+app.MapPost("/api/projects", async (
+    HttpContext httpContext,
+    CreateProjectRequest request,
+    ProjectService projectService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+    if (string.IsNullOrWhiteSpace(request.Name))
+        return Results.BadRequest(new { error = "name is required." });
+
+    if (string.IsNullOrWhiteSpace(request.Origin) ||
+        (request.Origin != "blank" && request.Origin != "github"))
+        return Results.BadRequest(new { error = "origin must be 'blank' or 'github'." });
+
+    if (request.Origin == "github" && string.IsNullOrWhiteSpace(request.SourceRepository))
+        return Results.BadRequest(new { error = "source_repository is required when origin is 'github'." });
+
+    if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
+        return Results.BadRequest(new { error = "working_directory is required." });
+
+    try
+    {
+        Scaffolder.Domain.Project project;
+        if (request.Origin == "blank")
+        {
+            project = await projectService.CreateBlankAsync(
+                request.Name!, request.WorkingDirectory!,
+                request.DefaultProvider, request.DefaultModelGitHubCopilot,
+                request.DefaultModelMicrosoftFoundry, caller.User, ct);
+        }
+        else
+        {
+            project = await projectService.CreateFromGitHubAsync(
+                request.Name!, request.SourceRepository!, request.WorkingDirectory!,
+                request.DefaultProvider, request.DefaultModelGitHubCopilot,
+                request.DefaultModelMicrosoftFoundry, caller.User, ct);
+        }
+        return Results.Created($"/api/projects/{project.Id}", MapProject(project, available: true));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (WorkspaceUnavailableException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to create project");
+        return Results.Problem("Failed to create the project.", statusCode: 500);
+    }
+});
+
+// GET /api/projects — list all projects
+app.MapGet("/api/projects", async (
+    ProjectService projectService,
+    CancellationToken ct) =>
+{
+    var views = await projectService.ListViewsAsync(ct);
+    return Results.Ok(views.Select(v => MapProject(v.Project, v.Available)));
+});
+
+// GET /api/projects/{id} — get a single project
+app.MapGet("/api/projects/{id}", async (
+    string id,
+    ProjectService projectService,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var view = await projectService.GetViewAsync(projectId, ct);
+    return view is null ? Results.NotFound() : Results.Ok(MapProject(view.Project, view.Available));
+});
+
+// PATCH /api/projects/{id} — rename
+app.MapMethods("/api/projects/{id}", ["PATCH"], async (
+    string id,
+    UpdateProjectNameRequest request,
+    ProjectService projectService,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    if (string.IsNullOrWhiteSpace(request.Name))
+        return Results.BadRequest(new { error = "name is required." });
+
+    bool updated;
+    try { updated = await projectService.RenameAsync(projectId, request.Name!, ct); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    return updated ? Results.NoContent() : Results.NotFound();
+});
+
+// PUT /api/projects/{id}/provider-settings — update provider defaults
+app.MapPut("/api/projects/{id}/provider-settings", async (
+    string id,
+    UpdateProjectProviderSettingsRequest request,
+    ProjectService projectService,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    bool updated;
+    try
+    {
+        updated = await projectService.UpdateProviderSettingsAsync(
+            projectId, request.DefaultProvider,
+            request.DefaultModelGitHubCopilot, request.DefaultModelMicrosoftFoundry, ct);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    return updated ? Results.NoContent() : Results.NotFound();
+});
+
+// POST /api/projects/{id}/relink — relink to moved directory
+app.MapPost("/api/projects/{id}/relink", async (
+    string id,
+    RelinkProjectRequest request,
+    ProjectService projectService,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
+        return Results.BadRequest(new { error = "working_directory is required." });
+
+    bool updated;
+    try { updated = await projectService.RelinkAsync(projectId, request.WorkingDirectory!, ct); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    return updated ? Results.NoContent() : Results.NotFound();
+});
+
+// DELETE /api/projects/{id}?confirm=true — record-only delete
+app.MapDelete("/api/projects/{id}", async (
+    HttpContext httpContext,
+    string id,
+    ProjectService projectService,
+    SqliteRunStore runStore,
+    RunWorkflowRegistry workflowRegistry,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    var confirm = httpContext.Request.Query["confirm"].FirstOrDefault();
+    if (!string.Equals(confirm, "true", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "confirm=true query parameter is required for delete." });
+
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    bool deleted;
+    try
+    {
+        deleted = await projectService.DeleteAsync(projectId, runStore, workflowRegistry, ct);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to delete project {ProjectId}", id);
+        return Results.Problem("Failed to delete the project.", statusCode: 500);
+    }
+    return deleted ? Results.NoContent() : Results.NotFound();
+});
+
+// GET /api/projects/{id}/runs — list runs for a project
+app.MapGet("/api/projects/{id}/runs", async (
+    string id,
+    SqliteRunStore runStore,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var runs = await runStore.GetRunsByProjectAsync(projectId, ct);
+    return Results.Ok(runs.Select(r => new
+    {
+        run_id = r.Id.ToString(),
+        status = r.Status.ToApiString(),
+        model_source = r.ModelSource.ToApiString(),
+        model_id = r.ModelId,
+        task = r.Task,
+        started_at = r.StartedAt,
+        ended_at = r.EndedAt,
+    }));
+});
+
+// POST /api/projects/{id}/runs — start a run within a project
+app.MapPost("/api/projects/{id}/runs", async (
+    HttpContext httpContext,
+    string id,
+    CreateProjectRunRequest request,
+    IProjectStore projectStore,
+    IProjectWorkspaceProvider workspaceProvider,
+    SqliteRunStore runStore,
+    RunStreamStore streamStore,
+    RunOrchestrator orchestrator,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    if (string.IsNullOrWhiteSpace(request.Task))
+        return Results.BadRequest(new { error = "task is required." });
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+    // Load project
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    // Reject if project is being deleted
+    if (project.State == ProjectState.Deleting)
+        return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
+
+    // Reject if workspace unavailable
+    if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
+        return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available. Use relink to reconnect the project." });
+
+    // Resolve provider (explicit -> project default)
+    ModelSource modelSource;
+    if (!string.IsNullOrWhiteSpace(request.ModelSource))
+    {
+        try { modelSource = ModelSourceExtensions.FromApiString(request.ModelSource); }
+        catch (ArgumentException) { return Results.BadRequest(new { error = "model_source must be 'github-copilot' or 'microsoft-foundry'." }); }
+    }
+    else
+    {
+        modelSource = project.ProviderSettings.DefaultProvider;
+    }
+
+    // Resolve model id (explicit -> project default for the selected provider -> null)
+    string? modelId = request.ModelId;
+    if (string.IsNullOrWhiteSpace(modelId))
+    {
+        modelId = modelSource == ModelSource.GitHubCopilot
+            ? project.ProviderSettings.GitHubCopilotModel
+            : project.ProviderSettings.MicrosoftFoundryModel;
+    }
+
+    // Base branch (explicit -> project default)
+    var baseBranch = string.IsNullOrWhiteSpace(request.BaseBranch)
+        ? project.DefaultBranch
+        : request.BaseBranch;
+
+    // Build reserved run (Pending)
+    var run = new Run
+    {
+        Id = RunId.New(),
+        RepositoryPath = project.WorkingDirectory,
+        OriginatingBranch = baseBranch,
+        ModelSource = modelSource,
+        ModelId = modelId,
+        Task = request.Task!,
+        SubmittingUser = caller.User,
+        Status = RunStatus.Pending,
+        StartedAt = DateTimeOffset.UtcNow,
+        ProjectId = projectId,
+    };
+
+    // Atomically reserve the run row (Pending) only when project is still Active
+    bool reserved = await runStore.TryCreateProjectRunAsync(run, ct);
+    if (!reserved)
+        return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
+
+    // Start the workflow. On any failure, terminalize the reserved run so it never sticks as Pending.
+    try
+    {
+        await orchestrator.StartReservedProjectRunAsync(run, ct);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to start project run {RunId} for project {ProjectId}", run.Id, projectId);
+        try
+        {
+            await runStore.TrySetTerminalStatusAsync(
+                run.Id, RunStatus.Failed, DateTimeOffset.UtcNow,
+                "run_start_failed", CancellationToken.None).ConfigureAwait(false);
+            var streamEntry = streamStore.Get(run.Id.ToString());
+            if (streamEntry is not null)
+            {
+                streamEntry.RecordNext(EventTypes.RunFailed, new { reason = "run_start_failed" });
+                streamStore.Complete(run.Id.ToString());
+            }
+        }
+        catch (Exception compensationEx)
+        {
+            logger.LogError(compensationEx, "Compensation failed for reserved run {RunId}", run.Id);
+        }
+        return Results.Problem("Failed to start the run.", statusCode: 500);
+    }
+
+    return Results.Accepted(
+        $"/api/runs/{run.Id}",
+        new CreateRunResponse { RunId = run.Id.ToString(), Status = "in_progress" });
+});
+
+// POST /api/auth/github/device — start device flow
+app.MapPost("/api/auth/github/device", async (
+    HttpContext httpContext,
+    IGitHubAuthService authService,
+    IGitHubTokenScopeProvider scopeProvider,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var scope = scopeProvider.Resolve(caller.User);
+    try
+    {
+        var result = await authService.StartDeviceFlowAsync(scope, ct);
+        return Results.Ok(new GitHubDeviceFlowResponse
+        {
+            UserCode = result.UserCode,
+            VerificationUri = result.VerificationUri,
+            ExpiresIn = result.ExpiresIn,
+            Interval = result.Interval,
+        });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to start GitHub device flow for {User}", caller.User);
+        return Results.Problem("Failed to start GitHub device flow.", statusCode: 500);
+    }
+});
+
+// POST /api/auth/github/poll — poll device flow
+app.MapPost("/api/auth/github/poll", async (
+    HttpContext httpContext,
+    IGitHubAuthService authService,
+    IGitHubTokenScopeProvider scopeProvider,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var scope = scopeProvider.Resolve(caller.User);
+    var result = await authService.PollDeviceFlowAsync(scope, ct);
+    return Results.Ok(new GitHubPollResponse
+    {
+        Status = result.Result switch
+        {
+            GitHubDeviceFlowPollResult.Pending => "pending",
+            GitHubDeviceFlowPollResult.Success => "success",
+            GitHubDeviceFlowPollResult.Expired => "expired",
+            GitHubDeviceFlowPollResult.Denied  => "denied",
+            _ => "unknown"
+        },
+        Login = result.Login,
+    });
+});
+
+// GET /api/auth/github — current auth status
+app.MapGet("/api/auth/github", async (
+    HttpContext httpContext,
+    IGitHubTokenStore tokenStore,
+    IGitHubTokenScopeProvider scopeProvider,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var scope = scopeProvider.Resolve(caller.User);
+    var entry = await tokenStore.GetAsync(scope, ct);
+    var identity = entry.Status == GitHubTokenStatus.SignedIn
+        ? await tokenStore.GetIdentityAsync(scope, ct)
+        : null;
+    return Results.Ok(new GitHubAuthStatusResponse
+    {
+        Status = entry.Status switch
+        {
+            GitHubTokenStatus.SignedIn      => "signed_in",
+            GitHubTokenStatus.SignedOut     => "signed_out",
+            GitHubTokenStatus.NeverSignedIn => "never_signed_in",
+            _ => "unknown"
+        },
+        Login = identity?.Login,
+    });
+});
+
+// POST /api/auth/github/sign-out
+app.MapPost("/api/auth/github/sign-out", async (
+    HttpContext httpContext,
+    IGitHubAuthService authService,
+    IGitHubTokenScopeProvider scopeProvider,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var scope = scopeProvider.Resolve(caller.User);
+    await authService.SignOutAsync(scope, ct);
+    return Results.NoContent();
+});
+
 app.Run();
 
 static bool IsOwner(HttpContext context, Run run) =>
     string.Equals(ApiKeyAuthMiddleware.GetCaller(context).User, run.SubmittingUser, StringComparison.Ordinal);
+
+static ProjectResponse MapProject(Project p, bool available) => new()
+{
+    ProjectId = p.Id.ToString(),
+    Name = p.Name,
+    Origin = p.Origin.ToApiString(),
+    SourceRepository = p.Origin.SourceRepository,
+    WorkingDirectory = p.WorkingDirectory,
+    DefaultBranch = p.DefaultBranch,
+    Owner = p.Owner,
+    DefaultProvider = p.ProviderSettings.DefaultProvider.ToApiString(),
+    DefaultModelGitHubCopilot = p.ProviderSettings.GitHubCopilotModel,
+    DefaultModelMicrosoftFoundry = p.ProviderSettings.MicrosoftFoundryModel,
+    Available = available,
+    State = p.State == ProjectState.Active ? "active" : "deleting",
+    CreatedAt = p.CreatedAt,
+    UpdatedAt = p.UpdatedAt,
+};
 
 /// <summary>
 /// Strips NUL, C0 control characters (0x00-0x1F, excluding \t and \n), DEL (0x7F),

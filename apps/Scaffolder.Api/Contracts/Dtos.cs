@@ -294,3 +294,85 @@ public sealed record WorkspaceFileContent
     [JsonPropertyName("language")]
     public string? Language { get; init; }   // language hint for syntax highlighting
 }
+
+// -----------------------------------------------------------------------
+// Projects
+// -----------------------------------------------------------------------
+
+public sealed record CreateProjectRequest
+{
+    [JsonPropertyName("name")] public string? Name { get; init; }
+    [JsonPropertyName("origin")] public string? Origin { get; init; }                   // "blank" | "github"
+    [JsonPropertyName("source_repository")] public string? SourceRepository { get; init; }
+    [JsonPropertyName("working_directory")] public string? WorkingDirectory { get; init; }
+    [JsonPropertyName("default_provider")] public string? DefaultProvider { get; init; }
+    [JsonPropertyName("default_model_github_copilot")] public string? DefaultModelGitHubCopilot { get; init; }
+    [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
+}
+
+public sealed record UpdateProjectNameRequest
+{
+    [JsonPropertyName("name")] public string? Name { get; init; }
+}
+
+public sealed record UpdateProjectProviderSettingsRequest
+{
+    [JsonPropertyName("default_provider")] public string? DefaultProvider { get; init; }
+    [JsonPropertyName("default_model_github_copilot")] public string? DefaultModelGitHubCopilot { get; init; }
+    [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
+}
+
+public sealed record RelinkProjectRequest
+{
+    [JsonPropertyName("working_directory")] public string? WorkingDirectory { get; init; }
+}
+
+public sealed record ProjectResponse
+{
+    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("origin")] public required string Origin { get; init; }
+    [JsonPropertyName("source_repository")] public string? SourceRepository { get; init; }
+    [JsonPropertyName("working_directory")] public required string WorkingDirectory { get; init; }
+    [JsonPropertyName("default_branch")] public required string DefaultBranch { get; init; }
+    [JsonPropertyName("owner")] public required string Owner { get; init; }
+    [JsonPropertyName("default_provider")] public required string DefaultProvider { get; init; }
+    [JsonPropertyName("default_model_github_copilot")] public string? DefaultModelGitHubCopilot { get; init; }
+    [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
+    [JsonPropertyName("available")] public required bool Available { get; init; }
+    [JsonPropertyName("state")] public required string State { get; init; }
+    [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
+    [JsonPropertyName("updated_at")] public required DateTimeOffset UpdatedAt { get; init; }
+}
+
+public sealed record CreateProjectRunRequest
+{
+    [JsonPropertyName("task")] public string? Task { get; init; }
+    [JsonPropertyName("model_source")] public string? ModelSource { get; init; }
+    [JsonPropertyName("model_id")] public string? ModelId { get; init; }
+    [JsonPropertyName("base_branch")] public string? BaseBranch { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// GitHub auth
+// -----------------------------------------------------------------------
+
+public sealed record GitHubDeviceFlowResponse
+{
+    [JsonPropertyName("user_code")] public required string UserCode { get; init; }
+    [JsonPropertyName("verification_uri")] public required string VerificationUri { get; init; }
+    [JsonPropertyName("expires_in")] public required int ExpiresIn { get; init; }
+    [JsonPropertyName("interval")] public required int Interval { get; init; }
+}
+
+public sealed record GitHubPollResponse
+{
+    [JsonPropertyName("status")] public required string Status { get; init; }   // "pending" | "success" | "expired" | "denied"
+    [JsonPropertyName("login")] public string? Login { get; init; }
+}
+
+public sealed record GitHubAuthStatusResponse
+{
+    [JsonPropertyName("status")] public required string Status { get; init; }   // "signed_in" | "signed_out" | "never_signed_in"
+    [JsonPropertyName("login")] public string? Login { get; init; }
+}

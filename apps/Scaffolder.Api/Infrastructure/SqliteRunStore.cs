@@ -292,6 +292,30 @@ public sealed class SqliteRunStore
         return rows > 0;
     }
 
+    /// <summary>
+    /// Transitions a pre-inserted Pending run to InProgress, recording the worktree path, branch,
+    /// and actual start time. Called by the project-run path after TryCreateProjectRunAsync reserves
+    /// the row atomically.
+    /// </summary>
+    public async Task UpdateToInProgressAsync(
+        RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET status = 'in_progress', worktree_path = $worktreePath,
+                   worktree_branch = $worktreeBranch, started_at = $startedAt
+             WHERE run_id = $runId AND status = 'pending';
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$worktreePath", worktreePath);
+                cmd.Parameters.AddWithValue("$worktreeBranch", worktreeBranch);
+                cmd.Parameters.AddWithValue("$startedAt", startedAt.ToString("O"));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+    }
+
     private async Task ExecuteNonQueryAsync(string sql, Action<SqliteCommand> bind, CancellationToken ct)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
