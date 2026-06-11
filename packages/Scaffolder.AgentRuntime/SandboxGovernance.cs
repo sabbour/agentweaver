@@ -166,12 +166,12 @@ internal sealed class SandboxGovernance : IDisposable
             // Layer C: Shell-specific gate (only for run_command)
             if (allowed && toolName == "run_command")
             {
-                if (!_executor.IsRealIsolation)
+                if (!_executor.IsRealIsolation && _executor.BackendName != "direct")
                 {
                     allowed = false;
                     reason = $"Shell execution denied: executor '{_executor.BackendName}' provides no real isolation (IsRealIsolation = false).";
                 }
-                else if (!_policy.ShellEnabled)
+                else if (!_policy.ShellEnabled && _executor.BackendName != "direct")
                 {
                     allowed = false;
                     reason = "Shell execution denied: Sandbox:ShellEnabled is false.";

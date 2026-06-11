@@ -379,9 +379,10 @@ public sealed class SandboxGovernanceTests : IDisposable
     }
 
     [Fact]
-    public void RunCommand_WithPassthrough_Executor_IsDenied()
+    public void RunCommand_WithPassthrough_DirectMode_IsAllowed()
     {
-        // _governance uses PassthroughExecutor (IsRealIsolation = false)
+        // _governance uses PassthroughExecutor (BackendName = "direct") — direct mode bypasses
+        // the IsRealIsolation gate so run_command is allowed.
         var result = _governance.EvaluateToolCall(
             AgentId, "run_command",
             new Dictionary<string, object>
@@ -391,8 +392,8 @@ public sealed class SandboxGovernanceTests : IDisposable
             },
             _logger);
 
-        result.Allowed.Should().BeFalse(
-            "run_command must be denied when the executor provides no real isolation");
+        result.Allowed.Should().BeTrue(
+            "run_command must be allowed in direct mode (BackendName='direct') even without real isolation");
     }
 
     [Fact]

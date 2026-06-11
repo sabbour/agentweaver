@@ -31,5 +31,13 @@ internal static class NativeToolExclusion
         "task",                                    // subagent orchestration (scoped out)
         "notebook",                                // scoped out
         "webfetch", "web_fetch", "websearch", "web_search",  // network tools
+
+        // Block native SDK versions of tools we've overridden with custom implementations.
+        // Our custom tools in SessionConfig.Tools override these via overridesBuiltInTool=true.
+        // Without this exclusion, the native and custom versions conflict and the SDK may
+        // present neither (or the wrong one) to the model.
+        "read_file", "write_file", "create_file",
+        "str_replace_editor", "apply_patch",
+        "grep_search", "file_search", "report_intent",
     ];
 }
