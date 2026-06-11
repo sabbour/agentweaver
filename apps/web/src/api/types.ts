@@ -64,3 +64,16 @@ export interface RetriableReviewErrorBody {
   error: string;
   status: string;
 }
+
+export interface WorkspaceFileEntry {
+  path: string;
+  status: 'added' | 'modified' | 'deleted';
+  scope: 'committed' | 'uncommitted' | 'merged';
+}
+
+export interface WorkspaceFileDiff {
+  path: string;
+  diff: string | null;
+  status: 'added' | 'modified' | 'deleted';
+  is_binary: boolean;
+}

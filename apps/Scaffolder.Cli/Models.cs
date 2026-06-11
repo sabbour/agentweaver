@@ -126,6 +126,35 @@ public sealed record SetSandboxPolicyRequest
     public required bool ShellEnabled { get; init; }
 }
 
+/// <summary>An entry in the workspace file list for a run.</summary>
+public sealed record WorkspaceFileEntry
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("scope")]
+    public required string Scope { get; init; }
+}
+
+/// <summary>Per-file diff returned by GET /api/runs/{id}/files/{path}.</summary>
+public sealed record WorkspaceFileDiff
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("diff")]
+    public string? Diff { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("is_binary")]
+    public required bool IsBinary { get; init; }
+}
+
 /// <summary>Shared serialization settings for the CLI.</summary>
 public static class JsonConfig
 {

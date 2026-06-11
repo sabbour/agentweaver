@@ -14,7 +14,7 @@ import {
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { ReviewResponse, RunDetail as RunDetailModel, RunStatus } from '../api/types';
-import { DiffViewer } from './DiffViewer';
+import { ArtifactBrowser } from './ArtifactBrowser';
 import { ReviewPanel } from './ReviewPanel';
 
 const useStyles = makeStyles({
@@ -123,11 +123,15 @@ export function RunDetail({ runId }: RunDetailProps) {
           ))}
         </TableBody>
       </Table>
+      {run.status === 'pending' ? (
+        <Text>Run has not started yet.</Text>
+      ) : (
+        <ArtifactBrowser runId={runId} runStatus={run.status} />
+      )}
       {run.status === 'awaiting_review' && (
         <div className={styles.reviewSection}>
           <Divider />
           <Badge color="warning">Awaiting review</Badge>
-          <DiffViewer diff={run.diff} />
           <ReviewPanel
             runId={runId}
             treeHash={run.tree_hash}
@@ -139,7 +143,6 @@ export function RunDetail({ runId }: RunDetailProps) {
         <div className={styles.reviewSection}>
           <Divider />
           <Badge color="danger">Merge failed</Badge>
-          <DiffViewer diff={run.diff} />
           {run.result && <Text className={styles.mergeResult}>{run.result}</Text>}
           <Text>The worktree has been preserved for manual resolution.</Text>
         </div>

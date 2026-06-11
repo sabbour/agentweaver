@@ -143,4 +143,20 @@ public sealed class ApiClient
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<SandboxPolicy>(response, ct);
     }
+
+    public async Task<IReadOnlyList<WorkspaceFileEntry>> GetRunFilesAsync(
+        string runId, string filter = "all", CancellationToken ct = default)
+    {
+        var url = $"{_config.ApiUrl}/api/runs/{Uri.EscapeDataString(runId)}/files?filter={Uri.EscapeDataString(filter)}";
+        using var response = await _http.GetAsync(url, ct);
+        return await ReadJsonAsync<List<WorkspaceFileEntry>>(response, ct);
+    }
+
+    public async Task<WorkspaceFileDiff> GetRunFileDiffAsync(
+        string runId, string path, CancellationToken ct = default)
+    {
+        var url = $"{_config.ApiUrl}/api/runs/{Uri.EscapeDataString(runId)}/files/{Uri.EscapeDataString(path)}";
+        using var response = await _http.GetAsync(url, ct);
+        return await ReadJsonAsync<WorkspaceFileDiff>(response, ct);
+    }
 }

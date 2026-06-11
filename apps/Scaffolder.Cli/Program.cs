@@ -85,6 +85,13 @@ internal static class CliEntryPoint
                     }
                     return await RunCommands.ShowAsync(api, showId, cts.Token);
 
+                case "artifacts":
+                    if (!TryGetRunId(args, out var artifactsId))
+                    {
+                        return MissingRunId("artifacts");
+                    }
+                    return await ArtifactCommands.ArtifactsAsync(api, artifactsId, cts.Token);
+
                 default:
                     AnsiConsole.MarkupLine($"[red]Unknown subcommand:[/] {Markup.Escape(subcommand)}");
                     PrintUsage();
@@ -193,10 +200,11 @@ internal static class CliEntryPoint
         AnsiConsole.WriteLine("Scaffolder CLI");
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("Usage:");
-        AnsiConsole.WriteLine("  scaffolder run submit            Submit a new run and watch it");
-        AnsiConsole.WriteLine("  scaffolder run watch <run-id>    Stream events for a run");
-        AnsiConsole.WriteLine("  scaffolder run review <run-id>   Review a run's diff and approve or decline");
-        AnsiConsole.WriteLine("  scaffolder run show <run-id>     Show run details");
+        AnsiConsole.WriteLine("  scaffolder run submit                Submit a new run and watch it");
+        AnsiConsole.WriteLine("  scaffolder run watch <run-id>        Stream events for a run");
+        AnsiConsole.WriteLine("  scaffolder run review <run-id>       Review a run's diff and approve or decline");
+        AnsiConsole.WriteLine("  scaffolder run show <run-id>         Show run details");
+        AnsiConsole.WriteLine("  scaffolder run artifacts <run-id>    Browse run artifact files and diffs");
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("  scaffolder sandbox-policy get --repository-path <path>");
         AnsiConsole.WriteLine("  scaffolder sandbox-policy set --repository-path <path> --shell-enabled true|false");

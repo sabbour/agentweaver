@@ -4,6 +4,7 @@ import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
 import { apiClient } from '../api/apiClient';
 import type { RunDetail, ReviewResponse } from '../api/types';
+import { ArtifactBrowser } from './ArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
 import { ReviewPanel } from './ReviewPanel';
 import { RunHeader } from './RunHeader';
@@ -88,6 +89,9 @@ export function RunWatcher({ runId }: RunWatcherProps) {
     <div className={styles.root}>
       <RunHeader runId={runId} streamStatus={status} error={error ?? undefined} />
       <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} />
+      {isLiveRun && (
+        <ArtifactBrowser runId={runId} runStatus="in_progress" />
+      )}
       {hasReviewRequested && (
         <div className={styles.reviewSection}>
           <Divider />
