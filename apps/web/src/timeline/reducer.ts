@@ -425,7 +425,8 @@ function processEvent(
     }
 
     case 'tool.approval_required': {
-      const requestId = String(event.payload['request_id'] ?? '');
+      // Server emits camelCase (requestId, toolName); accept both for resilience.
+      const requestId = String(event.payload['request_id'] ?? event.payload['requestId'] ?? '');
       const toolName = String(event.payload['tool_name'] ?? event.payload['toolName'] ?? '');
       const url = event.payload['url'] != null ? String(event.payload['url']) : null;
       const approvalItem: ApprovalRequestItem = {
