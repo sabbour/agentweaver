@@ -169,3 +169,26 @@ public sealed record WorkspaceFileDiff
     [JsonPropertyName("is_binary")]
     public bool IsBinary { get; init; }
 }
+
+/// <summary>Response body for POST /api/runs/{id}/commit.</summary>
+public sealed record CommitResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
+/// <summary>One entry in the flat workspace listing returned by GET /api/runs/{id}/workspace.</summary>
+public sealed record WorkspaceNode
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }     // relative path, forward slashes
+
+    [JsonPropertyName("is_folder")]
+    public bool IsFolder { get; init; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }           // "added" | "modified" | "deleted" | null (unchanged)
+}

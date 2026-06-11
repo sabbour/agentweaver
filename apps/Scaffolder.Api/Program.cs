@@ -249,13 +249,14 @@ app.MapGet("/api/runs/{id}/stream", async (
     {
         Run? run;
         try { run = await runStore.GetAsync(runId, ct); }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to fetch run {RunId} for stream", runId);
-            httpContext.Response.StatusCode = 500;
-            await httpContext.Response.WriteAsJsonAsync(new { error = "Failed to retrieve the run." }, ct);
-            return;
-        }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to fetch run {RunId} for stream", runId);
+                httpContext.Response.StatusCode = 500;
+                await httpContext.Response.WriteAsJsonAsync(new { error = "Failed to retrieve the run." }, ct);
+                return;
+            }
 
         if (run is null || !string.Equals(caller.User, run.SubmittingUser, StringComparison.Ordinal))
         {
@@ -290,6 +291,8 @@ app.MapGet("/api/runs/{id}/stream", async (
         // Poll-based streaming: use the atomic GetSnapshotSince to get events + completion flag
         // under a single lock. This eliminates the race between reading events and checking
         // whether the run has completed — no events can be lost.
+        bool reviewRequestedSent = false;
+
         while (!ct.IsCancellationRequested)
         {
             var snapshot = entry.GetSnapshotSince(lastSeen);
@@ -299,10 +302,15 @@ app.MapGet("/api/runs/{id}/stream", async (
                 await WriteSseEventAsync(httpContext.Response, evt, ct);
                 if (evt.Sequence > lastSeen)
                     lastSeen = evt.Sequence;
+                if (evt.Type == EventTypes.ReviewRequested) reviewRequestedSent = true;
             }
 
             if (snapshot.IsCompleted)
                 break;
+            // The MAF workflow pauses at the HITL gate once review.requested is emitted.
+            // The stream entry is never marked completed in that state, so close the stream
+            // here to let the client poll for the review decision via GET /api/runs/{id}.
+            if (entry.IsAwaitingReview && reviewRequestedSent) break;
 
             // Wait for new events or completion (with a short timeout to avoid indefinite hang).
             try { await entry.WaitForChangeAsync(ct); }
@@ -420,6 +428,170 @@ app.MapPost("/api/runs/{id}/review", async (
     // Return immediately — the watch loop will handle the terminal state transition.
     var expectedStatus = request.Approved ? "merging" : "declined";
     return Results.Json(new ReviewResponse { RunId = id, Status = expectedStatus, MergeResult = null });
+});
+
+// POST /api/runs/{id}/commit — stages and commits the worktree, then transitions the run to Completed.
+// This is the "Commit Changes" action: it does not merge to the originating branch and does not
+// delete the worktree. Intended for runs in awaiting_review state.
+app.MapPost("/api/runs/{id}/commit", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    RunStreamStore streamStore,
+    WorktreeManager worktreeManager,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for commit", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.NotFound();
+
+    if (run.Status != RunStatus.AwaitingReview)
+        return Results.Conflict(new { error = $"Run is in status '{run.Status.ToApiString()}' and cannot be committed." });
+
+    if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+        return Results.Conflict(new { error = "Worktree not available." });
+
+    try { worktreeManager.CommitChanges(run.WorktreePath, runId); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to commit worktree changes for run {RunId}", runId);
+        return Results.Problem("Failed to commit worktree changes.", statusCode: 500);
+    }
+
+    var transitioned = await runStore.TryTransitionReviewAsync(
+        runId, RunStatus.Completed, DateTimeOffset.UtcNow, null, ct);
+    if (!transitioned)
+        return Results.Conflict(new { error = "Run status has changed; could not transition to completed." });
+
+    var entry = streamStore.Get(id);
+    if (entry is not null)
+    {
+        var seq = entry.NextSequence();
+        entry.Record(new RunEvent(seq, EventTypes.RunCompleted, new { result = "committed" }));
+        streamStore.Complete(id);
+    }
+
+    logger.LogInformation("Run {RunId} committed by {User}", id, ApiKeyAuthMiddleware.GetCaller(httpContext).User);
+
+    return Results.Json(new CommitResponse { RunId = id, Status = RunStatus.Completed.ToApiString() });
+});
+
+// GET /api/runs/{id}/workspace — flat directory listing of all files in the worktree (not just changed).
+// Used by the Files tab in the artifact browser. Only available for runs with an active worktree.
+app.MapGet("/api/runs/{id}/workspace", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    WorktreeManager worktreeManager,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for workspace listing", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.NotFound();
+
+    // Worktree is gone for terminal statuses that remove or abandon it.
+    if (run.Status is RunStatus.Failed or RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed)
+        return Results.NotFound();
+
+    // Pending runs have no worktree yet.
+    if (run.Status is RunStatus.Pending)
+        return Results.Json(Array.Empty<WorkspaceNode>());
+
+    if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+        return Results.NotFound();
+
+    try
+    {
+        // Build a path → status map from the changed-file set.
+        var changedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (!string.IsNullOrEmpty(run.WorktreeBranch))
+        {
+            try
+            {
+                var committed = worktreeManager.GetCommittedFileEntries(
+                    run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch);
+                foreach (var e in committed) changedFiles[e.Path] = e.Status;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not compute committed entries for workspace listing of run {RunId}", runId);
+            }
+        }
+
+        try
+        {
+            var uncommitted = worktreeManager.GetUncommittedFileEntries(run.WorktreePath);
+            foreach (var e in uncommitted) changedFiles[e.Path] = e.Status;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not compute uncommitted entries for workspace listing of run {RunId}", runId);
+        }
+
+        var worktreeRoot = run.WorktreePath.TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        var nodes = new List<WorkspaceNode>();
+
+        // Enumerate directories (exclude .git).
+        foreach (var dir in Directory.GetDirectories(worktreeRoot, "*", SearchOption.AllDirectories))
+        {
+            var rel = dir.Substring(worktreeRoot.Length)
+                         .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                         .Replace('\\', '/');
+            if (rel == ".git" || rel.StartsWith(".git/", StringComparison.Ordinal)) continue;
+            nodes.Add(new WorkspaceNode { Path = rel, IsFolder = true, Status = null });
+        }
+
+        // Enumerate files (exclude .git file/directory and its contents).
+        foreach (var file in Directory.GetFiles(worktreeRoot, "*", SearchOption.AllDirectories))
+        {
+            var rel = file.Substring(worktreeRoot.Length)
+                          .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                          .Replace('\\', '/');
+            if (rel == ".git" || rel.StartsWith(".git/", StringComparison.Ordinal)) continue;
+            changedFiles.TryGetValue(rel, out var status);
+            nodes.Add(new WorkspaceNode { Path = rel, IsFolder = false, Status = status });
+        }
+
+        // Sort: folders first (alphabetically), then files (alphabetically).
+        var sorted = nodes
+            .OrderBy(n => n.IsFolder ? 0 : 1)
+            .ThenBy(n => n.Path, StringComparer.Ordinal)
+            .ToArray();
+
+        return Results.Json(sorted);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to list workspace for run {RunId}", runId);
+        return Results.Problem("Failed to list workspace.", statusCode: 500);
+    }
 });
 
 app.MapPost("/api/runs/{id}/shell-approvals", (
