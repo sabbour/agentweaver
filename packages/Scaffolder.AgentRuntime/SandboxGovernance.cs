@@ -27,7 +27,7 @@ internal sealed class SandboxGovernance : IDisposable
         defaultAction: Deny
         rules:
           - name: allow-file-tools
-            condition: "tool_name == 'read_file' or tool_name == 'list_directory' or tool_name == 'write_file' or tool_name == 'edit_file' or tool_name == 'str_replace_editor' or tool_name == 'apply_patch' or tool_name == 'create' or tool_name == 'edit'"
+            condition: "tool_name == 'read_file' or tool_name == 'write_file' or tool_name == 'create_file' or tool_name == 'str_replace_editor' or tool_name == 'apply_patch'"
             action: Allow
             description: >
               File read/write/edit tools. Actual path containment enforced by SandboxPolicyBackend.

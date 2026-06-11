@@ -21,8 +21,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
         - read_file(path): read a file (path = relative path from working directory)
         - str_replace_editor(path, old_str, new_str): replace a unique string in a file (preferred for edits)
         - apply_patch(patch): apply a patch in Copilot CLI patch grammar
-        - create(path, file_text): create a new file with content (fails if the file already exists; path = relative file path)
-        - edit(path, content): write or overwrite a file completely (path = relative file path, content = full file content)
+        - create_file(path, file_text): create a new file (fails if it already exists)
+        - write_file(path, content): overwrite or create a file with complete content
         - grep_search(pattern, path?): search for a regex pattern across files
         - file_search(pattern): find files matching a glob pattern
 
@@ -260,7 +260,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
                 if (call.Name == "run_command")
                     toolArgs["directory"] = workingDirectory;
 
-                if (call.Name is "edit" or "create" or "str_replace_editor" or "read_file")
+                if (call.Name is "write_file" or "create_file" or "str_replace_editor" or "read_file")
                 {
                     foreach (var alias in new[] { "file_path", "filename", "target", "file" })
                     {

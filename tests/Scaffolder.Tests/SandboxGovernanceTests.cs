@@ -72,9 +72,9 @@ public sealed class SandboxGovernanceTests : IDisposable
 
     [Theory]
     [InlineData("read_file", "file.txt")]
-    [InlineData("list_directory", "subdir")]
     [InlineData("write_file", "output.cs")]
-    [InlineData("edit_file", "Program.cs")]
+    [InlineData("create_file", "Program.cs")]
+    [InlineData("str_replace_editor", "app.cs")]
     public void Allow_KnownTool_InSandboxRelativePath(string toolName, string relativePath)
     {
         var result = _governance.EvaluateToolCall(
@@ -86,12 +86,12 @@ public sealed class SandboxGovernanceTests : IDisposable
     }
 
     [Fact]
-    public void Allow_ListDirectory_SubdirectoryInSandbox()
+    public void Allow_WriteFile_SubdirectoryInSandbox()
     {
-        // list_directory on a subdirectory within the sandbox
+        // write_file on a path within a sandbox subdirectory
         var result = _governance.EvaluateToolCall(
-            AgentId, "list_directory",
-            new Dictionary<string, object> { ["path"] = "src" },
+            AgentId, "write_file",
+            new Dictionary<string, object> { ["path"] = "src/output.cs" },
             _logger);
 
         result.Allowed.Should().BeTrue();
@@ -300,20 +300,20 @@ public sealed class SandboxGovernanceTests : IDisposable
     }
 
     // ===================================================================
-    // I. Issue 3 — "." and "./" acceptance for list_directory
+    // I. Issue 3 — "." and "./" acceptance for write_file
     // ===================================================================
 
     [Theory]
     [InlineData(".")]
     [InlineData("./")]
-    public void Allow_ListDirectory_DotPath(string dotPath)
+    public void Allow_WriteFile_DotPath(string dotPath)
     {
         var result = _governance.EvaluateToolCall(
-            AgentId, "list_directory",
+            AgentId, "write_file",
             new Dictionary<string, object> { ["path"] = dotPath },
             _logger);
 
-        result.Allowed.Should().BeTrue($"list_directory with path \"{dotPath}\" should resolve to sandbox root and be allowed");
+        result.Allowed.Should().BeTrue($"write_file with path \"{dotPath}\" should resolve to sandbox root and be allowed");
     }
 
     [Theory]

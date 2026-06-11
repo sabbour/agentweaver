@@ -547,7 +547,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var nativeOverrides = new HashSet<string>(StringComparer.Ordinal)
         {
             "read_file", "str_replace_editor", "apply_patch",
-            "create", "edit", "grep_search", "file_search", "report_intent",
+            "create_file", "write_file", "grep_search", "file_search", "report_intent",
         };
 
         return SandboxToolRegistry.Build(context)

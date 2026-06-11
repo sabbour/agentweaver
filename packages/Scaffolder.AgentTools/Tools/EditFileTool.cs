@@ -5,7 +5,7 @@ namespace Scaffolder.AgentTools.Tools;
 
 internal sealed class EditFileTool : ISandboxTool
 {
-    public string Name => "edit";
+    public string Name => "write_file";
 
     public AIFunction CreateFunction(SandboxToolContext ctx) =>
         AIFunctionFactory.Create(

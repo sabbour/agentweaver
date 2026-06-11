@@ -14,9 +14,8 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
     /// <summary>Known file-tool names that require path validation.</summary>
     private static readonly HashSet<string> KnownFileTools = new(StringComparer.Ordinal)
     {
-        "read_file", "write_file", "edit_file", "list_directory",
-        // Custom tools matching Copilot built-in names:
-        "str_replace_editor", "apply_patch", "create", "edit",
+        "read_file", "write_file", "create_file",
+        "str_replace_editor", "apply_patch",
     };
 
     /// <summary>Known search-tool names that enumerate the sandbox root.</summary>
