@@ -4,8 +4,6 @@ import {
   Button,
   MessageBar,
   Spinner,
-  Tab,
-  TabList,
   Text,
   makeStyles,
   mergeClasses,
@@ -26,10 +24,8 @@ import {
   type FluentIcon,
 } from '@fluentui/react-icons';
 import {
-  FILTERS,
   useArtifactBrowser,
   type ArtifactBrowserState,
-  type FilterValue,
 } from '../hooks/useArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
 
@@ -166,9 +162,7 @@ const useFileTreeStyles = makeStyles({
     flexShrink: 0,
   },
   tabListWrapper: {
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    flexShrink: 0,
+    display: 'none',
   },
   fileList: {
     overflowY: 'auto',
@@ -336,9 +330,6 @@ export function FileTreePanel({ state }: FileTreePanelProps) {
   const styles = useFileTreeStyles();
   const {
     runStatus,
-    activeFilter,
-    isHistorical,
-    handleFilterChange,
     files,
     filesLoading,
     filesError,
@@ -475,19 +466,6 @@ export function FileTreePanel({ state }: FileTreePanelProps) {
           <Badge color={reviewResultBadgeColor(reviewResult.status)}>{reviewResult.status}</Badge>
         </div>
       )}
-      <div className={styles.tabListWrapper}>
-        <TabList
-          size="small"
-          selectedValue={activeFilter}
-          onTabSelect={(_e, data) => handleFilterChange(data.value as FilterValue)}
-        >
-          {FILTERS.map((f) => (
-            <Tab key={f.value} value={f.value} disabled={isHistorical && f.value !== 'all'}>
-              {f.label}
-            </Tab>
-          ))}
-        </TabList>
-      </div>
       <div className={styles.fileList}>
         {filesLoading ? (
           <div className={styles.spinnerWrapper}>
