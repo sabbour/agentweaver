@@ -1,4 +1,4 @@
-﻿import { memo, useState } from 'react';
+import { memo, useState } from 'react';
 import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { AgentMessageBubble } from './AgentMessageBubble';
