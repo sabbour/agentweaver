@@ -4,15 +4,21 @@ import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
 import { apiClient } from '../api/apiClient';
 import type { RunDetail, ReviewResponse } from '../api/types';
-import { ArtifactBrowser } from './ArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
 import { ReviewPanel } from './ReviewPanel';
 import { RunHeader } from './RunHeader';
+import { RunLayout } from './RunLayout';
 import { Timeline } from './Timeline';
 import { useTimelineItems } from '../timeline/useTimelineItems';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  centerContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalM,
+  },
   reviewSection: {
     display: 'flex',
     flexDirection: 'column',
@@ -85,13 +91,14 @@ export function RunWatcher({ runId }: RunWatcherProps) {
 
   const resolvedStatus = effectiveReviewComplete?.status ?? (reviewRun && reviewRun.status !== 'awaiting_review' ? reviewRun.status : null);
 
-  return (
-    <div className={styles.root}>
-      <RunHeader runId={runId} streamStatus={status} error={error ?? undefined} />
+  // Derive a stable run status string for the artifact browser panels.
+  const derivedRunStatus = isLiveRun
+    ? 'in_progress'
+    : (effectiveReviewComplete?.status ?? (hasReviewRequested ? 'awaiting_review' : 'completed'));
+
+  const centerContent = (
+    <div className={styles.centerContent}>
       <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} />
-      {isLiveRun && (
-        <ArtifactBrowser runId={runId} runStatus="in_progress" />
-      )}
       {hasReviewRequested && (
         <div className={styles.reviewSection}>
           <Divider />
@@ -120,6 +127,13 @@ export function RunWatcher({ runId }: RunWatcherProps) {
           )}
         </div>
       )}
+    </div>
+  );
+
+  return (
+    <div className={styles.root}>
+      <RunHeader runId={runId} streamStatus={status} error={error ?? undefined} />
+      <RunLayout runId={runId} runStatus={derivedRunStatus} centerContent={centerContent} />
     </div>
   );
 }

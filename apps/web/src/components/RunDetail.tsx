@@ -14,14 +14,19 @@ import {
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { ReviewResponse, RunDetail as RunDetailModel, RunStatus } from '../api/types';
-import { ArtifactBrowser } from './ArtifactBrowser';
 import { ReviewPanel } from './ReviewPanel';
+import { RunLayout } from './RunLayout';
 
 const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
+  },
+  centerContent: {
+    display: 'flex',
+    flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalM,
     maxWidth: '720px',
   },
   label: {
@@ -111,8 +116,8 @@ export function RunDetail({ runId }: RunDetailProps) {
     ['Result', run.result ?? '-'],
   ];
 
-  return (
-    <div className={styles.root}>
+  const centerContent = (
+    <div className={styles.centerContent}>
       <Table aria-label="Run details">
         <TableBody>
           {rows.map(([label, value]) => (
@@ -123,11 +128,7 @@ export function RunDetail({ runId }: RunDetailProps) {
           ))}
         </TableBody>
       </Table>
-      {run.status === 'pending' ? (
-        <Text>Run has not started yet.</Text>
-      ) : (
-        <ArtifactBrowser runId={runId} runStatus={run.status} />
-      )}
+      {run.status === 'pending' && <Text>Run has not started yet.</Text>}
       {run.status === 'awaiting_review' && (
         <div className={styles.reviewSection}>
           <Divider />
@@ -147,6 +148,16 @@ export function RunDetail({ runId }: RunDetailProps) {
           <Text>The worktree has been preserved for manual resolution.</Text>
         </div>
       )}
+    </div>
+  );
+
+  return (
+    <div className={styles.root}>
+      <RunLayout
+        runId={runId}
+        runStatus={run.status === 'pending' ? 'completed' : run.status}
+        centerContent={centerContent}
+      />
     </div>
   );
 }
