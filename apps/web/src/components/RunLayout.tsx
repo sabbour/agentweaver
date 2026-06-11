@@ -124,12 +124,13 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
 
       {/* File viewer modal — opens when a file is selected */}
       <FileViewerModal
+        runId={runId}
         filePath={artifactState.selectedPath}
         onClose={artifactState.clearSelection}
         diff={artifactState.diff}
         diffLoading={artifactState.diffLoading}
         diffError={artifactState.diffError}
-        isChangedFile={artifactState.selectedPathIsChanged}
+        isChanged={artifactState.selectedPathIsChanged}
       />
     </div>
   );

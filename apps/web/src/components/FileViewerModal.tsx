@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   Button,
   Dialog,
@@ -12,8 +13,11 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { DiffViewer } from './DiffViewer';
-import type { WorkspaceFileDiff } from '../api/types';
+import { apiClient } from '../api/apiClient';
+import type { WorkspaceFileDiff, WorkspaceFileContent } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -21,10 +25,10 @@ import type { WorkspaceFileDiff } from '../api/types';
 
 const useStyles = makeStyles({
   surface: {
-    width: 'min(900px, 70vw)',
-    maxWidth: '900px',
-    minWidth: '480px',
-    maxHeight: '80vh',
+    width: '80vw',
+    maxWidth: '1100px',
+    height: '80vh',
+    maxHeight: '900px',
     display: 'flex',
     flexDirection: 'column',
   },
@@ -102,26 +106,64 @@ function splitPath(filePath: string): { name: string; folder: string } {
 // ---------------------------------------------------------------------------
 
 export interface FileViewerModalProps {
+  runId: string;
   filePath: string | null;
   onClose: () => void;
   diff: WorkspaceFileDiff | null;
   diffLoading: boolean;
   diffError: string | null;
-  isChangedFile: boolean;
+  isChanged?: boolean;
 }
 
 export function FileViewerModal({
+  runId,
   filePath,
   onClose,
   diff,
   diffLoading,
   diffError,
-  isChangedFile,
+  isChanged = true,
 }: FileViewerModalProps) {
   const styles = useStyles();
   const isOpen = filePath !== null;
 
   const { name, folder } = filePath ? splitPath(filePath) : { name: '', folder: '' };
+
+  const [fileContent, setFileContent] = useState<WorkspaceFileContent | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [contentError, setContentError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!filePath || isChanged !== false) return;
+    setContentLoading(true); // eslint-disable-line react-hooks/set-state-in-effect
+    setContentError(null);
+    setFileContent(null);
+  }, [runId, filePath, isChanged]);
+
+  useEffect(() => {
+    if (!filePath || isChanged !== false) return;
+
+    let active = true;
+
+    apiClient
+      .getRunFileContent(runId, filePath)
+      .then((data) => {
+        if (active) {
+          setFileContent(data);
+          setContentLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          setContentError(err instanceof Error ? err.message : String(err));
+          setContentLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [runId, filePath, isChanged]);
 
   return (
     <Dialog open={isOpen} onOpenChange={(_, data) => { if (!data.open) onClose(); }} modalType="modal">
@@ -132,6 +174,7 @@ export function FileViewerModal({
               <Button
                 appearance="subtle"
                 icon={<DismissRegular />}
+                size="small"
                 onClick={onClose}
                 aria-label="Close"
               />
@@ -143,24 +186,47 @@ export function FileViewerModal({
             </div>
           </DialogTitle>
           <DialogContent className={styles.content}>
-            {!isChangedFile ? (
-              <div className={styles.noChangesText}>
-                <Text>No changes in this file</Text>
-              </div>
-            ) : diffLoading ? (
+            {isChanged ? (
+              diffLoading ? (
+                <div className={styles.spinnerWrapper}>
+                  <Spinner size="small" />
+                </div>
+              ) : diffError ? (
+                <div className={styles.errorText}>
+                  <Text>{diffError}</Text>
+                </div>
+              ) : diff?.is_binary ? (
+                <div className={styles.noChangesText}>
+                  <Text>Binary file — diff not available</Text>
+                </div>
+              ) : (
+                <DiffViewer diff={diff?.diff ?? null} filename={filePath ?? undefined} />
+              )
+            ) : contentLoading ? (
               <div className={styles.spinnerWrapper}>
                 <Spinner size="small" />
               </div>
-            ) : diffError ? (
+            ) : contentError ? (
               <div className={styles.errorText}>
-                <Text>{diffError}</Text>
+                <Text>{contentError}</Text>
               </div>
-            ) : diff?.is_binary ? (
+            ) : fileContent?.is_binary ? (
               <div className={styles.noChangesText}>
-                <Text>Binary file — diff not available</Text>
+                <Text>Binary file</Text>
+              </div>
+            ) : fileContent?.content === null && fileContent?.language === 'too_large' ? (
+              <div className={styles.noChangesText}>
+                <Text>File too large to display</Text>
               </div>
             ) : (
-              <DiffViewer diff={diff?.diff ?? null} filename={filePath ?? undefined} />
+              <SyntaxHighlighter
+                language={fileContent?.language ?? 'plaintext'}
+                style={vscDarkPlus}
+                showLineNumbers
+                customStyle={{ margin: 0, height: '100%', overflow: 'auto', fontSize: '13px' }}
+              >
+                {fileContent?.content ?? ''}
+              </SyntaxHighlighter>
             )}
           </DialogContent>
           <DialogActions className={styles.actions}>

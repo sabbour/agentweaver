@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -54,6 +54,11 @@ export class ScaffolderApiClient {
   getRunFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}`);
+  }
+
+  getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<WorkspaceFileContent>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
   }
 
   getRunWorkspace(runId: string): Promise<WorkspaceNode[]> {

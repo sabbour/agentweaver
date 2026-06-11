@@ -27,7 +27,7 @@ import {
   type ArtifactBrowserState,
 } from '../hooks/useArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
-import type { WorkspaceNode } from '../api/types';
+import type { WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Tree data model
@@ -47,54 +47,6 @@ interface TreeNodeInternal {
   isFolder: boolean;
   status?: 'added' | 'modified' | 'deleted';
   childrenMap: Map<string, TreeNodeInternal>;
-}
-
-function buildFileTree(
-  entries: Array<{ path: string; status: 'added' | 'modified' | 'deleted' }>,
-): TreeNode[] {
-  const rootMap = new Map<string, TreeNodeInternal>();
-
-  for (const entry of entries) {
-    const segments = entry.path.split('/');
-    let currentMap = rootMap;
-
-    for (let i = 0; i < segments.length; i++) {
-      const name = segments[i];
-      const isLast = i === segments.length - 1;
-      const pathSoFar = segments.slice(0, i + 1).join('/');
-
-      if (!currentMap.has(name)) {
-        currentMap.set(name, {
-          name,
-          fullPath: pathSoFar,
-          isFolder: !isLast,
-          status: isLast ? entry.status : undefined,
-          childrenMap: new Map(),
-        });
-      }
-
-      if (!isLast) {
-        currentMap = currentMap.get(name)!.childrenMap;
-      }
-    }
-  }
-
-  function toSortedArray(map: Map<string, TreeNodeInternal>): TreeNode[] {
-    const nodes = [...map.values()];
-    nodes.sort((a, b) => {
-      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-    return nodes.map((n) => ({
-      name: n.name,
-      fullPath: n.fullPath,
-      isFolder: n.isFolder,
-      status: n.status,
-      children: toSortedArray(n.childrenMap),
-    }));
-  }
-
-  return toSortedArray(rootMap);
 }
 
 function buildWorkspaceTree(nodes: WorkspaceNode[]): TreeNode[] {
@@ -155,6 +107,19 @@ function getFileStatusIcon(status?: string): FluentIcon {
   if (status === 'modified') return DocumentEditRegular;
   if (status === 'deleted') return DocumentDismissRegular;
   return DocumentRegular;
+}
+
+// ---------------------------------------------------------------------------
+// Flat list helpers
+// ---------------------------------------------------------------------------
+
+function parentFolder(path: string): string {
+  const parts = path.split('/');
+  return parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+}
+
+function filename(path: string): string {
+  return path.split('/').pop() ?? path;
 }
 
 function reviewResultBadgeColor(
@@ -307,6 +272,69 @@ const useFileTreeStyles = makeStyles({
     alignItems: 'center',
     padding: tokens.spacingVerticalL,
   },
+  changeHeader: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    gap: tokens.spacingHorizontalXS,
+    flexShrink: 0,
+  },
+  changeHeaderTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase200,
+    flex: 1,
+  },
+  addedCount: {
+    color: tokens.colorPaletteGreenForeground1,
+    fontSize: tokens.fontSizeBase200,
+    fontFamily: tokens.fontFamilyMonospace,
+  },
+  removedCount: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+    fontFamily: tokens.fontFamilyMonospace,
+  },
+  flatRow: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    paddingTop: '4px',
+    paddingBottom: '4px',
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    cursor: 'pointer',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+  },
+  flatRowSelected: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground3Hover,
+    },
+  },
+  flatFileName: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase200,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+  },
+  flatParentFolder: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    flex: 1,
+    flexShrink: 2,
+  },
 });
 
 const useDiffPanelStyles = makeStyles({
@@ -407,7 +435,7 @@ function renderTreeNodes({
         <div key={node.fullPath}>
           <div
             className={styles.treeRow}
-            style={{ paddingLeft: `${depth * 12 + 8}px` }}
+            style={{ paddingLeft: `${depth * 16 + 8}px` }}
             onClick={() => toggleFolder(node.fullPath)}
             role="button"
             tabIndex={0}
@@ -454,7 +482,7 @@ function renderTreeNodes({
       <div
         key={node.fullPath}
         className={mergeClasses(styles.treeRow, isSelected ? styles.treeRowSelected : undefined)}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={() => onFileClick(node.fullPath, isChanged)}
         role="button"
         tabIndex={0}
@@ -467,6 +495,63 @@ function renderTreeNodes({
           <FileStatusIcon />
         </span>
         <Text className={styles.fileName}>{node.name}</Text>
+      </div>
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
+// FlatChangesList
+// ---------------------------------------------------------------------------
+
+interface FlatChangesListProps {
+  files: WorkspaceFileEntry[];
+  selectedPath: string | null;
+  onFileClick: (path: string, isChanged: boolean) => void;
+  styles: ReturnType<typeof useFileTreeStyles>;
+}
+
+function renderFlatChangesList({
+  files,
+  selectedPath,
+  onFileClick,
+  styles,
+}: FlatChangesListProps): React.ReactNode[] {
+  return files.map((file) => {
+    const name = filename(file.path);
+    const folder = parentFolder(file.path);
+    const FileIcon = getFileStatusIcon(file.status);
+    const iconClass =
+      file.status === 'added'
+        ? styles.statusIconAdded
+        : file.status === 'modified'
+          ? styles.statusIconModified
+          : styles.statusIconDeleted;
+    const badgeColor: 'success' | 'warning' | 'danger' =
+      file.status === 'added' ? 'success' : file.status === 'modified' ? 'warning' : 'danger';
+    const statusLetter = file.status === 'added' ? 'A' : file.status === 'modified' ? 'M' : 'D';
+    const isSelected = file.path === selectedPath;
+
+    return (
+      <div
+        key={file.path}
+        className={mergeClasses(styles.flatRow, isSelected ? styles.flatRowSelected : undefined)}
+        onClick={() => onFileClick(file.path, true)}
+        role="button"
+        tabIndex={0}
+        title={file.path}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') onFileClick(file.path, true);
+        }}
+      >
+        <span className={iconClass} aria-label={file.status}>
+          <FileIcon />
+        </span>
+        <Text className={styles.flatFileName}>{name}</Text>
+        {folder && <Text className={styles.flatParentFolder}>{folder}</Text>}
+        <Text className={styles.addedCount}>+{file.added_lines}</Text>
+        <Text className={styles.removedCount}>-{file.removed_lines}</Text>
+        <Badge color={badgeColor} size="small">{statusLetter}</Badge>
       </div>
     );
   });
@@ -586,25 +671,9 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
     }
   };
 
-  const tree = useMemo(() => buildFileTree(files), [files]);
-
-  // Tracks folders toggled from their default state.
-  // Top-level folders (depth 0) start expanded; nested folders start collapsed.
-  const [toggledFolders, setToggledFolders] = useState<Set<string>>(() => new Set<string>());
-
-  const toggleFolder = (fullPath: string) => {
-    setToggledFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(fullPath)) {
-        next.delete(fullPath);
-      } else {
-        next.add(fullPath);
-      }
-      return next;
-    });
-  };
-
   const showReviewBar = runStatus === 'awaiting_review' && reviewResult === null;
+  const totalAdded = files.reduce((acc, f) => acc + (f.added_lines ?? 0), 0);
+  const totalRemoved = files.reduce((acc, f) => acc + (f.removed_lines ?? 0), 0);
 
   return (
     <div className={styles.root}>
@@ -696,16 +765,19 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
                 <Text>No changes</Text>
               </div>
             ) : (
-              renderTreeNodes({
-                nodes: tree,
-                depth: 0,
-                selectedPath,
-                onFileClick: fileClickHandler,
-                styles,
-                toggledFolders,
-                toggleFolder,
-                defaultChangedFlag: true,
-              })
+              <>
+                <div className={styles.changeHeader}>
+                  <Text className={styles.changeHeaderTitle}>Branch Changes</Text>
+                  <Text className={styles.addedCount}>+{totalAdded}</Text>
+                  <Text className={styles.removedCount}>-{totalRemoved}</Text>
+                </div>
+                {renderFlatChangesList({
+                  files,
+                  selectedPath,
+                  onFileClick: fileClickHandler,
+                  styles,
+                })}
+              </>
             )}
           </div>
         </>

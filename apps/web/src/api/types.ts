@@ -69,6 +69,15 @@ export interface WorkspaceFileEntry {
   path: string;
   status: 'added' | 'modified' | 'deleted';
   scope: 'committed' | 'uncommitted' | 'merged';
+  added_lines: number;
+  removed_lines: number;
+}
+
+export interface WorkspaceFileContent {
+  path: string;
+  content: string | null;
+  is_binary: boolean;
+  language: string | null;
 }
 
 export interface WorkspaceFileDiff {

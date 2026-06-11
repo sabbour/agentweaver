@@ -32,6 +32,8 @@ function makeEntry(overrides: Partial<WorkspaceFileEntry> = {}): WorkspaceFileEn
     path: 'src/app.ts',
     status: 'added',
     scope: 'committed',
+    added_lines: 0,
+    removed_lines: 0,
     ...overrides,
   };
 }
