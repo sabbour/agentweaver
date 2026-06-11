@@ -236,25 +236,9 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: Li
           <Text className={styles.summary}>{preview}</Text>
         </div>
         {expanded && prompt && (
-          <>
-            <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
-              {prompt}
-            </Text>
-            {p['tools'] && (
-              <div style={{
-                margin: `${tokens.spacingVerticalS} 0 0 24px`,
-                borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-                paddingTop: tokens.spacingVerticalXS,
-              }}>
-                <Text as="span" style={{ display: 'block', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, fontStyle: 'italic', marginBottom: '2px' }}>
-                  debug — registered tools (not part of prompt)
-                </Text>
-                <Text as="span" style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
-                  {(p['tools'] as string[]).join(' · ')}
-                </Text>
-              </div>
-            )}
-          </>
+          <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
+            {prompt}
+          </Text>
         )}
       </div>
     );
@@ -325,6 +309,21 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: Li
           </Text>
         )}
         <Text className={styles.approvalMeta}>Request ID: {requestId}</Text>
+      </div>
+    );
+  }
+
+  // --- agent.tools: separate flat card listing registered tools ---
+  if (event.type === 'agent.tools') {
+    const tools = event.payload['tools'] as string[] | undefined;
+    if (!tools || tools.length === 0) return null;
+    return (
+      <div className={styles.card}>
+        <CodeRegular className={styles.subtleIcon} aria-hidden="true" />
+        <Badge className={styles.badge} color="subtle" shape="rounded" size="small">tools</Badge>
+        <Text className={styles.summary} style={{ fontFamily: tokens.fontFamilyMonospace }}>
+          {tools.join(' · ')}
+        </Text>
       </div>
     );
   }

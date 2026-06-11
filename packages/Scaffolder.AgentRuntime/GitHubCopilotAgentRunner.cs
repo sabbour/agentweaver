@@ -219,11 +219,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
         // Emit configuration snapshot for debuggability.
-        Emit("agent.system_prompt", new
-        {
-            provider = "copilot",
-            prompt = CopilotSystemPrompt,
-        });
+        Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt });
+        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)" } });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });

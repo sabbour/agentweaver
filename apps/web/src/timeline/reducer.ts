@@ -384,6 +384,7 @@ function processEvent(
     case 'sandbox.selected':
     case 'sandbox.warning':
     case 'agent.system_prompt':
+    case 'agent.tools':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
 
     default:
