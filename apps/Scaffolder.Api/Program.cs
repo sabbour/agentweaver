@@ -479,6 +479,188 @@ app.MapPut("/api/sandbox-policy", async (
     }
 });
 
+// GET /api/runs/{id}/files — returns the changed-file set for a run (FR-034)
+app.MapGet("/api/runs/{id}/files", async (
+    HttpContext httpContext,
+    string id,
+    string? filter,
+    SqliteRunStore runStore,
+    WorktreeManager worktreeManager,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    // A trailing slash on this URL indicates an empty file-path attempt that ASP.NET
+    // Core's trailing-slash normalization sends here instead of to the diff endpoint.
+    // Reject it so callers receive 400 rather than an unintended file-list response.
+    if (httpContext.Request.Path.HasValue && httpContext.Request.Path.Value!.EndsWith('/'))
+        return Results.BadRequest(new { error = "Invalid file path." });
+
+    // Validate filter before any run lookup so an invalid value always returns 400.
+    var normalizedFilter = (filter ?? "all").ToLowerInvariant();
+    if (normalizedFilter is not ("all" or "committed" or "uncommitted" or "last-commit"))
+        return Results.BadRequest(new { error = "filter must be all, committed, uncommitted, or last-commit." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for file list", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.NotFound();
+
+    // Failed runs do not serve artifacts (aligns with diff-withholding policy FR-026 / SC-009).
+    if (run.Status is RunStatus.Pending or RunStatus.Failed)
+        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined;
+
+    if (isTerminal)
+    {
+        var entries = WorkspaceFileEntryParser.ParseUnifiedDiffEntries(run.Diff ?? string.Empty);
+        return Results.Json(entries);
+    }
+
+    if (string.IsNullOrEmpty(run.WorktreePath) || string.IsNullOrEmpty(run.WorktreeBranch))
+        return Results.Conflict(new { error = "Worktree not available." });
+
+    if (!Directory.Exists(run.WorktreePath))
+        return Results.Conflict(new { error = "Worktree not available." });
+
+    try
+    {
+        IReadOnlyList<WorkspaceFileEntry> result = normalizedFilter switch
+        {
+            "committed"   => worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch),
+            "uncommitted" => worktreeManager.GetUncommittedFileEntries(run.WorktreePath),
+            "last-commit" => worktreeManager.GetLastCommitFileEntries(run.WorktreePath),
+            _             => MergeFileEntries(
+                                 worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch),
+                                 worktreeManager.GetUncommittedFileEntries(run.WorktreePath)),
+        };
+        return Results.Json(result);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to compute file entries for run {RunId}", runId);
+        return Results.Problem("Failed to compute file entries.", statusCode: 500);
+    }
+});
+
+// GET /api/runs/{id}/files/{**path} — returns a per-file unified diff (FR-035)
+app.MapGet("/api/runs/{id}/files/{**path}", async (
+    HttpContext httpContext,
+    string id,
+    string path,
+    SqliteRunStore runStore,
+    WorktreeManager worktreeManager,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for file diff", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.NotFound();
+
+    // Path validation after ownership check to prevent leaking run existence via error-code differences.
+    if (!TryValidateRelativePath(path, out var normalizedPath))
+        return Results.BadRequest(new { error = "Invalid file path." });
+
+    // Post-open path containment check using the stored worktree root.
+    if (!string.IsNullOrEmpty(run.WorktreePath))
+    {
+        var worktreeRoot = run.WorktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var full = Path.GetFullPath(Path.Combine(worktreeRoot, normalizedPath));
+        var rootWithSep = worktreeRoot + Path.DirectorySeparatorChar;
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!full.StartsWith(rootWithSep, cmp))
+            return Results.BadRequest(new { error = "Invalid file path." });
+    }
+
+    // Failed runs do not serve artifacts (aligns with diff-withholding policy FR-026 / SC-009).
+    if (run.Status is RunStatus.Pending or RunStatus.Failed)
+        return Results.NotFound();
+
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined;
+
+    IReadOnlyList<WorkspaceFileEntry> allEntries;
+
+    if (isTerminal)
+    {
+        allEntries = WorkspaceFileEntryParser.ParseUnifiedDiffEntries(run.Diff ?? string.Empty);
+    }
+    else
+    {
+        if (string.IsNullOrEmpty(run.WorktreePath) || string.IsNullOrEmpty(run.WorktreeBranch))
+            return Results.Conflict(new { error = "Worktree not available." });
+        if (!Directory.Exists(run.WorktreePath))
+            return Results.Conflict(new { error = "Worktree not available." });
+
+        try
+        {
+            allEntries = MergeFileEntries(
+                worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch),
+                worktreeManager.GetUncommittedFileEntries(run.WorktreePath));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to compute file whitelist for run {RunId}", runId);
+            return Results.Problem("Failed to retrieve file list.", statusCode: 500);
+        }
+    }
+
+    // Whitelist check: only serve paths present in the changed-file set.
+    var whitelistEntry = allEntries.FirstOrDefault(
+        e => string.Equals(e.Path, normalizedPath, StringComparison.Ordinal));
+    if (whitelistEntry is null)
+        return Results.NotFound();
+
+    if (isTerminal)
+    {
+        var (storedDiff, isBinary) = WorkspaceFileEntryParser.ParseFileDiffFromUnifiedDiff(run.Diff ?? string.Empty, normalizedPath);
+        return Results.Json(new WorkspaceFileDiff
+        {
+            Path     = normalizedPath,
+            Diff     = isBinary ? null : storedDiff,
+            Status   = whitelistEntry.Status,
+            IsBinary = isBinary,
+        });
+    }
+
+    try
+    {
+        var (fileDiff, isBinaryFile) = worktreeManager.GetFileDiffEntry(
+            run.RepositoryPath, run.WorktreePath!, run.OriginatingBranch, run.WorktreeBranch!, normalizedPath);
+
+        return Results.Json(new WorkspaceFileDiff
+        {
+            Path     = normalizedPath,
+            Diff     = fileDiff,
+            Status   = whitelistEntry.Status,
+            IsBinary = isBinaryFile,
+        });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to compute file diff for run {RunId}", runId);
+        return Results.Problem("Failed to compute file diff.", statusCode: 500);
+    }
+});
+
 app.Run();
 
 static bool IsOwner(HttpContext context, Run run) =>
@@ -657,6 +839,76 @@ static SandboxPolicy ToSandboxPolicyDomain(SandboxPolicyDto dto) => new()
     RedactPii                  = dto.RedactPii,
     MaxOutputBytes             = dto.MaxOutputBytes,
 };
+
+/// <summary>
+/// Validates a relative file path from a route parameter. Normalizes percent-encoded
+/// separators (%2F, %5C) that ASP.NET Core does not decode in catch-all route params,
+/// then rejects null bytes, control characters (including DEL and C1), rooted paths,
+/// UNC paths, device paths, drive-relative paths, parent-traversal segments, and on
+/// Windows, Alternate Data Stream specifiers. Returns false on any violation; sets
+/// normalizedPath to the canonical relative form on success.
+/// </summary>
+static bool TryValidateRelativePath(string? rawPath, out string normalizedPath)
+{
+    normalizedPath = string.Empty;
+    if (string.IsNullOrEmpty(rawPath)) return false;
+
+    // Normalize percent-encoded separators that ASP.NET Core does not decode in catch-all params.
+    // This must happen first so all subsequent checks operate on the decoded path.
+    rawPath = rawPath.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase)
+                     .Replace("%5C", "/", StringComparison.OrdinalIgnoreCase);
+
+    foreach (var c in rawPath)
+    {
+        // Reject C0 control characters (including null byte).
+        if (c == '\0' || c < ' ') return false;
+        // Reject DEL and C1 control characters.
+        if (c == '\u007F' || (c >= '\u0080' && c <= '\u009F')) return false;
+    }
+
+    // Reject raw UNC paths before separator normalization.
+    if (rawPath.StartsWith(@"\\", StringComparison.Ordinal)) return false;
+
+    var normalized = rawPath.Replace('\\', '/');
+
+    // Reject absolute and rooted paths (handles /, C:\, C:/).
+    if (Path.IsPathRooted(normalized)) return false;
+
+    // Reject normalized UNC (//host) and device (//./device) paths.
+    if (normalized.StartsWith("//", StringComparison.Ordinal)) return false;
+
+    // Reject drive-relative paths not already caught by IsPathRooted on non-Windows hosts.
+    if (normalized.Length >= 2 && char.IsLetter(normalized[0]) && normalized[1] == ':')
+        return false;
+
+    // Reject parent-traversal segments.
+    foreach (var segment in normalized.Split('/'))
+    {
+        if (segment == "..") return false;
+    }
+
+    // On Windows, reject paths containing ':' after drive-letter checks above.
+    // Any remaining ':' indicates a Windows Alternate Data Stream specifier.
+    if (OperatingSystem.IsWindows() && normalized.Contains(':', StringComparison.Ordinal))
+        return false;
+
+    normalizedPath = normalized;
+    return true;
+}
+
+/// <summary>
+/// Merges committed and uncommitted file-entry lists into a single deduplicated list.
+/// When a path appears in both, the uncommitted entry wins (more current status).
+/// </summary>
+static IReadOnlyList<WorkspaceFileEntry> MergeFileEntries(
+    IReadOnlyList<WorkspaceFileEntry> committed,
+    IReadOnlyList<WorkspaceFileEntry> uncommitted)
+{
+    var merged = new Dictionary<string, WorkspaceFileEntry>(StringComparer.Ordinal);
+    foreach (var e in committed)   merged[e.Path] = e;
+    foreach (var e in uncommitted) merged[e.Path] = e;
+    return [.. merged.Values];
+}
 
 public partial class Program { }
 

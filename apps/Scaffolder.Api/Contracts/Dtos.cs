@@ -140,3 +140,32 @@ public sealed record ReviewResponse
     [JsonPropertyName("merge_result")]
     public string? MergeResult { get; init; }
 }
+
+/// <summary>One file entry in the changed-file set for a run (FR-034).</summary>
+public sealed record WorkspaceFileEntry
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }   // "added" | "modified" | "deleted"
+
+    [JsonPropertyName("scope")]
+    public required string Scope { get; init; }    // "committed" | "uncommitted" | "merged"
+}
+
+/// <summary>Per-file unified diff for a single file in a run's worktree (FR-035).</summary>
+public sealed record WorkspaceFileDiff
+{
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("diff")]
+    public string? Diff { get; init; }             // unified diff chunk; null if binary or unavailable
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }   // "added" | "modified" | "deleted"
+
+    [JsonPropertyName("is_binary")]
+    public bool IsBinary { get; init; }
+}

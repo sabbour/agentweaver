@@ -1,5 +1,6 @@
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
+using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Infrastructure;
 using Scaffolder.Api.Runs;
 using Scaffolder.Domain;
@@ -101,6 +102,210 @@ public sealed class WorktreeManager
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, worktree.Tip.Tree);
         return patch.Content;
+    }
+
+    /// <summary>
+    /// Returns files that differ between the originating branch tip and the worktree branch tip
+    /// (committed changes in this run).
+    /// </summary>
+    public IReadOnlyList<WorkspaceFileEntry> GetCommittedFileEntries(
+        string repositoryPath, string originatingBranch, string worktreeBranch)
+    {
+        using var repo = new Repository(repositoryPath);
+
+        var origin = repo.Branches[originatingBranch]
+            ?? throw new InvalidOperationException($"Originating branch '{originatingBranch}' was not found.");
+        var worktree = repo.Branches[worktreeBranch]
+            ?? throw new InvalidOperationException($"Worktree branch '{worktreeBranch}' was not found.");
+
+        using var diff = repo.Diff.Compare<TreeChanges>(origin.Tip.Tree, worktree.Tip.Tree);
+        var entries = new List<WorkspaceFileEntry>();
+
+        foreach (var change in diff)
+        {
+            if (change.Status == ChangeKind.Unmodified) continue;
+            entries.Add(new WorkspaceFileEntry
+            {
+                Path   = NormalizePathSeparators(change.Path),
+                Status = MapChangeKindToStatus(change.Status),
+                Scope  = "committed",
+            });
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Returns files that have staged or working-directory changes in the worktree
+    /// compared to the worktree HEAD (uncommitted changes).
+    /// </summary>
+    public IReadOnlyList<WorkspaceFileEntry> GetUncommittedFileEntries(string worktreePath)
+    {
+        using var repo = new Repository(worktreePath);
+
+        var status = repo.RetrieveStatus(new StatusOptions
+        {
+            IncludeUntracked     = true,
+            IncludeIgnored       = false,
+            RecurseUntrackedDirs = true,
+            RecurseIgnoredDirs   = false,
+        });
+
+        // Index changes are inserted first; working-directory changes overwrite them
+        // because the working directory represents the most current state.
+        var byPath = new Dictionary<string, WorkspaceFileEntry>(StringComparer.Ordinal);
+
+        foreach (var entry in status)
+        {
+            var indexStatus = MapFileStatusToEntryStatus(entry.State, staged: true);
+            if (indexStatus is not null)
+            {
+                var p = NormalizePathSeparators(entry.FilePath);
+                byPath[p] = new WorkspaceFileEntry { Path = p, Status = indexStatus, Scope = "uncommitted" };
+            }
+        }
+
+        foreach (var entry in status)
+        {
+            var workdirStatus = MapFileStatusToEntryStatus(entry.State, staged: false);
+            if (workdirStatus is not null)
+            {
+                var p = NormalizePathSeparators(entry.FilePath);
+                byPath[p] = new WorkspaceFileEntry { Path = p, Status = workdirStatus, Scope = "uncommitted" };
+            }
+        }
+
+        return [.. byPath.Values];
+    }
+
+    /// <summary>
+    /// Returns files changed in the most recent commit on the worktree branch vs its parent.
+    /// Returns an empty list when the worktree HEAD has no parent (initial commit).
+    /// </summary>
+    public IReadOnlyList<WorkspaceFileEntry> GetLastCommitFileEntries(string worktreePath)
+    {
+        using var repo = new Repository(worktreePath);
+
+        var head = repo.Head.Tip;
+        if (head is null) return [];
+
+        var parent = head.Parents.FirstOrDefault();
+        if (parent is null) return [];
+
+        using var diff = repo.Diff.Compare<TreeChanges>(parent.Tree, head.Tree);
+        var entries = new List<WorkspaceFileEntry>();
+
+        foreach (var change in diff)
+        {
+            if (change.Status == ChangeKind.Unmodified) continue;
+            entries.Add(new WorkspaceFileEntry
+            {
+                Path   = NormalizePathSeparators(change.Path),
+                Status = MapChangeKindToStatus(change.Status),
+                Scope  = "committed",
+            });
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Returns the unified diff for a single file relative to the originating branch tip,
+    /// including both committed and any uncommitted working-directory changes.
+    /// Returns (null, true) when the file is binary; (null, false) when no diff was produced.
+    /// </summary>
+    public (string? Diff, bool IsBinary) GetFileDiffEntry(
+        string repositoryPath,
+        string worktreePath,
+        string originatingBranch,
+        string worktreeBranch,
+        string relativeFilePath)
+    {
+        var parts = new System.Text.StringBuilder();
+        bool isBinary = false;
+
+        // Committed diff: origin branch tip to worktree branch tip.
+        using (var repo = new Repository(repositoryPath))
+        {
+            var origin   = repo.Branches[originatingBranch];
+            var worktree = repo.Branches[worktreeBranch];
+
+            if (origin is not null && worktree is not null)
+            {
+                using var patch = repo.Diff.Compare<Patch>(
+                    origin.Tip.Tree,
+                    worktree.Tip.Tree,
+                    new[] { relativeFilePath },
+                    new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false });
+
+                var entry = patch[relativeFilePath];
+                if (entry is not null)
+                {
+                    if (entry.IsBinaryComparison) isBinary = true;
+                    else if (!string.IsNullOrEmpty(entry.Patch)) parts.Append(entry.Patch);
+                }
+            }
+        }
+
+        // Uncommitted diff: worktree HEAD to working directory and index.
+        if (!isBinary && Directory.Exists(worktreePath))
+        {
+            using var repo = new Repository(worktreePath);
+            var headTree = repo.Head.Tip?.Tree;
+
+            if (headTree is not null)
+            {
+                using var patch = repo.Diff.Compare<Patch>(
+                    headTree,
+                    DiffTargets.WorkingDirectory | DiffTargets.Index,
+                    new[] { relativeFilePath },
+                    new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false });
+
+                var entry = patch[relativeFilePath];
+                if (entry is not null)
+                {
+                    if (entry.IsBinaryComparison) isBinary = true;
+                    else if (!string.IsNullOrEmpty(entry.Patch)) parts.Append(entry.Patch);
+                }
+            }
+        }
+
+        if (isBinary) return (null, true);
+        var result = parts.ToString();
+        return (string.IsNullOrEmpty(result) ? null : result, false);
+    }
+
+    private static string NormalizePathSeparators(string path) =>
+        path.Replace('\\', '/');
+
+    private static string MapChangeKindToStatus(ChangeKind kind) => kind switch
+    {
+        ChangeKind.Added       => "added",
+        ChangeKind.Deleted     => "deleted",
+        ChangeKind.Renamed     => "modified",
+        ChangeKind.Copied      => "added",
+        ChangeKind.TypeChanged => "modified",
+        _                      => "modified",
+    };
+
+    private static string? MapFileStatusToEntryStatus(FileStatus state, bool staged)
+    {
+        if (staged)
+        {
+            if ((state & FileStatus.NewInIndex)        != 0) return "added";
+            if ((state & FileStatus.ModifiedInIndex)   != 0) return "modified";
+            if ((state & FileStatus.DeletedFromIndex)  != 0) return "deleted";
+            if ((state & FileStatus.RenamedInIndex)    != 0) return "modified";
+            if ((state & FileStatus.TypeChangeInIndex) != 0) return "modified";
+            return null;
+        }
+
+        if ((state & FileStatus.NewInWorkdir)        != 0) return "added";
+        if ((state & FileStatus.ModifiedInWorkdir)   != 0) return "modified";
+        if ((state & FileStatus.DeletedFromWorkdir)  != 0) return "deleted";
+        if ((state & FileStatus.RenamedInWorkdir)    != 0) return "modified";
+        if ((state & FileStatus.TypeChangeInWorkdir) != 0) return "modified";
+        return null;
     }
 
     /// <summary>
