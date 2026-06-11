@@ -23,7 +23,8 @@ public sealed record MergeResult(
     string? PreviousHeadSha,
     string? NewHeadSha,
     bool WasFastForward,
-    string? Reason);
+    string? Reason,
+    IReadOnlyList<string>? ConflictingFiles = null);
 
 public enum MergeResultKind
 {

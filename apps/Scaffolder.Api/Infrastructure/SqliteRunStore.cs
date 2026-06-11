@@ -189,14 +189,15 @@ public sealed class SqliteRunStore
     /// <summary>
     /// Transitions a run from Merging to a terminal status (Merged or MergeFailed).
     /// Called after MergeWorktree returns a Merged or Conflict outcome.
+    /// <paramref name="mergeConflicts"/> is a JSON array of conflicting file paths; pass null on success.
     /// </summary>
     public async Task CompleteMergingAsync(
-        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default)
     {
         await ExecuteNonQueryAsync(
             """
             UPDATE runs
-               SET status = $toStatus, ended_at = $endedAt, result = $result
+               SET status = $toStatus, ended_at = $endedAt, result = $result, merge_conflicts = $mergeConflicts
              WHERE run_id = $runId AND status = 'merging';
             """,
             cmd =>
@@ -204,6 +205,23 @@ public sealed class SqliteRunStore
                 cmd.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
                 cmd.Parameters.AddWithValue("$endedAt", Ts(endedAt));
                 cmd.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$mergeConflicts", (object?)mergeConflicts ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Updates the tree_hash of a run that is still in AwaitingReview status.
+    /// Used by the /commit endpoint after staging and committing any remaining
+    /// uncommitted changes on top of the agent's commit.
+    /// </summary>
+    public async Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            "UPDATE runs SET tree_hash = $treeHash WHERE run_id = $runId AND status = 'awaiting_review';",
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$treeHash", newTreeHash);
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
     }
@@ -244,11 +262,13 @@ public sealed class SqliteRunStore
     // Ordinals: 0=run_id 1=repository_path 2=originating_branch 3=model_source 4=task
     //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
     //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
+    //           15=merge_conflicts
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
                submitting_user, status, started_at, ended_at, result,
-               worktree_path, worktree_branch, tree_hash, step_count, diff
+               worktree_path, worktree_branch, tree_hash, step_count, diff,
+               merge_conflicts
           FROM runs
         """;
 
@@ -269,6 +289,7 @@ public sealed class SqliteRunStore
         TreeHash         = r.IsDBNull(12) ? null : r.GetString(12),
         StepCount        = r.IsDBNull(13) ? 0    : r.GetInt32(13),
         Diff             = r.IsDBNull(14) ? null : r.GetString(14),
+        MergeConflicts   = r.IsDBNull(15) ? null : r.GetString(15),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

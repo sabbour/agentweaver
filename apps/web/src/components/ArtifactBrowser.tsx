@@ -172,9 +172,8 @@ const useFileTreeStyles = makeStyles({
   },
   reviewBarButtons: {
     display: 'flex',
-    flexDirection: 'row',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
   },
   reviewBarDecline: {
     color: tokens.colorPaletteRedForeground1,
@@ -757,36 +756,38 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
                 appearance="primary"
                 size="small"
                 icon={<CheckmarkRegular />}
-                aria-label="Commit changes to worktree"
-                style={{ flex: 1 }}
+                aria-label="Commit and merge to originating branch"
+                style={{ width: '100%', whiteSpace: 'nowrap' }}
                 onClick={() => void commitRun()}
               >
-                Commit Changes
+                Commit and Merge
               </Button>
-              <Button
-                appearance="secondary"
-                size="small"
-                icon={<CommentRegular />}
-                aria-label="Request changes"
-                style={{ flex: 1 }}
-                onClick={() => {
-                  setRequestChangesOpen((open) => !open);
-                  setRequestChangesComment('');
-                }}
-              >
-                Request Changes
-              </Button>
-              <Button
-                appearance="secondary"
-                size="small"
-                icon={<DismissRegular />}
-                aria-label="Decline run"
-                style={{ flex: 1 }}
-                className={styles.reviewBarDecline}
-                onClick={() => void submitReview(false)}
-              >
-                Decline
-              </Button>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  icon={<CommentRegular />}
+                  aria-label="Request changes"
+                  style={{ flex: 1, whiteSpace: 'nowrap' }}
+                  onClick={() => {
+                    setRequestChangesOpen((open) => !open);
+                    setRequestChangesComment('');
+                  }}
+                >
+                  Request Changes
+                </Button>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  icon={<DismissRegular />}
+                  aria-label="Decline run"
+                  style={{ flex: 1, whiteSpace: 'nowrap' }}
+                  className={styles.reviewBarDecline}
+                  onClick={() => void submitReview(false)}
+                >
+                  Decline
+                </Button>
+              </div>
             </div>
           )}
           {commitError && <Text className={styles.commitError}>{commitError}</Text>}

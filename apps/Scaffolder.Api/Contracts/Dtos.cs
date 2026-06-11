@@ -65,6 +65,13 @@ public sealed record RunResponse
     [JsonPropertyName("tree_hash")]
     public string? TreeHash { get; init; }
 
+    /// <summary>
+    /// JSON array of conflicting file paths when the run is in merge_failed status due to a conflict.
+    /// Null for all other statuses.
+    /// </summary>
+    [JsonPropertyName("merge_conflicts")]
+    public string? MergeConflicts { get; init; }
+
     [JsonPropertyName("sandbox")]
     public SandboxStatusDto? Sandbox { get; init; }
 }
@@ -184,6 +191,19 @@ public sealed record CommitResponse
 
     [JsonPropertyName("status")]
     public required string Status { get; init; }
+
+    /// <summary>
+    /// Merge result string (e.g. "merged:&lt;sha&gt;", "conflict:&lt;reason&gt;").
+    /// Null when the merge could not complete and the run has been reverted.
+    /// </summary>
+    [JsonPropertyName("merge_result")]
+    public string? MergeResult { get; init; }
+
+    /// <summary>
+    /// JSON array of conflicting file paths, populated when Status is "merge_failed".
+    /// </summary>
+    [JsonPropertyName("conflicting_files")]
+    public IReadOnlyList<string>? ConflictingFiles { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{id}/request-changes.</summary>

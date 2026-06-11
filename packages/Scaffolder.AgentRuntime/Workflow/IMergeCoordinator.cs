@@ -19,7 +19,7 @@ public interface IMergeCoordinator
     Task RevertMergeAsync(string runId, CancellationToken ct);
 
     /// <summary>Transitions the run from Merging to MergeFailed with the given result.</summary>
-    Task FailMergeAsync(string runId, string mergeResult, CancellationToken ct);
+    Task FailMergeAsync(string runId, string mergeResult, string? mergeConflictsJson, CancellationToken ct);
 
     /// <summary>
     /// Executes the full merge flow: acquire lock, CAS, merge worktree, transition run state.
@@ -68,4 +68,8 @@ public sealed record MergeExecutionResult
     public string? PreviousHeadSha { get; init; }
     public string? Reason { get; init; }
     public string? LockFailureReason { get; init; }
+    /// <summary>
+    /// Populated when Outcome == Conflict. Contains the list of file paths that conflicted.
+    /// </summary>
+    public IReadOnlyList<string>? ConflictingFiles { get; init; }
 }

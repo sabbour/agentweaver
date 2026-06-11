@@ -457,7 +457,8 @@ public sealed class WorktreeManager
         if (result.Status == MergeTreeStatus.Conflicts)
         {
             return MergeOutcome.Conflict(
-                "The originating branch has diverged and the merge has conflicts that require human resolution.");
+                "The originating branch has diverged and the merge has conflicts that require human resolution.",
+                ExtractConflictingFiles(result));
         }
 
         var signature = WithTimestamp();
@@ -507,7 +508,8 @@ public sealed class WorktreeManager
         if (result.Status == MergeTreeStatus.Conflicts)
         {
             return MergeOutcome.Conflict(
-                "The originating branch has diverged and the merge has conflicts that require human resolution.");
+                "The originating branch has diverged and the merge has conflicts that require human resolution.",
+                ExtractConflictingFiles(result));
         }
 
         var signature = WithTimestamp();
@@ -698,6 +700,25 @@ public sealed class WorktreeManager
     }
 
     private Signature WithTimestamp() => new(_signature.Name, _signature.Email, DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// Extracts the list of conflicting relative file paths from a <see cref="MergeTreeResult"/>
+    /// that has <see cref="MergeTreeStatus.Conflicts"/>. Paths are normalised to forward slashes.
+    /// Uses Ours path when available, Theirs as fallback, Ancestor as last resort.
+    /// </summary>
+    private static IReadOnlyList<string> ExtractConflictingFiles(MergeTreeResult mergeResult)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var conflict in mergeResult.Conflicts)
+        {
+            var path = conflict.Ours?.Path
+                    ?? conflict.Theirs?.Path
+                    ?? conflict.Ancestor?.Path;
+            if (!string.IsNullOrEmpty(path))
+                paths.Add(NormalizePathSeparators(path));
+        }
+        return [.. paths];
+    }
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength] + "…";

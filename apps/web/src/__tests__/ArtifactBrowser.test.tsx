@@ -140,7 +140,7 @@ describe('ArtifactBrowser', () => {
     expect(screen.getAllByLabelText('deleted').length).toBeGreaterThanOrEqual(1);
 
     // The unified three-button review bar is shown for awaiting_review.
-    expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+    expect(screen.getByLabelText('Commit and merge to originating branch')).toBeDefined();
     expect(screen.getByLabelText('Request changes')).toBeDefined();
     expect(screen.getByLabelText('Decline run')).toBeDefined();
   });
@@ -314,7 +314,7 @@ describe('ArtifactBrowser', () => {
 
     // Step 1: bar is visible at the first review gate.
     await waitFor(() => {
-      expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+      expect(screen.getByLabelText('Commit and merge to originating branch')).toBeDefined();
     });
 
     // Step 2: submit a request-changes; this sets requestChangesResult internally.
@@ -335,7 +335,7 @@ describe('ArtifactBrowser', () => {
       </Wrapper>,
     );
     // Bar must not be visible while the agent is revising.
-    expect(screen.queryByLabelText('Commit changes to worktree')).toBeNull();
+    expect(screen.queryByLabelText('Commit and merge to originating branch')).toBeNull();
 
     // Step 4: second review gate arrives; runStatus returns to awaiting_review.
     rerender(
@@ -345,7 +345,7 @@ describe('ArtifactBrowser', () => {
     );
     // Bar must reappear even though requestChangesResult is still set.
     await waitFor(() => {
-      expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+      expect(screen.getByLabelText('Commit and merge to originating branch')).toBeDefined();
       expect(screen.getByLabelText('Request changes')).toBeDefined();
       expect(screen.getByLabelText('Decline run')).toBeDefined();
     });
@@ -368,10 +368,10 @@ describe('ArtifactBrowser', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+      expect(screen.getByLabelText('Commit and merge to originating branch')).toBeDefined();
     });
 
-    await user.click(screen.getByLabelText('Commit changes to worktree'));
+    await user.click(screen.getByLabelText('Commit and merge to originating branch'));
 
     await waitFor(() => {
       expect(commitRunMock()).toHaveBeenCalledWith('run-010');

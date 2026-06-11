@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Workflow;
@@ -55,7 +56,7 @@ public sealed class MergeCoordinator : IMergeCoordinator
     public async Task CompleteMergeAsync(string runId, string mergeResult, CancellationToken ct)
     {
         await _runStore.CompleteMergingAsync(
-            RunId.Parse(runId), RunStatus.Merged, DateTimeOffset.UtcNow, mergeResult, CancellationToken.None).ConfigureAwait(false);
+            RunId.Parse(runId), RunStatus.Merged, DateTimeOffset.UtcNow, mergeResult, null, CancellationToken.None).ConfigureAwait(false);
     }
 
     public async Task RevertMergeAsync(string runId, CancellationToken ct)
@@ -63,10 +64,10 @@ public sealed class MergeCoordinator : IMergeCoordinator
         await _runStore.RevertMergingAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
     }
 
-    public async Task FailMergeAsync(string runId, string mergeResult, CancellationToken ct)
+    public async Task FailMergeAsync(string runId, string mergeResult, string? mergeConflictsJson, CancellationToken ct)
     {
         await _runStore.CompleteMergingAsync(
-            RunId.Parse(runId), RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeResult, CancellationToken.None).ConfigureAwait(false);
+            RunId.Parse(runId), RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeResult, mergeConflictsJson, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -125,15 +126,20 @@ public sealed class MergeCoordinator : IMergeCoordinator
                     };
 
                 case MergeResultKind.Conflict:
+                    var conflictingFiles = result.ConflictingFiles ?? [];
+                    var mergeConflictsJson = conflictingFiles.Count > 0
+                        ? System.Text.Json.JsonSerializer.Serialize(conflictingFiles)
+                        : null;
                     var conflictResult = $"conflict:{result.Reason}";
-                    await FailMergeAsync(input.RunId, conflictResult, ct).ConfigureAwait(false);
+                    await FailMergeAsync(input.RunId, conflictResult, mergeConflictsJson, ct).ConfigureAwait(false);
                     _logger.LogInformation("Merge outcome: conflict. RunId={RunId} Details={Details}",
                         input.RunId, SanitizeReason(result.Reason));
                     return new MergeExecutionResult
                     {
                         Outcome = MergeExecutionOutcome.Conflict,
                         MergeResult = conflictResult,
-                        Reason = result.Reason
+                        Reason = result.Reason,
+                        ConflictingFiles = conflictingFiles
                     };
 
                 default:

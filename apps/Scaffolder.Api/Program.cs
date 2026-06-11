@@ -214,6 +214,7 @@ app.MapGet("/api/runs/{id}", async (
         Diff = diff,
         StepCount = run.StepCount,
         TreeHash = run.TreeHash,
+        MergeConflicts = run.MergeConflicts,
         Sandbox = sandboxStatus,
     });
 });
@@ -480,15 +481,18 @@ app.MapPost("/api/runs/{id}/review", async (
     return Results.Json(new ReviewResponse { RunId = id, Status = expectedStatus, MergeResult = null });
 });
 
-// POST /api/runs/{id}/commit — stages and commits the worktree, then transitions the run to Completed.
-// This is the "Commit Changes" action: it does not merge to the originating branch and does not
-// delete the worktree. Intended for runs in awaiting_review state.
+// POST /api/runs/{id}/commit — stages and commits any remaining uncommitted changes to the worktree
+// branch, then immediately merges that branch into the originating branch (commit-and-merge flow).
+// On success: run transitions to Merged, worktree is cleaned up.
+// On merge conflict: run transitions to MergeFailed, conflicting files are stored, worktree preserved.
+// On other error: run reverts to AwaitingReview (Blocked) or fails with MergeFailed.
 app.MapPost("/api/runs/{id}/commit", async (
     HttpContext httpContext,
     string id,
     SqliteRunStore runStore,
     RunStreamStore streamStore,
     WorktreeManager worktreeManager,
+    IMergeCoordinator mergeCoordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -513,28 +517,91 @@ app.MapPost("/api/runs/{id}/commit", async (
     if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
         return Results.Conflict(new { error = "Worktree not available." });
 
-    try { worktreeManager.CommitChanges(run.WorktreePath, runId); }
+    if (string.IsNullOrEmpty(run.WorktreeBranch) || string.IsNullOrEmpty(run.RepositoryPath))
+        return Results.Conflict(new { error = "Run is missing required merge data (worktree_branch or repository_path)." });
+
+    // Stage and commit any remaining uncommitted changes in the worktree.
+    string newTreeHash;
+    try { newTreeHash = worktreeManager.CommitChanges(run.WorktreePath, runId); }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to commit worktree changes for run {RunId}", runId);
         return Results.Problem("Failed to commit worktree changes.", statusCode: 500);
     }
 
-    var transitioned = await runStore.TryTransitionReviewAsync(
-        runId, RunStatus.Completed, DateTimeOffset.UtcNow, null, ct);
-    if (!transitioned)
-        return Results.Conflict(new { error = "Run status has changed; could not transition to completed." });
+    // Persist the new tree hash so restart recovery has the correct value.
+    await runStore.UpdateTreeHashAfterCommitAsync(runId, newTreeHash, ct).ConfigureAwait(false);
 
     var entry = streamStore.Get(id);
     if (entry is not null)
+        entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = newTreeHash });
+
+    // Merge the worktree branch into the originating branch.
+    var mergeInput = new MergeInput(
+        id, newTreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
+    var mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, ct).ConfigureAwait(false);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext).User;
+    switch (mergeExecResult.Outcome)
     {
-        entry.RecordNext(EventTypes.RunCompleted, new { result = "committed" });
-        streamStore.Complete(id);
+        case MergeExecutionOutcome.Merged:
+            if (entry is not null)
+            {
+                entry.RecordNext(EventTypes.MergeCompleted,
+                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha });
+                streamStore.Complete(id);
+            }
+            logger.LogInformation("Run {RunId} committed and merged by {User}", id, caller);
+            return Results.Json(new CommitResponse
+            {
+                RunId = id,
+                Status = RunStatus.Merged.ToApiString(),
+                MergeResult = mergeExecResult.MergeResult,
+            });
+
+        case MergeExecutionOutcome.Conflict:
+            var conflictingFiles = mergeExecResult.ConflictingFiles ?? [];
+            if (entry is not null)
+            {
+                entry.RecordNext(EventTypes.MergeConflicted,
+                    new { conflicting_files = conflictingFiles });
+                streamStore.Complete(id);
+            }
+            logger.LogInformation(
+                "Run {RunId} commit succeeded but merge conflicted for {User}: {FileCount} file(s)",
+                id, caller, conflictingFiles.Count);
+            return Results.Json(new CommitResponse
+            {
+                RunId = id,
+                Status = RunStatus.MergeFailed.ToApiString(),
+                MergeResult = mergeExecResult.MergeResult,
+                ConflictingFiles = conflictingFiles,
+            });
+
+        case MergeExecutionOutcome.Blocked:
+            // Transient: run has been reverted to AwaitingReview. Client should retry.
+            logger.LogWarning("Run {RunId} commit+merge blocked for {User}: {Reason}", id, caller, mergeExecResult.Reason);
+            return Results.Conflict(new
+            {
+                error  = mergeExecResult.Reason ?? "repository_busy",
+                status = RunStatus.AwaitingReview.ToApiString(),
+            });
+
+        case MergeExecutionOutcome.LockFailed:
+            if (string.Equals(mergeExecResult.LockFailureReason, "already_merging", StringComparison.Ordinal))
+                return Results.Conflict(new { error = "Run is already being merged." });
+            await runStore.RevertMergingAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            return Results.Conflict(new { error = mergeExecResult.LockFailureReason });
+
+        case MergeExecutionOutcome.InternalError:
+        default:
+            if (entry is not null)
+            {
+                entry.RecordNext(EventTypes.MergeFailed, new { reason = "unexpected_error" });
+                streamStore.Complete(id);
+            }
+            return Results.Problem("Merge failed unexpectedly.", statusCode: 500);
     }
-
-    logger.LogInformation("Run {RunId} committed by {User}", id, ApiKeyAuthMiddleware.GetCaller(httpContext).User);
-
-    return Results.Json(new CommitResponse { RunId = id, Status = RunStatus.Completed.ToApiString() });
 });
 
 // POST /api/runs/{id}/request-changes — human reviewer requests changes, kicking off a new revision
@@ -1317,7 +1384,8 @@ static async Task<IResult> ExecuteDirectReviewAsync(
             if (entry is not null)
             {
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
-                entry.RecordNext(EventTypes.MergeFailed, new { reason = mergeExecResult.Reason });
+                entry.RecordNext(EventTypes.MergeConflicted,
+                    new { conflicting_files = mergeExecResult.ConflictingFiles ?? [] });
                 streamStore.Complete(id);
             }
             return Results.Json(new ReviewResponse
