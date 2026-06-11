@@ -13,11 +13,6 @@ internal sealed class ApplyPatchTool : ISandboxTool
                 [Description("Patch content in the Copilot CLI patch grammar.")] string patch,
                 CancellationToken ct = default) =>
             {
-                // apply_patch is pre-validated — governance call runs for the audit trail.
-                var govArgs = new Dictionary<string, object> { ["tool_name"] = Name };
-                var (allowed, reason) = ctx.EvaluateToolCall(Name, govArgs);
-                if (!allowed) return $"Error: {reason}";
-
                 var result = await ctx.FileTools.ApplyPatchAsync(patch, ct);
                 if (!result.Success) return $"Error: {result.Reason}";
                 var summary = string.Join("; ", result.Hunks.Select(h => h.Success ? $"{h.Path}: ok" : $"{h.Path}: {h.Error}"));

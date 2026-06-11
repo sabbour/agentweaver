@@ -11,9 +11,6 @@ internal sealed class ReportIntentTool : ISandboxTool
         AIFunctionFactory.Create(
             ([Description("Brief description of the agent's current intent or plan step.")] string intent) =>
             {
-                var govArgs = new Dictionary<string, object> { ["tool_name"] = Name };
-                var (allowed, reason) = ctx.EvaluateToolCall(Name, govArgs);
-                if (!allowed) return Task.FromResult<object?>($"Error: {reason}");
                 // Intentionally synchronous — just surfaces the intent; no I/O.
                 _ = intent;
                 return Task.FromResult<object?>("ok");

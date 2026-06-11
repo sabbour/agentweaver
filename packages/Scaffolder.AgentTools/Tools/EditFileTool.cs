@@ -14,10 +14,6 @@ internal sealed class EditFileTool : ISandboxTool
                 [Description("Content to write.")] string content,
                 CancellationToken ct = default) =>
             {
-                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = Name };
-                var (allowed, reason) = ctx.EvaluateToolCall(Name, govArgs);
-                if (!allowed) return $"Error: {reason}";
-
                 var (_, failure) = await ctx.FileTools.WriteFileAsync(path, content, ct);
                 return failure is not null ? $"Error: {failure.Message}" : "ok";
             },

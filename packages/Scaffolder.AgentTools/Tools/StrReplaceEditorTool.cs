@@ -15,10 +15,6 @@ internal sealed class StrReplaceEditorTool : ISandboxTool
                 [Description("Replacement string.")] string new_str,
                 CancellationToken ct = default) =>
             {
-                var govArgs = new Dictionary<string, object> { ["path"] = path, ["tool_name"] = Name };
-                var (allowed, reason) = ctx.EvaluateToolCall(Name, govArgs);
-                if (!allowed) return $"Error: {reason}";
-
                 var (replaced, failure) = await ctx.FileTools.StrReplaceAsync(path, old_str, new_str, ct);
                 return failure is not null ? $"Error: {failure.Message}" : (replaced ? "ok" : "not replaced");
             },

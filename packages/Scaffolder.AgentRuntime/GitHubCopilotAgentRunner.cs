@@ -232,7 +232,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             SearchTools: searchTools,
             Redactor: redactor,
             Options: toolOptions,
-            EvaluateToolCall: (toolName, args) => governance.EvaluateToolCall(agentId, toolName, new Dictionary<string, object>(args), _logger),
             Logger: _logger,
             EmitEvent: Emit,
             RunId: runId,

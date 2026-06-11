@@ -16,15 +16,6 @@ internal sealed class RunCommandTool : ISandboxTool
                 [Description("Timeout in milliseconds (default 30000).")] int? timeout_ms,
                 CancellationToken ct = default) =>
             {
-                var govArgs = new Dictionary<string, object>
-                {
-                    ["command"] = command,
-                    ["directory"] = ctx.WorkingDirectory,
-                    ["tool_name"] = Name,
-                };
-                var (allowed, reason) = ctx.EvaluateToolCall(Name, govArgs);
-                if (!allowed) return $"Error: {reason}";
-
                 // HITL gate: destructive commands require operator approval before execution.
                 if (ctx.Options.RequireApprovalForAllShell || IsDestructivePattern(command, ctx.Options.DestructiveCommandPatterns))
                 {

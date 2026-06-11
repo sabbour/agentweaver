@@ -12,7 +12,6 @@ public interface ISandboxTool
 
     /// <summary>
     /// Creates the AIFunction to register with the model.
-    /// The function performs its own governance check via context.EvaluateToolCall before executing.
     /// </summary>
     AIFunction CreateFunction(SandboxToolContext context);
 }
