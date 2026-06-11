@@ -141,7 +141,7 @@ describe('ArtifactBrowser', () => {
 
     // The unified three-button review bar is shown for awaiting_review.
     expect(screen.getByLabelText('Commit and merge to originating branch')).toBeDefined();
-    expect(screen.getByLabelText('Request changes')).toBeDefined();
+    expect(screen.getByLabelText('Request change')).toBeDefined();
     expect(screen.getByLabelText('Decline run')).toBeDefined();
   });
 
@@ -256,9 +256,9 @@ describe('ArtifactBrowser', () => {
     });
   });
 
-  // AB-08: Request Changes flow — clicking "Request Changes" reveals a textarea;
+  // AB-08: Request change flow — clicking "Request change" reveals a textarea;
   // submitting calls apiClient.requestChanges with the comment text.
-  it('calls requestChanges with the comment when the Request Changes flow is submitted', async () => {
+  it('calls requestChanges with the comment when the Request change flow is submitted', async () => {
     getRunFilesMock().mockResolvedValue([]);
     requestChangesMock().mockResolvedValue({ run_id: 'run-008', status: 'in_progress' });
 
@@ -271,11 +271,11 @@ describe('ArtifactBrowser', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Request changes')).toBeDefined();
+      expect(screen.getByLabelText('Request change')).toBeDefined();
     });
 
-    // Open the request changes box.
-    await user.click(screen.getByLabelText('Request changes'));
+    // Open the Request change box.
+    await user.click(screen.getByLabelText('Request change'));
 
     // The textarea should now be visible.
     await waitFor(() => {
@@ -318,7 +318,7 @@ describe('ArtifactBrowser', () => {
     });
 
     // Step 2: submit a request-changes; this sets requestChangesResult internally.
-    await user.click(screen.getByLabelText('Request changes'));
+    await user.click(screen.getByLabelText('Request change'));
     await waitFor(() => {
       expect(screen.getByLabelText('Changes requested comment')).toBeDefined();
     });
@@ -346,7 +346,7 @@ describe('ArtifactBrowser', () => {
     // Bar must reappear even though requestChangesResult is still set.
     await waitFor(() => {
       expect(screen.getByLabelText('Commit and merge to originating branch')).toBeDefined();
-      expect(screen.getByLabelText('Request changes')).toBeDefined();
+      expect(screen.getByLabelText('Request change')).toBeDefined();
       expect(screen.getByLabelText('Decline run')).toBeDefined();
     });
   });

@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ChevronLeftRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
@@ -11,6 +11,7 @@ const useStyles = makeStyles({
     flexDirection: 'row',
     height: 'calc(100vh - 140px)',
     overflow: 'hidden',
+    position: 'relative',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -19,15 +20,17 @@ const useStyles = makeStyles({
     flexShrink: 0,
     display: 'flex',
     flexDirection: 'row',
+    position: 'relative',
     overflow: 'hidden',
     transition: 'width 0.15s ease',
     backgroundColor: tokens.colorNeutralBackground1,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   leftPanelExpanded: {
     width: '260px',
   },
   leftPanelCollapsed: {
-    width: '28px',
+    width: '0px',
   },
   center: {
     flex: 1,
@@ -42,28 +45,20 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     minWidth: 0,
   },
-  toggleStrip: {
-    flexShrink: 0,
-    width: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingTop: tokens.spacingVerticalS,
-    backgroundColor: tokens.colorNeutralBackground1,
-    borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  toggleStripLeft: {
-    borderLeft: 'none',
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
   toggleButton: {
-    minWidth: '20px',
-    width: '20px',
-    height: '44px',
+    position: 'absolute',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    zIndex: 2,
+    width: '16px',
+    height: '32px',
+    minWidth: 'unset',
     padding: '0',
-    fontSize: tokens.fontSizeBase100,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
+    boxShadow: tokens.shadow4,
+    transition: 'left 0.15s ease',
     ':hover': {
       color: tokens.colorNeutralForeground1,
       backgroundColor: tokens.colorNeutralBackground3,
@@ -92,9 +87,15 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
     artifactState.handleFileSelect(path, isChanged);
   };
 
+  useEffect(() => {
+    if (runStatus === 'awaiting_review') {
+      setLeftExpanded(true);
+    }
+  }, [runStatus]);
+
   return (
     <div className={styles.root}>
-      {/* Left panel — file tree with tabs */}
+      {/* Left panel — file tree, no strip */}
       <div
         className={mergeClasses(
           styles.leftPanel,
@@ -106,22 +107,28 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
             <FileTreePanel state={artifactState} onFileClick={handleFileClick} />
           </div>
         )}
-        <div className={mergeClasses(styles.toggleStrip, styles.toggleStripLeft)}>
-          <Button
-            appearance="subtle"
-            className={styles.toggleButton}
-            size="small"
-            onClick={() => setLeftExpanded((v) => !v)}
-            aria-label={leftExpanded ? 'Collapse file tree' : 'Expand file tree'}
-          >
-            {leftExpanded
-              ? <ChevronLeftRegular style={{ fontSize: '16px' }} />
-              : <ChevronRightRegular style={{ fontSize: '16px' }} />}
-          </Button>
-        </div>
       </div>
 
-      {/* Center — run timeline or run detail */}
+      {/* Floating toggle button — sibling of leftPanel, absolute in root */}
+      <Button
+        appearance="subtle"
+        className={styles.toggleButton}
+        style={{
+          left: leftExpanded ? '260px' : '0px',
+          borderRadius: '0 4px 4px 0',
+          borderLeft: 'none',
+          borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+        }}
+        size="small"
+        onClick={() => setLeftExpanded((v) => !v)}
+        aria-label={leftExpanded ? 'Collapse file tree' : 'Expand file tree'}
+      >
+        {leftExpanded
+          ? <ChevronLeftRegular style={{ fontSize: '12px' }} />
+          : <ChevronRightRegular style={{ fontSize: '12px' }} />}
+      </Button>
+
+      {/* Center — run timeline */}
       <div ref={scrollRef} onScroll={onCenterScroll} className={styles.center}>{centerContent}</div>
 
       {/* File viewer modal — opens when a file is selected */}

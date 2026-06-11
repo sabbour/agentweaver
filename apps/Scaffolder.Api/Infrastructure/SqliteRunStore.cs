@@ -154,16 +154,54 @@ public sealed class SqliteRunStore
     }
 
     /// <summary>
-    /// Atomically transitions a run from AwaitingReview to Merging.
+    /// Atomically transitions a run from AwaitingReview to Committing.
+    /// Returns true if the CAS succeeded (this /commit request owns the run),
+    /// false if another request already moved the run out of AwaitingReview.
+    /// Must be called BEFORE CommitChanges to prevent TOCTOU races.
+    /// </summary>
+    public async Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE runs SET status = 'committing' WHERE run_id = $runId AND status = 'awaiting_review';";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// Reverts a run from Committing back to AwaitingReview.
+    /// Optionally updates tree_hash (used by restart recovery to record the
+    /// committed HEAD after a crash between CommitChanges and ExecuteMergeAsync).
+    /// Returns true if a row was updated; false if the run was no longer in Committing.
+    /// </summary>
+    public async Task<bool> TryRevertCommittingAsync(RunId runId, string? treeHash = null, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE runs SET status = 'awaiting_review', tree_hash = COALESCE($treeHash, tree_hash) WHERE run_id = $runId AND status = 'committing';";
+        command.Parameters.AddWithValue("$treeHash", (object?)treeHash ?? DBNull.Value);
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+
+    /// <summary>
+    /// Atomically transitions a run from AwaitingReview or Committing to Merging.
+    /// Accepts both source states so the /commit flow (Committing → Merging) and
+    /// the /review flow (AwaitingReview → Merging) share a single CAS guard.
     /// Returns true if the CAS succeeded (this request owns the merge slot),
-    /// false if another request already moved the run out of AwaitingReview (MF3).
+    /// false if another request already moved the run out of the expected state (MF3).
     /// </summary>
     public async Task<bool> TryStartMergingAsync(RunId runId, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "UPDATE runs SET status = 'merging' WHERE run_id = $runId AND status = 'awaiting_review';";
+            "UPDATE runs SET status = 'merging' WHERE run_id = $runId AND status IN ('awaiting_review', 'committing');";
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -190,35 +228,37 @@ public sealed class SqliteRunStore
     /// Transitions a run from Merging to a terminal status (Merged or MergeFailed).
     /// Called after MergeWorktree returns a Merged or Conflict outcome.
     /// <paramref name="mergeConflicts"/> is a JSON array of conflicting file paths; pass null on success.
+    /// Returns true if the transition was applied (one row updated); false on a concurrency conflict.
     /// </summary>
-    public async Task CompleteMergingAsync(
+    public async Task<bool> CompleteMergingAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default)
     {
-        await ExecuteNonQueryAsync(
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
             """
             UPDATE runs
                SET status = $toStatus, ended_at = $endedAt, result = $result, merge_conflicts = $mergeConflicts
              WHERE run_id = $runId AND status = 'merging';
-            """,
-            cmd =>
-            {
-                cmd.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
-                cmd.Parameters.AddWithValue("$endedAt", Ts(endedAt));
-                cmd.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$mergeConflicts", (object?)mergeConflicts ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$runId", runId.ToString());
-            }, ct).ConfigureAwait(false);
+            """;
+        command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
+        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
+        command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+        command.Parameters.AddWithValue("$mergeConflicts", (object?)mergeConflicts ?? DBNull.Value);
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
     }
 
     /// <summary>
-    /// Updates the tree_hash of a run that is still in AwaitingReview status.
+    /// Updates the tree_hash of a run that is in Committing status.
     /// Used by the /commit endpoint after staging and committing any remaining
     /// uncommitted changes on top of the agent's commit.
     /// </summary>
     public async Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default)
     {
         await ExecuteNonQueryAsync(
-            "UPDATE runs SET tree_hash = $treeHash WHERE run_id = $runId AND status = 'awaiting_review';",
+            "UPDATE runs SET tree_hash = $treeHash WHERE run_id = $runId AND status = 'committing';",
             cmd =>
             {
                 cmd.Parameters.AddWithValue("$treeHash", newTreeHash);

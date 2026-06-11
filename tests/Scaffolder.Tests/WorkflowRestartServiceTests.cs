@@ -318,11 +318,11 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     {
         public Task<MergeLockResult> AcquireMergeLockAsync(string runId, string repositoryPath, CancellationToken ct) =>
             throw new NotImplementedException("Not called in restart tests");
-        public Task CompleteMergeAsync(string runId, string mergeResult, CancellationToken ct) =>
+        public Task<bool> CompleteMergeAsync(string runId, string mergeResult, CancellationToken ct) =>
             throw new NotImplementedException("Not called in restart tests");
         public Task RevertMergeAsync(string runId, CancellationToken ct) =>
             throw new NotImplementedException("Not called in restart tests");
-        public Task FailMergeAsync(string runId, string mergeResult, string? mergeConflictsJson, CancellationToken ct) =>
+        public Task<bool> FailMergeAsync(string runId, string mergeResult, string? mergeConflictsJson, CancellationToken ct) =>
             throw new NotImplementedException("Not called in restart tests");
         public Task<MergeExecutionResult> ExecuteMergeAsync(MergeInput input, CancellationToken ct) =>
             throw new NotImplementedException("Not called in restart tests");

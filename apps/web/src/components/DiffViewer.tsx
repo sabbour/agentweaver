@@ -107,7 +107,7 @@ const useStyles = makeStyles({
     textAlign: 'right',
     paddingLeft: tokens.spacingHorizontalS,
     paddingRight: tokens.spacingHorizontalS,
-    minWidth: '40px',
+    width: '40px',
     color: tokens.colorNeutralForeground4,
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -125,7 +125,8 @@ const useStyles = makeStyles({
   lineContent: {
     paddingLeft: tokens.spacingHorizontalXS,
     paddingRight: tokens.spacingHorizontalM,
-    whiteSpace: 'pre',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
     verticalAlign: 'top',
     width: '100%',
   },
@@ -254,18 +255,18 @@ function HighlightedDiff({
             {hunks.map((h, j) =>
               h.type !== 'fileheader' ? (
                 <tr key={`hk-${j}`} className={styles.rowHunk}>
-                  <td className={styles.lineNum} />
-                  <td className={styles.lineNum} />
                   <td className={styles.lineSign} />
+                  <td className={styles.lineNum} />
+                  <td className={styles.lineNum} />
                   <td className={styles.lineContent}>{h.content}</td>
                 </tr>
               ) : null,
             )}
             {codeLine && (
               <tr style={bgColor ? { backgroundColor: bgColor } : undefined}>
+                <td className={styles.lineSign}>{codeLine.sign}</td>
                 <td className={styles.lineNum}>{codeLine.oldNum ?? ''}</td>
                 <td className={styles.lineNum}>{codeLine.newNum ?? ''}</td>
-                <td className={styles.lineSign}>{codeLine.sign}</td>
                 <td className={styles.lineContent}>
                   {row.children?.map((token: RendererNode, j: number) =>
                     syntaxCreateElement({ node: token as never, stylesheet, useInlineStyles, key: j }),
@@ -279,9 +280,9 @@ function HighlightedDiff({
       {(hunksBefore.get(codeLines.length) ?? []).map((h, j) =>
         h.type !== 'fileheader' ? (
           <tr key={`hkend-${j}`} className={styles.rowHunk}>
-            <td className={styles.lineNum} />
-            <td className={styles.lineNum} />
             <td className={styles.lineSign} />
+            <td className={styles.lineNum} />
+            <td className={styles.lineNum} />
             <td className={styles.lineContent}>{h.content}</td>
           </tr>
         ) : null,
@@ -296,9 +297,9 @@ function HighlightedDiff({
           {(hunksBefore.get(0) ?? []).map((h, j) =>
             h.type !== 'fileheader' ? (
               <tr key={j} className={styles.rowHunk}>
-                <td className={styles.lineNum} />
-                <td className={styles.lineNum} />
                 <td className={styles.lineSign} />
+                <td className={styles.lineNum} />
+                <td className={styles.lineNum} />
                 <td className={styles.lineContent}>{h.content}</td>
               </tr>
             ) : null,
@@ -353,9 +354,9 @@ function PlainDiff({
 
           return (
             <tr key={i} className={rowClass}>
+              <td className={mergeClasses(styles.lineSign, rowClass)}>{line.sign}</td>
               <td className={mergeClasses(styles.lineNum, rowClass)}>{line.oldNum ?? ''}</td>
               <td className={mergeClasses(styles.lineNum, rowClass)}>{line.newNum ?? ''}</td>
-              <td className={mergeClasses(styles.lineSign, rowClass)}>{line.sign}</td>
               <td className={mergeClasses(styles.lineContent, rowClass)}>
                 {line.content || ' '}
               </td>

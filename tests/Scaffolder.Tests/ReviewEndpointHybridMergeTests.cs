@@ -88,12 +88,12 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
-    // HM-2 — Checked-out branch, modified tracked file → 409 retriable;
-    // fix the condition and re-approve → merged. Proves retriability of the
-    // Blocked outcome and correct Merging → AwaitingReview reversion.
+    // HM-2 — Checked-out branch, modified tracked file → ref-only fallback;
+    // the merge succeeds without touching the working tree. The user's local
+    // changes are preserved; the branch ref advances.
     // =========================================================================
     [Fact]
-    public async Task Approve_CheckedOut_ModifiedTrackedFile_Blocks_ThenClean_Merges()
+    public async Task Approve_CheckedOut_ModifiedTrackedFile_FallsBackToRefOnly_Merges()
     {
         var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
             dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
@@ -101,42 +101,40 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         // Dirty the main working tree: modify the tracked readme.txt without staging.
         File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "locally modified content");
 
-        var firstResponse = await _ownerClient.PostAsJsonAsync(
+        var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
 
-        firstResponse.StatusCode.Should().Be(HttpStatusCode.Conflict,
-            "a dirty working tree must block the merge with HTTP 409 (retriable)");
+        // With the fix, a dirty working tree falls back to ref-only merge instead of blocking.
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "a dirty working tree must fall back to ref-only merge (not 409-block) because MergeRefOnly does not touch the working tree");
 
-        var firstBody = await firstResponse.Content.ReadFromJsonAsync<JsonElement>();
-        firstBody.GetProperty("status").GetString().Should().Be("awaiting_review",
-            "the response body must carry the current status so the client knows it can retry");
-        firstBody.GetProperty("error").GetString().Should().Contain("uncommitted changes",
-            "the blocked reason must describe the uncommitted tracked-file condition");
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result.Should().NotBeNull();
+        result!.Status.Should().Be("merged");
+        result.MergeResult.Should().StartWith("merged:");
 
-        // The DB must reflect awaiting_review — not merging or any terminal state.
+        // The originating branch ref must have advanced to include the agent's file.
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().NotBeNull(
+            "the ref-only fallback must advance the main branch ref to include the agent's file");
+
+        // The dirty file must NOT have been overwritten — no hard reset occurred.
+        File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("locally modified content",
+            "the ref-only fallback must not touch the main working tree — the user's local changes are preserved");
+
+        // The run must be in merged status.
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        var runAfterBlock = await runStore.GetAsync(run.Id);
-        runAfterBlock!.Status.Should().Be(RunStatus.AwaitingReview,
-            "RevertMergingAsync must return the run to awaiting_review after a blocked outcome");
-
-        // Restore the tracked file to its committed content and re-approve.
-        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "initial content");
-
-        var secondResponse = await _ownerClient.PostAsJsonAsync(
-            $"/api/runs/{run.Id}/review", new { approved = true });
-
-        secondResponse.StatusCode.Should().Be(HttpStatusCode.OK,
-            "a clean working tree must allow the merge to proceed on re-approval");
-        var secondResult = await secondResponse.Content.ReadFromJsonAsync<ReviewResponse>();
-        secondResult!.Status.Should().Be("merged");
+        var runAfterMerge = await runStore.GetAsync(run.Id);
+        runAfterMerge!.Status.Should().Be(RunStatus.Merged,
+            "the run must transition to merged after the ref-only fallback merge");
     }
 
     // =========================================================================
     // HM-3 — Checked-out branch, untracked file collides with a path added by
-    // the merge → 409 retriable (untracked-overwrite category).
+    // the merge → ref-only fallback; merge succeeds, untracked file preserved.
     // =========================================================================
     [Fact]
-    public async Task Approve_CheckedOut_UntrackedFileCollides_Blocks()
+    public async Task Approve_CheckedOut_UntrackedFileCollides_FallsBackToRefOnly_Merges()
     {
         // The agent adds "collision.txt" — a path that does not yet exist on main.
         var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
@@ -148,18 +146,22 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
-            "an untracked file that would be overwritten must block the merge (retriable 409)");
+        // With the fix, untracked collision falls back to ref-only merge (not 409-block).
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "an untracked collision must fall back to ref-only merge since MergeRefOnly does not overwrite untracked files");
 
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("status").GetString().Should().Be("awaiting_review",
-            "the run must remain awaiting_review so the human can remove the collision and retry");
-        body.GetProperty("error").GetString().Should().Contain("untracked files would be overwritten",
-            "the blocked reason must identify the untracked-overwrite category");
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+        result.MergeResult.Should().StartWith("merged:");
 
-        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        var runAfterBlock = await runStore.GetAsync(run.Id);
-        runAfterBlock!.Status.Should().Be(RunStatus.AwaitingReview);
+        // The untracked file must be preserved — no hard reset occurred.
+        File.ReadAllText(Path.Combine(repoPath, "collision.txt")).Should().Be("local untracked version",
+            "the ref-only fallback must not touch the untracked file in the main working tree");
+
+        // The branch ref must have advanced to include the agent's version of the file.
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["collision.txt"].Should().NotBeNull(
+            "the ref-only fallback must advance the main branch ref to include the agent's file");
     }
 
     // =========================================================================
@@ -209,7 +211,7 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
 
             var body = await response.Content.ReadFromJsonAsync<JsonElement>();
             body.GetProperty("status").GetString().Should().Be("awaiting_review");
-            body.GetProperty("error").GetString().Should().Contain("merge or rebase is already in progress",
+            body.GetProperty("error").GetString().Should().Contain("a git operation is in progress",
                 "the blocked reason must identify the in-progress sequencer operation");
         }
         finally
@@ -217,6 +219,95 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
             if (File.Exists(mergeHeadPath))
                 File.Delete(mergeHeadPath);
         }
+    }
+
+    // =========================================================================
+    // HM-5b — Checked-out branch, in-progress revert (REVERT_HEAD present) → 409
+    // REVERT_HEAD must be treated the same as MERGE_HEAD; it must NOT fall through
+    // to the ref-only path.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_RevertInProgress_Blocks()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "content"));
+
+        // Simulate an in-progress git revert by creating the REVERT_HEAD sentinel.
+        var revertHeadPath = Path.Combine(repoPath, ".git", "REVERT_HEAD");
+        File.WriteAllText(revertHeadPath, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n");
+        try
+        {
+            var response = await _ownerClient.PostAsJsonAsync(
+                $"/api/runs/{run.Id}/review", new { approved = true });
+
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+                "an in-progress revert (REVERT_HEAD) must block the scaffolder merge (retriable 409)");
+
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("status").GetString().Should().Be("awaiting_review");
+            body.GetProperty("error").GetString().Should().Contain("a git operation is in progress",
+                "the blocked reason must identify the in-progress revert operation");
+        }
+        finally
+        {
+            if (File.Exists(revertHeadPath))
+                File.Delete(revertHeadPath);
+        }
+    }
+
+    // =========================================================================
+    // =========================================================================
+    // HM-5c — Checked-out branch, conflicted index (no sequencer sentinel) → 409.
+    // Conflicted index entries must block outright (not fall through to ref-only)
+    // because advancing the branch ref beneath unresolved conflicts is unsafe.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_ConflictedIndex_Blocks()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "content"));
+
+        // Build a conflicted index state in the main repo:
+        // 1. Create two divergent branches with conflicting versions of conflict.txt.
+        // 2. Merge them — LibGit2Sharp leaves MERGE_HEAD + conflicted index entries.
+        // 3. Delete MERGE_HEAD so only the conflicted index entries remain; this
+        //    isolates the conflicted-index check from the sequencer-sentinel check.
+        var sig = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        using (var repo = new Repository(repoPath))
+        {
+            // Create a feature branch and commit a conflicting file on it.
+            var feature = repo.CreateBranch("_conflict-feature");
+            Commands.Checkout(repo, feature);
+            File.WriteAllText(Path.Combine(repoPath, "conflict.txt"), "feature version\n");
+            Commands.Stage(repo, "conflict.txt");
+            repo.Commit("Feature: add conflict.txt", sig, sig);
+
+            // Back on main, add a different version of the same file.
+            Commands.Checkout(repo, repo.Branches["main"]);
+            File.WriteAllText(Path.Combine(repoPath, "conflict.txt"), "main version\n");
+            Commands.Stage(repo, "conflict.txt");
+            repo.Commit("Main: add conflict.txt", sig, sig);
+
+            // Merge feature → main. Because both branches touched conflict.txt,
+            // LibGit2Sharp leaves the index in a conflicted state and creates MERGE_HEAD.
+            repo.Merge(repo.Branches["_conflict-feature"], sig, new MergeOptions());
+        }
+
+        // Delete MERGE_HEAD so only the conflicted index entries remain.
+        var mergeHeadPath = Path.Combine(repoPath, ".git", "MERGE_HEAD");
+        if (File.Exists(mergeHeadPath))
+            File.Delete(mergeHeadPath);
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "a conflicted index must block the scaffolder merge (retriable 409), not fall through to ref-only");
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("awaiting_review");
+        body.GetProperty("error").GetString().Should().Contain("conflicted",
+            "the blocked reason must identify the conflicted index entries");
     }
 
     // =========================================================================
@@ -256,10 +347,11 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
 
     // =========================================================================
     // HM-7 — Diverged, conflicting branch → 200 merge_failed; worktree branch
-    // and directory must both be preserved for human inspection.
+    // and directory are removed (MergeFailed is cleanly terminal; conflict info
+    // is stored in merge_conflicts column).
     // =========================================================================
     [Fact]
-    public async Task Approve_DivergentConflict_MergeFailed_WorktreeBranchAndDirectoryPreserved()
+    public async Task Approve_DivergentConflict_MergeFailed_WorktreeBranchAndDirectoryRemoved()
     {
         var (run, repoPath) = await SetupRunAwaitingReviewAsync(
             dir => File.WriteAllText(Path.Combine(dir, "conflict.txt"), "agent version"));
@@ -277,14 +369,9 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         result!.Status.Should().Be("merge_failed");
         result.MergeResult.Should().StartWith("conflict:");
 
-        // The worktree BRANCH must still exist in the repository.
-        using var repoAfter = new Repository(repoPath);
-        repoAfter.Branches[run.WorktreeBranch].Should().NotBeNull(
-            "the worktree branch must be preserved when the merge fails so the human can inspect it");
-
-        // The worktree DIRECTORY must still exist.
-        Directory.Exists(run.WorktreePath).Should().BeTrue(
-            "the worktree directory must be preserved when the merge fails");
+        // The worktree DIRECTORY must be removed (MergeFailed is terminal; conflict info is in the DB).
+        Directory.Exists(run.WorktreePath).Should().BeFalse(
+            "the worktree directory must be removed when the merge fails — conflict info is in merge_conflicts");
     }
 
     // =========================================================================
@@ -476,26 +563,30 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     [Fact]
     public async Task BlockedAndConflict_Responses_NeverExposePathsOrFileContent()
     {
-        // --- Part A: blocked 409 from a modified tracked file ---
+        // --- Part A: blocked 409 from an in-progress merge (MERGE_HEAD) ---
+        // A sequencer in progress is the remaining case that still returns 409.
         var (blockedRun, blockedRepoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
-            dir => File.WriteAllText(Path.Combine(dir, "secret.txt"), "SECRET FILE CONTENT"));
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
 
-        // Dirty the working tree so the approve is blocked.
-        File.WriteAllText(
-            Path.Combine(blockedRepoPath, "readme.txt"), "SECRET DIRTY CONTENT");
+        // Simulate an in-progress git merge so the sequencer check fires.
+        var mergeHeadPath = Path.Combine(blockedRepoPath, ".git", "MERGE_HEAD");
+        File.WriteAllText(mergeHeadPath, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n");
+        try
+        {
+            var blockedResponse = await _ownerClient.PostAsJsonAsync(
+                $"/api/runs/{blockedRun.Id}/review", new { approved = true });
 
-        var blockedResponse = await _ownerClient.PostAsJsonAsync(
-            $"/api/runs/{blockedRun.Id}/review", new { approved = true });
+            blockedResponse.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var blockedBody = await blockedResponse.Content.ReadAsStringAsync();
 
-        blockedResponse.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        var blockedBody = await blockedResponse.Content.ReadAsStringAsync();
-
-        blockedBody.Should().NotContain(blockedRepoPath,
-            "the 409 error must not expose absolute repository filesystem paths");
-        blockedBody.Should().NotContain("SECRET DIRTY CONTENT",
-            "the 409 error must not expose raw tracked-file content");
-        blockedBody.Should().NotContain("SECRET FILE CONTENT",
-            "the 409 error must not expose raw agent file content");
+            blockedBody.Should().NotContain(blockedRepoPath,
+                "the 409 error must not expose absolute repository filesystem paths");
+        }
+        finally
+        {
+            if (File.Exists(mergeHeadPath))
+                File.Delete(mergeHeadPath);
+        }
 
         // --- Part B: terminal conflict merge_result ---
         var (conflictRun, conflictRepoPath) = await SetupRunAwaitingReviewAsync(
@@ -634,6 +725,43 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         var runAfterApprove = await runStore.GetAsync(run.Id);
         runAfterApprove!.Status.Should().Be(RunStatus.AwaitingReview,
             "the run must remain in awaiting_review when the worktree tree hash cannot be verified");
+    }
+
+    // =========================================================================
+    // HM-14 — Dirty working tree fallback emits merge.completed with
+    // merge_mode = "ref-only" in the SSE event payload so the UI can hint
+    // the user to run `git pull`.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_DirtyWorkingTree_MergeCompletedEvent_HasRefOnlyMergeMode()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
+
+        // Dirty the working tree to trigger the ref-only fallback.
+        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "locally modified content");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+
+        // Inspect the SSE stream entry for a merge.completed event with merge_mode = "ref-only".
+        var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
+        var streamEntry = streamStore.Get(run.Id.ToString());
+        streamEntry.Should().NotBeNull();
+
+        var snapshot = streamEntry!.GetSnapshotSince(0);
+        var mergeCompletedEvent = snapshot.Events.FirstOrDefault(e => e.Type == EventTypes.MergeCompleted);
+        mergeCompletedEvent.Should().NotBeNull("a merge.completed event must be emitted after the ref-only fallback merge");
+
+        var payloadJson = JsonSerializer.Serialize(mergeCompletedEvent!.Payload);
+        payloadJson.Should().Contain("\"merge_mode\"",
+            "the merge.completed payload must include a merge_mode field");
+        payloadJson.Should().Contain("ref-only",
+            "merge_mode must be 'ref-only' when the dirty working tree fallback was used");
     }
 
     // =========================================================================

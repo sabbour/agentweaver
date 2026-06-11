@@ -128,6 +128,22 @@ public sealed record ShellApprovalRequest
     public string? CommandHash { get; init; }
 }
 
+/// <summary>Request body for POST /api/runs/{id}/tool-approvals and tool-denials.</summary>
+public sealed record ToolApprovalRequest
+{
+    [JsonPropertyName("request_id")]
+    public string? RequestId { get; init; }
+
+    /// <summary>
+    /// How broadly the approval applies.
+    /// <c>"once"</c> (default) — this request only.
+    /// <c>"run"</c> — auto-approve the same tool+URL for the remainder of this run.
+    /// <c>"always"</c> — permanently allow the same tool+URL across all runs.
+    /// </summary>
+    [JsonPropertyName("scope")]
+    public string Scope { get; init; } = "once";
+}
+
 /// <summary>Request body for POST /api/runs/{id}/review.</summary>
 public sealed record ReviewRequest
 {

@@ -55,7 +55,22 @@ public sealed class WorkflowRestartService
             await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         }
 
-        // 2. Revert Merging -> AwaitingReview (merge did not complete).
+        // 2. Revert Committing -> AwaitingReview (commit was started but did not complete).
+        // A crash after CommitChanges but before ExecuteMergeAsync leaves the run in Committing.
+        // Update tree_hash from the current worktree HEAD so the user can retry /commit.
+        var committing = await _runStore.GetByStatusAsync(RunStatus.Committing, ct).ConfigureAwait(false);
+        foreach (var run in committing)
+        {
+            _logger.LogWarning("Reverting interrupted commit for run {RunId} back to awaiting_review", run.Id);
+            string? recoveredTreeHash = null;
+            if (run.WorktreePath is not null && _worktreeOps.WorktreeExists(run.WorktreePath))
+                recoveredTreeHash = _worktreeOps.GetTreeHash(run.WorktreePath);
+            var reverted = await _runStore.TryRevertCommittingAsync(run.Id, recoveredTreeHash, CancellationToken.None).ConfigureAwait(false);
+            if (!reverted)
+                _logger.LogWarning("TryRevertCommittingAsync was a no-op for run {RunId} — status may have changed concurrently", run.Id);
+        }
+
+        // 3. Revert Merging -> AwaitingReview (merge did not complete).
         var merging = await _runStore.GetByStatusAsync(RunStatus.Merging, ct).ConfigureAwait(false);
         foreach (var run in merging)
         {
@@ -63,7 +78,7 @@ public sealed class WorkflowRestartService
             await _runStore.RevertMergingAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
         }
 
-        // 3. Resume AwaitingReview runs from checkpoint.
+        // 4. Resume AwaitingReview runs from checkpoint.
         var awaiting = await _runStore.GetByStatusAsync(RunStatus.AwaitingReview, ct).ConfigureAwait(false);
         foreach (var run in awaiting)
         {

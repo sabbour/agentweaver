@@ -25,9 +25,10 @@ interface TimelineProps {
   items: TimelineItem[];
   streamStatus: StreamStatus;
   isLiveRun: boolean;
+  runId?: string;
 }
 
-export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun }: TimelineProps) {
+export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun, runId }: TimelineProps) {
   const styles = useStyles();
 
   return (
@@ -54,6 +55,7 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun 
           <LifecycleEventCard
             key={`lc-${item.event.sequence > 0 ? item.event.sequence : i}`}
             event={item.event}
+            runId={runId}
           />
         );
       })}

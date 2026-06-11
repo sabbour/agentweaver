@@ -38,6 +38,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         Call report_intent(intent) before each major step to describe what you are about to do.
         report_intent does NOT write files — always follow it with the actual tool call in the same response.
 
+        Only write files within the current working directory. Do not write files to any path outside it.
         Work step by step. Do not produce a final summary until ALL writes are done.
         Do not ask clarifying questions — proceed with your best judgement.
         """;
@@ -55,6 +56,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
+    private readonly IToolApprovalGate _toolApprovalGate;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
     public GitHubCopilotAgentRunner(
@@ -62,12 +64,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
+        IToolApprovalGate toolApprovalGate,
         ILogger<GitHubCopilotAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
+        _toolApprovalGate = toolApprovalGate ?? throw new ArgumentNullException(nameof(toolApprovalGate));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -261,7 +265,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit),
+            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
@@ -270,9 +274,17 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             // is NOT registered wholesale — that would conflict with native tools and
             // bypass governance for sandbox operations.
             Tools = BuildSessionConfigTools(toolContext),
+            // Append workflow instructions as a system message so the model receives them
+            // before any user turn. SystemMessageMode.Append preserves Copilot's built-in
+            // guardrails and tool-use guidance while layering our scaffold instructions on top.
+            SystemMessage = new SystemMessageConfig
+            {
+                Mode = SystemMessageMode.Append,
+                Content = CopilotSystemPrompt,
+            },
         };
 
-        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: CopilotSystemPrompt);
+        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
         var session = await agent.CreateSessionAsync(ct);
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
@@ -350,6 +362,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         finally
         {
             _approvalStore.Clear(runId);
+            _toolApprovalGate.Clear(runId);
         }
     }
 
@@ -369,10 +382,68 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         string workingDirectory,
         Action<string, string, object?> emitToolCallOnce,
         Action<string, string> emitToolErrorOnce,
-        Action<string, object> emit)
+        Action<string, object> emit,
+        CancellationToken runCt)
     {
         return (request, invocation) =>
         {
+            // URL fetch (web_fetch) — surface a HITL approval gate rather than silently denying.
+            // The handler blocks on the gate (RunContinuationsAsynchronously, no SyncContext on
+            // SDK callback thread — safe to .GetAwaiter().GetResult()); the frontend renders a
+            // HITL card and the operator grants or denies via POST /api/runs/{id}/tool-approvals.
+            if (request is PermissionRequestUrl urlRequest)
+            {
+                var urlCallId = urlRequest.ToolCallId ?? Guid.NewGuid().ToString("n");
+                var requestId = urlCallId;  // full ID is the key — no truncation, no collision risk
+                var displayId = requestId.Length >= 8 ? requestId[..8] : requestId;
+                var rawUrl = urlRequest.Url ?? "";
+                var intention = urlRequest.Intention ?? "";
+
+                emitToolCallOnce(urlCallId, "web_fetch", new Dictionary<string, object>
+                {
+                    ["url"] = rawUrl,
+                });
+
+                // Short-circuit: skip the HITL card if a run-scoped or always-allowed policy already covers this tool+URL.
+                if (_toolApprovalGate.IsAutoApproved(runId, "web_fetch", rawUrl))
+                {
+                    _logger.LogInformation(
+                        "Tool HITL auto-approved (policy) — url={Url} runId={RunId}",
+                        rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
+                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                }
+
+                // Atomically register context and gate in one call so GrantAsync can record
+                // scope-based allow policies even if approval arrives immediately after registration.
+                var approvalTask = _toolApprovalGate.WaitForApprovalAsync(runId, requestId, "web_fetch", rawUrl, TimeSpan.FromMinutes(5), runCt);
+
+                emit(EventTypes.ToolApprovalRequired, new
+                {
+                    requestId,
+                    displayId,
+                    toolName = "web_fetch",
+                    url = SanitizeUrl(rawUrl),
+                    intention = SanitizeIntent(intention),
+                    message = "The agent wants to fetch a URL. Operator approval required.",
+                });
+
+                _logger.LogInformation(
+                    "Tool HITL gate — waiting for operator approval: requestId={RequestId} url={Url} runId={RunId}",
+                    displayId, rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
+
+                var approved = approvalTask.ConfigureAwait(false).GetAwaiter().GetResult();
+
+                if (!approved)
+                {
+                    emitToolErrorOnce(urlCallId, "URL fetch was denied by the operator.");
+                    _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
+                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Rejected });
+                }
+
+                _logger.LogInformation("Tool HITL approved — requestId={RequestId} runId={RunId}", displayId, runId);
+                return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+            }
+
             // Custom external tools registered in SessionConfig.Tools fire OnPermissionRequest
             // with PermissionRequestCustomTool. Run governance against the tool name + args
             // from the request — same two-layer check as native tools — before approving.
@@ -644,6 +715,21 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var fn = SandboxToolRegistry.Build(context)
             .First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
         return [new CopilotOverrideAIFunction(fn)];
+    }
+
+    /// <summary>
+    /// Strips userinfo credentials from a URL and caps its length at 200 characters.
+    /// Falls back to truncation if the input is not a valid absolute URI.
+    /// </summary>
+    internal static string SanitizeUrl(string rawUrl)
+    {
+        if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))
+            return rawUrl.Length > 200 ? rawUrl[..200] + "…" : rawUrl;
+
+        // Strip embedded credentials (userinfo) such as https://user:pass@host/
+        var builder = new UriBuilder(uri) { UserName = "", Password = "" };
+        var sanitized = builder.Uri.ToString();
+        return sanitized.Length > 200 ? sanitized[..200] + "…" : sanitized;
     }
 
     /// <summary>

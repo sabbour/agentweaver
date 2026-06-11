@@ -359,6 +359,12 @@ function processEvent(
       return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
     }
 
+    case 'run.error': {
+      // Non-terminal: run was reverted to AwaitingReview and is retryable.
+      // Add a visible error card without closing or completing the stream.
+      return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
+    }
+
     case 'run.completed': {
       // The watch loop emits run.completed at the workflow terminal; close any lingering
       // open turn defensively (should already be closed by agent.turn.end from the runner).
@@ -383,6 +389,7 @@ function processEvent(
     case 'tool.output':
     case 'tool.exec_result':
     case 'shell.approval_required':
+    case 'tool.approval_required':
     case 'sandbox.selected':
     case 'sandbox.warning':
     case 'agent.system_prompt':

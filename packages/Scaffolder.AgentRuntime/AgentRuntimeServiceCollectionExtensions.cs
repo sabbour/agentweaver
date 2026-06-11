@@ -29,6 +29,7 @@ public static class AgentRuntimeServiceCollectionExtensions
         services.AddSingleton<FoundryAgentRunner>();
         services.AddSingleton<IAgentRunner, AgentRunnerDispatcher>();
         services.AddSingleton<IShellApprovalStore, InMemoryShellApprovalStore>();
+        services.AddSingleton<IToolApprovalGate, InMemoryToolApprovalGate>();
         return services;
     }
 }

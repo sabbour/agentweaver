@@ -133,7 +133,8 @@ public sealed class CopilotReportIntentTests : IDisposable
             workingDirectory: _tempDir,
             emitToolCallOnce: (callId, toolName, args) => toolCalls.Add((callId, toolName, args)),
             emitToolErrorOnce: (callId, msg) => toolErrors.Add((callId, msg)),
-            emit: (type, payload) => emittedEvents.Add((type, payload)));
+            emit: (type, payload) => emittedEvents.Add((type, payload)),
+            runCt: CancellationToken.None);
 
         // intent contains a NUL (0x00) control character that must be stripped
         var argsEl = System.Text.Json.JsonSerializer.SerializeToElement(new { intent = "Hello\x00World" });
@@ -185,7 +186,8 @@ public sealed class CopilotReportIntentTests : IDisposable
             workingDirectory: _tempDir,
             emitToolCallOnce: (callId, toolName, args) => toolCalls.Add((callId, toolName, args)),
             emitToolErrorOnce: (callId, msg) => toolErrors.Add((callId, msg)),
-            emit: (type, payload) => emittedEvents.Add((type, payload)));
+            emit: (type, payload) => emittedEvents.Add((type, payload)),
+            runCt: CancellationToken.None);
 
         var argsEl = System.Text.Json.JsonSerializer.SerializeToElement(new { operation = "wipe" });
         var request = new PermissionRequestCustomTool
@@ -227,6 +229,7 @@ public sealed class CopilotReportIntentTests : IDisposable
             SandboxExecutorFactory.CreatePassthrough(),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
             NullLogger<GitHubCopilotAgentRunner>.Instance);
     }
 

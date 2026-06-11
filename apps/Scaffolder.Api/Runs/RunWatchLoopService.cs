@@ -167,7 +167,7 @@ public sealed class RunWatchLoopService
                     parsedRunId, RunStatus.Merged, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
-                entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult });
+                entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
 
                 _streamStore.Complete(runId);
                 return true;

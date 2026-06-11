@@ -144,7 +144,8 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
     // Test 3 (FR-016, edge: divergent conflicting branch)
     // Approving when the originating branch has diverged with a conflicting commit
     // must yield merge_failed status. The originating branch must remain at the
-    // human's advance commit (not rolled back), and the worktree must be preserved.
+    // human's advance commit (not rolled back). The worktree is removed (MergeFailed
+    // is cleanly terminal; conflict info is stored in merge_conflicts).
     // =========================================================================
     [Fact]
     public async Task Approve_DivergentConflictingBranch_ReturnsMergeFailed_BranchUnchanged()
@@ -178,9 +179,9 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
         repoAfter.Branches[run.OriginatingBranch]!.Tip.Sha.Should().Be(humanCommitSha,
             "the originating branch must not be modified when a merge fails (FR-016)");
 
-        // FR-016: worktree preserved for inspection.
-        Directory.Exists(run.WorktreePath).Should().BeTrue(
-            "the worktree must be preserved intact when the merge fails (FR-016)");
+        // Worktree is removed on conflict — MergeFailed is cleanly terminal, conflict info is in the DB.
+        Directory.Exists(run.WorktreePath).Should().BeFalse(
+            "the worktree must be removed when the merge fails — conflict info is stored in merge_conflicts");
     }
 
     // =========================================================================

@@ -92,7 +92,7 @@ export function RunWatcher({ runId }: RunWatcherProps) {
 
   const centerContent = (
     <div className={styles.centerContent}>
-      <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} />
+      <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} runId={runId} />
       {resolvedReview && (
         <div className={styles.reviewSection}>
           <Divider />

@@ -7,6 +7,12 @@ public static class EventTypes
     public const string RunCompleted = "run.completed";
     public const string RunFailed    = "run.failed";
     public const string RunBounded   = "run.bounded";
+    /// <summary>
+    /// Non-terminal error event emitted when an operation fails but the run is
+    /// reverted to a retryable state (e.g., AwaitingReview after merge InternalError).
+    /// Does NOT mark the stream as terminal.
+    /// </summary>
+    public const string RunError = "run.error";
 
     public const string ReviewRequested = "review.requested";
     public const string ReviewApproved  = "review.approved";
@@ -27,6 +33,13 @@ public static class EventTypes
     public const string ToolCall          = "tool.call";
     public const string ToolResult        = "tool.result";
     public const string ToolError         = "tool.error";
+    /// <summary>
+    /// Emitted when the sandbox intercepts a tool call (e.g. web_fetch) that requires
+    /// operator approval before proceeding. The run stream pauses at the permission gate
+    /// until the operator grants or denies via the tool-approvals/tool-denials endpoints.
+    /// Payload: { requestId, toolName, url?, intention?, message }
+    /// </summary>
+    public const string ToolApprovalRequired = "tool.approval_required";
 
     public const string ReviewChangesRequested = "review.changes_requested";
     public const string RevisionStarted        = "revision.started";

@@ -767,14 +767,14 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
                   appearance="secondary"
                   size="small"
                   icon={<CommentRegular />}
-                  aria-label="Request changes"
+                  aria-label="Request change"
                   style={{ flex: 1, whiteSpace: 'nowrap' }}
                   onClick={() => {
                     setRequestChangesOpen((open) => !open);
                     setRequestChangesComment('');
                   }}
                 >
-                  Request Changes
+                  Change
                 </Button>
                 <Button
                   appearance="secondary"

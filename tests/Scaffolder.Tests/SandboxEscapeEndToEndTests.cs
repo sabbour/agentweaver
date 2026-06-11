@@ -59,7 +59,7 @@ public sealed class SandboxEscapeEndToEndTests
 
         var factory = new GitHubCopilotClientFactory(config);
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
 
         await RunEscapeScenarioAsync(ModelSource.GitHubCopilot, runner, logger.Lines);
     }

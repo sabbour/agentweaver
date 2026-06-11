@@ -439,7 +439,26 @@ public sealed class WorktreeManager
     {
         // (d-1) Full clean-check before any mutation.
         if (!IsWorkingTreeMergeSafe(repo, origin.Tip, worktree.Tip.Tree, out var blockReason))
-            return MergeOutcome.Blocked(blockReason);
+        {
+            // A sequencer in progress (MERGE_HEAD, REBASE_HEAD, etc.) cannot be bypassed
+            // via the ref-only path — the user must resolve it first.
+            if (blockReason.Contains("a git operation is in progress", StringComparison.Ordinal))
+                return MergeOutcome.Blocked(blockReason);
+
+            // A conflicted index also cannot be bypassed via the ref-only path — advancing
+            // the branch ref underneath unresolved conflicts is unsafe.
+            if (blockReason.Contains("conflicted", StringComparison.Ordinal))
+                return MergeOutcome.Blocked(blockReason);
+
+            // For all other cases (dirty working tree, staged changes, untracked collisions),
+            // fall back to the ref-only path. MergeRefOnly never touches the working tree,
+            // so local changes are irrelevant and preserved. The user will need a `git pull`
+            // to sync their working tree after the merge.
+            _logger.LogWarning(
+                "Main working tree has uncommitted changes — using ref-only merge. " +
+                "A `git pull` in the repository is needed to reflect the merged changes locally.");
+            return MergeRefOnly(repo, origin, worktree, mergeBase, originatingBranch);
+        }
 
         var prevSha = origin.Tip.Sha;
 
@@ -481,9 +500,11 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
-    /// Merges when the originating branch is NOT checked out (bare repo or HEAD on a different
-    /// branch). Uses UpdateTarget to move the ref without touching any working tree or index.
-    /// NEVER called when the branch is checked out — that would leave the working tree stale.
+    /// Merges by updating only the branch ref — no working tree or index is touched.
+    /// Used when the originating branch is NOT checked out (bare repo or HEAD on a different branch),
+    /// OR as a fallback when the branch IS checked out but the working tree has uncommitted changes
+    /// (dirty working tree, staged changes, untracked collisions). In the fallback case the user's
+    /// local changes are left untouched; a <c>git pull</c> is required to sync the working tree.
     /// </summary>
     private MergeOutcome MergeRefOnly(
         Repository repo,
@@ -607,14 +628,14 @@ public sealed class WorktreeManager
 
         // Check for in-progress sequencer state against the real git directory.
         var gitDir = repo.Info.Path;
-        var sequencerFiles = new[] { "MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "BISECT_LOG" };
+        var sequencerFiles = new[] { "MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG" };
         var sequencerDirs  = new[] { "rebase-merge", "rebase-apply" };
 
         foreach (var file in sequencerFiles)
         {
             if (File.Exists(Path.Combine(gitDir, file)))
             {
-                blockReason = "a merge or rebase is already in progress";
+                blockReason = "a git operation is in progress (merge, rebase, cherry-pick, revert, bisect)";
                 return false;
             }
         }
@@ -622,7 +643,7 @@ public sealed class WorktreeManager
         {
             if (Directory.Exists(Path.Combine(gitDir, dir)))
             {
-                blockReason = "a merge or rebase is already in progress";
+                blockReason = "a git operation is in progress (merge, rebase, cherry-pick, revert, bisect)";
                 return false;
             }
         }
@@ -705,17 +726,33 @@ public sealed class WorktreeManager
     /// Extracts the list of conflicting relative file paths from a <see cref="MergeTreeResult"/>
     /// that has <see cref="MergeTreeStatus.Conflicts"/>. Paths are normalised to forward slashes.
     /// Uses Ours path when available, Theirs as fallback, Ancestor as last resort.
+    /// Paths are validated to reject rooted paths, traversal sequences, and control characters.
+    /// Results are capped at 50 entries.
     /// </summary>
     private static IReadOnlyList<string> ExtractConflictingFiles(MergeTreeResult mergeResult)
     {
         var paths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var conflict in mergeResult.Conflicts)
         {
+            if (paths.Count >= 50) break;
+
             var path = conflict.Ours?.Path
                     ?? conflict.Theirs?.Path
                     ?? conflict.Ancestor?.Path;
-            if (!string.IsNullOrEmpty(path))
-                paths.Add(NormalizePathSeparators(path));
+            if (string.IsNullOrEmpty(path)) continue;
+
+            var normalized = NormalizePathSeparators(path);
+
+            // Reject rooted paths (absolute paths starting with / or drive letters like C:\).
+            if (Path.IsPathRooted(normalized)) continue;
+
+            // Reject paths containing .. traversal segments.
+            if (normalized.Split('/').Any(seg => seg == "..")) continue;
+
+            // Reject paths with null bytes or C0/C1 control characters.
+            if (normalized.Any(c => c == '\0' || (c < 0x20 && c != '\t') || (c >= 0x7F && c <= 0x9F))) continue;
+
+            paths.Add(normalized);
         }
         return [.. paths];
     }

@@ -42,7 +42,7 @@ public sealed record MergeInput(
     string OriginatingBranch);
 
 /// <summary>Output from the merge executor (terminal workflow output).</summary>
-public sealed record MergeOutput(string RunId, string Status, string? MergeResult);
+public sealed record MergeOutput(string RunId, string Status, string? MergeResult, string? MergeMode = null);
 
 /// <summary>Terminal output for runs that produce no changes.</summary>
 public sealed record NoChangesOutput(string RunId);

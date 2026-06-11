@@ -167,6 +167,7 @@ app.MapGet("/api/runs/{id}", async (
     // Merging is included: the diff was already approved for review and the state
     // is only transiently different from AwaitingReview.
     string? diff = run.Status is RunStatus.AwaitingReview
+                                or RunStatus.Committing
                                 or RunStatus.Merging
                                 or RunStatus.Merged
                                 or RunStatus.MergeFailed
@@ -520,26 +521,63 @@ app.MapPost("/api/runs/{id}/commit", async (
     if (string.IsNullOrEmpty(run.WorktreeBranch) || string.IsNullOrEmpty(run.RepositoryPath))
         return Results.Conflict(new { error = "Run is missing required merge data (worktree_branch or repository_path)." });
 
+    // CAS: AwaitingReview → Committing — must happen BEFORE CommitChanges to prevent
+    // TOCTOU races where a concurrent /review decline or /request-changes can race after
+    // the git commit lands, and to prevent two simultaneous /commit calls from both succeeding.
+    bool acquiredCommitting;
+    try { acquiredCommitting = await runStore.TryTransitionToCommittingAsync(runId, CancellationToken.None); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to transition run {RunId} to Committing", runId);
+        return Results.Problem("Failed to acquire commit slot.", statusCode: 500);
+    }
+
+    if (!acquiredCommitting)
+        return Results.Conflict(new { error = $"Run is no longer in awaiting_review and cannot be committed." });
+
     // Stage and commit any remaining uncommitted changes in the worktree.
     string newTreeHash;
     try { newTreeHash = worktreeManager.CommitChanges(run.WorktreePath, runId); }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to commit worktree changes for run {RunId}", runId);
+        // Revert Committing → AwaitingReview so the user can retry.
+        await runStore.TryRevertCommittingAsync(runId, ct: CancellationToken.None).ConfigureAwait(false);
         return Results.Problem("Failed to commit worktree changes.", statusCode: 500);
     }
 
-    // Persist the new tree hash so restart recovery has the correct value.
-    await runStore.UpdateTreeHashAfterCommitAsync(runId, newTreeHash, ct).ConfigureAwait(false);
-
-    var entry = streamStore.Get(id);
-    if (entry is not null)
-        entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = newTreeHash });
-
-    // Merge the worktree branch into the originating branch.
-    var mergeInput = new MergeInput(
-        id, newTreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
-    var mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, ct).ConfigureAwait(false);
+    // Persist the new tree hash and execute the merge. Use CancellationToken.None for all
+    // post-CAS operations: the run now owns a non-cancellable path to a terminal/retryable state
+    // regardless of HTTP request lifetime. The try/catch is a safety net in case a captured ct
+    // still leaks through an internal call path.
+    RunStreamEntry? entry;
+    MergeExecutionResult mergeExecResult;
+    try
+    {
+        await runStore.UpdateTreeHashAfterCommitAsync(runId, newTreeHash, CancellationToken.None).ConfigureAwait(false);
+        entry = streamStore.Get(id);
+        // Merge the worktree branch into the originating branch.
+        // TryStartMergingAsync inside ExecuteMergeAsync now accepts Committing → Merging.
+        var mergeInput = new MergeInput(
+            id, newTreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
+        mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, CancellationToken.None).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException)
+    {
+        // Safety net: a cancellation token leaked into a post-CAS path.
+        // Revert the run to AwaitingReview so the user can retry.
+        logger.LogWarning("Post-CAS operation cancelled for run {RunId}; reverting to AwaitingReview", runId);
+        try
+        {
+            var reverted = await runStore.TryRevertCommittingAsync(runId, newTreeHash, CancellationToken.None).ConfigureAwait(false);
+            if (!reverted) logger.LogWarning("TryRevertCommittingAsync returned false for run {RunId} — may already be in terminal state", runId);
+        }
+        catch (Exception recoveryEx)
+        {
+            logger.LogError(recoveryEx, "Recovery revert failed for run {RunId} — restart recovery will clean up", runId);
+        }
+        return Results.Problem("Commit was cancelled; run reverted to awaiting review. Please retry.", statusCode: 503);
+    }
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext).User;
     switch (mergeExecResult.Outcome)
@@ -547,8 +585,10 @@ app.MapPost("/api/runs/{id}/commit", async (
         case MergeExecutionOutcome.Merged:
             if (entry is not null)
             {
+                // Only emit merge.started after the CAS (Committing → Merging) succeeded.
+                entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = newTreeHash });
                 entry.RecordNext(EventTypes.MergeCompleted,
-                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha });
+                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha, merge_mode = mergeExecResult.MergeMode });
                 streamStore.Complete(id);
             }
             logger.LogInformation("Run {RunId} committed and merged by {User}", id, caller);
@@ -563,6 +603,8 @@ app.MapPost("/api/runs/{id}/commit", async (
             var conflictingFiles = mergeExecResult.ConflictingFiles ?? [];
             if (entry is not null)
             {
+                // CAS succeeded; emit merge.started before the conflict terminal event.
+                entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = newTreeHash });
                 entry.RecordNext(EventTypes.MergeConflicted,
                     new { conflicting_files = conflictingFiles });
                 streamStore.Complete(id);
@@ -580,6 +622,7 @@ app.MapPost("/api/runs/{id}/commit", async (
 
         case MergeExecutionOutcome.Blocked:
             // Transient: run has been reverted to AwaitingReview. Client should retry.
+            // Do NOT emit merge.started — no terminal merge event will follow on this request.
             logger.LogWarning("Run {RunId} commit+merge blocked for {User}: {Reason}", id, caller, mergeExecResult.Reason);
             return Results.Conflict(new
             {
@@ -588,18 +631,19 @@ app.MapPost("/api/runs/{id}/commit", async (
             });
 
         case MergeExecutionOutcome.LockFailed:
+            // Repo lock failed before the Committing→Merging CAS — revert Committing→AwaitingReview.
+            await runStore.TryRevertCommittingAsync(runId, ct: CancellationToken.None).ConfigureAwait(false);
             if (string.Equals(mergeExecResult.LockFailureReason, "already_merging", StringComparison.Ordinal))
                 return Results.Conflict(new { error = "Run is already being merged." });
-            await runStore.RevertMergingAsync(runId, CancellationToken.None).ConfigureAwait(false);
             return Results.Conflict(new { error = mergeExecResult.LockFailureReason });
 
         case MergeExecutionOutcome.InternalError:
         default:
+            // DB state has been reverted to AwaitingReview by ExecuteMergeAsync's catch block.
+            // Emit a non-terminal run.error event so SSE clients know an error occurred but
+            // the run is still retryable. Do NOT complete the stream.
             if (entry is not null)
-            {
-                entry.RecordNext(EventTypes.MergeFailed, new { reason = "unexpected_error" });
-                streamStore.Complete(id);
-            }
+                entry.RecordNext(EventTypes.RunError, new { reason = "unexpected_error" });
             return Results.Problem("Merge failed unexpectedly.", statusCode: 500);
     }
 });
@@ -898,6 +942,66 @@ app.MapPost("/api/runs/{id}/shell-approvals", async (
     return Results.Ok(new { run_id = id, command_hash = body.CommandHash, approved = true });
 });
 
+app.MapPost("/api/runs/{id}/tool-approvals", async (
+    HttpContext httpContext,
+    string id,
+    ToolApprovalRequest body,
+    SqliteRunStore runStore,
+    IToolApprovalGate approvalGate,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    if (string.IsNullOrWhiteSpace(body.RequestId))
+        return Results.BadRequest(new { error = "request_id is required." });
+
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run.Status != RunStatus.InProgress)
+        return Results.Conflict(new { error = "Run is not active." });
+
+    var approvalScope = body.Scope switch {
+        "run" => ApprovalScope.Run,
+        "always" => ApprovalScope.Always,
+        _ => ApprovalScope.Once,
+    };
+
+    var resolved = await approvalGate.GrantAsync(id, body.RequestId, approvalScope);
+    if (!resolved)
+        return Results.Conflict(new { error = "No pending approval found for this request_id. It may have already been resolved or timed out." });
+
+    return Results.Ok(new { run_id = id, request_id = body.RequestId, approved = true });
+});
+
+app.MapPost("/api/runs/{id}/tool-denials", async (
+    HttpContext httpContext,
+    string id,
+    ToolApprovalRequest body,
+    SqliteRunStore runStore,
+    IToolApprovalGate approvalGate,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    if (string.IsNullOrWhiteSpace(body.RequestId))
+        return Results.BadRequest(new { error = "request_id is required." });
+
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run.Status != RunStatus.InProgress)
+        return Results.Conflict(new { error = "Run is not active." });
+
+    var resolved = approvalGate.Deny(id, body.RequestId);
+    if (!resolved)
+        return Results.Conflict(new { error = "No pending denial found for this request_id. It may have already been resolved or timed out." });
+
+    return Results.Ok(new { run_id = id, request_id = body.RequestId, denied = true });
+});
+
 app.MapGet("/api/sandbox-policy", async (
     string? repository_path,
     ISandboxPolicyStore policyStore,
@@ -983,7 +1087,7 @@ app.MapGet("/api/runs/{id}/files", async (
     if (run.Status is RunStatus.Pending or RunStatus.Failed)
         return Results.Json(Array.Empty<WorkspaceFileEntry>());
 
-    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined;
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed;
 
     if (isTerminal)
     {
@@ -1149,7 +1253,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     }
 
     // --- Diff endpoint branch ---
-    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined;
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed;
 
     IReadOnlyList<WorkspaceFileEntry> allEntries;
 
@@ -1363,7 +1467,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
             {
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
                 entry.RecordNext(EventTypes.MergeCompleted,
-                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha });
+                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha, merge_mode = mergeExecResult.MergeMode });
                 streamStore.Complete(id);
             }
             return Results.Json(new ReviewResponse
