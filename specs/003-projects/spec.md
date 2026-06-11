@@ -25,6 +25,10 @@ The provider and model a project stores are defaults only: consistent with the t
 - Q: Local project working-directory location (FR-006) → A: The user chooses the working directory for each project at creation time; there is no single managed workspace root.
 - Q: What a blank project initializes (FR-003) → A: A blank project initializes the chosen working directory as an empty directory initialized as a git repository (git init).
 - Q: Project delete scope (FR-019) → A: Deleting a project removes only the project record; the on-disk working directory and any cloned contents are always left on disk.
+- Q: Deleting a project that has in-flight or active runs (FR-019) → A: Deletion MUST require explicit user confirmation; if in-flight runs exist, the system MUST first cancel them to a visible terminal state and THEN remove the project record. Working-directory files are always preserved (record-only delete).
+- Q: Chosen working directory already exists and is non-empty (FR-003, FR-004) → A: For both a blank project and one created from a GitHub repository, the chosen directory MUST be empty or non-existent; if it already exists and is non-empty, the system MUST reject creation with a clear reason and MUST NOT overwrite or adopt the existing content. (Importing a pre-existing local folder remains out of scope.)
+- Q: Recorded working directory missing or inaccessible at list or open time (FR-022) → A: The system MUST still list the project but mark it unavailable, MUST block its runs because the sandbox boundary is invalid, and MUST offer the user a choice to relink the project to a new working directory or remove the project record; any existing files MUST be preserved.
+- Q: Source of the accountable human owner (FR-024) → A: The accountable human MUST be the GitHub-signed-in user when a GitHub sign-in is present; otherwise it MUST be the local operating-system/installation user identity, and this identity MUST be recorded on the project for accountability and audit.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -132,14 +136,15 @@ A user can update a project after creating it — change its name, change its AI
 ### Edge Cases
 
 - **Empty or duplicate name**: An empty or whitespace-only name is rejected. Project names are user-facing labels and need not be unique; each project is addressed by a stable internal identifier, so duplicate display names are allowed but remain distinguishable.
-- **Target directory already exists or is non-empty**: When the location chosen for a new project's working directory already exists or is non-empty, the conflict is surfaced and existing files are not silently overwritten.
+- **Target directory already exists or is non-empty**: For both blank and GitHub-repository projects, the chosen working directory MUST be empty or non-existent. When it already exists and is non-empty, creation MUST be rejected with a clear reason; existing files MUST NOT be overwritten or adopted (FR-003, FR-004).
 - **Invalid or unreachable GitHub reference**: A bad reference, missing network, or lack of access produces a clear failure and leaves no partially-created project; credentials are not leaked in the error.
 - **Private repository without usable authentication**: When authentication for a private repository is unavailable or rejected, the clone is denied with a clear reason and no secret is written to logs or telemetry.
 - **Clone interrupted mid-way**: A network loss during cloning does not leave a half-created project; the partial clone is cleaned up or the project is clearly marked failed.
 - **Unsupported provider**: Any attempt to select or configure a provider outside the two permitted is rejected.
 - **Default model no longer available**: When a project's stored default model is no longer offered by its provider, the user is prompted to pick an available model rather than a run silently using an unintended model.
-- **Deleting a project with active runs**: Deletion of a project that has in-flight runs is guarded — it is blocked or requires explicit confirmation — so a run is not orphaned without the user's knowledge.
+- **Deleting a project with active runs**: Deletion always requires explicit user confirmation. When the project has in-flight runs, the system MUST first cancel them to a visible terminal state before removing the project record, so no run is orphaned (FR-019).
 - **Run attempts to escape the project directory**: A project's run that attempts a file or process operation outside the project's working directory is rejected, not merely warned.
+- **Recorded working directory missing or inaccessible**: When a project's recorded working directory is missing or inaccessible at list or open time, the project MUST still be listed but marked unavailable, and its runs MUST be blocked because the sandbox boundary (FR-022) is invalid. The user MUST be offered a choice to relink the project to a new working directory or remove the project record (FR-019, FR-026); any existing files MUST be preserved.
 - **Large number of projects**: The landing page remains usable as the number of project cards grows (for example through scrolling or paging).
 - **Hosted-cloud deployment with no local user machine**: In a hosted-cloud deployment there is no local developer directory; the project's storage location is resolved by the deployment rather than assuming a local path.
 
@@ -151,8 +156,8 @@ A user can update a project after creating it — change its name, change its AI
 
 - **FR-001**: System MUST allow a user to create a new project either as a blank project or from an existing GitHub repository.
 - **FR-002**: System MUST materialize every project as a working directory and persist a project record so the project can be listed and reopened later, including after an application restart.
-- **FR-003**: For a blank project, the system MUST initialize the chosen working directory as an empty git repository (`git init`) with no scaffold content added.
-- **FR-004**: For a project created from a GitHub repository, the system MUST clone the specified repository into the project's working directory and record the GitHub origin (the source repository reference) on the project.
+- **FR-003**: For a blank project, the chosen working directory MUST be empty or non-existent; if it already exists and is non-empty, the system MUST reject creation with a clear reason and MUST NOT overwrite or adopt the existing content. When the directory is empty or newly created, the system MUST initialize it as an empty git repository (`git init`) with no scaffold content added.
+- **FR-004**: For a project created from a GitHub repository, the chosen working directory MUST be empty or non-existent; if it already exists and is non-empty, the system MUST reject creation with a clear reason and MUST NOT overwrite or adopt the existing content. When the directory is empty or newly created, the system MUST clone the specified repository into the project's working directory and record the GitHub origin (the source repository reference) on the project.
 - **FR-005**: The system MUST allow the user to sign in with GitHub via an OAuth device flow, and this sign-in MUST be initiable and usable identically from both the CLI (TUI) and the Web UI (Principle IV). A single successful GitHub sign-in MUST grant both (a) access to GitHub repositories sufficient to clone them, including private repositories the signed-in user is permitted to access, and (b) authorization to use the GitHub Copilot provider (Principle II). The system MUST authorize the GitHub Copilot provider via this GitHub sign-in in place of a separately entered API key, and MUST NOT require, prompt for, or store a Copilot-specific API key while a valid GitHub sign-in is present. The GitHub sign-in MUST NOT authorize, satisfy, or substitute for Microsoft Foundry credentials, which remain separate (FR-013, FR-016). Any token, device code, or other secret produced by the sign-in MUST NOT appear in any output, log, or telemetry (Principle IX).
 - **FR-006**: The user MUST choose the working directory for each project at creation time; there is no single managed workspace root. The chosen path MUST be recorded on the project record and MUST serve as the sandbox boundary for all of that project's runs (FR-022).
 - **FR-007**: System MUST reject creation when the project name is empty or only whitespace, and MUST surface a clear reason when any creation fails without leaving a partially-created or inconsistent project.
@@ -176,7 +181,7 @@ A user can update a project after creating it — change its name, change its AI
 
 - **FR-017**: System MUST allow a user to rename an existing project, with the new name reflected in the list and on the project's card.
 - **FR-018**: System MUST allow a user to edit a project's AI provider settings after creation, subject to the two-provider constraint in FR-013.
-- **FR-019**: System MUST allow a user to delete a project; deletion MUST remove the project record and remove the project from the list. The on-disk working directory and any cloned contents MUST always be left intact — no files are deleted from disk.
+- **FR-019**: System MUST allow a user to delete a project; deletion MUST require explicit user confirmation. If the project has in-flight or active runs at deletion time, the system MUST first cancel those runs to a visible terminal state, and only THEN remove the project record and remove the project from the list (Principle X). The on-disk working directory and any cloned contents MUST always be left intact — no files are deleted from disk.
 
 #### API-first and front-end parity
 
@@ -187,7 +192,8 @@ A user can update a project after creating it — change its name, change its AI
 
 - **FR-022**: A project's working directory MUST serve as the boundary for that project's runs: file and process operations performed by a project's runs MUST stay within the project's working directory and MUST be rejected if they attempt to escape it.
 - **FR-023**: Credentials or secrets used to clone a private GitHub repository MUST NOT be written to the project record, event logs, client-facing outputs, or telemetry, and MUST NOT be sent to any party beyond what is required to perform the clone.
-- **FR-024**: Each project MUST have a named human accountable for it and for the runs started within it.
+- **FR-024**: Each project MUST have a named human accountable for it and for the runs started within it. The accountable human MUST be the GitHub-signed-in user when a GitHub sign-in is present (FR-005); otherwise it MUST be the local operating-system/installation user identity. This identity MUST be recorded on the project record for accountability and audit (Principles IX, X).
+- **FR-026**: If a project's recorded working directory is missing or inaccessible when the project is listed or opened, the system MUST still list the project but MUST mark it as unavailable, and MUST block all runs for it because the sandbox boundary (FR-022) is invalid. The system MUST offer the user a choice to either relink the project to a new working directory or remove the project record (FR-019). Any files that exist MUST be preserved (consistent with record-only delete).
 
 #### Deployment parity
 
