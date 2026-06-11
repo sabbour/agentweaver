@@ -168,7 +168,9 @@ describe('ArtifactBrowser', () => {
 
     // The DiffViewer renders individual diff lines as spans.
     await waitFor(() => {
-      expect(screen.getByText('+new line')).toBeDefined();
+      // DiffViewer renders sign and content in separate table cells.
+      expect(screen.getByText('new line')).toBeDefined();
+      expect(screen.getByText('old line')).toBeDefined();
     });
   });
 
