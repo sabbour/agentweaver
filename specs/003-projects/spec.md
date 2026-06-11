@@ -20,7 +20,7 @@ The provider and model a project stores are defaults only: consistent with the t
 
 ### Session 2026-06-11
 
-- Q: GitHub authentication method for cloning private repositories (FR-005) → A: The app initiates its own OAuth device flow to authenticate the user for cloning private GitHub repositories.
+- Q: GitHub authentication scope and Copilot authorization (FR-005, FR-016) → A: A single "Sign in with GitHub" (OAuth device flow), reachable identically from both the CLI/TUI and the Web UI, grants both repository access — including cloning private repositories — and authorization to use the GitHub Copilot provider in place of a separately entered Copilot API key. The GitHub sign-in MUST NOT authorize Microsoft Foundry, which continues to use its own separate credentials.
 - Q: AI provider credential storage scope (FR-016) → A: Provider credentials are stored globally / installation-wide, shared across all projects (not per-project).
 - Q: Local project working-directory location (FR-006) → A: The user chooses the working directory for each project at creation time; there is no single managed workspace root.
 - Q: What a blank project initializes (FR-003) → A: A blank project initializes the chosen working directory as an empty directory initialized as a git repository (git init).
@@ -63,7 +63,7 @@ When the user opens the application, the landing page shows existing projects as
 
 ### User Story 3 - Create a project from a GitHub repository (Priority: P2)
 
-A user creates a project by pointing at an existing GitHub repository and choosing a working directory. The system clones the repository into the chosen directory and records the project, including its GitHub origin. For a private repository the system initiates an OAuth device flow to authenticate the user so the clone can succeed, and the credentials used must never appear in any output, log, or telemetry.
+A user creates a project by pointing at an existing GitHub repository and choosing a working directory. The system clones the repository into the chosen directory and records the project, including its GitHub origin. Cloning uses the same single GitHub sign-in (OAuth device flow) defined in FR-005, which grants both repository access — including private repositories — and authorization to use the GitHub Copilot provider; tokens or other credentials MUST never appear in any output, log, or telemetry.
 
 **Why this priority**: This is a high-value path, but it builds on the create and list capabilities; blank creation already proves the core, so cloning layers on at P2.
 
@@ -81,7 +81,7 @@ A user creates a project by pointing at an existing GitHub repository and choosi
 
 ### User Story 4 - Configure a project's AI provider settings and default model (Priority: P2)
 
-Each project stores AI provider settings: which of the two permitted providers is the project's default and a default model for each provider. The user can view and change these settings. Exactly two providers are ever offered — GitHub Copilot CLI and Microsoft Foundry — and no other provider can be configured. The stored values are defaults for runs started in the project; the provider and model remain selectable per run, and a run may override the project defaults.
+Each project stores AI provider settings: which of the two permitted providers is the project's default and a default model for each provider. The user can view and change these settings. Exactly two providers are ever offered — GitHub Copilot CLI and Microsoft Foundry — and no other provider can be configured. When GitHub Copilot is the selected provider, the GitHub sign-in (FR-005) authorizes it; no separate API key is required or stored for that provider. Microsoft Foundry uses its own separate credentials and is never authorized by the GitHub sign-in. The stored values are defaults for runs started in the project; the provider and model remain selectable per run, and a run may override the project defaults.
 
 **Why this priority**: Settings make a project useful for running agents and encode the project-level form of the two-providers rule, but a project can exist and be listed before it is configured, so this follows the core create/list slices.
 
@@ -153,7 +153,7 @@ A user can update a project after creating it — change its name, change its AI
 - **FR-002**: System MUST materialize every project as a working directory and persist a project record so the project can be listed and reopened later, including after an application restart.
 - **FR-003**: For a blank project, the system MUST initialize the chosen working directory as an empty git repository (`git init`) with no scaffold content added.
 - **FR-004**: For a project created from a GitHub repository, the system MUST clone the specified repository into the project's working directory and record the GitHub origin (the source repository reference) on the project.
-- **FR-005**: To clone a private GitHub repository, the system MUST initiate an OAuth device flow on the user's behalf to authenticate them; the resulting token MUST NOT appear in outputs, logs, or telemetry (Principle IX).
+- **FR-005**: The system MUST allow the user to sign in with GitHub via an OAuth device flow, and this sign-in MUST be initiable and usable identically from both the CLI (TUI) and the Web UI (Principle IV). A single successful GitHub sign-in MUST grant both (a) access to GitHub repositories sufficient to clone them, including private repositories the signed-in user is permitted to access, and (b) authorization to use the GitHub Copilot provider (Principle II). The system MUST authorize the GitHub Copilot provider via this GitHub sign-in in place of a separately entered API key, and MUST NOT require, prompt for, or store a Copilot-specific API key while a valid GitHub sign-in is present. The GitHub sign-in MUST NOT authorize, satisfy, or substitute for Microsoft Foundry credentials, which remain separate (FR-013, FR-016). Any token, device code, or other secret produced by the sign-in MUST NOT appear in any output, log, or telemetry (Principle IX).
 - **FR-006**: The user MUST choose the working directory for each project at creation time; there is no single managed workspace root. The chosen path MUST be recorded on the project record and MUST serve as the sandbox boundary for all of that project's runs (FR-022).
 - **FR-007**: System MUST reject creation when the project name is empty or only whitespace, and MUST surface a clear reason when any creation fails without leaving a partially-created or inconsistent project.
 
@@ -167,10 +167,10 @@ A user can update a project after creating it — change its name, change its AI
 #### AI provider settings and defaults
 
 - **FR-012**: Each project MUST store AI provider settings consisting of the project's default provider and a default model for each provider.
-- **FR-013**: System MUST offer exactly two AI providers — GitHub Copilot CLI and Microsoft Foundry — wherever a project's provider is selected or configured, and MUST reject any attempt to configure a provider other than these two.
+- **FR-013**: System MUST offer exactly two AI providers — GitHub Copilot CLI and Microsoft Foundry — wherever a project's provider is selected or configured, and MUST reject any attempt to configure a provider other than these two (Principle II). When GitHub Copilot is the selected provider, the system MUST authorize it via the GitHub sign-in (FR-005) and MUST NOT require or store a separate API key for that provider. Microsoft Foundry MUST use its own provider credentials; the GitHub sign-in MUST NOT authorize Microsoft Foundry.
 - **FR-014**: System MUST allow a default model to be selected per provider and MUST store it as that provider's default for the project.
 - **FR-015**: A project's stored provider and model MUST act as defaults only; the provider and model MUST remain selectable per run, and a run MUST be able to override the project defaults using one of the two permitted providers.
-- **FR-016**: Provider credentials MUST be stored globally / installation-wide and shared across all projects; they MUST NOT be stored on the project record. Secrets MUST NOT appear in outputs, logs, or telemetry (Principle IX).
+- **FR-016**: Provider credentials MUST be stored globally / installation-wide and shared across all projects; they MUST NOT be stored on the project record, and they MUST NOT appear in any output, log, or telemetry (Principle IX). For the GitHub Copilot provider, the stored credential is the authorization established by the GitHub sign-in (FR-005); no separate Copilot API key is entered or stored. For Microsoft Foundry, the stored credentials are its own provider credentials, which the GitHub sign-in neither provides nor replaces. Both providers' credentials follow this same global, installation-wide rule and MUST NOT be persisted on any individual project record.
 
 #### Project management (rename, edit, delete)
 
@@ -197,8 +197,8 @@ A user can update a project after creating it — change its name, change its AI
 
 - **Project**: The top-level container a user works in. Key attributes: a user-facing name (label), a stable internal identifier, an origin (blank or from a GitHub repository), the user-chosen working-directory path (selected at creation time; serves as the run sandbox boundary), AI provider settings (the project's default provider and a default model per provider; provider credentials are not stored here — they are global), the accountable human owner, and creation/update metadata.
 - **Project origin**: Discriminates how a project was created — "blank" or "from GitHub repository". For the GitHub case it holds the source repository reference.
-- **AI provider settings**: A project's default provider (one of the two permitted) together with a default model for each provider.
-- **Permitted provider**: The closed set of exactly two model sources — GitHub Copilot CLI and Microsoft Foundry. No other provider is valid anywhere a provider is selected.
+- **AI provider settings**: A project's default provider (one of the two permitted) together with a default model for each provider. For the GitHub Copilot provider, authorization comes from the GitHub sign-in (FR-005); no provider-specific API key is entered or stored. Microsoft Foundry uses its own provider credentials, which the GitHub sign-in does not provide.
+- **Permitted provider**: The closed set of exactly two model sources — GitHub Copilot CLI and Microsoft Foundry. No other provider is valid anywhere a provider is selected. GitHub Copilot is authorized via the GitHub sign-in (no stored key); Microsoft Foundry uses its own credentials and is never authorized by the GitHub sign-in.
 - **Project gallery (landing view)**: The collection of projects presented as cards, with entry points to create a new project blank or from a repository, including an empty state.
 
 ## Success Criteria *(mandatory)*
@@ -214,6 +214,7 @@ A user can update a project after creating it — change its name, change its AI
 - **SC-007**: Every project capability (create blank, create from repository, list, configure, rename, delete) is performable from both the CLI and the Web UI through the API, verified by exercising each capability from each client with identical results.
 - **SC-008**: Operations by a project's runs that attempt to act outside the project's working directory are rejected (not merely warned) in 100% of attempts.
 - **SC-009**: Created projects and their configured defaults persist across application restarts, so 100% of created projects remain listed and retain their settings after a restart.
+- **SC-010**: With a valid GitHub sign-in present (FR-005), a user can use the GitHub Copilot provider with zero prompts for a Copilot-specific API key in 100% of attempts; and that same GitHub sign-in alone never authorizes Microsoft Foundry — a Foundry run still requires Foundry's own credentials in 100% of attempts.
 
 ## Assumptions
 
