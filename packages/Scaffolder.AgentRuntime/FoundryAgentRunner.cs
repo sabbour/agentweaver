@@ -107,11 +107,24 @@ public sealed class FoundryAgentRunner : IAgentRunner
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
         var agentId = $"did:mesh:scaffolder:foundry:{runId}";
 
-        // --- Emit sandbox backend selection event (T019) ---
+        // Emit sandbox + debug info — visible in the run stream and UI.
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
-        // Emit the system prompt for debuggability — visible in the run stream and API logs.
-        Emit("agent.system_prompt", new { provider = "foundry", prompt = SystemPrompt });
+        // Build the tool list now (before toolContext is constructed) for the debug event.
+        var shellIncluded = (executor.IsRealIsolation || executor.BackendName == "direct") && sandboxPolicy.ShellEnabled;
+        Emit("agent.system_prompt", new
+        {
+            provider = "foundry",
+            prompt = SystemPrompt,
+            tools = SandboxToolRegistry.GetToolNames(shellIncluded),
+            sandbox = new
+            {
+                executor = executor.BackendName,
+                shell_enabled = sandboxPolicy.ShellEnabled,
+                direct = sandboxPolicy.Direct,
+                network_enabled = sandboxPolicy.NetworkEnabled,
+            },
+        });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });

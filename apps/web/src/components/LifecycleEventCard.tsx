@@ -236,9 +236,21 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: Li
           <Text className={styles.summary}>{preview}</Text>
         </div>
         {expanded && prompt && (
-          <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
-            {prompt}
-          </Text>
+          <>
+            <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
+              {prompt}
+            </Text>
+            {p['tools'] && (
+              <Text as="pre" style={{ margin: `${tokens.spacingVerticalXS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3 }}>
+                tools: {JSON.stringify(p['tools'])}
+              </Text>
+            )}
+            {p['sandbox'] && (
+              <Text as="pre" style={{ margin: `${tokens.spacingVerticalXS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3 }}>
+                sandbox: {JSON.stringify(p['sandbox'])}
+              </Text>
+            )}
+          </>
         )}
       </div>
     );

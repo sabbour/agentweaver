@@ -228,13 +228,15 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
         // Emit configuration snapshot for debuggability.
-        // Copilot uses native CLI tools; no custom tools or AvailableTools/ExcludedTools are set.
+        // Emit the actual system prompt and tool list so they're visible in the run timeline.
         Emit("agent.system_prompt", new
         {
             provider = "copilot",
-            note = "Native Copilot CLI tools active — no custom tool overrides. System prompt is Copilot CLI built-in.",
-            sandbox_policy = new
+            prompt = CopilotSystemPrompt,
+            tools = new[] { "native bash/shell", "native read/write/view", "native glob/grep" },
+            sandbox = new
             {
+                executor = executor.BackendName,
                 shell_enabled = sandboxPolicy.ShellEnabled,
                 direct = sandboxPolicy.Direct,
                 network_enabled = sandboxPolicy.NetworkEnabled,
@@ -288,7 +290,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             // Let Copilot CLI use its own native tools; governance runs via OnPermissionRequest.
         };
 
-        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
+        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: CopilotSystemPrompt);
         var session = await agent.CreateSessionAsync(ct);
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
