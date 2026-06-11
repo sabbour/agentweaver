@@ -56,14 +56,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct)
     {
         _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, runId={RunId}, streamIsNull={StreamIsNull}",
             workingDirectory, task.Length, runId, stream is null);
         _logger.LogDebug("Task content preview: {TaskPreview}", task.Length > 100 ? task[..100] : task);
 
         // --- Governance kernel (per-run) ---
-        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(workingDirectory, ct);
+        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(repositoryPath, ct);
         var executor = sandboxPolicy.Direct
             ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
             : _executor;

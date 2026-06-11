@@ -421,7 +421,7 @@ public sealed class NetworkOpenWarningTests : IDisposable
             Microsoft.Extensions.Logging.Abstractions.NullLogger<FoundryAgentRunner>.Instance);
 
         var ch = System.Threading.Channels.Channel.CreateUnbounded<RunEvent>();
-        await runner.ExecuteAsync("task", _workDir, ModelSource.MicrosoftFoundry, "r-net", ch.Writer, CancellationToken.None);
+        await runner.ExecuteAsync("task", _workDir, "", ModelSource.MicrosoftFoundry, "r-net", ch.Writer, CancellationToken.None);
         ch.Writer.TryComplete();
 
         var events = new List<RunEvent>();

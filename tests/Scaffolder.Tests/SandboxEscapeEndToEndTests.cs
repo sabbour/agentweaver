@@ -126,7 +126,7 @@ public sealed class SandboxEscapeEndToEndTests
         try
         {
             response = await runner.ExecuteAsync(
-                task, sandbox, provider, runId: Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
+                task, sandbox, "", provider, Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
         }
         finally
         {

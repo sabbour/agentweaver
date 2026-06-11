@@ -41,6 +41,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             await _agentRunner.ExecuteAsync(
                 input.Task,
                 input.WorktreePath,
+                input.RepositoryPath,
                 ModelSourceExtensions.FromApiString(input.ModelSource),
                 input.RunId,
                 writer,

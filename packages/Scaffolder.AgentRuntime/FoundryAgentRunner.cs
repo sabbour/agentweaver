@@ -81,6 +81,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
     public async Task<string> ExecuteAsync(
         string task,
         string workingDirectory,
+        string repositoryPath,
         ModelSource modelSource,
         string runId,
         ChannelWriter<RunEvent>? stream,
@@ -94,7 +95,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
         }
 
         // --- Per-run governance kernel (shared mechanism — FR-032) ---
-        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(workingDirectory, ct);
+        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(repositoryPath, ct);
         // direct: true in settings.yml → bypass all sandbox machinery, run commands on host shell.
         var executor = sandboxPolicy.Direct
             ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)

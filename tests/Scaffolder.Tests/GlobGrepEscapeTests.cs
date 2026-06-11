@@ -90,7 +90,7 @@ public sealed class GlobGrepEscapeTests
         try
         {
             response = await runner.ExecuteAsync(
-                task, sandbox, ModelSource.GitHubCopilot, runId: Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
+                task, sandbox, "", ModelSource.GitHubCopilot, Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
         }
         finally
         {
@@ -264,7 +264,7 @@ public sealed class GlobGrepEscapeTests
         try
         {
             response = await runner.ExecuteAsync(
-                task, sandbox, ModelSource.GitHubCopilot, runId: Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
+                task, sandbox, "", ModelSource.GitHubCopilot, Guid.NewGuid().ToString("N"), channel.Writer, cts.Token);
         }
         finally
         {
