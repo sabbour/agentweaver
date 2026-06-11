@@ -67,6 +67,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
         string repositoryPath,
         ModelSource modelSource,
         string runId,
+        string? modelId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct)
     {
@@ -108,7 +109,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
             });
         }
 
-        var chatClient = _chatClient ?? _factory!.CreateChatClient();
+        var chatClient = _chatClient ?? _factory!.CreateChatClient(modelId);
         var fileTools = new SandboxedFileTools(workingDirectory);
         var searchTools = new SandboxedSearchTools(workingDirectory);
         var redactor = SandboxOutputRedactor.Default;

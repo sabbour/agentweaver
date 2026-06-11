@@ -35,17 +35,19 @@ public sealed class CopilotReportIntentTests : IDisposable
     }
 
     // =========================================================================
-    // Test 1 (B2): Session config tool list contains EXACTLY report_intent.
+    // Test 1 (B2): Session config tool list contains report_intent and report_outcome.
     // =========================================================================
     [Fact]
-    public void BuildSessionConfigTools_ContainsExactlyReportIntent()
+    public void BuildSessionConfigTools_ContainsReportIntentAndReportOutcome()
     {
         var context = BuildMinimalContext();
         var tools = GitHubCopilotAgentRunner.BuildSessionConfigTools(context);
 
-        tools.Should().ContainSingle("only report_intent must be registered in SessionConfig.Tools");
-        tools[0].Name.Should().Be("report_intent",
-            "the single registered tool must be report_intent so the agent can call it");
+        tools.Should().HaveCount(2, "both report_intent and report_outcome must be registered in SessionConfig.Tools");
+        tools.Should().Contain(t => t.Name == "report_intent",
+            "report_intent must be registered so the agent can signal its intent");
+        tools.Should().Contain(t => t.Name == "report_outcome",
+            "report_outcome must be registered so the agent can self-assess completion");
     }
 
     // =========================================================================
@@ -223,9 +225,10 @@ public sealed class CopilotReportIntentTests : IDisposable
     private GitHubCopilotAgentRunner BuildRunner()
     {
         var config = new ConfigurationBuilder().Build();
-        var factory = new GitHubCopilotClientFactory(config);
+        var factory = new GitHubCopilotClientFactory(config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
         return new GitHubCopilotAgentRunner(
             factory,
+            new FixedInstallationScopeStub(),
             SandboxExecutorFactory.CreatePassthrough(),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),

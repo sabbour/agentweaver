@@ -69,7 +69,9 @@ public sealed class RunOrchestrator
             worktreeInfo.BranchName,
             run.RepositoryPath,
             run.OriginatingBranch,
-            run.ModelSource.ToApiString());
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
@@ -116,7 +118,9 @@ public sealed class RunOrchestrator
             run.WorktreeBranch,
             run.RepositoryPath,
             run.OriginatingBranch,
-            run.ModelSource.ToApiString());
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);

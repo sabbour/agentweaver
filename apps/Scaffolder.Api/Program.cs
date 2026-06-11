@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using Scaffolder.AgentRuntime;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentRuntime.Workflow;
+using Scaffolder.Api.Auth;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Git;
 using Scaffolder.Api.Infrastructure;
@@ -47,6 +48,12 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
+
+// GitHub auth (token store + scope provider + device flow service)
+builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
+builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
+builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
+builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
 
 // Agent runtime
 builder.Services.AddAgentRuntime();

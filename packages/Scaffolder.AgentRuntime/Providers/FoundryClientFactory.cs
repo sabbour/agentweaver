@@ -19,14 +19,17 @@ public sealed class FoundryClientFactory
         _deployment = section.GetValue<string>("Deployment") ?? section.GetValue<string>("ModelId");
     }
 
-    public IChatClient CreateChatClient()
+    public IChatClient CreateChatClient() => CreateChatClient(null);
+
+    public IChatClient CreateChatClient(string? deploymentOverride)
     {
         if (_endpoint is null)
             throw new InvalidOperationException("Providers:MicrosoftFoundry:Endpoint is required.");
         if (_apiKey is null)
             throw new InvalidOperationException("Providers:MicrosoftFoundry:ApiKey is required.");
-        if (_deployment is null)
-            throw new InvalidOperationException("Providers:MicrosoftFoundry:Deployment is required.");
+
+        var deployment = deploymentOverride ?? _deployment
+            ?? throw new InvalidOperationException("Providers:MicrosoftFoundry:Deployment is required.");
 
         // Strip project path — AzureOpenAIClient needs the resource root only.
         // e.g. https://foo.services.ai.azure.com/api/projects/bar → https://foo.services.ai.azure.com
@@ -34,7 +37,7 @@ public sealed class FoundryClientFactory
         var resourceEndpoint = new Uri($"{uri.Scheme}://{uri.Host}");
 
         return new AzureOpenAIClient(resourceEndpoint, new AzureKeyCredential(_apiKey))
-            .GetChatClient(_deployment)
+            .GetChatClient(deployment)
             .AsIChatClient();
     }
 }

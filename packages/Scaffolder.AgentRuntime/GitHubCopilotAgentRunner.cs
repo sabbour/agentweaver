@@ -58,6 +58,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         new(StringComparer.OrdinalIgnoreCase) { "report_intent", "report_outcome", "glob" };
 
     private readonly GitHubCopilotClientFactory _factory;
+    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -66,6 +67,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
     public GitHubCopilotAgentRunner(
         GitHubCopilotClientFactory factory,
+        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -73,6 +75,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         ILogger<GitHubCopilotAgentRunner> logger)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
@@ -80,7 +83,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct)
     {
         _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, runId={RunId}, streamIsNull={StreamIsNull}",
             workingDirectory, task.Length, runId, stream is null);
@@ -93,7 +96,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             : _executor;
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        await using var client = _factory.CreateClient();
+        var scope = _scopeProvider.Resolve(userId: null);
+        await using var client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
         await client.StartAsync(ct);
 
         _logger.LogInformation("Copilot client started");
@@ -290,6 +294,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 Mode = SystemMessageMode.Append,
                 Content = CopilotSystemPrompt,
             },
+            // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
+            Model = modelId,
         };
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
