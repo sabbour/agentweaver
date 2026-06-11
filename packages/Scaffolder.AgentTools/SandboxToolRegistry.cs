@@ -26,7 +26,10 @@ public static class SandboxToolRegistry
             new Tools.ReportIntentTool(),
         };
 
-        if (context.Executor.IsRealIsolation && context.Options.ShellEnabled)
+        // Include run_command when: real isolation is available, OR direct mode is active
+        // (direct = host shell, no sandbox wrapper). Never include without ShellEnabled.
+        if ((context.Executor.IsRealIsolation || context.Executor.BackendName == "direct")
+            && context.Options.ShellEnabled)
             tools.Insert(0, new Tools.RunCommandTool());
 
         return tools.Select(t => t.CreateFunction(context)).ToList();

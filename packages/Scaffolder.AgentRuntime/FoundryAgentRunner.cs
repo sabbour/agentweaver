@@ -16,28 +16,28 @@ public sealed class FoundryAgentRunner : IAgentRunner
         """
         You are a file-editing assistant. Complete the given task using the available tools.
 
-        Prefer file tools over shell for all file operations — they are faster, safer, and
-        always available regardless of sandbox configuration:
-        - read_file(path): read a file (path = relative path from working directory)
-        - str_replace_editor(path, old_str, new_str): replace a unique string in a file (preferred for edits)
-        - apply_patch(patch): apply a patch in Copilot CLI patch grammar
-        - create_file(path, file_text): create a new file (fails if it already exists)
+        IMPORTANT: Use ONLY the tool names listed below. Do NOT use 'edit', 'create', 'bash',
+        'view', 'glob', or any other tool name — those do not exist here.
+
+        File tools (always available — prefer over shell):
+        - read_file(path): read a file
         - write_file(path, content): overwrite or create a file with complete content
-        - grep_search(pattern, path?): search for a regex pattern across files
+        - create_file(path, file_text): create a new file (fails if already exists)
+        - str_replace_editor(path, old_str, new_str): replace a unique string in a file
+        - apply_patch(patch): apply a patch in Copilot CLI patch grammar
+        - grep_search(pattern): search for a pattern across files
         - file_search(pattern): find files matching a glob pattern
 
-        All file tool 'path' arguments must be RELATIVE paths from the working directory. Never use absolute paths.
+        All 'path' arguments must be RELATIVE paths from the working directory. Never use absolute paths.
 
-        Only use run_command for operations that genuinely require a shell (building,
-        running tests, etc.). Do not use run_command to read, list, copy, or delete files —
-        use the file tools instead.
+        Shell (only when genuinely needed — building, running tests):
+        - run_command(command, directory?): run a shell command
 
-        - report_intent: call this before each major step to describe what you are about to do,
-          AND immediately after each run_command to give a one-sentence plain-English interpretation
-          of the output (what happened, whether it succeeded or failed, and why — max 15 words).
+        Observability:
+        - report_intent(intent): call this before each major step to describe what you are about to do
 
-        Work step by step. When you are done, produce a final message summarising what you
-        changed and why. Do not ask clarifying questions — proceed with your best judgement.
+        Work step by step. When done, produce a final message summarising what you changed and why.
+        Do not ask clarifying questions — proceed with your best judgement.
         """;
 
     private const int MaxTurns = 30;
@@ -238,10 +238,21 @@ public sealed class FoundryAgentRunner : IAgentRunner
             {
                 Emit("tool.call", new { callId = call.CallId, toolName = call.Name, arguments = call.Arguments });
 
-                var tool = tools.OfType<AIFunction>().FirstOrDefault(t => t.Name == call.Name);
+                // Backward-compat aliases: GPT models have strong training on Copilot CLI's
+                // built-in tool names and may hallucinate them even when the schema says otherwise.
+                var resolvedName = call.Name switch
+                {
+                    "edit"        => "write_file",
+                    "create"      => "create_file",
+                    "view"        => "read_file",
+                    "write"       => "write_file",
+                    _ => call.Name,
+                };
+
+                var tool = tools.OfType<AIFunction>().FirstOrDefault(t => t.Name == resolvedName);
                 if (tool is null)
                 {
-                    var err = $"Unknown tool: {call.Name}";
+                    var err = $"Unknown tool: {call.Name}. Available tools: {string.Join(", ", tools.OfType<AIFunction>().Select(t => t.Name))}";
                     Emit("tool.error", new { callId = call.CallId, errorMessage = err });
                     toolResults.Add(new FunctionResultContent(call.CallId, err));
                     continue;
@@ -257,10 +268,10 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
                 // Inject working directory unconditionally so governance always sees our value,
                 // not a model-supplied one (prevents policy/execution mismatch).
-                if (call.Name == "run_command")
+                if (resolvedName == "run_command")
                     toolArgs["directory"] = workingDirectory;
 
-                if (call.Name is "write_file" or "create_file" or "str_replace_editor" or "read_file")
+                if (resolvedName is "write_file" or "create_file" or "str_replace_editor" or "read_file")
                 {
                     foreach (var alias in new[] { "file_path", "filename", "target", "file" })
                     {
@@ -273,12 +284,13 @@ public sealed class FoundryAgentRunner : IAgentRunner
                     }
                 }
 
-                var (allowed, reason) = governance.EvaluateToolCall(agentId, call.Name, toolArgs, _logger);
+                var (allowed, reason) = governance.EvaluateToolCall(agentId, resolvedName, toolArgs, _logger);
 
                 if (!allowed)
                 {
                     _logger.LogWarning(
-                        "Governance DENIED for tool {ToolName}. ReceivedArgKeys=[{Keys}] Reason={Reason}",
+                        "Governance DENIED for tool {ToolName} (called as {CalledName}). ReceivedArgKeys=[{Keys}] Reason={Reason}",
+                        resolvedName,
                         call.Name,
                         string.Join(", ", toolArgs.Keys),
                         reason);
