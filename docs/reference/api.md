@@ -30,6 +30,8 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 
 ## Endpoints
 
+### Runs
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/runs` | Submit a task and start a run |
@@ -45,6 +47,29 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/runs/{id}/files/{path}` | Get diff or content for a specific file |
 | `POST` | `/api/runs/{id}/tool-approvals` | Approve a pending tool call |
 | `POST` | `/api/runs/{id}/tool-denials` | Deny a pending tool call |
+
+### Projects
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/projects` | Create a project (blank or from GitHub) |
+| `GET` | `/api/projects` | List all projects |
+| `GET` | `/api/projects/{id}` | Get a project by id |
+| `PATCH` | `/api/projects/{id}` | Rename a project |
+| `PUT` | `/api/projects/{id}/provider-settings` | Update provider and model defaults |
+| `POST` | `/api/projects/{id}/relink` | Relink a project to a moved directory |
+| `DELETE` | `/api/projects/{id}` | Delete a project (record only; cancels active runs) |
+| `GET` | `/api/projects/{id}/runs` | List runs for a project |
+| `POST` | `/api/projects/{id}/runs` | Start a run within a project |
+
+### GitHub authentication
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/auth/github/device` | Start the GitHub device authorization flow |
+| `POST` | `/api/auth/github/poll` | Poll the device flow for completion |
+| `GET` | `/api/auth/github` | Get current GitHub authentication status |
+| `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
 
 ### POST /api/runs
 
@@ -439,13 +464,245 @@ Reports the terminal outcome of a `run_command` invocation. **Planned — not ye
 | `timed_out` | bool | `true` when the command was terminated because it exceeded the configured time limit |
 | `output_truncated` | bool | `true` when captured output exceeded `max_output_bytes` and was cut off |
 
+## Project endpoints
+
+### POST /api/projects
+
+Creates a new project. Set `origin` to `"blank"` to register a local directory as a project, or `"github"` to clone a GitHub repository into the working directory first.
+
+Request:
+
+```json
+{
+  "name": "my-project",
+  "origin": "blank",
+  "working_directory": "C:/repos/my-project",
+  "default_provider": "github-copilot",
+  "default_model_github_copilot": null,
+  "default_model_microsoft_foundry": null
+}
+```
+
+For a GitHub-origin project, add `"source_repository": "owner/repo"` and the server will clone the repository into `working_directory`.
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Display name |
+| `origin` | string | Yes | `"blank"` or `"github"` |
+| `working_directory` | string | Yes | Absolute local path for the project |
+| `source_repository` | string | When `origin` is `"github"` | GitHub repository in `owner/repo` format |
+| `default_provider` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the runtime default when omitted. |
+| `default_model_github_copilot` | string | No | Model name override for the GitHub Copilot provider |
+| `default_model_microsoft_foundry` | string | No | Model name override for the Microsoft Foundry provider |
+
+Response `201 Created` returns a project object:
+
+```json
+{
+  "project_id": "a1b2c3d4-...",
+  "name": "my-project",
+  "origin": "blank",
+  "source_repository": null,
+  "working_directory": "C:/repos/my-project",
+  "default_branch": "main",
+  "owner": "local-developer",
+  "default_provider": "github-copilot",
+  "default_model_github_copilot": null,
+  "default_model_microsoft_foundry": null,
+  "available": true,
+  "state": "active",
+  "created_at": "2026-06-07T21:00:00+00:00",
+  "updated_at": "2026-06-07T21:00:00+00:00"
+}
+```
+
+`available` is `true` when the working directory exists on the server filesystem. `state` is `"active"` or `"deleting"`.
+
+Validation failures return `400 Bad Request`.
+
+### GET /api/projects
+
+Returns all projects owned by the authenticated user. Each entry uses the same shape as the `POST /api/projects` response.
+
+### GET /api/projects/{id}
+
+Returns a single project. Returns `404 Not Found` when no project exists for the given id.
+
+### PATCH /api/projects/{id}
+
+Renames a project.
+
+Request:
+
+```json
+{ "name": "new-name" }
+```
+
+Response `204 No Content` on success. `400` when `name` is missing. `404` when the project does not exist.
+
+### PUT /api/projects/{id}/provider-settings
+
+Updates the provider and model defaults for a project.
+
+Request:
+
+```json
+{
+  "default_provider": "microsoft-foundry",
+  "default_model_github_copilot": null,
+  "default_model_microsoft_foundry": "gpt-4o"
+}
+```
+
+All fields are optional. Omitting a field leaves it unchanged. Response `204 No Content` on success.
+
+### POST /api/projects/{id}/relink
+
+Updates the working directory path for a project. Use this after moving a repository to a new location.
+
+Request:
+
+```json
+{ "working_directory": "D:/new-location/my-project" }
+```
+
+Response `204 No Content` on success. `400` when the new path is missing or not a valid git repository.
+
+### DELETE /api/projects/{id}
+
+Deletes the project record. Does not touch the working directory or git history. Active runs for the project are cancelled; each cancelled run emits a `run.cancelled` event on its stream.
+
+Requires the query parameter `confirm=true`:
+
+```
+DELETE /api/projects/a1b2c3d4-...?confirm=true
+```
+
+Without `confirm=true` the request returns `400 Bad Request`. Response `204 No Content` on success.
+
+### GET /api/projects/{id}/runs
+
+Lists all runs for a project. Returns a JSON array:
+
+```json
+[
+  {
+    "run_id": "f36800fd-...",
+    "status": "merged",
+    "model_source": "github-copilot",
+    "model_id": null,
+    "task": "add license headers",
+    "started_at": "2026-06-07T21:09:45+00:00",
+    "ended_at": "2026-06-07T21:10:12+00:00"
+  }
+]
+```
+
+### POST /api/projects/{id}/runs
+
+Starts a run within a project. The project's working directory and default branch are used unless overridden in the request body.
+
+Request:
+
+```json
+{
+  "task": "add a license header to every source file",
+  "model_source": "github-copilot",
+  "model_id": null,
+  "base_branch": "main"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `task` | string | Yes | Task description for the agent |
+| `model_source` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the project default, then the runtime default. |
+| `model_id` | string | No | Model override. Falls back to the project default for the resolved provider, then `null`. |
+| `base_branch` | string | No | Branch to run from. Falls back to the project's `default_branch`. |
+
+Provider and model resolution order:
+1. Value in the request body
+2. Project default (`PUT /api/projects/{id}/provider-settings`)
+3. Runtime default (`appsettings.json`)
+
+Response `202 Accepted`:
+
+```json
+{ "run_id": "f36800fd-...", "status": "in_progress" }
+```
+
+`409 Conflict` with `error: "project_deleting"` when the project is being deleted.
+`409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible. Use `POST /api/projects/{id}/relink` to reconnect the project to its new location.
+
+## GitHub authentication endpoints
+
+GitHub authentication allows the GitHub Copilot provider to use a token obtained through the OAuth device flow rather than a static API key.
+
+### POST /api/auth/github/device
+
+Starts the GitHub device authorization flow for the calling user.
+
+Response `200 OK`:
+
+```json
+{
+  "user_code": "XXXX-XXXX",
+  "verification_uri": "https://github.com/login/device",
+  "expires_in": 900,
+  "interval": 5
+}
+```
+
+Direct the user to `verification_uri` and ask them to enter `user_code`. Then poll `POST /api/auth/github/poll` at the returned `interval` (seconds) until the flow completes or expires.
+
+### POST /api/auth/github/poll
+
+Polls the active device flow for the calling user.
+
+Response `200 OK`:
+
+```json
+{ "status": "pending", "login": null }
+```
+
+| `status` value | Meaning |
+| --- | --- |
+| `pending` | User has not yet authorized — keep polling |
+| `success` | Authorization granted; `login` contains the GitHub username |
+| `expired` | The device code expired before the user authorized |
+| `denied` | The user actively denied the request |
+
+On `success` the token is stored server-side and used automatically for subsequent Copilot provider calls.
+
+### GET /api/auth/github
+
+Returns the current GitHub authentication state for the calling user.
+
+Response `200 OK`:
+
+```json
+{ "status": "signed_in", "login": "octocat" }
+```
+
+| `status` value | Meaning |
+| --- | --- |
+| `signed_in` | A valid token is stored; `login` contains the GitHub username |
+| `signed_out` | The user explicitly signed out |
+| `never_signed_in` | No sign-in has been completed for this user |
+
+### POST /api/auth/github/sign-out
+
+Deletes the stored GitHub token for the calling user. Response `204 No Content`.
+
 ## Persistence
 
-One SQLite table backs the API, created on startup with WAL enabled:
+SQLite tables are created on startup with WAL enabled:
 
 | Table | Purpose |
 | --- | --- |
-| `runs` | Run records with status, timing, submitting user, task, model source, and the final result text |
+| `runs` | Run records with status, timing, submitting user, task, model source, model id, project id, and the final result text |
+| `projects` | Project records with name, origin, working directory, default branch, owner, provider settings, and state |
+| `github_tokens` | Per-user GitHub tokens stored by the OS credential store (not a SQLite table — managed by `OsCredentialStoreGitHubTokenStore`) |
 
 The run's event stream is held in memory by `RunStreamStore` and is not persisted to SQLite. After a process restart, the granular event history is unavailable — only the final `result` text survives. Completed runs are persisted via the Copilot SDK session store (session ID = `scaffolder-run-{runId}`). The `GET /api/runs/{id}/history` endpoint replays persisted session events for terminal runs.
 

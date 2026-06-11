@@ -32,6 +32,7 @@ Clients should order and deduplicate events by `sequence`.
 | `run.outcome` | Agent self-assessment of task completion, emitted just before `run.completed` | `achieved` (bool), `reason` |
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
+| `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
 | `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |
 | `review.declined` | When the owner declines the run | *(none)* |
@@ -84,6 +85,10 @@ This event marks a terminal failure. The `reason` field identifies the cause. Wh
 ### `run.bounded`
 
 This event marks a run that exceeded enforced limits. `limit_type` is `step-count` or `wall-clock`.
+
+### `run.cancelled`
+
+This event marks a run that was cancelled because its project was deleted. The run transitions to a terminal state immediately and no further events are emitted. It carries no payload fields. The originating branch and any worktree state are cleaned up as part of the project deletion.
 
 ### `review.requested`
 
