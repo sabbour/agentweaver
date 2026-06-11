@@ -82,6 +82,13 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
                     var runAllowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
                     lock (runAllowlist) runAllowlist.Add(policyKey);
                 }
+                else if (scope == ApprovalScope.Tool)
+                {
+                    // Tool-scoped: approve this tool for any URL this run.
+                    var toolKey = PolicyKey(ctx.ToolName, null);
+                    var runAllowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
+                    lock (runAllowlist) runAllowlist.Add(toolKey);
+                }
                 else if (scope == ApprovalScope.Always)
                 {
                     lock (_alwaysLock) _alwaysAllowedPolicies.Add(policyKey);
@@ -99,11 +106,13 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     public bool IsAutoApproved(string runId, string toolName, string? url)
     {
         var key = PolicyKey(toolName, url);
+        var toolKey = PolicyKey(toolName, null); // tool-scoped wildcard (any URL)
 
         // Check always-allowed first (cheaper lookup with a small set).
         lock (_alwaysLock)
         {
             if (_alwaysAllowedPolicies.Contains(key)) return true;
+            if (_alwaysAllowedPolicies.Contains(toolKey)) return true;
         }
 
         // Check run-scoped allowlist.
@@ -112,6 +121,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
             lock (runAllowlist)
             {
                 if (runAllowlist.Contains(key)) return true;
+                if (runAllowlist.Contains(toolKey)) return true;
             }
         }
 

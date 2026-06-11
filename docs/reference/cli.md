@@ -54,6 +54,7 @@ Example output:
 [tool.result]        OK: namespace Demo { public static class Program { ... } }
 [tool.error]         ERROR: Path '../outside.txt' rejected: resolves outside the sandbox boundary
 [review.requested]   Awaiting review (tree: abc123def)
+[run.outcome]        Achieved: true — completed all requested changes
 [run.completed]      Run complete after 7 steps
 ```
 
@@ -74,6 +75,16 @@ If the merge reaches a terminal conflict the CLI prints `Merge failed.`, the rea
 ### `scaffolder run show <run-id>`
 
 Fetches the run and prints a table with the run id, status, model source, start and end times, step count, and whether a diff is available.
+
+### `scaffolder run artifacts <run-id>`
+
+Opens an interactive artifact browser for a run. Lists all changed files in the worktree (filtered by a selection prompt: All / Committed / Uncommitted / Last commit), then lets you select a file and view its diff in a color-coded panel. Added lines render in green and removed lines render in red. Hunk headers and metadata lines are dimmed. After viewing a file, you are prompted to view another or exit.
+
+```text
+scaffolder run artifacts <run-id>
+```
+
+The command exits immediately if no changes are found in the run. For in-progress runs, the file list reflects the current worktree state with a notice that the run is still active.
 
 ### `scaffolder sandbox-policy`
 

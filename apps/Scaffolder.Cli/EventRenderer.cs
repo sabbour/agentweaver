@@ -61,6 +61,15 @@ public static class EventRenderer
                 return $"Merge completed: {Markup.Escape(Str(p, "merged_commit_hash"))}";
             case "merge.failed":
                 return $"Merge failed: {Markup.Escape(Str(p, "reason"))}";
+            case "run.outcome":
+            {
+                var achieved = Str(p, "achieved");
+                var reason = Str(p, "reason");
+                var achievedBool = achieved == "True" || achieved == "true";
+                return achievedBool
+                    ? $"Achieved: {Markup.Escape(reason)}"
+                    : $"Not achieved: {Markup.Escape(reason)}";
+            }
             case "sandbox.selected":
             {
                 var backend = Str(p, "backend");
@@ -127,6 +136,7 @@ public static class EventRenderer
         "revision.started" => "blue",
         "merge.completed" => "green",
         "merge.failed" => "red",
+        "run.outcome" => "cyan",
         "sandbox.selected" => "cyan",
         "sandbox.warning" => "yellow",
         "shell.approval_required" => "yellow",

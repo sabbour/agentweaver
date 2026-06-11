@@ -357,7 +357,6 @@ function scopeLabel(scope: string): string {
     default: return `Allowed (${scope})`;
   }
 }
-
 function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intention, runId, isResolved, resolvedScope: resolvedScopeProp }: ToolApprovalCardProps) {
   const [resolvedScope, setResolvedScope] = useState<string | null>(
     isResolved ? (resolvedScopeProp ?? 'once') : null,
@@ -365,7 +364,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const handleAllow = async (scope: 'once' | 'run' | 'always') => {
+  const handleAllow = async (scope: 'once' | 'run' | 'always' | 'tool') => {
     if (!runId || resolvedScope !== null || busy) return;
     setBusy(true);
     const baseUrl = API_URL.replace(/\/+$/, '');
@@ -493,6 +492,19 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
           >
             Allow this run
           </Button>
+          <Tooltip
+            content="Allows all calls to this tool (any URL) for the rest of this run."
+            relationship="description"
+          >
+            <Button
+              appearance="outline"
+              size="small"
+              disabled={busy || !runId}
+              onClick={() => void handleAllow('tool')}
+            >
+              Allow tool
+            </Button>
+          </Tooltip>
           <Tooltip
             content="Allows this tool+URL for all future requests this session. Resets when the server restarts."
             relationship="description"

@@ -11,6 +11,9 @@ public enum ApprovalScope
 
     /// <summary>Persist a permanent allow policy for this tool+URL combo across all runs.</summary>
     Always,
+
+    /// <summary>Approve all future requests from this tool (any URL) for this run.</summary>
+    Tool,
 }
 
 /// <summary>

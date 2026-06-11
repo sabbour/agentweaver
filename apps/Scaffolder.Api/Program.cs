@@ -1068,6 +1068,7 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     var approvalScope = body.Scope switch {
         "run" => ApprovalScope.Run,
         "always" => ApprovalScope.Always,
+        "tool" => ApprovalScope.Tool,
         _ => ApprovalScope.Once,
     };
 
