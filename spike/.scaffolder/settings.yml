@@ -3,7 +3,7 @@
 # Add new groups under their own key — existing groups are not affected.
 
 sandbox:
-  shell_enabled: true
+  shell_enabled: false
   allowed_repository_roots: []
   destructive_command_patterns:
     - rm -rf
