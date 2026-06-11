@@ -446,6 +446,12 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             {
                 var (toolName, args) = MapToToolCall(request);
 
+                // Shell tools need "directory" for SandboxPolicyBackend to validate cwd.
+                // PermissionRequestShell maps to run_command via MapToToolCall but flows through
+                // this general path (not the custom-tool branch), so inject directory here too.
+                if (toolName == "run_command" && !args.ContainsKey("directory"))
+                    args["directory"] = workingDirectory;
+
                 // Surface the call from this source ONLY when we hold the real ToolCallId, so it
                 // dedups against the streaming lifecycle. With a synthetic id we stay silent on
                 // the approved path (the lifecycle, which has the real id, emits the call and its
