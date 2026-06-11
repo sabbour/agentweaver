@@ -128,6 +128,7 @@ export function useArtifactBrowser(
   // Loading/error state is reset in event handlers to avoid synchronous setState in effect body.
   useEffect(() => {
     let active = true;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
 
     const doFetch = () => {
       apiClient
@@ -141,8 +142,16 @@ export function useArtifactBrowser(
         })
         .catch((err: unknown) => {
           if (active) {
-            setFilesError(extractErrorMessage(err));
-            setFilesLoading(false);
+            if (err instanceof ApiError && err.status === 409) {
+              setWorkspaceError('Workspace files unavailable for this run.');
+              setFilesLoading(false);
+              // 409 is permanent — stop polling
+              clearInterval(intervalId);
+              active = false;
+            } else {
+              setFilesError(extractErrorMessage(err));
+              setFilesLoading(false);
+            }
           }
         });
     };
@@ -155,7 +164,7 @@ export function useArtifactBrowser(
       };
     }
 
-    const intervalId = setInterval(doFetch, POLL_INTERVAL_MS);
+    intervalId = setInterval(doFetch, POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearInterval(intervalId);

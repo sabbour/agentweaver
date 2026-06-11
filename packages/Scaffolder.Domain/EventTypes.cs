@@ -30,6 +30,11 @@ public static class EventTypes
     public const string AgentMessage      = "agent.message";
     public const string AgentMessageDelta = "agent.message.delta";
     public const string AgentIntent       = "agent.intent";
+    /// <summary>
+    /// Emitted when the agent calls report_outcome at the end of a run.
+    /// Payload: { achieved: bool, reason: string }
+    /// </summary>
+    public const string RunOutcome        = "run.outcome";
     public const string ToolCall          = "tool.call";
     public const string ToolResult        = "tool.result";
     public const string ToolError         = "tool.error";

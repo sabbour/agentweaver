@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using Scaffolder.AgentRuntime;
+using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Git;
@@ -204,6 +205,27 @@ app.MapGet("/api/runs/{id}", async (
         }
     }
 
+    // Read outcome from the in-memory stream (same pattern as sandbox status).
+    bool? outcomeAchieved = null;
+    string? outcomeReason = null;
+    if (streamEntry is not null)
+    {
+        var outcomeEvt = streamEntry.GetSnapshotSince(0).Events
+            .FirstOrDefault(e => e.Type == EventTypes.RunOutcome);
+        if (outcomeEvt is not null)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(outcomeEvt.Payload,
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<RunOutcomePayload>(json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (parsed is not null)
+            {
+                outcomeAchieved = parsed.Achieved;
+                outcomeReason = parsed.Reason;
+            }
+        }
+    }
+
     return Results.Json(new RunResponse
     {
         RunId = run.Id.ToString(),
@@ -217,6 +239,9 @@ app.MapGet("/api/runs/{id}", async (
         TreeHash = run.TreeHash,
         MergeConflicts = run.MergeConflicts,
         Sandbox = sandboxStatus,
+        WorktreeBranch = run.WorktreeBranch,
+        OutcomeAchieved = outcomeAchieved,
+        OutcomeReason = outcomeReason,
     });
 });
 
@@ -334,6 +359,84 @@ app.MapGet("/api/runs/{id}/stream", async (
         logger.LogError(ex, "Error streaming run {RunId}", runId);
         try { await httpContext.Response.WriteAsync("event: error\ndata: stream failure\n\n", CancellationToken.None); }
         catch { /* response may already be closed */ }
+    }
+});
+
+// GET /api/runs/{id}/history — replay persisted session events for terminal runs.
+// Uses Copilot SDK session resumption (SessionId="scaffolder-run-{runId}") to reconstruct
+// the event timeline without re-executing the agent.
+app.MapGet("/api/runs/{id}/history", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    GitHubCopilotClientFactory copilotClientFactory,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for history", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    // History is only available for terminal runs.
+    var terminalStatuses = new[] { RunStatus.Merged, RunStatus.Declined, RunStatus.MergeFailed, RunStatus.Failed };
+    if (!terminalStatuses.Contains(run.Status))
+        return Results.Conflict(new { error = "History is only available for terminal runs." });
+
+    // Resume the session in read-only mode (DisableResume=true suppresses the resume event)
+    // to retrieve persisted events without re-executing.
+    var sessionId = $"scaffolder-run-{runId}";
+    await using var client = copilotClientFactory.CreateClient();
+    await client.StartAsync(ct);
+
+    GitHub.Copilot.SDK.CopilotSession? session = null;
+    try
+    {
+        var resumeConfig = new GitHub.Copilot.SDK.ResumeSessionConfig
+        {
+            EnableConfigDiscovery = false,
+            DisableResume = true,
+        };
+        session = await client.ResumeSessionAsync(sessionId, resumeConfig, ct);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Failed to resume session {SessionId} for history — session may not exist", sessionId);
+        return Results.NotFound(new { error = "No persisted session found for this run." });
+    }
+
+    try
+    {
+        var events = await session.GetMessagesAsync(ct);
+        var result = events.Select(e => new
+        {
+            id        = e.Id,
+            type      = e.Type,
+            timestamp = e.Timestamp,
+            agent_id  = e.AgentId,
+            parent_id = e.ParentId,
+            ephemeral = e.Ephemeral,
+        });
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to retrieve messages for session {SessionId}", sessionId);
+        return Results.Problem("Failed to retrieve session history.", statusCode: 500);
+    }
+    finally
+    {
+        if (session is not null)
+            await session.DisposeAsync();
     }
 });
 
@@ -1689,5 +1792,16 @@ file sealed class SandboxSelectedPayload
 {
     public string? Backend { get; init; }
     public bool IsRealIsolation { get; init; }
+    public string? Reason { get; init; }
+}
+
+/// <summary>
+/// Typed helper for deserializing the run.outcome event payload emitted by the agent.
+/// The payload is stored as an anonymous object and serialized with camelCase,
+/// so <see cref="System.Text.Json.JsonSerializerOptions.PropertyNameCaseInsensitive"/> is used.
+/// </summary>
+file sealed class RunOutcomePayload
+{
+    public bool Achieved { get; init; }
     public string? Reason { get; init; }
 }

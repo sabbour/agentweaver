@@ -87,7 +87,7 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
-    expect(screen.getByText('✓ Allowed (once)')).toBeDefined();
+    expect(screen.getByText('✓ Allowed (once) · web_fetch')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
   });
 
@@ -130,7 +130,7 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Allow this run' }));
-    expect(screen.getByText('✓ Allowed (this run)')).toBeDefined();
+    expect(screen.getByText('✓ Allowed (this run) · web_fetch')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Allow this run' })).toBeNull();
   });
 
@@ -173,7 +173,7 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Always allow (session)' }));
-    expect(screen.getByText('✓ Allowed (always, this session)')).toBeDefined();
+    expect(screen.getByText('✓ Allowed (always, this session) · web_fetch')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Always allow (session)' })).toBeNull();
   });
 
@@ -216,7 +216,7 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Deny' }));
-    expect(screen.getByText('✗ Denied')).toBeDefined();
+    expect(screen.getByText('✗ Denied · web_fetch')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull();
   });
 });

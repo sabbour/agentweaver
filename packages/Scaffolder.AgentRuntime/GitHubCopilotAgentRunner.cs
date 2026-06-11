@@ -41,6 +41,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         Only write files within the current working directory. Do not write files to any path outside it.
         Work step by step. Do not produce a final summary until ALL writes are done.
         Do not ask clarifying questions — proceed with your best judgement.
+
+        When your work is complete, call report_outcome(achieved, reason) once to self-assess:
+        - achieved: true if the task was fully completed, false if any critical step failed or was blocked
+        - reason: one-sentence explanation
+        Call this as your final tool call before writing any summary.
         """;
 
     /// <summary>
@@ -50,7 +55,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// sole suppress decision source — never driven by model-controlled strings.
     /// </summary>
     private static readonly HashSet<string> SuppressedInternalTools =
-        new(StringComparer.OrdinalIgnoreCase) { "report_intent", "glob" };
+        new(StringComparer.OrdinalIgnoreCase) { "report_intent", "report_outcome", "glob" };
 
     private readonly GitHubCopilotClientFactory _factory;
     private readonly ISandboxExecutor _executor;
@@ -224,7 +229,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         // Emit configuration snapshot for debuggability.
         Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt });
-        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)" } });
+        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -269,6 +274,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
+            // Deterministic session ID enables history replay via ResumeSessionAsync.
+            // Format: "scaffolder-run-{runId}" — unique per run, stable across restarts.
+            SessionId = $"scaffolder-run-{runId}",
             // Register only report_intent so the SDK knows about it as a custom tool
             // and routes it through OnPermissionRequest. The full SandboxToolRegistry
             // is NOT registered wholesale — that would conflict with native tools and
@@ -363,6 +371,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         {
             _approvalStore.Clear(runId);
             _toolApprovalGate.Clear(runId);
+            // Dispose (not delete) the agent so the SDK persists session events for history replay.
+            // Cast to IAsyncDisposable since AIAgent base class does not declare it,
+            // but the concrete GitHubCopilotAgent implementation does.
+            if (agent is IAsyncDisposable disposableAgent)
+                await disposableAgent.DisposeAsync();
         }
     }
 
@@ -467,6 +480,31 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                             intentRaw = intentProp.GetString() ?? "";
 
                         emit(EventTypes.AgentIntent, new { intent = SanitizeIntent(intentRaw) });
+
+                        return Task.FromResult(new PermissionRequestResult
+                        {
+                            Kind = PermissionRequestResultKind.Approved,
+                        });
+                    }
+
+                    // report_outcome is a side-effect-free self-assessment call: approve without
+                    // governance, emit run.outcome (not tool.call / tool.result), and return.
+                    if (string.Equals(toolName, "report_outcome", StringComparison.Ordinal))
+                    {
+                        bool achieved = false;
+                        string reasonRaw = "";
+                        if (customTool.Args is System.Text.Json.JsonElement outcomeEl &&
+                            outcomeEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            if (outcomeEl.TryGetProperty("achieved", out var achievedProp) &&
+                                (achievedProp.ValueKind == System.Text.Json.JsonValueKind.True ||
+                                 achievedProp.ValueKind == System.Text.Json.JsonValueKind.False))
+                                achieved = achievedProp.GetBoolean();
+                            if (outcomeEl.TryGetProperty("reason", out var reasonProp))
+                                reasonRaw = reasonProp.GetString() ?? "";
+                        }
+
+                        emit(EventTypes.RunOutcome, new { achieved, reason = SanitizeIntent(reasonRaw) });
 
                         return Task.FromResult(new PermissionRequestResult
                         {
@@ -666,7 +704,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var nativeOverrides = new HashSet<string>(StringComparer.Ordinal)
         {
             "read_file", "str_replace_editor", "apply_patch",
-            "create_file", "write_file", "grep_search", "file_search", "report_intent",
+            "create_file", "write_file", "grep_search", "file_search", "report_intent", "report_outcome",
         };
 
         return SandboxToolRegistry.Build(context)
@@ -705,16 +743,18 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     }
 
     /// <summary>
-    /// Builds the single-function tool list for <see cref="SessionConfig.Tools"/>:
-    /// only <c>report_intent</c>, wrapped as a native override so the SDK accepts it.
-    /// Registering only this function (not the full <see cref="SandboxToolRegistry.Build"/>
-    /// list) prevents conflicts with native tools and keeps governance tight.
+    /// Builds the tool list for <see cref="SessionConfig.Tools"/>:
+    /// only <c>report_intent</c> and <c>report_outcome</c>, wrapped as native overrides so
+    /// the SDK accepts them. Registering only these functions (not the full
+    /// <see cref="SandboxToolRegistry.Build"/> list) prevents conflicts with native tools
+    /// and keeps governance tight.
     /// </summary>
     internal static IList<AIFunction> BuildSessionConfigTools(SandboxToolContext context)
     {
-        var fn = SandboxToolRegistry.Build(context)
-            .First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
-        return [new CopilotOverrideAIFunction(fn)];
+        var all = SandboxToolRegistry.Build(context);
+        var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
+        var outcomeFn = all.First(f => string.Equals(f.Name, "report_outcome", StringComparison.Ordinal));
+        return [new CopilotOverrideAIFunction(intentFn), new CopilotOverrideAIFunction(outcomeFn)];
     }
 
     /// <summary>

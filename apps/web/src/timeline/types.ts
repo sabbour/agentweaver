@@ -13,7 +13,16 @@ export interface TurnGroupItem {
   active: boolean;
 }
 
-export type TurnStep = AgentMessageItem | ToolCallItem;
+export interface ApprovalRequestItem {
+  kind: 'approval-request';
+  requestId: string;
+  toolName: string;
+  url: string | null;
+  resolved: boolean;
+  resolvedScope: string | null;
+}
+
+export type TurnStep = AgentMessageItem | ToolCallItem | ApprovalRequestItem;
 
 export interface AgentMessageItem {
   kind: 'agent-message';
@@ -49,10 +58,14 @@ export interface TimelineReducerState {
   currentTurnIndex: number | null;
   /** callId → [turnItemIndex, stepIndex] for O(1) pairing of tool.result/error. */
   pendingToolCalls: Map<unknown, [number, number]>;
+  /** requestId → [turnItemIndex, stepIndex] for pairing tool.result/error with approval cards. */
+  pendingApprovals: Map<unknown, [number, number]>;
   /** Location of the currently streaming message bubble. */
   streamingMessage: {
     turnIndex: number;
     stepIndex: number;
     messageId: unknown;
   } | null;
+  /** Agent self-assessment from report_outcome tool call. Null if agent never called it. */
+  runOutcome?: { achieved: boolean; reason: string };
 }

@@ -78,6 +78,7 @@ export type EventType =
   | 'run.completed'
   | 'run.failed'
   | 'run.error'
+  | 'run.outcome'
   | 'review.requested'
   | 'review.approved'
   | 'review.declined'

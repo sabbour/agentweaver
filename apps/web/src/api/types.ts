@@ -48,6 +48,7 @@ export interface RunDetail {
   step_count: number;
   tree_hash: string | null;
   sandbox?: RunSandboxInfo | null;
+  worktree_branch?: string | null;
 }
 
 export interface ReviewRequest {
@@ -96,6 +97,8 @@ export interface WorkspaceNode {
 export interface CommitResponse {
   run_id: string;
   status: string;
+  merge_result: string | null;
+  conflicting_files: string[] | null;
 }
 
 export interface RequestChangesResponse {

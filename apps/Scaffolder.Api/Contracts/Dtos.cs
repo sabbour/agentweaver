@@ -74,6 +74,27 @@ public sealed record RunResponse
 
     [JsonPropertyName("sandbox")]
     public SandboxStatusDto? Sandbox { get; init; }
+
+    /// <summary>
+    /// Worktree branch name (e.g. "scaffolder-run-{runId}").
+    /// Null for runs that have no worktree or have been cleaned up.
+    /// </summary>
+    [JsonPropertyName("worktree_branch")]
+    public string? WorktreeBranch { get; init; }
+
+    /// <summary>
+    /// Whether the agent self-assessed the task as achieved (from report_outcome tool call).
+    /// Null when the agent never called report_outcome (older runs or no-change runs).
+    /// </summary>
+    [JsonPropertyName("outcome_achieved")]
+    public bool? OutcomeAchieved { get; init; }
+
+    /// <summary>
+    /// One-sentence explanation of the outcome from the agent's self-assessment.
+    /// Null when OutcomeAchieved is null.
+    /// </summary>
+    [JsonPropertyName("outcome_reason")]
+    public string? OutcomeReason { get; init; }
 }
 
 public sealed record SandboxStatusDto

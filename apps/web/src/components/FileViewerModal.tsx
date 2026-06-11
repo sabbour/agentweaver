@@ -80,7 +80,7 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalM,
   },
   markdownPreview: {
-    padding: '16px 24px',
+    padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalXXL}`,
     overflow: 'auto',
     flex: 1,
     lineHeight: '1.6',

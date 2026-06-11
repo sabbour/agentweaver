@@ -63,7 +63,7 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground1,
     fontFamily: tokens.fontFamilyMonospace,
-    fontSize: '13px',
+    fontSize: tokens.fontSizeBase200,
   },
   fileHeader: {
     flexShrink: 0,
@@ -245,9 +245,9 @@ function HighlightedDiff({
         const hunks = hunksBefore.get(i) ?? [];
         const bgColor =
           codeLine?.type === 'added'
-            ? '#e6ffed'
+            ? tokens.colorPaletteGreenBackground1
             : codeLine?.type === 'removed'
-              ? '#ffecec'
+              ? tokens.colorPaletteRedBackground1
               : undefined;
 
         return (
@@ -317,7 +317,7 @@ function HighlightedDiff({
       CodeTag={DiffTbody}
       wrapLines={true}
       renderer={renderer as never}
-      customStyle={{ fontSize: '13px', fontFamily: tokens.fontFamilyMonospace }}
+      customStyle={{ fontSize: tokens.fontSizeBase200, fontFamily: tokens.fontFamilyMonospace }}
     >
       {code}
     </SyntaxHighlighter>
@@ -403,18 +403,8 @@ export function DiffViewer({ diff, filename }: DiffViewerProps) {
   return (
     <div className={styles.root}>
       {filename && (
-        <div
-          className={styles.fileHeader}
-          style={
-            useSyntax
-              ? { backgroundColor: '#252526', borderColor: '#3c3c3c', color: '#cccccc' }
-              : undefined
-          }
-        >
-          <span
-            className={styles.filePath}
-            style={useSyntax ? { color: '#cccccc' } : undefined}
-          >
+        <div className={styles.fileHeader}>
+          <span className={styles.filePath}>
             {filename}
           </span>
           <span className={styles.changeCount}>

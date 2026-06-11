@@ -24,6 +24,7 @@ public static class SandboxToolRegistry
             new Tools.GrepSearchTool(),
             new Tools.FileSearchTool(),
             new Tools.ReportIntentTool(),
+            new Tools.ReportOutcomeTool(),
         };
 
         // Include run_command when: real isolation is available, OR direct mode is active
@@ -38,6 +39,6 @@ public static class SandboxToolRegistry
     /// <summary>Returns the canonical tool names for AvailableTools construction.</summary>
     public static string[] GetToolNames(bool includeShell) =>
         includeShell
-            ? ["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent"]
-            : ["read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent"];
+            ? ["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent", "report_outcome"]
+            : ["read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent", "report_outcome"];
 }

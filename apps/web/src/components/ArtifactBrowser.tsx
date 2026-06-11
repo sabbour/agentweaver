@@ -282,7 +282,7 @@ const useFileTreeStyles = makeStyles({
   },
   fileName: {
     fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
     flex: 1,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -318,7 +318,7 @@ const useFileTreeStyles = makeStyles({
   },
   changeHeaderTitle: {
     fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase300,
+    fontSize: tokens.fontSizeBase400,
     flex: 1,
   },
   addedCount: {
@@ -356,7 +356,7 @@ const useFileTreeStyles = makeStyles({
   flatFileName: {
     fontFamily: tokens.fontFamilyMonospace,
     fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',

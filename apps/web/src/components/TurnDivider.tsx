@@ -7,8 +7,8 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
-    paddingTop: '2px',
-    paddingBottom: '2px',
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
   },
   label: {
     color: tokens.colorNeutralForeground3,

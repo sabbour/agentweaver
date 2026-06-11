@@ -42,7 +42,7 @@ interface RunWatcherProps { runId: string; }
 export function RunWatcher({ runId }: RunWatcherProps) {
   const styles = useStyles();
   const { events, status, error, reconnect } = useRunStream(runId, API_KEY, API_URL);
-  const { items } = useTimelineItems(events, runId);
+  const { items, runOutcome } = useTimelineItems(events, runId);
   const isLiveRun = status === 'connecting' || status === 'streaming';
 
   // Auto-scroll center panel to bottom as new events arrive,
@@ -92,7 +92,7 @@ export function RunWatcher({ runId }: RunWatcherProps) {
 
   const centerContent = (
     <div className={styles.centerContent}>
-      <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} runId={runId} />
+      <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} runId={runId} runOutcome={runOutcome} />
       {resolvedReview && (
         <div className={styles.reviewSection}>
           <Divider />

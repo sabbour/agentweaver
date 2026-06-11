@@ -115,7 +115,7 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
         className={styles.toggleButton}
         style={{
           left: leftExpanded ? '260px' : '0px',
-          borderRadius: '0 4px 4px 0',
+          borderRadius: `0 ${tokens.borderRadiusMedium} ${tokens.borderRadiusMedium} 0`,
           borderLeft: 'none',
           borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
         }}
@@ -124,8 +124,8 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
         aria-label={leftExpanded ? 'Collapse file tree' : 'Expand file tree'}
       >
         {leftExpanded
-          ? <ChevronLeftRegular style={{ fontSize: '12px' }} />
-          : <ChevronRightRegular style={{ fontSize: '12px' }} />}
+          ? <ChevronLeftRegular style={{ fontSize: tokens.fontSizeBase200 }} />
+          : <ChevronRightRegular style={{ fontSize: tokens.fontSizeBase200 }} />}
       </Button>
 
       {/* Center — run timeline */}

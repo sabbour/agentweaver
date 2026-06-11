@@ -26,9 +26,10 @@ interface TimelineProps {
   streamStatus: StreamStatus;
   isLiveRun: boolean;
   runId?: string;
+  runOutcome?: { achieved: boolean; reason: string };
 }
 
-export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun, runId }: TimelineProps) {
+export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun, runId, runOutcome }: TimelineProps) {
   const styles = useStyles();
 
   return (
@@ -56,6 +57,7 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
             key={`lc-${item.event.sequence > 0 ? item.event.sequence : i}`}
             event={item.event}
             runId={runId}
+            runOutcome={item.event.type === 'run.completed' ? runOutcome : undefined}
           />
         );
       })}

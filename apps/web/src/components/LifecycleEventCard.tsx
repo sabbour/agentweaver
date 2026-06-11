@@ -35,7 +35,8 @@ const useStyles = makeStyles({
   warningIcon: { color: tokens.colorPaletteYellowForeground1, flexShrink: 0 },
   subtleIcon: { color: tokens.colorNeutralForeground3, flexShrink: 0 },
   summary: {
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground2,
     wordBreak: 'break-word',
     flexGrow: 1,
   },
@@ -144,7 +145,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorStatusWarningBorderActive}`,
+    border: `1px solid ${tokens.colorStatusInformativeBorder1}`,
     backgroundColor: tokens.colorNeutralBackground1,
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
@@ -156,8 +157,8 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorStatusWarningBackground1,
-    borderBottom: `1px solid ${tokens.colorStatusWarningBorderActive}`,
+    backgroundColor: tokens.colorStatusInformativeBackground1,
+    borderBottom: `1px solid ${tokens.colorStatusInformativeBorder1}`,
   },
   approvalBodyRedesign: {
     display: 'flex',
@@ -185,10 +186,10 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusSmall,
     padding: tokens.spacingHorizontalS,
-    wordBreak: 'break-all',
     flex: '1',
     margin: '0',
-    whiteSpace: 'pre-wrap',
+    whiteSpace: 'nowrap',
+    overflowX: 'auto',
     color: tokens.colorNeutralForeground1,
   },
   approvalCopyBtnRedesign: {
@@ -219,7 +220,7 @@ const useStyles = makeStyles({
 
 type BadgeColor = 'success' | 'warning' | 'danger' | 'subtle' | 'informative';
 
-function lifecycleProps(event: RunStreamEvent): {
+function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean; reason: string }): {
   icon: React.ReactNode;
   label: string;
   summary: string;
@@ -229,6 +230,14 @@ function lifecycleProps(event: RunStreamEvent): {
   const p = event.payload;
   switch (event.type) {
     case 'run.completed':
+      if (runOutcome?.achieved === false) {
+        return {
+          icon: <WarningFilled aria-hidden="true" />,
+          label: 'run.completed',
+          summary: `Not achieved · ${runOutcome.reason}`,
+          badgeColor: 'warning',
+        };
+      }
       return {
         icon: <CheckmarkCircleFilled aria-hidden="true" />,
         label: 'run.completed',
@@ -335,15 +344,29 @@ interface ToolApprovalCardProps {
   url: string | null;
   intention: string | null;
   runId?: string;
+  isResolved?: boolean;
+  resolvedScope?: string | null;
 }
 
-function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intention, runId }: ToolApprovalCardProps) {
-  const [resolved, setResolved] = useState<'allowed-once' | 'allowed-run' | 'allowed-always' | 'denied' | null>(null);
+function scopeLabel(scope: string): string {
+  switch (scope) {
+    case 'once': return 'Allowed (once)';
+    case 'run': return 'Allowed (this run)';
+    case 'always': return 'Allowed (always, this session)';
+    case 'tool': return 'Allowed (all calls to tool)';
+    default: return `Allowed (${scope})`;
+  }
+}
+
+function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intention, runId, isResolved, resolvedScope: resolvedScopeProp }: ToolApprovalCardProps) {
+  const [resolvedScope, setResolvedScope] = useState<string | null>(
+    isResolved ? (resolvedScopeProp ?? 'once') : null,
+  );
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const handleAllow = async (scope: 'once' | 'run' | 'always') => {
-    if (!runId || resolved || busy) return;
+    if (!runId || resolvedScope !== null || busy) return;
     setBusy(true);
     const baseUrl = API_URL.replace(/\/+$/, '');
     try {
@@ -359,7 +382,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
         console.error('Tool approval request failed:', response.status);
         return;
       }
-      setResolved(`allowed-${scope}`);
+      setResolvedScope(scope);
     } catch {
       // ignore network errors — user can retry
     } finally {
@@ -368,7 +391,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
   };
 
   const handleDeny = async () => {
-    if (!runId || resolved || busy) return;
+    if (!runId || resolvedScope !== null || busy) return;
     setBusy(true);
     const baseUrl = API_URL.replace(/\/+$/, '');
     try {
@@ -384,7 +407,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
         console.error('Tool denial request failed:', response.status);
         return;
       }
-      setResolved('denied');
+      setResolvedScope('deny');
     } catch {
       // ignore network errors — user can retry
     } finally {
@@ -399,21 +422,29 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const resolvedLabel =
-    resolved === 'allowed-once' ? '✓ Allowed (once)' :
-    resolved === 'allowed-run' ? '✓ Allowed (this run)' :
-    resolved === 'allowed-always' ? '✓ Allowed (always, this session)' :
-    resolved === 'denied' ? '✗ Denied' : null;
+  // Collapsed inline view — shown after action or when pre-resolved from reducer
+  if (resolvedScope !== null) {
+    const label = resolvedScope === 'deny'
+      ? `\u2717 Denied \u00b7 ${toolName}`
+      : `\u2713 ${scopeLabel(resolvedScope)} \u00b7 ${toolName}`;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
+        <Text size={200} style={{ color: resolvedScope === 'deny' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1 }}>
+          {label}
+        </Text>
+      </div>
+    );
+  }
 
   return (
     // SECURITY (Y-3): all values rendered as text — no HTML
     <div className={styles.approvalCardRedesign} role="alert">
       <div className={styles.approvalHeaderRedesign}>
         <ShieldLockRegular
-          style={{ fontSize: '18px', color: tokens.colorStatusWarningForeground1 }}
+          style={{ fontSize: '18px', color: tokens.colorStatusInformativeForeground1 }}
           aria-hidden="true"
         />
-        <Text weight="semibold" size={300} style={{ color: tokens.colorStatusWarningForeground1 }}>
+        <Text weight="semibold" size={300} style={{ color: tokens.colorStatusInformativeForeground1 }}>
           Tool Approval Required
         </Text>
       </div>
@@ -445,75 +476,50 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
           <Text className={styles.approvalIntentionRedesign}>{intention}</Text>
         )}
 
-        {resolved ? (
-          <Text
-            size={200}
+        <div className={styles.approvalActionsRedesign}>
+          <Button
+            appearance="primary"
+            size="small"
+            disabled={busy || !runId}
+            onClick={() => void handleAllow('once')}
+          >
+            Allow once
+          </Button>
+          <Button
+            appearance="outline"
+            size="small"
+            disabled={busy || !runId}
+            onClick={() => void handleAllow('run')}
+          >
+            Allow this run
+          </Button>
+          <Tooltip
+            content="Allows this tool+URL for all future requests this session. Resets when the server restarts."
+            relationship="description"
+          >
+            <Button
+              appearance="outline"
+              size="small"
+              disabled={busy || !runId}
+              onClick={() => void handleAllow('always')}
+            >
+              Always allow (session)
+            </Button>
+          </Tooltip>
+          <Button
+            appearance="outline"
+            size="small"
+            disabled={busy || !runId}
+            onClick={() => void handleDeny()}
             style={{
-              color: resolved === 'denied' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1,
-              fontStyle: 'italic',
+              marginLeft: 'auto',
+              borderColor: tokens.colorStatusDangerBorder1,
+              color: tokens.colorStatusDangerForeground1,
             }}
           >
-            {resolvedLabel}
-          </Text>
-        ) : (
-          <div className={styles.approvalActionsRedesign}>
-            <Button
-              appearance="primary"
-              size="small"
-              disabled={busy || !runId}
-              onClick={() => void handleAllow('once')}
-              style={{
-                backgroundColor: tokens.colorStatusWarningBackground3,
-                borderColor: tokens.colorStatusWarningBorderActive,
-                color: tokens.colorNeutralForegroundOnBrand,
-              }}
-            >
-              Allow once
-            </Button>
-            <Button
-              appearance="outline"
-              size="small"
-              disabled={busy || !runId}
-              onClick={() => void handleAllow('run')}
-              style={{
-                borderColor: tokens.colorStatusWarningBorderActive,
-                color: tokens.colorStatusWarningForeground1,
-              }}
-            >
-              Allow this run
-            </Button>
-            <Tooltip
-              content="Allows this tool+URL for all future requests this session. Resets when the server restarts."
-              relationship="description"
-            >
-              <Button
-                appearance="outline"
-                size="small"
-                disabled={busy || !runId}
-                onClick={() => void handleAllow('always')}
-                style={{
-                  borderColor: tokens.colorStatusSuccessBorderActive,
-                  color: tokens.colorStatusSuccessForeground1,
-                }}
-              >
-                Always allow (session)
-              </Button>
-            </Tooltip>
-            <Button
-              appearance="outline"
-              size="small"
-              disabled={busy || !runId}
-              onClick={() => void handleDeny()}
-              style={{
-                marginLeft: 'auto',
-                borderColor: tokens.colorStatusDangerBorderActive,
-                color: tokens.colorStatusDangerForeground1,
-              }}
-            >
-              Deny
-            </Button>
-          </div>
-        )}
+            Deny
+          </Button>
+        </div>
 
         <Text className={styles.approvalRequestIdRedesign}>ID: {displayId}</Text>
       </div>
@@ -524,9 +530,12 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
 interface LifecycleEventCardProps {
   event: RunStreamEvent;
   runId?: string;
+  isResolved?: boolean;
+  resolvedScope?: string | null;
+  runOutcome?: { achieved: boolean; reason: string };
 }
 
-export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runId }: LifecycleEventCardProps) {
+export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runId, isResolved, resolvedScope, runOutcome }: LifecycleEventCardProps) {
   const styles = useStyles();
   const [expanded, setExpanded] = useState(false);
 
@@ -558,7 +567,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
           <Text className={styles.summary}>{preview}</Text>
         </div>
         {expanded && prompt && (
-          <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
+          <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
             {prompt}
           </Text>
         )}
@@ -653,6 +662,8 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
         url={url}
         intention={intention}
         runId={runId}
+        isResolved={isResolved}
+        resolvedScope={resolvedScope}
       />
     );
   }
@@ -676,12 +687,14 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     const tools = event.payload['tools'] as string[] | undefined;
     if (!tools || tools.length === 0) return null;
     return (
-      <div className={styles.card}>
-        <CodeRegular className={styles.subtleIcon} aria-hidden="true" />
+      <div className={styles.card} style={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <CodeRegular className={styles.subtleIcon} aria-hidden="true" style={{ marginTop: '2px' }} />
         <Badge className={styles.badge} color="subtle" shape="rounded" size="small">tools</Badge>
-        <Text className={styles.summary} style={{ fontFamily: tokens.fontFamilyMonospace }}>
-          {tools.join(' · ')}
-        </Text>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS }}>
+          {tools.map(tool => (
+            <Badge key={tool} appearance="outline" size="small" shape="rounded" style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100 }}>{tool}</Badge>
+          ))}
+        </div>
       </div>
     );
   }
@@ -704,7 +717,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
   }
 
   // --- default card layout ---
-  const { icon, label, summary, badgeColor } = lifecycleProps(event);
+  const { icon, label, summary, badgeColor } = lifecycleProps(event, runOutcome);
 
   const iconClass =
     badgeColor === 'success' ? styles.successIcon :
