@@ -1,7 +1,7 @@
 import React from 'react';
 import { Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { Prism as SyntaxHighlighter, createElement as syntaxCreateElement } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 // Local type alias matching react-syntax-highlighter's ambient rendererNode/rendererProps
 interface RendererNode {
@@ -244,9 +244,9 @@ function HighlightedDiff({
         const hunks = hunksBefore.get(i) ?? [];
         const bgColor =
           codeLine?.type === 'added'
-            ? 'rgba(46, 160, 67, 0.15)'
+            ? '#e6ffed'
             : codeLine?.type === 'removed'
-              ? 'rgba(248, 81, 73, 0.15)'
+              ? '#ffecec'
               : undefined;
 
         return (
@@ -311,7 +311,7 @@ function HighlightedDiff({
   return (
     <SyntaxHighlighter
       language={lang}
-      style={vscDarkPlus}
+      style={oneLight}
       PreTag={DiffTable}
       CodeTag={DiffTbody}
       wrapLines={true}
@@ -400,10 +400,7 @@ export function DiffViewer({ diff, filename }: DiffViewerProps) {
   const { added, removed } = countChanges(lines);
 
   return (
-    <div
-      className={styles.root}
-      style={useSyntax ? { backgroundColor: '#1e1e1e' } : undefined}
-    >
+    <div className={styles.root}>
       {filename && (
         <div
           className={styles.fileHeader}

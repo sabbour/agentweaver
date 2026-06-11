@@ -115,7 +115,21 @@ public sealed class SqliteRunStore
     }
 
     /// <summary>
-    /// Atomically transitions a run from AwaitingReview to <paramref name="toStatus"/>.
+    /// Atomically transitions a run from AwaitingReview to InProgress.
+    /// Returns true if the CAS succeeded (request-changes won the race),
+    /// false if another request already moved the run out of AwaitingReview.
+    /// Used by the request-changes endpoint (B3) to reclaim the run for a new revision.
+    /// </summary>
+    public async Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE runs SET status = 'in_progress', ended_at = NULL WHERE run_id = $runId AND status = 'awaiting_review';";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
     /// Returns true if the transition was applied (exactly one row updated), false if a
     /// concurrent request already changed the status. This single-row conditional UPDATE
     /// is the idempotency and concurrency guard for the review endpoint (design issue #4).

@@ -3,6 +3,7 @@ import { Badge, Divider, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
 import type { ReviewResponse } from '../api/types';
+import { deriveRunStatusFromEvents } from '../timeline/deriveRunStatus';
 import { RunHeader } from './RunHeader';
 import { RunLayout } from './RunLayout';
 import { Timeline } from './Timeline';
@@ -40,7 +41,7 @@ interface RunWatcherProps { runId: string; }
 
 export function RunWatcher({ runId }: RunWatcherProps) {
   const styles = useStyles();
-  const { events, status, error } = useRunStream(runId, API_KEY, API_URL);
+  const { events, status, error, reconnect } = useRunStream(runId, API_KEY, API_URL);
   const { items } = useTimelineItems(events, runId);
   const isLiveRun = status === 'connecting' || status === 'streaming';
 
@@ -61,9 +62,6 @@ export function RunWatcher({ runId }: RunWatcherProps) {
     }
   }, [items.length]);
 
-  const hasReviewRequested = events.some((e) => e.type === 'review.requested');
-
-  // Derive resolved status and merge result from SSE merge events.
   const resolvedReview = useMemo((): ReviewResponse | null => {
     const mergeEvent = events.find(
       (e) => e.type === 'merge.completed' || e.type === 'merge.failed',
@@ -85,19 +83,17 @@ export function RunWatcher({ runId }: RunWatcherProps) {
     };
   }, [events, runId]);
 
-  // Derive a stable run status string for the artifact browser panels.
-  // review.requested takes priority over isLiveRun — once the agent has requested
-  // review, the live-streaming phase is over from the agent's perspective.
-  const derivedRunStatus = hasReviewRequested
-    ? (resolvedReview?.status ?? 'awaiting_review')
-    : isLiveRun
-      ? 'in_progress'
-      : 'completed';
+  // Derive run status from the most recent lifecycle event so that revisit
+  // cycles (revision.started -> second review.requested) are handled correctly.
+  // A second review.requested overrides the earlier one; revision.started
+  // overrides the first review.requested. isLiveRun is only used as a fallback
+  // when no lifecycle events have arrived yet.
+  const derivedRunStatus = deriveRunStatusFromEvents(events, isLiveRun);
 
   const centerContent = (
     <div className={styles.centerContent}>
       <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} />
-      {hasReviewRequested && resolvedReview && (
+      {resolvedReview && (
         <div className={styles.reviewSection}>
           <Divider />
           <Badge
@@ -121,6 +117,8 @@ export function RunWatcher({ runId }: RunWatcherProps) {
         centerContent={centerContent}
         centerScrollRef={centerScrollRef}
         onCenterScroll={handleCenterScroll}
+        onRequestChangesSuccess={reconnect}
+        onCommitSuccess={reconnect}
       />
     </div>
   );

@@ -30,7 +30,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var woe = new WorkflowOutputEvent(
             new MergeOutput(runId, "merged", "merged:abc123"), "terminal-merge");
 
-        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
 
         result.Should().BeTrue("a merged output is genuinely terminal");
     }
@@ -42,7 +42,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var woe = new WorkflowOutputEvent(
             new MergeOutput(runId, "merge_failed", "conflict"), "terminal-merge");
 
-        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
 
         result.Should().BeTrue("a merge_failed output is genuinely terminal");
     }
@@ -54,7 +54,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var woe = new WorkflowOutputEvent(
             new MergeOutput(runId, "blocked", "dirty_working_tree"), "terminal-merge");
 
-        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
 
         result.Should().BeFalse("a blocked output is non-terminal; run must remain recoverable");
     }
@@ -66,7 +66,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var woe = new WorkflowOutputEvent(
             new MergeOutput(runId, "blocked", "dirty_working_tree"), "terminal-merge");
 
-        await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+        await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
 
         entry.IsCompleted.Should().BeFalse(
             "a blocked output must not mark the stream as completed so clients stay connected");
@@ -79,7 +79,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var woe = new WorkflowOutputEvent(
             new NoChangesOutput(runId), "terminal-no-op");
 
-        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
 
         result.Should().BeTrue("a no_changes output is genuinely terminal");
     }
@@ -91,7 +91,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var woe = new WorkflowOutputEvent(
             new DeclinedOutput(runId), "terminal-declined");
 
-        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
 
         result.Should().BeTrue("a declined output is genuinely terminal");
     }
@@ -103,7 +103,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var woe = new WorkflowOutputEvent(
             new ContentSafetyFailedOutput(runId), "terminal-safety-failed");
 
-        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
 
         result.Should().BeTrue("a content_safety output is genuinely terminal");
     }

@@ -93,5 +93,28 @@ public sealed class SqliteDb
             diff               TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS run_revisions (
+            run_id              TEXT NOT NULL,
+            revision_number     INTEGER NOT NULL,
+            reviewer_user       TEXT NOT NULL,
+            created_at          TEXT NOT NULL,
+            raw_comment         TEXT NOT NULL,
+            sanitized_comment   TEXT NOT NULL,
+            previous_tree_hash  TEXT NOT NULL,
+            PRIMARY KEY (run_id, revision_number)
+        );
+
+        CREATE TRIGGER IF NOT EXISTS trg_run_revisions_no_update
+            BEFORE UPDATE ON run_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_revisions is append-only: UPDATE is not permitted');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_run_revisions_no_delete
+            BEFORE DELETE ON run_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_revisions is append-only: DELETE is not permitted');
+        END;
+
         """;
 }

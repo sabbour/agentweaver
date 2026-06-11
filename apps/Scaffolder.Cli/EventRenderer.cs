@@ -30,6 +30,8 @@ public static class EventRenderer
                 return $"Run bounded: {Markup.Escape(Str(p, "limit_type"))} limit reached after {Str(p, "step_count")} steps";
             case "agent.message":
                 return Markup.Escape(Str(p, "text"));
+            case "agent.intent":
+                return Markup.Escape(Str(p, "intent"));
             case "tool.call":
             {
                 var toolName = Str(p, "toolName");
@@ -51,6 +53,10 @@ public static class EventRenderer
                 return $"Review approved by {Markup.Escape(Str(p, "approved_by"))}";
             case "review.declined":
                 return $"Review declined by {Markup.Escape(Str(p, "declined_by"))}";
+            case "review.changes_requested":
+                return $"Changes requested (revision {Markup.Escape(Str(p, "revision"))})";
+            case "revision.started":
+                return $"Revision {Markup.Escape(Str(p, "revision"))} started";
             case "merge.completed":
                 return $"Merge completed: {Markup.Escape(Str(p, "merged_commit_hash"))}";
             case "merge.failed":
@@ -108,6 +114,7 @@ public static class EventRenderer
         "run.failed" => "red",
         "run.bounded" => "yellow",
         "agent.message" => "white",
+        "agent.intent" => "cyan",
         "tool.call" => "cyan",
         "tool.result" => "green",
         "tool.error" => "red",
@@ -116,6 +123,8 @@ public static class EventRenderer
         "review.requested" => "magenta",
         "review.approved" => "green",
         "review.declined" => "yellow",
+        "review.changes_requested" => "yellow",
+        "revision.started" => "blue",
         "merge.completed" => "green",
         "merge.failed" => "red",
         "sandbox.selected" => "cyan",

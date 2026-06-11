@@ -7,13 +7,17 @@ import {
   Tab,
   TabList,
   Text,
+  Textarea,
   makeStyles,
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import {
+  CheckmarkRegular,
   ChevronDownRegular,
   ChevronRightRegular,
+  CommentRegular,
+  DismissRegular,
   DocumentAddRegular,
   DocumentDismissRegular,
   DocumentEditRegular,
@@ -113,11 +117,6 @@ function getFileStatusIcon(status?: string): FluentIcon {
 // Flat list helpers
 // ---------------------------------------------------------------------------
 
-function parentFolder(path: string): string {
-  const parts = path.split('/');
-  return parts.length > 1 ? parts.slice(0, -1).join('/') : '';
-}
-
 function filename(path: string): string {
   return path.split('/').pop() ?? path;
 }
@@ -164,15 +163,43 @@ const useFileTreeStyles = makeStyles({
   },
   reviewBar: {
     display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     flexShrink: 0,
   },
+  reviewBarButtons: {
+    display: 'flex',
+    flexDirection: 'row',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  reviewBarDecline: {
+    color: tokens.colorPaletteRedForeground1,
+  },
   reviewError: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+  },
+  requestChangesBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    marginTop: tokens.spacingVerticalXS,
+  },
+  requestChangesLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+  },
+  requestChangesActions: {
+    display: 'flex',
+    flexDirection: 'row',
+    gap: tokens.spacingHorizontalXS,
+    alignItems: 'center',
+  },
+  requestChangesError: {
     color: tokens.colorPaletteRedForeground1,
     fontSize: tokens.fontSizeBase200,
   },
@@ -245,7 +272,7 @@ const useFileTreeStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     fontSize: tokens.fontSizeBase200,
-    color: tokens.colorPaletteDarkOrangeForeground1,
+    color: tokens.colorPaletteMarigoldForeground2,
   },
   statusIconDeleted: {
     flexShrink: 0,
@@ -266,7 +293,7 @@ const useFileTreeStyles = makeStyles({
     color: tokens.colorPaletteGreenForeground1,
   },
   fileNameModified: {
-    color: tokens.colorPaletteDarkOrangeForeground1,
+    color: tokens.colorPaletteMarigoldForeground2,
   },
   fileNameDeleted: {
     color: tokens.colorPaletteRedForeground1,
@@ -299,11 +326,13 @@ const useFileTreeStyles = makeStyles({
     color: tokens.colorPaletteGreenForeground1,
     fontSize: tokens.fontSizeBase200,
     fontFamily: tokens.fontFamilyMonospace,
+    flexShrink: 0,
   },
   removedCount: {
     color: tokens.colorPaletteRedForeground1,
     fontSize: tokens.fontSizeBase200,
     fontFamily: tokens.fontFamilyMonospace,
+    flexShrink: 0,
   },
   flatRow: {
     display: 'flex',
@@ -332,7 +361,8 @@ const useFileTreeStyles = makeStyles({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    flexShrink: 0,
+    flex: 1,
+    minWidth: 0,
   },
   flatParentFolder: {
     fontFamily: tokens.fontFamilyMonospace,
@@ -541,7 +571,6 @@ function renderFlatChangesList({
 }: FlatChangesListProps): React.ReactNode[] {
   return files.map((file) => {
     const name = filename(file.path);
-    const folder = parentFolder(file.path);
     const FileIcon = getFileStatusIcon(file.status);
     const iconClass =
       file.status === 'added'
@@ -570,7 +599,6 @@ function renderFlatChangesList({
           <FileIcon />
         </span>
         <Text className={styles.flatFileName}>{name}</Text>
-        {folder && <Text className={styles.flatParentFolder}>{folder}</Text>}
         <Text className={styles.addedCount}>+{file.added_lines}</Text>
         <Text className={styles.removedCount}>-{file.removed_lines}</Text>
         <Badge color={badgeColor} size="small">{statusLetter}</Badge>
@@ -683,6 +711,10 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
     commitResult,
     commitError,
     commitRun,
+    requestChangesPending,
+    requestChangesResult,
+    requestChangesError,
+    requestChanges,
   } = state;
 
   const fileClickHandler = (path: string, isChanged = true) => {
@@ -693,7 +725,10 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
     }
   };
 
-  const showReviewBar = runStatus === 'awaiting_review' && reviewResult === null;
+  const [requestChangesOpen, setRequestChangesOpen] = useState(false);
+  const [requestChangesComment, setRequestChangesComment] = useState('');
+
+  const showReviewBar = runStatus === 'awaiting_review' && reviewResult === null && commitResult === null;
   const totalAdded = files.reduce((acc, f) => acc + (f.added_lines ?? 0), 0);
   const totalRemoved = files.reduce((acc, f) => acc + (f.removed_lines ?? 0), 0);
 
@@ -711,98 +746,144 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
         </TabList>
       </div>
 
-      {activeTab === 'changes' && (
-        <>
-          {/* Commit Changes button */}
-          {runStatus === 'awaiting_review' && commitResult === null && (
-            <div className={styles.commitBar}>
-              {commitPending ? (
-                <Spinner size="tiny" />
-              ) : (
+      {/* Review bar — visible on both tabs when awaiting review */}
+      {showReviewBar && (
+        <div className={styles.reviewBar}>
+          {(commitPending || reviewPending || requestChangesPending) ? (
+            <Spinner size="tiny" aria-label="Processing" />
+          ) : (
+            <div className={styles.reviewBarButtons}>
+              <Button
+                appearance="primary"
+                size="small"
+                icon={<CheckmarkRegular />}
+                aria-label="Commit changes to worktree"
+                style={{ flex: 1 }}
+                onClick={() => void commitRun()}
+              >
+                Commit Changes
+              </Button>
+              <Button
+                appearance="secondary"
+                size="small"
+                icon={<CommentRegular />}
+                aria-label="Request changes"
+                style={{ flex: 1 }}
+                onClick={() => {
+                  setRequestChangesOpen((open) => !open);
+                  setRequestChangesComment('');
+                }}
+              >
+                Request Changes
+              </Button>
+              <Button
+                appearance="secondary"
+                size="small"
+                icon={<DismissRegular />}
+                aria-label="Decline run"
+                style={{ flex: 1 }}
+                className={styles.reviewBarDecline}
+                onClick={() => void submitReview(false)}
+              >
+                Decline
+              </Button>
+            </div>
+          )}
+          {commitError && <Text className={styles.commitError}>{commitError}</Text>}
+          {reviewError && <Text className={styles.reviewError}>{reviewError}</Text>}
+          {requestChangesOpen && !requestChangesPending && (
+            <div className={styles.requestChangesBox}>
+              <Text className={styles.requestChangesLabel}>
+                Describe what the agent should change
+              </Text>
+              <Textarea
+                placeholder="Describe what the agent should change"
+                value={requestChangesComment}
+                onChange={(_, data) => setRequestChangesComment(data.value)}
+                rows={3}
+                resize="vertical"
+                aria-label="Changes requested comment"
+              />
+              {requestChangesError && (
+                <Text className={styles.requestChangesError}>{requestChangesError}</Text>
+              )}
+              <div className={styles.requestChangesActions}>
                 <Button
                   appearance="primary"
                   size="small"
-                  style={{ width: '100%' }}
-                  disabled={commitPending}
-                  onClick={() => void commitRun()}
+                  disabled={requestChangesComment.trim().length === 0}
+                  aria-label="Send change request to agent"
+                  onClick={() => {
+                    void requestChanges(requestChangesComment.trim()).then(() => {
+                      setRequestChangesOpen(false);
+                      setRequestChangesComment('');
+                    });
+                  }}
                 >
-                  Commit Changes
+                  Send
                 </Button>
-              )}
-              {commitError && <Text className={styles.commitError}>{commitError}</Text>}
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  aria-label="Cancel request changes"
+                  onClick={() => {
+                    setRequestChangesOpen(false);
+                    setRequestChangesComment('');
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
             </div>
           )}
-          {commitResult !== null && (
-            <div className={styles.reviewResultBar}>
-              <Badge color="success">{commitResult.status}</Badge>
-            </div>
-          )}
+        </div>
+      )}
+      {commitResult !== null && (
+        <div className={styles.reviewResultBar}>
+          <Badge color="success">{commitResult.status}</Badge>
+        </div>
+      )}
+      {requestChangesResult !== null && (
+        <div className={styles.reviewResultBar}>
+          <Badge color="informative">{requestChangesResult.status}</Badge>
+        </div>
+      )}
+      {reviewResult !== null && (
+        <div className={styles.reviewResultBar}>
+          <Badge color={reviewResultBadgeColor(reviewResult.status)}>{reviewResult.status}</Badge>
+        </div>
+      )}
 
-          {/* Approve/Decline bar */}
-          {showReviewBar && (
-            <div className={styles.reviewBar}>
-              {reviewPending ? (
-                <Spinner size="tiny" />
-              ) : (
-                <>
-                  <Button
-                    appearance="primary"
-                    size="small"
-                    disabled={reviewPending}
-                    onClick={() => void submitReview(true)}
-                  >
-                    Approve
-                  </Button>
-                  <Button
-                    appearance="secondary"
-                    size="small"
-                    disabled={reviewPending}
-                    onClick={() => void submitReview(false)}
-                  >
-                    Decline
-                  </Button>
-                </>
-              )}
-              {reviewError && <Text className={styles.reviewError}>{reviewError}</Text>}
+      {activeTab === 'changes' && (
+        <div className={styles.fileList}>
+          {filesLoading ? (
+            <div className={styles.spinnerWrapper}>
+              <Spinner size="tiny" />
             </div>
-          )}
-          {reviewResult !== null && (
-            <div className={styles.reviewResultBar}>
-              <Badge color={reviewResultBadgeColor(reviewResult.status)}>{reviewResult.status}</Badge>
+          ) : filesError ? (
+            <div className={styles.emptyState}>
+              <Text>{filesError}</Text>
             </div>
+          ) : files.length === 0 ? (
+            <div className={styles.emptyState}>
+              <Text>No changes</Text>
+            </div>
+          ) : (
+            <>
+              <div className={styles.changeHeader}>
+                <Text className={styles.changeHeaderTitle}>Branch Changes</Text>
+                <Text className={styles.addedCount}>+{totalAdded}</Text>
+                <Text className={styles.removedCount}>-{totalRemoved}</Text>
+              </div>
+              {renderFlatChangesList({
+                files,
+                selectedPath,
+                onFileClick: fileClickHandler,
+                styles,
+              })}
+            </>
           )}
-
-          {/* Changes file list */}
-          <div className={styles.fileList}>
-            {filesLoading ? (
-              <div className={styles.spinnerWrapper}>
-                <Spinner size="tiny" />
-              </div>
-            ) : filesError ? (
-              <div className={styles.emptyState}>
-                <Text>{filesError}</Text>
-              </div>
-            ) : files.length === 0 ? (
-              <div className={styles.emptyState}>
-                <Text>No changes</Text>
-              </div>
-            ) : (
-              <>
-                <div className={styles.changeHeader}>
-                  <Text className={styles.changeHeaderTitle}>Branch Changes</Text>
-                  <Text className={styles.addedCount}>+{totalAdded}</Text>
-                  <Text className={styles.removedCount}>-{totalRemoved}</Text>
-                </div>
-                {renderFlatChangesList({
-                  files,
-                  selectedPath,
-                  onFileClick: fileClickHandler,
-                  styles,
-                })}
-              </>
-            )}
-          </div>
-        </>
+        </div>
       )}
 
       {activeTab === 'files' && (
@@ -867,11 +948,12 @@ export function DiffPanel({ state }: DiffPanelProps) {
 interface ArtifactBrowserProps {
   runId: string;
   runStatus: string;
+  onCommitSuccess?: () => void;
 }
 
-export function ArtifactBrowser({ runId, runStatus }: ArtifactBrowserProps) {
+export function ArtifactBrowser({ runId, runStatus, onCommitSuccess }: ArtifactBrowserProps) {
   const styles = useStyles();
-  const state = useArtifactBrowser(runId, runStatus);
+  const state = useArtifactBrowser(runId, runStatus, undefined, onCommitSuccess);
 
   return (
     <div className={styles.root}>

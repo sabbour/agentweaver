@@ -219,6 +219,44 @@ public static class RunCommands
     }
 
     /// <summary>
+    /// Requests changes for a run that is awaiting review. The reviewer's comment is
+    /// passed to the agent as structured feedback; a new revision cycle starts on the
+    /// same worktree. Mirrors the review/approve command (Principle IV: CLI+Web parity).
+    /// </summary>
+    public static async Task<int> RequestChangesAsync(
+        ApiClient api, string runId, string? comment, CancellationToken ct)
+    {
+        var feedbackComment = comment;
+
+        if (string.IsNullOrWhiteSpace(feedbackComment))
+        {
+            AnsiConsole.MarkupLine("[grey]Enter your feedback (end with an empty line):[/]");
+            feedbackComment = ReadMultiLine();
+        }
+
+        if (string.IsNullOrWhiteSpace(feedbackComment))
+        {
+            AnsiConsole.MarkupLine("[red]Feedback comment must not be empty.[/]");
+            return 1;
+        }
+
+        RequestChangesResponse result;
+        try
+        {
+            result = await api.RequestChangesAsync(runId, feedbackComment, ct);
+        }
+        catch (ApiException ex)
+        {
+            PrintApiError(ex);
+            return 1;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[green]Changes requested.[/] run: {Markup.Escape(result.RunId)} status: {Markup.Escape(result.Status)}");
+        return 0;
+    }
+
+    /// <summary>
     /// Checks the run's current state and, if it is still awaiting a decision,
     /// prompts for approval and submits it. The decision is recorded by the API.
     /// </summary>

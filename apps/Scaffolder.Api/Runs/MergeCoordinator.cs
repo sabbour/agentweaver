@@ -41,8 +41,12 @@ public sealed class MergeCoordinator : IMergeCoordinator
         var casSucceeded = await _runStore.TryStartMergingAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
         if (!casSucceeded)
         {
-            lockHandle.Dispose();
-            return MergeLockResult.Failed("already_merging");
+            var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+            if (run?.Status != RunStatus.Merging)
+            {
+                lockHandle.Dispose();
+                return MergeLockResult.Failed("already_merging");
+            }
         }
 
         return MergeLockResult.Success(lockHandle);

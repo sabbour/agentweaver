@@ -36,7 +36,20 @@ const useStyles = makeStyles({
   },
   badge: { flexShrink: 0 },
 
-  // terminal-style output line (tool.output)
+  // truncated comment text (max 3 lines)
+  changesRequestedComment: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    marginLeft: '24px',
+    marginTop: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    borderLeft: `2px solid ${tokens.colorNeutralStroke1}`,
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: '3',
+    overflow: 'hidden',
+    wordBreak: 'break-word',
+  },
   terminalLine: {
     display: 'flex',
     alignItems: 'baseline',
@@ -156,6 +169,20 @@ function lifecycleProps(event: RunStreamEvent): {
         label: 'review.declined',
         summary: `Declined by ${String(p['declined_by'] ?? '')}`,
         badgeColor: 'subtle',
+      };
+    case 'review.changes_requested':
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'review.changes_requested',
+        summary: String(p['comment'] ?? 'Changes requested'),
+        badgeColor: 'warning',
+      };
+    case 'revision.started':
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'revision.started',
+        summary: String(p['message'] ?? 'Revision started'),
+        badgeColor: 'informative',
       };
     case 'merge.completed':
       return {
@@ -338,6 +365,23 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: Li
         <Text className={styles.summary} style={{ fontFamily: tokens.fontFamilyMonospace }}>
           {tools.join(' · ')}
         </Text>
+      </div>
+    );
+  }
+
+  // --- review.changes_requested: show label + optional comment blockquote ---
+  if (event.type === 'review.changes_requested') {
+    const comment = event.payload['comment'] ? String(event.payload['comment']) : null;
+    return (
+      <div className={styles.card} style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%' }}>
+          <span className={styles.warningIcon}><WarningFilled aria-hidden="true" /></span>
+          <Badge className={styles.badge} color="warning" shape="rounded" size="small">review.changes_requested</Badge>
+          <Text className={styles.summary}>Changes requested</Text>
+        </div>
+        {comment && (
+          <Text as="p" className={styles.changesRequestedComment}>{comment}</Text>
+        )}
       </div>
     );
   }

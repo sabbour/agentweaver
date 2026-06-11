@@ -157,7 +157,7 @@ public sealed class WorkflowRestartService
             try
             {
                 var streamingRun = await _factory.ResumeAsync(checkpointInfo, ct).ConfigureAwait(false);
-                _registry.Register(runIdStr, streamingRun);
+                var runCt = _registry.Register(runIdStr, streamingRun);
 
                 // Re-populate PendingRequestStore from the resumed run's status.
                 var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);
@@ -183,7 +183,7 @@ public sealed class WorkflowRestartService
                 }
 
                 // Start the supervised watch loop.
-                _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser);
+                _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
             }
             catch (Exception ex)
             {

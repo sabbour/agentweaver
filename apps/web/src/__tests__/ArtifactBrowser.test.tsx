@@ -14,6 +14,8 @@ vi.mock('../api/apiClient', () => ({
     getRunFiles: vi.fn(),
     getRunFileDiff: vi.fn(),
     submitReview: vi.fn(),
+    commitRun: vi.fn(),
+    requestChanges: vi.fn(),
   },
 }));
 
@@ -50,8 +52,10 @@ function makeDiff(overrides: Partial<WorkspaceFileDiff> = {}): WorkspaceFileDiff
 
 // Typed references to the mocked methods for use in assertions.
 // vi.mocked asserts the deep-mocked type so .mockResolvedValue is available.
-const getRunFilesMock     = () => vi.mocked(apiClient.getRunFiles);
-const getRunFileDiffMock  = () => vi.mocked(apiClient.getRunFileDiff);
+const getRunFilesMock      = () => vi.mocked(apiClient.getRunFiles);
+const getRunFileDiffMock   = () => vi.mocked(apiClient.getRunFileDiff);
+const requestChangesMock   = () => vi.mocked(apiClient.requestChanges);
+const commitRunMock        = () => vi.mocked(apiClient.commitRun);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -134,6 +138,11 @@ describe('ArtifactBrowser', () => {
     expect(screen.getAllByLabelText('added').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByLabelText('modified').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByLabelText('deleted').length).toBeGreaterThanOrEqual(1);
+
+    // The unified three-button review bar is shown for awaiting_review.
+    expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+    expect(screen.getByLabelText('Request changes')).toBeDefined();
+    expect(screen.getByLabelText('Decline run')).toBeDefined();
   });
 
   // AB-04: selecting a file calls getRunFileDiff and renders the diff viewer
@@ -245,5 +254,151 @@ describe('ArtifactBrowser', () => {
         screen.getByText('Showing the artifact state at run completion.'),
       ).toBeDefined();
     });
+  });
+
+  // AB-08: Request Changes flow — clicking "Request Changes" reveals a textarea;
+  // submitting calls apiClient.requestChanges with the comment text.
+  it('calls requestChanges with the comment when the Request Changes flow is submitted', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+    requestChangesMock().mockResolvedValue({ run_id: 'run-008', status: 'in_progress' });
+
+    const user = userEvent.setup();
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="run-008" runStatus="awaiting_review" />
+      </Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Request changes')).toBeDefined();
+    });
+
+    // Open the request changes box.
+    await user.click(screen.getByLabelText('Request changes'));
+
+    // The textarea should now be visible.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Changes requested comment')).toBeDefined();
+    });
+
+    // Send button is disabled when comment is empty.
+    expect(screen.getByLabelText('Send change request to agent').hasAttribute('disabled') ||
+      screen.getByLabelText('Send change request to agent').getAttribute('aria-disabled') === 'true').toBe(true);
+
+    // Type a comment.
+    await user.type(screen.getByLabelText('Changes requested comment'), 'Please fix the formatting');
+
+    // Send button should now be enabled.
+    await user.click(screen.getByLabelText('Send change request to agent'));
+
+    await waitFor(() => {
+      expect(requestChangesMock()).toHaveBeenCalledWith('run-008', 'Please fix the formatting');
+    });
+  });
+
+  // AB-09: Review bar reappears on second review gate after request-changes.
+  // Scenario: awaiting_review (bar shows) -> request-changes submitted
+  // -> runStatus becomes in_progress (bar hidden) -> runStatus becomes
+  // awaiting_review again (bar must show despite stale requestChangesResult).
+  it('shows review bar again on second review gate after a request-changes cycle', async () => {    getRunFilesMock().mockResolvedValue([]);
+    requestChangesMock().mockResolvedValue({ run_id: 'run-009', status: 'in_progress' });
+
+    const user = userEvent.setup();
+
+    const { rerender } = render(
+      <Wrapper>
+        <ArtifactBrowser runId="run-009" runStatus="awaiting_review" />
+      </Wrapper>,
+    );
+
+    // Step 1: bar is visible at the first review gate.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+    });
+
+    // Step 2: submit a request-changes; this sets requestChangesResult internally.
+    await user.click(screen.getByLabelText('Request changes'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Changes requested comment')).toBeDefined();
+    });
+    await user.type(screen.getByLabelText('Changes requested comment'), 'Add more tests');
+    await user.click(screen.getByLabelText('Send change request to agent'));
+    await waitFor(() => {
+      expect(requestChangesMock()).toHaveBeenCalledWith('run-009', 'Add more tests');
+    });
+
+    // Step 3: server starts revision; runStatus transitions to in_progress.
+    rerender(
+      <Wrapper>
+        <ArtifactBrowser runId="run-009" runStatus="in_progress" />
+      </Wrapper>,
+    );
+    // Bar must not be visible while the agent is revising.
+    expect(screen.queryByLabelText('Commit changes to worktree')).toBeNull();
+
+    // Step 4: second review gate arrives; runStatus returns to awaiting_review.
+    rerender(
+      <Wrapper>
+        <ArtifactBrowser runId="run-009" runStatus="awaiting_review" />
+      </Wrapper>,
+    );
+    // Bar must reappear even though requestChangesResult is still set.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+      expect(screen.getByLabelText('Request changes')).toBeDefined();
+      expect(screen.getByLabelText('Decline run')).toBeDefined();
+    });
+  });
+
+  // AB-10: Commit success triggers onCommitSuccess callback (reconnect hook for SSE).
+  // After commitRun() resolves, the caller's onCommitSuccess must be invoked so
+  // the SSE stream can reconnect and receive run.merged / run.completed events.
+  it('calls onCommitSuccess after a successful commit', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+    commitRunMock().mockResolvedValue({ run_id: 'run-010', status: 'merging' });
+
+    const onCommitSuccess = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="run-010" runStatus="awaiting_review" onCommitSuccess={onCommitSuccess} />
+      </Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Commit changes to worktree')).toBeDefined();
+    });
+
+    await user.click(screen.getByLabelText('Commit changes to worktree'));
+
+    await waitFor(() => {
+      expect(commitRunMock()).toHaveBeenCalledWith('run-010');
+      expect(onCommitSuccess).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // AB-11: Modified files in the Changes tab show an 'M' status badge (not 'D').
+  // Ensures the amber/modified color path is taken, not the red/deleted path.
+  it('modified files in Changes tab show M badge and modified aria-label', async () => {
+    getRunFilesMock().mockResolvedValue([
+      makeEntry({ path: 'src/modified.ts', status: 'modified', added_lines: 3, removed_lines: 1 }),
+    ]);
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="run-011" runStatus="in_progress" />
+      </Wrapper>,
+    );
+
+    await waitFor(() => {
+      // Status badge letter for modified must be 'M', not 'D' (deleted) or 'A' (added).
+      expect(screen.getByText('M')).toBeDefined();
+      expect(screen.queryByText('D')).toBeNull();
+    });
+
+    // The status icon must carry aria-label="modified".
+    expect(screen.getAllByLabelText('modified').length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -97,3 +97,8 @@ export interface CommitResponse {
   run_id: string;
   status: string;
 }
+
+export interface RequestChangesResponse {
+  run_id: string;
+  status: string;
+}

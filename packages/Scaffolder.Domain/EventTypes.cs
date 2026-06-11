@@ -22,4 +22,7 @@ public static class EventTypes
     public const string ToolCall          = "tool.call";
     public const string ToolResult        = "tool.result";
     public const string ToolError         = "tool.error";
+
+    public const string ReviewChangesRequested = "review.changes_requested";
+    public const string RevisionStarted        = "revision.started";
 }

@@ -369,6 +369,8 @@ function processEvent(
     case 'review.requested':
     case 'review.approved':
     case 'review.declined':
+    case 'review.changes_requested':
+    case 'revision.started':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
 
     case 'merge.completed':

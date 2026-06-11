@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CommitResponse, ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
+import type { CommitResponse, RequestChangesResponse, ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -51,9 +51,18 @@ export interface ArtifactBrowserState {
   commitResult: CommitResponse | null;
   commitError: string | null;
   commitRun: () => Promise<void>;
+  requestChangesPending: boolean;
+  requestChangesResult: RequestChangesResponse | null;
+  requestChangesError: string | null;
+  requestChanges: (comment: string) => Promise<void>;
 }
 
-export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBrowserState {
+export function useArtifactBrowser(
+  runId: string,
+  runStatus: string,
+  onRequestChangesSuccess?: () => void,
+  onCommitSuccess?: () => void,
+): ArtifactBrowserState {
   const isHistorical = HISTORICAL_STATUSES.has(runStatus);
   const isLive = runStatus === 'in_progress';
 
@@ -81,7 +90,20 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
   const [commitResult, setCommitResult] = useState<CommitResponse | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
 
+  const [requestChangesPending, setRequestChangesPending] = useState(false);
+  const [requestChangesResult, setRequestChangesResult] = useState<RequestChangesResponse | null>(null);
+  const [requestChangesError, setRequestChangesError] = useState<string | null>(null);
+
   const activeFilter = isHistorical ? 'all' : filter;
+
+  // When the run enters a new revision cycle the derived status becomes
+  // in_progress again. Clear any stale requestChangesResult so it does not
+  // suppress the review bar when the second review gate arrives.
+  useEffect(() => {
+    if (runStatus === 'in_progress') {
+      setRequestChangesResult(null);
+    }
+  }, [runStatus]);
 
   // Clear all local state when runId changes so stale data from the previous run
   // is never visible while the new fetch is in flight.
@@ -98,6 +120,8 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     setWorkspaceError(null);
     setCommitResult(null);
     setCommitError(null);
+    setRequestChangesResult(null);
+    setRequestChangesError(null);
   }, [runId]);
 
   // Fetch file list whenever filter or runId changes.
@@ -256,10 +280,34 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     try {
       const resp = await apiClient.commitRun(runId);
       setCommitResult(resp);
+      onCommitSuccess?.();
     } catch (err) {
       setCommitError(extractErrorMessage(err));
     } finally {
       setCommitPending(false);
+    }
+  };
+
+  const requestChanges = async (comment: string): Promise<void> => {
+    if (runStatus !== 'awaiting_review') return;
+    setRequestChangesPending(true);
+    setRequestChangesError(null);
+    try {
+      const resp = await apiClient.requestChanges(runId, comment);
+      setRequestChangesResult(resp);
+      onRequestChangesSuccess?.();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setRequestChangesError(
+          err.status === 403
+            ? 'Not authorized to request changes on this run.'
+            : `Error ${err.status}: ${err.body}`,
+        );
+      } else {
+        setRequestChangesError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setRequestChangesPending(false);
     }
   };
 
@@ -292,5 +340,9 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     commitResult,
     commitError,
     commitRun,
+    requestChangesPending,
+    requestChangesResult,
+    requestChangesError,
+    requestChanges,
   };
 }

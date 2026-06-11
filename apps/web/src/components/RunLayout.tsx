@@ -77,12 +77,14 @@ interface RunLayoutProps {
   centerContent: ReactNode;
   centerScrollRef?: RefObject<HTMLDivElement | null>;
   onCenterScroll?: () => void;
+  onRequestChangesSuccess?: () => void;
+  onCommitSuccess?: () => void;
 }
 
-export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll }: RunLayoutProps) {
+export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
-  const artifactState = useArtifactBrowser(runId, runStatus);
+  const artifactState = useArtifactBrowser(runId, runStatus, onRequestChangesSuccess, onCommitSuccess);
   const internalRef = useRef<HTMLDivElement>(null);
   const scrollRef = centerScrollRef ?? internalRef;
 

@@ -155,6 +155,23 @@ public sealed record WorkspaceFileDiff
     public required bool IsBinary { get; init; }
 }
 
+/// <summary>Request body for POST /api/runs/{id}/request-changes.</summary>
+public sealed record RequestChangesRequest
+{
+    [JsonPropertyName("comment")]
+    public required string Comment { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs/{id}/request-changes.</summary>
+public sealed record RequestChangesResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
 /// <summary>Shared serialization settings for the CLI.</summary>
 public static class JsonConfig
 {

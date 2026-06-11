@@ -48,17 +48,28 @@ public sealed class RunWatchLoopService
     /// Starts a supervised watch loop for the given streaming run. The loop monitors
     /// workflow events and translates them to SSE events + SQLite status updates.
     /// </summary>
-    public void StartWatching(string runId, StreamingRun streamingRun, RunStreamEntry entry, string ownerUser)
+    public void StartWatching(
+        string runId,
+        StreamingRun streamingRun,
+        RunStreamEntry entry,
+        string ownerUser,
+        int expectedGeneration,
+        CancellationToken runCt)
     {
         _ = Task.Run(async () =>
         {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
             try
             {
-                await WatchAsync(runId, streamingRun, entry, ownerUser, _appStopping).ConfigureAwait(false);
+                await WatchAsync(runId, streamingRun, entry, ownerUser, expectedGeneration, linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
             {
                 // App is shutting down — not an error.
+            }
+            catch (OperationCanceledException) when (runCt.IsCancellationRequested && !_appStopping.IsCancellationRequested)
+            {
+                _logger.LogInformation("Old workflow abandoned for run {RunId}", runId);
             }
             catch (Exception ex)
             {
@@ -69,7 +80,12 @@ public sealed class RunWatchLoopService
     }
 
     private async Task WatchAsync(
-        string runId, StreamingRun streamingRun, RunStreamEntry entry, string ownerUser, CancellationToken ct)
+        string runId,
+        StreamingRun streamingRun,
+        RunStreamEntry entry,
+        string ownerUser,
+        int expectedGeneration,
+        CancellationToken ct)
     {
         await foreach (var evt in streamingRun.WatchStreamAsync(ct))
         {
@@ -97,19 +113,18 @@ public sealed class RunWatchLoopService
 
                     entry.MarkAwaitingReview();
 
-                    var reviewSeq = entry.NextSequence();
-                    entry.Record(new RunEvent(reviewSeq, EventTypes.ReviewRequested, new
+                    entry.RecordNext(EventTypes.ReviewRequested, new
                     {
                         tree_hash = reviewReq?.TreeHash,
                         request_id = rie.Request.RequestId
-                    }));
+                    });
                     break;
 
                 case WorkflowOutputEvent woe:
-                        var isTerminal = await HandleTerminalOutputAsync(runId, woe, entry, ct).ConfigureAwait(false);
+                        var isTerminal = await HandleTerminalOutputAsync(runId, woe, entry, expectedGeneration, ct).ConfigureAwait(false);
                         if (isTerminal)
                         {
-                            _registry.Remove(runId);
+                            _registry.Abandon(runId);
                             _factory.DeleteCheckpoints(runId);
                             return;
                         }
@@ -127,8 +142,20 @@ public sealed class RunWatchLoopService
     /// watch loop preserves the registry entry and checkpoints for recovery.
     /// </summary>
     internal async Task<bool> HandleTerminalOutputAsync(
-        string runId, WorkflowOutputEvent woe, RunStreamEntry entry, CancellationToken ct)
+        string runId,
+        WorkflowOutputEvent woe,
+        RunStreamEntry entry,
+        int expectedGeneration,
+        CancellationToken ct)
     {
+        if (entry.Generation != expectedGeneration)
+        {
+            _logger.LogWarning(
+                "Ignoring terminal output from stale workflow generation for run {RunId}. ExpectedGeneration={ExpectedGeneration} ActualGeneration={ActualGeneration}",
+                runId, expectedGeneration, entry.Generation);
+            return false;
+        }
+
         var parsedRunId = RunId.Parse(runId);
 
         if (woe.Is<MergeOutput>(out var mergeOutput))
@@ -139,10 +166,8 @@ public sealed class RunWatchLoopService
                 await _runStore.TrySetTerminalStatusAsync(
                     parsedRunId, RunStatus.Merged, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
-                var approvedSeq = entry.NextSequence();
-                entry.Record(new RunEvent(approvedSeq, EventTypes.ReviewApproved, new { }));
-                var mergedSeq = entry.NextSequence();
-                entry.Record(new RunEvent(mergedSeq, EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult }));
+                entry.RecordNext(EventTypes.ReviewApproved, new { });
+                entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult });
 
                 _streamStore.Complete(runId);
                 return true;
@@ -163,10 +188,8 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
-            var approvedSeqF = entry.NextSequence();
-            entry.Record(new RunEvent(approvedSeqF, EventTypes.ReviewApproved, new { }));
-            var failedSeq = entry.NextSequence();
-            entry.Record(new RunEvent(failedSeq, EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult }));
+            entry.RecordNext(EventTypes.ReviewApproved, new { });
+            entry.RecordNext(EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult });
 
             _streamStore.Complete(runId);
             return true;
@@ -181,8 +204,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, "no_changes", CancellationToken.None).ConfigureAwait(false);
 
-            var seq = entry.NextSequence();
-            entry.Record(new RunEvent(seq, EventTypes.RunCompleted, new { result = "no_changes" }));
+            entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
 
             _streamStore.Complete(runId);
             return true;
@@ -193,8 +215,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None).ConfigureAwait(false);
 
-            var seq = entry.NextSequence();
-            entry.Record(new RunEvent(seq, EventTypes.ReviewDeclined, new { }));
+            entry.RecordNext(EventTypes.ReviewDeclined, new { });
 
             _streamStore.Complete(runId);
             return true;
@@ -210,8 +231,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "content_safety", CancellationToken.None).ConfigureAwait(false);
 
-            var seq = entry.NextSequence();
-            entry.Record(new RunEvent(seq, EventTypes.RunFailed, new { reason = "content_safety" }));
+            entry.RecordNext(EventTypes.RunFailed, new { reason = "content_safety" });
 
             _streamStore.Complete(runId);
             return true;
@@ -246,8 +266,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, reason, CancellationToken.None).ConfigureAwait(false);
 
-            var seq = entry.NextSequence();
-            entry.Record(new RunEvent(seq, EventTypes.RunFailed, new { reason }));
+            entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
         }
         catch (Exception ex)
@@ -256,7 +275,7 @@ public sealed class RunWatchLoopService
         }
         finally
         {
-            _registry.Remove(runId);
+            _registry.Abandon(runId);
         }
     }
 }

@@ -78,6 +78,14 @@ internal static class CliEntryPoint
                     }
                     return await RunCommands.ReviewAsync(api, reviewId, cts.Token);
 
+                case "request-changes":
+                    if (!TryGetRunId(args, out var requestChangesId))
+                    {
+                        return MissingRunId("request-changes");
+                    }
+                    var comment = GetFlag(args, "--comment") ?? GetFlag(args, "-m");
+                    return await RunCommands.RequestChangesAsync(api, requestChangesId, comment, cts.Token);
+
                 case "show":
                     if (!TryGetRunId(args, out var showId))
                     {
@@ -203,7 +211,8 @@ internal static class CliEntryPoint
         AnsiConsole.WriteLine("  scaffolder run submit                Submit a new run and watch it");
         AnsiConsole.WriteLine("  scaffolder run watch <run-id>        Stream events for a run");
         AnsiConsole.WriteLine("  scaffolder run review <run-id>       Review a run's diff and approve or decline");
-        AnsiConsole.WriteLine("  scaffolder run show <run-id>         Show run details");
+        AnsiConsole.WriteLine("  scaffolder run request-changes <run-id> [--comment|-m <text>]  Request changes from the agent");
+        AnsiConsole.WriteLine("  scaffolder run show <run-id>          Show run details");
         AnsiConsole.WriteLine("  scaffolder run artifacts <run-id>    Browse run artifact files and diffs");
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("  scaffolder sandbox-policy get --repository-path <path>");

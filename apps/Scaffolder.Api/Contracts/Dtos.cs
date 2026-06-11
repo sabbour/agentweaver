@@ -186,6 +186,23 @@ public sealed record CommitResponse
     public required string Status { get; init; }
 }
 
+/// <summary>Request body for POST /api/runs/{id}/request-changes.</summary>
+public sealed record RequestChangesRequest
+{
+    [JsonPropertyName("comment")]
+    public string? Comment { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs/{id}/request-changes.</summary>
+public sealed record RequestChangesResponse
+{
+    [JsonPropertyName("run_id")]
+    public required string RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
 /// <summary>One entry in the flat workspace listing returned by GET /api/runs/{id}/workspace.</summary>
 public sealed record WorkspaceNode
 {

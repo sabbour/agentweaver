@@ -6,7 +6,6 @@ import {
   DialogBody,
   DialogContent,
   DialogSurface,
-  DialogTitle,
   Spinner,
   Text,
   makeStyles,
@@ -14,7 +13,7 @@ import {
 } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { DiffViewer } from './DiffViewer';
 import { apiClient } from '../api/apiClient';
 import type { WorkspaceFileDiff, WorkspaceFileContent } from '../api/types';
@@ -32,31 +31,11 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
   },
-  titleRow: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: tokens.spacingHorizontalS,
-    overflow: 'hidden',
-  },
-  fileName: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    flexShrink: 1,
-  },
-  folderPath: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    flexShrink: 2,
+  closeBtn: {
+    position: 'absolute',
+    top: tokens.spacingVerticalXS,
+    right: tokens.spacingHorizontalXS,
+    zIndex: 10,
   },
   body: {
     display: 'flex',
@@ -64,6 +43,7 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     flex: 1,
     minHeight: '400px',
+    position: 'relative',
   },
   content: {
     flex: 1,
@@ -92,16 +72,6 @@ const useStyles = makeStyles({
 });
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function splitPath(filePath: string): { name: string; folder: string } {
-  const idx = filePath.lastIndexOf('/');
-  if (idx === -1) return { name: filePath, folder: '' };
-  return { name: filePath.slice(idx + 1), folder: filePath.slice(0, idx) };
-}
-
-// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -126,8 +96,6 @@ export function FileViewerModal({
 }: FileViewerModalProps) {
   const styles = useStyles();
   const isOpen = filePath !== null;
-
-  const { name, folder } = filePath ? splitPath(filePath) : { name: '', folder: '' };
 
   const [fileContent, setFileContent] = useState<WorkspaceFileContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
@@ -167,24 +135,16 @@ export function FileViewerModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(_, data) => { if (!data.open) onClose(); }} modalType="modal">
-      <DialogSurface className={styles.surface}>
+      <DialogSurface className={styles.surface} aria-label={filePath ?? 'File viewer'}>
         <DialogBody className={styles.body}>
-          <DialogTitle
-            action={
-              <Button
-                appearance="subtle"
-                icon={<DismissRegular />}
-                size="small"
-                onClick={onClose}
-                aria-label="Close"
-              />
-            }
-          >
-            <div className={styles.titleRow}>
-              <span className={styles.fileName}>{name}</span>
-              {folder && <span className={styles.folderPath}>{folder}</span>}
-            </div>
-          </DialogTitle>
+          <Button
+            appearance="subtle"
+            icon={<DismissRegular />}
+            size="small"
+            onClick={onClose}
+            aria-label="Close"
+            className={styles.closeBtn}
+          />
           <DialogContent className={styles.content}>
             {isChanged ? (
               diffLoading ? (
@@ -221,7 +181,7 @@ export function FileViewerModal({
             ) : (
               <SyntaxHighlighter
                 language={fileContent?.language ?? 'plaintext'}
-                style={vscDarkPlus}
+                style={oneLight}
                 showLineNumbers
                 customStyle={{ margin: 0, height: '100%', overflow: 'auto', fontSize: '13px' }}
               >
