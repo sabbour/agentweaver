@@ -505,6 +505,7 @@ app.MapGet("/api/runs/{id}/files", async (
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to fetch run {RunId} for file list", runId);
@@ -567,6 +568,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to fetch run {RunId} for file diff", runId);

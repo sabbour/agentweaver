@@ -10,15 +10,12 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
-  AddCircleRegular,
   ChevronDownRegular,
   ChevronRightRegular,
-  DismissCircleRegular,
-  DocumentCode16Regular,
-  DocumentDataRegular,
+  DocumentAddRegular,
+  DocumentDismissRegular,
+  DocumentEditRegular,
   DocumentRegular,
-  DocumentTextRegular,
-  EditRegular,
   FolderOpenRegular,
   FolderRegular,
   type FluentIcon,
@@ -101,19 +98,14 @@ function buildFileTree(
 // Icon helpers
 // ---------------------------------------------------------------------------
 
-function getFileIcon(filename: string): FluentIcon {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
-  if (['ts', 'tsx', 'cs', 'js', 'jsx'].includes(ext)) return DocumentCode16Regular;
-  if (ext === 'json') return DocumentDataRegular;
-  if (['md', 'css', 'txt'].includes(ext)) return DocumentTextRegular;
+// Returns a single combined document icon that represents both file and change status.
+// Added -> DocumentAddRegular (green), modified -> DocumentEditRegular (orange),
+// deleted -> DocumentDismissRegular (red), no status -> DocumentRegular (neutral).
+function getFileStatusIcon(status?: string): FluentIcon {
+  if (status === 'added') return DocumentAddRegular;
+  if (status === 'modified') return DocumentEditRegular;
+  if (status === 'deleted') return DocumentDismissRegular;
   return DocumentRegular;
-}
-
-function getStatusIcon(status?: string): FluentIcon | null {
-  if (status === 'added') return AddCircleRegular;
-  if (status === 'modified') return EditRegular;
-  if (status === 'deleted') return DismissCircleRegular;
-  return null;
 }
 
 function reviewResultBadgeColor(
@@ -393,14 +385,15 @@ export function FileTreePanel({ state }: FileTreePanelProps) {
         );
       }
 
-      const FileIcon = getFileIcon(node.name);
-      const StatusIcon = getStatusIcon(node.status);
+      const FileStatusIcon = getFileStatusIcon(node.status);
       const statusIconClass =
         node.status === 'added'
           ? styles.statusIconAdded
           : node.status === 'modified'
             ? styles.statusIconModified
-            : styles.statusIconDeleted;
+            : node.status === 'deleted'
+              ? styles.statusIconDeleted
+              : styles.fileIcon;
       const isSelected = node.fullPath === selectedPath;
 
       return (
@@ -416,14 +409,9 @@ export function FileTreePanel({ state }: FileTreePanelProps) {
             if (e.key === 'Enter' || e.key === ' ') handleFileSelect(node.fullPath);
           }}
         >
-          <span className={styles.fileIcon}>
-            <FileIcon />
+          <span className={statusIconClass} aria-label={node.status}>
+            <FileStatusIcon />
           </span>
-          {StatusIcon && (
-            <span className={statusIconClass} aria-label={node.status}>
-              <StatusIcon />
-            </span>
-          )}
           <Text className={styles.fileName}>{node.name}</Text>
         </div>
       );
@@ -519,7 +507,7 @@ export function DiffPanel({ state }: DiffPanelProps) {
             <Text>Binary file — diff not available</Text>
           </div>
         ) : (
-          <DiffViewer diff={diff?.diff ?? null} />
+          <DiffViewer diff={diff?.diff ?? null} filename={selectedPath ?? undefined} />
         )}
       </div>
     </div>
