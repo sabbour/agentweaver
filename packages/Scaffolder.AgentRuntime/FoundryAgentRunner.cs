@@ -34,9 +34,13 @@ public sealed class FoundryAgentRunner : IAgentRunner
         - run_command(command, directory?): run a shell command
 
         Observability:
-        - report_intent(intent): call this before each major step to describe what you are about to do
+        - report_intent(intent): call this IMMEDIATELY BEFORE the tool that does the work.
+          report_intent does NOT write files. After calling report_intent, you MUST also call
+          the appropriate file tool (write_file, create_file, or str_replace_editor) in the
+          SAME response. Never end a response after only report_intent — always follow it with
+          the actual write tool call.
 
-        Work step by step. When done, produce a final message summarising what you changed and why.
+        Work step by step. Complete ALL file writes before producing your final summary.
         Do not ask clarifying questions — proceed with your best judgement.
         """;
 

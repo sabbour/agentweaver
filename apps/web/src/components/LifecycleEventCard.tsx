@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
@@ -8,6 +8,8 @@ import {
   DismissCircleFilled,
   ShieldRegular,
   CodeRegular,
+  ChevronDownRegular,
+  ChevronRightRegular,
 } from '@fluentui/react-icons';
 import type { RunStreamEvent } from '../api/sse';
 
@@ -204,10 +206,42 @@ interface LifecycleEventCardProps {
 
 export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: LifecycleEventCardProps) {
   const styles = useStyles();
+  const [expanded, setExpanded] = useState(false);
 
   // sandbox.warning is suppressed — shown inline only if genuinely blocking.
   if (event.type === 'sandbox.warning') {
     return null;
+  }
+
+  // --- agent.system_prompt: expandable full-text card ---
+  if (event.type === 'agent.system_prompt') {
+    const p = event.payload;
+    const provider = String(p['provider'] ?? 'unknown');
+    const prompt = p['prompt'] ? String(p['prompt']) : null;
+    const note = p['note'] ? String(p['note']) : null;
+    const preview = prompt
+      ? prompt.slice(0, 120).replace(/\n/g, ' ') + `… (${prompt.length} chars)`
+      : (note ?? '');
+    return (
+      <div className={styles.card} style={{ flexDirection: 'column', alignItems: 'flex-start', cursor: prompt ? 'pointer' : undefined }}
+        onClick={prompt ? () => setExpanded(e => !e) : undefined}
+        role={prompt ? 'button' : undefined}
+        aria-expanded={prompt ? expanded : undefined}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%' }}>
+          {prompt && (expanded
+            ? <ChevronDownRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />
+            : <ChevronRightRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />)}
+          <CodeRegular className={styles.subtleIcon} aria-hidden="true" />
+          <Badge className={styles.badge} color="subtle" shape="rounded" size="small">system_prompt:{provider}</Badge>
+          <Text className={styles.summary}>{preview}</Text>
+        </div>
+        {expanded && prompt && (
+          <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
+            {prompt}
+          </Text>
+        )}
+      </div>
+    );
   }
 
   // --- terminal output line (tool.output) ---

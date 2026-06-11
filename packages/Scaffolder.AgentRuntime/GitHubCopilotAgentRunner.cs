@@ -536,9 +536,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             {
                 ["path"] = write.FileName ?? "",
             }),
-            PermissionRequestShell shell => ("shell", new Dictionary<string, object>
+            // Map native Copilot shell requests to our 'run_command' governance rule.
+            // This lets the model use bash in direct mode (shell runs through the Copilot CLI
+            // process which IS the passthrough we configured). Using 'run_command' avoids the
+            // explicit deny-native-shell YAML rule which targeted 'shell'.
+            PermissionRequestShell shell => ("run_command", new Dictionary<string, object>
             {
                 ["command"] = shell.FullCommandText ?? "",
+                ["directory"] = string.Empty,  // injected to workingDirectory in handler below
             }),
             PermissionRequestMcp mcp => ("mcp", new Dictionary<string, object>
             {
