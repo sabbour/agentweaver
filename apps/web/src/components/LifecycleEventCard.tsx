@@ -176,6 +176,18 @@ function lifecycleProps(event: RunStreamEvent): {
         summary: `${String(p['backend'] ?? '')}${p['isRealIsolation'] === false ? ' \u2014 no isolation' : ''}`,
         badgeColor: p['isRealIsolation'] === false ? 'warning' : 'informative',
       };
+    case 'agent.system_prompt': {
+      const provider = String(p['provider'] ?? 'unknown');
+      const prompt = p['prompt'] ? String(p['prompt']) : null;
+      const note = p['note'] ? String(p['note']) : null;
+      const chars = prompt ? ` (${prompt.length} chars)` : '';
+      return {
+        icon: <CodeRegular aria-hidden="true" />,
+        label: `system_prompt:${provider}`,
+        summary: prompt ? `${prompt.slice(0, 120).replace(/\n/g, ' ')}…${chars}` : (note ?? ''),
+        badgeColor: 'subtle',
+      };
+    }
     default:
       return {
         icon: null,

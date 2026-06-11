@@ -105,6 +105,9 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
+
+        // Emit the system prompt for debuggability — visible in the run stream and API logs.
+        Emit("agent.system_prompt", new { provider = "foundry", prompt = SystemPrompt });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });

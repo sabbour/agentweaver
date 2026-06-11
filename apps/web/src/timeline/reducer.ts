@@ -383,6 +383,7 @@ function processEvent(
     case 'shell.approval_required':
     case 'sandbox.selected':
     case 'sandbox.warning':
+    case 'agent.system_prompt':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
 
     default:
