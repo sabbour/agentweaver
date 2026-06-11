@@ -64,7 +64,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         // --- Governance kernel (per-run) ---
         var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(workingDirectory, ct);
-        using var governance = SandboxGovernance.Create(workingDirectory, runId, _executor, sandboxPolicy, _logger);
+        var executor = sandboxPolicy.Direct
+            ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
+            : _executor;
+        using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
         await using var client = _factory.CreateClient();
         await client.StartAsync(ct);
@@ -198,10 +201,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var agentId = $"did:mesh:scaffolder:copilot:{runId}";
 
         // --- Emit sandbox backend selection event (T019) ---
-        Emit("sandbox.selected", new { backend = _executor.BackendName, isRealIsolation = _executor.IsRealIsolation, reason = _executor.SelectionReason });
-        if (_executor.HasNetworkWarning)
+        Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
+        if (executor.HasNetworkWarning)
         {
-            Emit("sandbox.warning", new { category = "network-open", message = _executor.NetworkWarningMessage, backend = _executor.BackendName });
+            Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
         }
         if (sandboxPolicy.NetworkEnabled)
         {
@@ -211,7 +214,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 message = "Sandbox is running with outbound network enabled (network_enabled: true in .scaffolder/settings.yml). " +
                           "Network access is intentional but increases the attack surface. " +
                           "Ensure this is required for the agent's task.",
-                backend = _executor.BackendName
+                backend = executor.BackendName
             });
         }
 
@@ -227,7 +230,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             AgentId: agentId,
             WorkingDirectory: workingDirectory,
             SandboxRoot: workingDirectory,
-            Executor: _executor,
+            Executor: executor,
             FileTools: fileTools,
             SearchTools: searchTools,
             Redactor: redactor,
@@ -244,7 +247,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             EnableConfigDiscovery = false,
             Streaming = true,
             Tools = BuildCopilotTools(toolContext),
-            AvailableTools = NativeToolExclusion.AvailableToolNames(_executor.IsRealIsolation && sandboxPolicy.ShellEnabled),
+            AvailableTools = NativeToolExclusion.AvailableToolNames(executor.IsRealIsolation && sandboxPolicy.ShellEnabled),
             ExcludedTools = NativeToolExclusion.ExcludedToolNames(),
         };
 

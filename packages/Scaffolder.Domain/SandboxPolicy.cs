@@ -13,6 +13,14 @@ public sealed record SandboxPolicy
     public bool ShellEnabled { get; init; } = true;
 
     /// <summary>
+    /// Run shell commands directly without any sandbox isolation layer (bwrap/mxc).
+    /// Use only when the deployment environment itself provides isolation (e.g. a
+    /// container). When true, <c>run_command</c> executes via the host shell directly.
+    /// Default: false.
+    /// </summary>
+    public bool Direct { get; init; } = false;
+
+    /// <summary>
     /// Allow outbound network access inside the sandbox.
     /// Default: false (blocked — safer default for scaffolders vs Copilot CLI which defaults to true).
     /// When true, passes <c>NetworkPolicy { AllowOutbound = true }</c> to the sandbox engine.

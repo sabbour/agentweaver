@@ -636,6 +636,7 @@ static SandboxPolicyDto ToSandboxPolicyDto(SandboxPolicy policy) => new()
 {
     RepositoryPath             = policy.RepositoryPath,
     ShellEnabled               = policy.ShellEnabled,
+    Direct                     = policy.Direct,
     NetworkEnabled             = policy.NetworkEnabled,
     AllowedRepositoryRoots     = policy.AllowedRepositoryRoots,
     DestructiveCommandPatterns = policy.DestructiveCommandPatterns,
@@ -648,6 +649,7 @@ static SandboxPolicy ToSandboxPolicyDomain(SandboxPolicyDto dto) => new()
 {
     RepositoryPath             = dto.RepositoryPath,
     ShellEnabled               = dto.ShellEnabled,
+    Direct                     = dto.Direct,
     NetworkEnabled             = dto.NetworkEnabled,
     AllowedRepositoryRoots     = dto.AllowedRepositoryRoots,
     DestructiveCommandPatterns = dto.DestructiveCommandPatterns,

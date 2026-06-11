@@ -92,6 +92,13 @@ internal sealed class SandboxPolicyYamlDto
     public bool ShellEnabled { get; set; } = true;
 
     /// <summary>
+    /// Run commands directly without sandbox isolation (bwrap/mxc).
+    /// Use when the deployment environment itself provides isolation.
+    /// Default: false.
+    /// </summary>
+    public bool Direct { get; set; } = false;
+
+    /// <summary>
     /// Allow outbound network inside the sandbox.
     /// Default: false (more restrictive than Copilot CLI which defaults to true).
     /// </summary>
@@ -111,6 +118,7 @@ internal sealed class SandboxPolicyYamlDto
     {
         RepositoryPath = repositoryPath,
         ShellEnabled = ShellEnabled,
+        Direct = Direct,
         NetworkEnabled = NetworkEnabled,
         AllowedRepositoryRoots = AllowedRepositoryRoots,
         DestructiveCommandPatterns = DestructiveCommandPatterns,
@@ -122,6 +130,7 @@ internal sealed class SandboxPolicyYamlDto
     public static SandboxPolicyYamlDto FromDomain(SandboxPolicy p) => new()
     {
         ShellEnabled = p.ShellEnabled,
+        Direct = p.Direct,
         NetworkEnabled = p.NetworkEnabled,
         AllowedRepositoryRoots = [.. p.AllowedRepositoryRoots],
         DestructiveCommandPatterns = [.. p.DestructiveCommandPatterns],

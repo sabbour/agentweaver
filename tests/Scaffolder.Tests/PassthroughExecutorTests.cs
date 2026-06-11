@@ -1,61 +1,51 @@
-using System.Diagnostics;
 using FluentAssertions;
 using Scaffolder.SandboxExec;
 
 namespace Scaffolder.Tests.Sandbox;
 
 /// <summary>
-/// T026 — Unit tests for PassthroughExecutor (deny-by-default fallback executor).
-/// Tested via SandboxExecutorFactory.CreatePassthrough() because PassthroughExecutor is internal.
+/// T026 — Unit tests for PassthroughExecutor (direct execution fallback).
 /// </summary>
 public sealed class PassthroughExecutorTests
 {
     private readonly ISandboxExecutor _executor =
-        SandboxExecutorFactory.CreatePassthrough("unit-test: no isolation available");
+        SandboxExecutorFactory.CreatePassthrough("unit-test: direct execution");
 
     [Fact]
     public void IsRealIsolation_IsFalse()
     {
         _executor.IsRealIsolation.Should().BeFalse(
-            "passthrough is a deny-by-default fallback and provides no real process isolation");
+            "passthrough provides no process isolation — relies on deployment environment");
     }
 
     [Fact]
-    public async Task ExecuteAsync_ReturnsDeniedResult_WithExitCodeMinus1()
+    public void BackendName_IsDirect()
     {
-        var result = await _executor.ExecuteAsync(MakeCommand());
+        _executor.BackendName.Should().Be("direct");
+    }
 
-        result.ExitCode.Should().Be(-1);
-        result.Stderr.Should().Contain("Shell execution denied");
+    [Fact]
+    public async Task ExecuteAsync_RunsCommand_ReturnsOutput()
+    {
+        // Use a command that works on both Windows and Linux
+        var command = OperatingSystem.IsWindows() ? "echo hello" : "echo hello";
+        var result = await _executor.ExecuteAsync(
+            new SandboxCommand(command, Path.GetTempPath(), null, new SandboxFsPolicy([], [], []), 5000));
+
+        result.ExitCode.Should().Be(0);
+        result.Stdout.Should().Contain("hello");
         result.TimedOut.Should().BeFalse();
-        result.OutputTruncated.Should().BeFalse();
-        result.Stdout.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ExecuteAsync_NeverSpawnsProcess()
+    public async Task StreamAsync_YieldsOutputAndExitCode()
     {
-        var before = Process.GetProcesses().Length;
-        _ = await _executor.ExecuteAsync(MakeCommand());
-        var after = Process.GetProcesses().Length;
-
-        // Allow minor OS-level process-count variance (≤3) but no new process from our executor.
-        after.Should().BeLessThanOrEqualTo(before + 3,
-            "passthrough executor must not spawn any process");
-    }
-
-    [Fact]
-    public async Task StreamAsync_YieldsOnlyExitCodeChunk_WithDenyMessage()
-    {
+        var command = OperatingSystem.IsWindows() ? "echo hi" : "echo hi";
         var chunks = new List<SandboxOutputChunk>();
-        await foreach (var chunk in _executor.StreamAsync(MakeCommand()))
+        await foreach (var chunk in _executor.StreamAsync(
+            new SandboxCommand(command, Path.GetTempPath(), null, new SandboxFsPolicy([], [], []), 5000)))
             chunks.Add(chunk);
 
-        chunks.Should().HaveCount(1, "passthrough yields exactly one terminal chunk");
-        chunks[0].Stream.Should().Be(SandboxOutputStream.ExitCode);
-        chunks[0].Data.Should().Contain("Shell execution denied");
+        chunks.Should().Contain(c => c.Stream == SandboxOutputStream.ExitCode && c.Data == "0");
     }
-
-    private static SandboxCommand MakeCommand() =>
-        new("echo hello", Path.GetTempPath(), null, new SandboxFsPolicy([], [], []), 5000);
 }

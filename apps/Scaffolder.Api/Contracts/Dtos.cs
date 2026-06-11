@@ -92,6 +92,9 @@ public sealed record SandboxPolicyDto
     [JsonPropertyName("shell_enabled")]
     public bool ShellEnabled { get; init; }
 
+    [JsonPropertyName("direct")]
+    public bool Direct { get; init; }
+
     [JsonPropertyName("network_enabled")]
     public bool NetworkEnabled { get; init; }
 
