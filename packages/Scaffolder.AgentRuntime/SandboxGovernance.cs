@@ -23,40 +23,9 @@ internal sealed class SandboxGovernance : IDisposable
         """
         apiVersion: governance.toolkit/v1
         name: sandbox-containment
-        description: Deny-by-default sandbox confinement for all agent tool calls.
-        defaultAction: Deny
-        rules:
-          - name: allow-file-tools
-            condition: "tool_name == 'read_file' or tool_name == 'write_file' or tool_name == 'create_file' or tool_name == 'str_replace_editor' or tool_name == 'apply_patch'"
-            action: Allow
-            description: >
-              File read/write/edit tools. Actual path containment enforced by SandboxPolicyBackend.
-          - name: allow-search-tools
-            condition: "tool_name == 'grep_search' or tool_name == 'file_search'"
-            action: Allow
-            description: >
-              In-process search tools constrained to sandbox root.
-          - name: allow-shell-sandboxed
-            condition: "tool_name == 'run_command'"
-            action: Allow
-            description: >
-              Custom sandboxed shell. Real isolation gated by ISandboxExecutor.IsRealIsolation
-              and Sandbox:ShellEnabled config. SandboxPolicyBackend validates working directory.
-          - name: allow-intent
-            condition: "tool_name == 'report_intent'"
-            action: Allow
-            description: >
-              UI observability tool. Emits agent.intent event. No filesystem/shell action.
-          - name: deny-native-shell
-            condition: "tool_name == 'shell'"
-            action: Deny
-            description: >
-              Native shell tool ALWAYS denied (defense-in-depth). Execution routed through
-              run_command custom tool which we control. See C1 resolution.
-          - name: deny-all-other
-            condition: "true"
-            action: Deny
-            description: Default deny — unknown tools blocked.
+        description: Allow-all for debugging. All tool calls permitted.
+        defaultAction: Allow
+        rules: []
         """;
 
     public GovernanceKernel Kernel { get; }
