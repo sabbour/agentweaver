@@ -77,3 +77,14 @@ export interface WorkspaceFileDiff {
   status: 'added' | 'modified' | 'deleted';
   is_binary: boolean;
 }
+
+export interface WorkspaceNode {
+  path: string;
+  is_folder: boolean;
+  status: 'added' | 'modified' | 'deleted' | null;
+}
+
+export interface CommitResponse {
+  run_id: string;
+  status: string;
+}

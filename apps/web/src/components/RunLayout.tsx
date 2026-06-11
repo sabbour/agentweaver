@@ -2,7 +2,8 @@ import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ChevronLeftRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
-import { FileTreePanel, DiffPanel } from './ArtifactBrowser';
+import { FileTreePanel } from './ArtifactBrowser';
+import { FileViewerModal } from './FileViewerModal';
 
 const useStyles = makeStyles({
   root: {
@@ -23,23 +24,9 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
   },
   leftPanelExpanded: {
-    width: '240px',
+    width: '260px',
   },
   leftPanelCollapsed: {
-    width: '28px',
-  },
-  rightPanel: {
-    flexShrink: 0,
-    display: 'flex',
-    flexDirection: 'row',
-    overflow: 'hidden',
-    transition: 'width 0.15s ease',
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  rightPanelExpanded: {
-    width: '480px',
-  },
-  rightPanelCollapsed: {
     width: '28px',
   },
   center: {
@@ -95,14 +82,17 @@ interface RunLayoutProps {
 export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
-  const [rightExpanded, setRightExpanded] = useState(true);
   const artifactState = useArtifactBrowser(runId, runStatus);
   const internalRef = useRef<HTMLDivElement>(null);
   const scrollRef = centerScrollRef ?? internalRef;
 
+  const handleFileClick = (path: string, isChanged = true) => {
+    artifactState.handleFileSelect(path, isChanged);
+  };
+
   return (
     <div className={styles.root}>
-      {/* Left panel — file tree */}
+      {/* Left panel — file tree with tabs */}
       <div
         className={mergeClasses(
           styles.leftPanel,
@@ -111,7 +101,7 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
       >
         {leftExpanded && (
           <div className={styles.panelContent}>
-            <FileTreePanel state={artifactState} />
+            <FileTreePanel state={artifactState} onFileClick={handleFileClick} />
           </div>
         )}
         <div className={mergeClasses(styles.toggleStrip, styles.toggleStripLeft)}>
@@ -132,32 +122,15 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
       {/* Center — run timeline or run detail */}
       <div ref={scrollRef} onScroll={onCenterScroll} className={styles.center}>{centerContent}</div>
 
-      {/* Right panel — diff viewer */}
-      <div
-        className={mergeClasses(
-          styles.rightPanel,
-          rightExpanded ? styles.rightPanelExpanded : styles.rightPanelCollapsed,
-        )}
-      >
-        <div className={styles.toggleStrip}>
-          <Button
-            appearance="subtle"
-            className={styles.toggleButton}
-            size="small"
-            onClick={() => setRightExpanded((v) => !v)}
-            aria-label={rightExpanded ? 'Collapse diff viewer' : 'Expand diff viewer'}
-          >
-            {rightExpanded
-              ? <ChevronRightRegular style={{ fontSize: '16px' }} />
-              : <ChevronLeftRegular style={{ fontSize: '16px' }} />}
-          </Button>
-        </div>
-        {rightExpanded && (
-          <div className={styles.panelContent}>
-            <DiffPanel state={artifactState} />
-          </div>
-        )}
-      </div>
+      {/* File viewer modal — opens when a file is selected */}
+      <FileViewerModal
+        filePath={artifactState.selectedPath}
+        onClose={artifactState.clearSelection}
+        diff={artifactState.diff}
+        diffLoading={artifactState.diffLoading}
+        diffError={artifactState.diffError}
+        isChangedFile={artifactState.selectedPathIsChanged}
+      />
     </div>
   );
 }

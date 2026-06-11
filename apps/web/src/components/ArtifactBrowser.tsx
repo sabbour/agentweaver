@@ -4,6 +4,8 @@ import {
   Button,
   MessageBar,
   Spinner,
+  Tab,
+  TabList,
   Text,
   makeStyles,
   mergeClasses,
@@ -25,6 +27,7 @@ import {
   type ArtifactBrowserState,
 } from '../hooks/useArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
+import type { WorkspaceNode } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Tree data model
@@ -94,6 +97,52 @@ function buildFileTree(
   return toSortedArray(rootMap);
 }
 
+function buildWorkspaceTree(nodes: WorkspaceNode[]): TreeNode[] {
+  const rootMap = new Map<string, TreeNodeInternal>();
+
+  for (const node of nodes) {
+    const segments = node.path.split('/');
+    let currentMap = rootMap;
+
+    for (let i = 0; i < segments.length; i++) {
+      const name = segments[i];
+      const isLast = i === segments.length - 1;
+      const pathSoFar = segments.slice(0, i + 1).join('/');
+
+      if (!currentMap.has(name)) {
+        currentMap.set(name, {
+          name,
+          fullPath: pathSoFar,
+          isFolder: isLast ? node.is_folder : true,
+          status: isLast && node.status ? node.status : undefined,
+          childrenMap: new Map(),
+        });
+      }
+
+      if (!isLast) {
+        currentMap = currentMap.get(name)!.childrenMap;
+      }
+    }
+  }
+
+  function toSortedArray(map: Map<string, TreeNodeInternal>): TreeNode[] {
+    const nodes = [...map.values()];
+    nodes.sort((a, b) => {
+      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return nodes.map((n) => ({
+      name: n.name,
+      fullPath: n.fullPath,
+      isFolder: n.isFolder,
+      status: n.status,
+      children: toSortedArray(n.childrenMap),
+    }));
+  }
+
+  return toSortedArray(rootMap);
+}
+
 // ---------------------------------------------------------------------------
 // Icon helpers
 // ---------------------------------------------------------------------------
@@ -129,6 +178,25 @@ const useFileTreeStyles = makeStyles({
     height: '100%',
     overflow: 'hidden',
   },
+  tabListWrapper: {
+    flexShrink: 0,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    padding: `0 ${tokens.spacingHorizontalXS}`,
+  },
+  commitBar: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    flexShrink: 0,
+  },
+  commitError: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+  },
   reviewBar: {
     display: 'flex',
     flexDirection: 'row',
@@ -152,9 +220,6 @@ const useFileTreeStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     flexShrink: 0,
-  },
-  tabListWrapper: {
-    display: 'none',
   },
   fileList: {
     overflowY: 'auto',
@@ -311,14 +376,185 @@ const useStyles = makeStyles({
 });
 
 // ---------------------------------------------------------------------------
+// Shared tree renderer
+// ---------------------------------------------------------------------------
+
+interface TreeRendererProps {
+  nodes: TreeNode[];
+  depth: number;
+  selectedPath: string | null;
+  onFileClick: (path: string, isChanged: boolean) => void;
+  styles: ReturnType<typeof useFileTreeStyles>;
+  toggledFolders: Set<string>;
+  toggleFolder: (path: string) => void;
+  defaultChangedFlag?: boolean;
+}
+
+function renderTreeNodes({
+  nodes,
+  depth,
+  selectedPath,
+  onFileClick,
+  styles,
+  toggledFolders,
+  toggleFolder,
+  defaultChangedFlag = true,
+}: TreeRendererProps): React.ReactNode[] {
+  return nodes.map((node) => {
+    if (node.isFolder) {
+      const expanded = depth === 0 ? !toggledFolders.has(node.fullPath) : toggledFolders.has(node.fullPath);
+      return (
+        <div key={node.fullPath}>
+          <div
+            className={styles.treeRow}
+            style={{ paddingLeft: `${depth * 12 + 8}px` }}
+            onClick={() => toggleFolder(node.fullPath)}
+            role="button"
+            tabIndex={0}
+            aria-expanded={expanded}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') toggleFolder(node.fullPath);
+            }}
+          >
+            <span className={styles.chevronIcon}>
+              {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
+            </span>
+            <span className={styles.folderIcon}>
+              {expanded ? <FolderOpenRegular /> : <FolderRegular />}
+            </span>
+            <Text className={styles.folderName}>{node.name}</Text>
+          </div>
+          {expanded && renderTreeNodes({
+            nodes: node.children,
+            depth: depth + 1,
+            selectedPath,
+            onFileClick,
+            styles,
+            toggledFolders,
+            toggleFolder,
+            defaultChangedFlag,
+          })}
+        </div>
+      );
+    }
+
+    const isChanged = node.status !== undefined || defaultChangedFlag;
+    const FileStatusIcon = getFileStatusIcon(node.status);
+    const statusIconClass =
+      node.status === 'added'
+        ? styles.statusIconAdded
+        : node.status === 'modified'
+          ? styles.statusIconModified
+          : node.status === 'deleted'
+            ? styles.statusIconDeleted
+            : styles.fileIcon;
+    const isSelected = node.fullPath === selectedPath;
+
+    return (
+      <div
+        key={node.fullPath}
+        className={mergeClasses(styles.treeRow, isSelected ? styles.treeRowSelected : undefined)}
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        onClick={() => onFileClick(node.fullPath, isChanged)}
+        role="button"
+        tabIndex={0}
+        title={node.fullPath}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') onFileClick(node.fullPath, isChanged);
+        }}
+      >
+        <span className={statusIconClass} aria-label={node.status ?? undefined}>
+          <FileStatusIcon />
+        </span>
+        <Text className={styles.fileName}>{node.name}</Text>
+      </div>
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
+// FilesTabPanel
+// ---------------------------------------------------------------------------
+
+interface FilesTabPanelProps {
+  workspaceFiles: WorkspaceNode[];
+  workspaceLoading: boolean;
+  workspaceError: string | null;
+  selectedPath: string | null;
+  onFileClick: (path: string, isChanged: boolean) => void;
+}
+
+export function FilesTabPanel({
+  workspaceFiles,
+  workspaceLoading,
+  workspaceError,
+  selectedPath,
+  onFileClick,
+}: FilesTabPanelProps) {
+  const styles = useFileTreeStyles();
+  const [toggledFolders, setToggledFolders] = useState<Set<string>>(() => new Set<string>());
+
+  const tree = useMemo(() => buildWorkspaceTree(workspaceFiles), [workspaceFiles]);
+
+  const toggleFolder = (fullPath: string) => {
+    setToggledFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(fullPath)) next.delete(fullPath);
+      else next.add(fullPath);
+      return next;
+    });
+  };
+
+  if (workspaceLoading) {
+    return (
+      <div className={styles.spinnerWrapper}>
+        <Spinner size="tiny" />
+      </div>
+    );
+  }
+
+  if (workspaceError) {
+    return (
+      <div className={styles.emptyState}>
+        <Text>{workspaceError}</Text>
+      </div>
+    );
+  }
+
+  if (workspaceFiles.length === 0) {
+    return (
+      <div className={styles.emptyState}>
+        <Text>No files</Text>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {renderTreeNodes({
+        nodes: tree,
+        depth: 0,
+        selectedPath,
+        onFileClick,
+        styles,
+        toggledFolders,
+        toggleFolder,
+        defaultChangedFlag: false,
+      })}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // FileTreePanel
 // ---------------------------------------------------------------------------
 
 interface FileTreePanelProps {
   state: ArtifactBrowserState;
+  onFileClick?: (path: string, isChanged?: boolean) => void;
 }
 
-export function FileTreePanel({ state }: FileTreePanelProps) {
+export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
   const styles = useFileTreeStyles();
   const {
     runStatus,
@@ -331,17 +567,30 @@ export function FileTreePanel({ state }: FileTreePanelProps) {
     reviewResult,
     reviewError,
     submitReview,
+    activeTab,
+    setActiveTab,
+    workspaceFiles,
+    workspaceLoading,
+    workspaceError,
+    commitPending,
+    commitResult,
+    commitError,
+    commitRun,
   } = state;
+
+  const fileClickHandler = (path: string, isChanged = true) => {
+    if (onFileClick) {
+      onFileClick(path, isChanged);
+    } else {
+      handleFileSelect(path, isChanged);
+    }
+  };
 
   const tree = useMemo(() => buildFileTree(files), [files]);
 
   // Tracks folders toggled from their default state.
   // Top-level folders (depth 0) start expanded; nested folders start collapsed.
-  // Each toggle flips the folder from its default.
   const [toggledFolders, setToggledFolders] = useState<Set<string>>(() => new Set<string>());
-
-  const isFolderExpanded = (fullPath: string, depth: number): boolean =>
-    depth === 0 ? !toggledFolders.has(fullPath) : toggledFolders.has(fullPath);
 
   const toggleFolder = (fullPath: string) => {
     setToggledFolders((prev) => {
@@ -355,122 +604,124 @@ export function FileTreePanel({ state }: FileTreePanelProps) {
     });
   };
 
-  const renderTree = (nodes: TreeNode[], depth: number) => {
-    return nodes.map((node) => {
-      if (node.isFolder) {
-        const expanded = isFolderExpanded(node.fullPath, depth);
-        return (
-          <div key={node.fullPath}>
-            <div
-              className={styles.treeRow}
-              style={{ paddingLeft: `${depth * 12 + 8}px` }}
-              onClick={() => toggleFolder(node.fullPath)}
-              role="button"
-              tabIndex={0}
-              aria-expanded={expanded}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') toggleFolder(node.fullPath);
-              }}
-            >
-              <span className={styles.chevronIcon}>
-                {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
-              </span>
-              <span className={styles.folderIcon}>
-                {expanded ? <FolderOpenRegular /> : <FolderRegular />}
-              </span>
-              <Text className={styles.folderName}>{node.name}</Text>
-            </div>
-            {expanded && renderTree(node.children, depth + 1)}
-          </div>
-        );
-      }
-
-      const FileStatusIcon = getFileStatusIcon(node.status);
-      const statusIconClass =
-        node.status === 'added'
-          ? styles.statusIconAdded
-          : node.status === 'modified'
-            ? styles.statusIconModified
-            : node.status === 'deleted'
-              ? styles.statusIconDeleted
-              : styles.fileIcon;
-      const isSelected = node.fullPath === selectedPath;
-
-      return (
-        <div
-          key={node.fullPath}
-          className={mergeClasses(styles.treeRow, isSelected ? styles.treeRowSelected : undefined)}
-          style={{ paddingLeft: `${depth * 12 + 8}px` }}
-          onClick={() => handleFileSelect(node.fullPath)}
-          role="button"
-          tabIndex={0}
-          title={node.fullPath}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') handleFileSelect(node.fullPath);
-          }}
-        >
-          <span className={statusIconClass} aria-label={node.status}>
-            <FileStatusIcon />
-          </span>
-          <Text className={styles.fileName}>{node.name}</Text>
-        </div>
-      );
-    });
-  };
-
   const showReviewBar = runStatus === 'awaiting_review' && reviewResult === null;
 
   return (
     <div className={styles.root}>
-      {showReviewBar && (
-        <div className={styles.reviewBar}>
-          {reviewPending ? (
-            <Spinner size="tiny" />
-          ) : (
-            <>
-              <Button
-                appearance="primary"
-                size="small"
-                disabled={reviewPending}
-                onClick={() => void submitReview(true)}
-              >
-                Approve
-              </Button>
-              <Button
-                appearance="secondary"
-                size="small"
-                disabled={reviewPending}
-                onClick={() => void submitReview(false)}
-              >
-                Decline
-              </Button>
-            </>
-          )}
-          {reviewError && <Text className={styles.reviewError}>{reviewError}</Text>}
-        </div>
-      )}
-      {reviewResult !== null && (
-        <div className={styles.reviewResultBar}>
-          <Badge color={reviewResultBadgeColor(reviewResult.status)}>{reviewResult.status}</Badge>
-        </div>
-      )}
-      <div className={styles.fileList}>
-        {filesLoading ? (
-          <div className={styles.spinnerWrapper}>
-            <Spinner size="tiny" />
-          </div>
-        ) : filesError ? (
-          <div className={styles.emptyState}>
-            <Text>{filesError}</Text>
-          </div>
-        ) : files.length === 0 ? (
-          <div className={styles.emptyState}>
-            <Text>No changes</Text>
-          </div>
-        ) : (
-          renderTree(tree, 0)
-        )}
+      {/* Tab list */}
+      <div className={styles.tabListWrapper}>
+        <TabList
+          selectedValue={activeTab}
+          onTabSelect={(_, data) => setActiveTab(data.value as 'changes' | 'files')}
+          size="small"
+        >
+          <Tab value="changes">Changes</Tab>
+          <Tab value="files">Files</Tab>
+        </TabList>
       </div>
+
+      {activeTab === 'changes' && (
+        <>
+          {/* Commit Changes button */}
+          {runStatus === 'awaiting_review' && commitResult === null && (
+            <div className={styles.commitBar}>
+              {commitPending ? (
+                <Spinner size="tiny" />
+              ) : (
+                <Button
+                  appearance="primary"
+                  size="small"
+                  style={{ width: '100%' }}
+                  disabled={commitPending}
+                  onClick={() => void commitRun()}
+                >
+                  Commit Changes
+                </Button>
+              )}
+              {commitError && <Text className={styles.commitError}>{commitError}</Text>}
+            </div>
+          )}
+          {commitResult !== null && (
+            <div className={styles.reviewResultBar}>
+              <Badge color="success">{commitResult.status}</Badge>
+            </div>
+          )}
+
+          {/* Approve/Decline bar */}
+          {showReviewBar && (
+            <div className={styles.reviewBar}>
+              {reviewPending ? (
+                <Spinner size="tiny" />
+              ) : (
+                <>
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    disabled={reviewPending}
+                    onClick={() => void submitReview(true)}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    disabled={reviewPending}
+                    onClick={() => void submitReview(false)}
+                  >
+                    Decline
+                  </Button>
+                </>
+              )}
+              {reviewError && <Text className={styles.reviewError}>{reviewError}</Text>}
+            </div>
+          )}
+          {reviewResult !== null && (
+            <div className={styles.reviewResultBar}>
+              <Badge color={reviewResultBadgeColor(reviewResult.status)}>{reviewResult.status}</Badge>
+            </div>
+          )}
+
+          {/* Changes file list */}
+          <div className={styles.fileList}>
+            {filesLoading ? (
+              <div className={styles.spinnerWrapper}>
+                <Spinner size="tiny" />
+              </div>
+            ) : filesError ? (
+              <div className={styles.emptyState}>
+                <Text>{filesError}</Text>
+              </div>
+            ) : files.length === 0 ? (
+              <div className={styles.emptyState}>
+                <Text>No changes</Text>
+              </div>
+            ) : (
+              renderTreeNodes({
+                nodes: tree,
+                depth: 0,
+                selectedPath,
+                onFileClick: fileClickHandler,
+                styles,
+                toggledFolders,
+                toggleFolder,
+                defaultChangedFlag: true,
+              })
+            )}
+          </div>
+        </>
+      )}
+
+      {activeTab === 'files' && (
+        <div className={styles.fileList}>
+          <FilesTabPanel
+            workspaceFiles={workspaceFiles}
+            workspaceLoading={workspaceLoading}
+            workspaceError={workspaceError}
+            selectedPath={selectedPath}
+            onFileClick={fileClickHandler}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry } from '../api/types';
+import type { CommitResponse, ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -32,14 +32,25 @@ export interface ArtifactBrowserState {
   filesLoading: boolean;
   filesError: string | null;
   selectedPath: string | null;
+  selectedPathIsChanged: boolean;
   diff: WorkspaceFileDiff | null;
   diffLoading: boolean;
   diffError: string | null;
-  handleFileSelect: (path: string) => void;
+  handleFileSelect: (path: string, isChanged?: boolean) => void;
+  clearSelection: () => void;
   reviewPending: boolean;
   reviewResult: ReviewResponse | null;
   reviewError: string | null;
   submitReview: (approved: boolean) => Promise<void>;
+  activeTab: 'changes' | 'files';
+  setActiveTab: (tab: 'changes' | 'files') => void;
+  workspaceFiles: WorkspaceNode[];
+  workspaceLoading: boolean;
+  workspaceError: string | null;
+  commitPending: boolean;
+  commitResult: CommitResponse | null;
+  commitError: string | null;
+  commitRun: () => Promise<void>;
 }
 
 export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBrowserState {
@@ -52,6 +63,7 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
   const [filesError, setFilesError] = useState<string | null>(null);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedPathIsChanged, setSelectedPathIsChanged] = useState(true);
   const [diff, setDiff] = useState<WorkspaceFileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -60,6 +72,15 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
   const [reviewResult, setReviewResult] = useState<ReviewResponse | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
+  const [activeTab, setActiveTab] = useState<'changes' | 'files'>('changes');
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceNode[]>([]);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+
+  const [commitPending, setCommitPending] = useState(false);
+  const [commitResult, setCommitResult] = useState<CommitResponse | null>(null);
+  const [commitError, setCommitError] = useState<string | null>(null);
+
   const activeFilter = isHistorical ? 'all' : filter;
 
   // Clear all local state when runId changes so stale data from the previous run
@@ -67,10 +88,16 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
   useEffect(() => {
     setFiles([]); // eslint-disable-line react-hooks/set-state-in-effect
     setSelectedPath(null);
+    setSelectedPathIsChanged(true);
     setDiff(null);
     setFilter('all');
     setReviewResult(null);
     setReviewError(null);
+    setActiveTab('changes');
+    setWorkspaceFiles([]);
+    setWorkspaceError(null);
+    setCommitResult(null);
+    setCommitError(null);
   }, [runId]);
 
   // Fetch file list whenever filter or runId changes.
@@ -115,10 +142,36 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     };
   }, [runId, activeFilter, isLive]);
 
-  // Fetch diff when selected file changes.
+  // Fetch workspace files when the Files tab is active.
+  useEffect(() => {
+    if (activeTab !== 'files') return;
+
+    let active = true;
+
+    apiClient
+      .getRunWorkspace(runId)
+      .then((data) => {
+        if (active) {
+          setWorkspaceFiles(data);
+          setWorkspaceLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          setWorkspaceError(extractErrorMessage(err));
+          setWorkspaceLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [runId, activeTab]);
+
+  // Fetch diff when selected file changes (only for changed files).
   // Loading state is reset in the file selection handler, not here.
   useEffect(() => {
-    if (!selectedPath) return;
+    if (!selectedPath || !selectedPathIsChanged) return;
 
     let active = true;
 
@@ -141,7 +194,16 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     return () => {
       active = false;
     };
-  }, [runId, selectedPath]);
+  }, [runId, selectedPath, selectedPathIsChanged]);
+
+  const handleSetActiveTab = (tab: 'changes' | 'files') => {
+    if (tab === 'files') {
+      setWorkspaceLoading(true);
+      setWorkspaceError(null);
+      setWorkspaceFiles([]);
+    }
+    setActiveTab(tab);
+  };
 
   const handleFilterChange = (newFilter: FilterValue) => {
     if (isHistorical) return;
@@ -151,11 +213,22 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     setFilesError(null);
   };
 
-  const handleFileSelect = (path: string) => {
+  const handleFileSelect = (path: string, isChanged = true) => {
     setSelectedPath(path);
-    setDiffLoading(true);
-    setDiffError(null);
-    setDiff(null);
+    setSelectedPathIsChanged(isChanged);
+    if (isChanged) {
+      setDiffLoading(true);
+      setDiffError(null);
+      setDiff(null);
+    } else {
+      setDiff(null);
+      setDiffLoading(false);
+      setDiffError(null);
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedPath(null);
   };
 
   const submitReview = async (approved: boolean): Promise<void> => {
@@ -180,6 +253,20 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     }
   };
 
+  const commitRun = async (): Promise<void> => {
+    if (runStatus !== 'awaiting_review') return;
+    setCommitPending(true);
+    setCommitError(null);
+    try {
+      const resp = await apiClient.commitRun(runId);
+      setCommitResult(resp);
+    } catch (err) {
+      setCommitError(extractErrorMessage(err));
+    } finally {
+      setCommitPending(false);
+    }
+  };
+
   return {
     runStatus,
     filter,
@@ -190,13 +277,24 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     filesLoading,
     filesError,
     selectedPath,
+    selectedPathIsChanged,
     diff,
     diffLoading,
     diffError,
     handleFileSelect,
+    clearSelection,
     reviewPending,
     reviewResult,
     reviewError,
     submitReview,
+    activeTab,
+    setActiveTab: handleSetActiveTab,
+    workspaceFiles,
+    workspaceLoading,
+    workspaceError,
+    commitPending,
+    commitResult,
+    commitError,
+    commitRun,
   };
 }
