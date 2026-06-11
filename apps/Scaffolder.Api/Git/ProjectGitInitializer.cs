@@ -11,7 +11,7 @@ namespace Scaffolder.Api.Git;
 /// For from-GitHub projects: clones the repository using an ephemeral credential that is
 /// never stored or logged.
 /// </summary>
-public sealed class ProjectGitInitializer
+public class ProjectGitInitializer
 {
     private readonly ILogger<ProjectGitInitializer> _logger;
 
@@ -26,7 +26,7 @@ public sealed class ProjectGitInitializer
     /// Returns the branch name that was created (may differ from the requested name if the
     /// repo's init.defaultBranch config overrides it — we explicitly create the branch).
     /// </summary>
-    public string InitBlank(string workingDirectory, string defaultBranch)
+    public virtual string InitBlank(string workingDirectory, string defaultBranch)
     {
         Repository.Init(workingDirectory);
         using var repo = new Repository(workingDirectory);
@@ -60,7 +60,7 @@ public sealed class ProjectGitInitializer
     /// the provided <paramref name="accessToken"/> as an ephemeral credential.
     /// The token is NEVER logged or stored. Returns the default branch name.
     /// </summary>
-    public string Clone(string workingDirectory, string sourceRepository, string accessToken)
+    public virtual string Clone(string workingDirectory, string sourceRepository, string accessToken)
     {
         // Normalize "owner/repo" -> full HTTPS URL
         var url = sourceRepository.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
