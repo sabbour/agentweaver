@@ -33,22 +33,13 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// </summary>
     private const string CopilotSystemPrompt =
         """
-        IMPORTANT: Use ONLY the custom tools listed below. Do NOT call bash, view, glob, ls,
-        grep, curl, git, gh, or any other native tool — they are disabled and will error.
+        You are a coding and file editing assistant. Complete the given task using the available tools.
 
-        Available tools:
-        - read_file(path): read a file (relative path from working directory)
-        - write_file(path, content): overwrite or create a file with full content
-        - create_file(path, file_text): create a new file (fails if already exists)
-        - str_replace_editor(path, old_str, new_str): replace a unique string in a file
-        - apply_patch(patch): apply a Copilot CLI patch
-        - grep_search(pattern): search files for a pattern
-        - file_search(pattern): find files by glob pattern
-        - run_command(command): run a shell command
-        - report_intent(intent): describe what you are about to do
+        Call report_intent(intent) before each major step to describe what you are about to do.
+        report_intent does NOT write files — always follow it with the actual tool call in the same response.
 
-        All path arguments must be RELATIVE — no absolute paths.
-        Work step by step. Complete the full task including all file writes.
+        Work step by step. Do not produce a final summary until ALL writes are done.
+        Do not ask clarifying questions — proceed with your best judgement.
         """;
 
     /// <summary>
