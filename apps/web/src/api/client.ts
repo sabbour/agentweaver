@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -75,6 +75,60 @@ export class ScaffolderApiClient {
 
   updateSandboxPolicy(policy: Pick<SandboxPolicy, 'repository_path' | 'shell_enabled' | 'direct' | 'network_enabled'>): Promise<SandboxPolicy> {
     return this.request<SandboxPolicy>('PUT', '/api/sandbox-policy', policy);
+  }
+
+  // Projects
+  listProjects(): Promise<Project[]> {
+    return this.request<Project[]>('GET', '/api/projects');
+  }
+
+  getProject(projectId: string): Promise<Project> {
+    return this.request<Project>('GET', `/api/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  createProject(req: CreateProjectRequest): Promise<Project> {
+    return this.request<Project>('POST', '/api/projects', req);
+  }
+
+  renameProject(projectId: string, name: string): Promise<void> {
+    return this.request<void>('PATCH', `/api/projects/${encodeURIComponent(projectId)}`, { name });
+  }
+
+  updateProjectProviderSettings(projectId: string, req: UpdateProjectProviderSettingsRequest): Promise<void> {
+    return this.request<void>('PUT', `/api/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
+  }
+
+  relinkProject(projectId: string, workingDirectory: string): Promise<void> {
+    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/relink`, { working_directory: workingDirectory });
+  }
+
+  deleteProject(projectId: string): Promise<void> {
+    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}?confirm=true`);
+  }
+
+  startProjectRun(projectId: string, req: CreateProjectRunRequest): Promise<SubmitRunResponse> {
+    return this.request<SubmitRunResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/runs`, req);
+  }
+
+  listProjectRuns(projectId: string): Promise<ProjectRunSummary[]> {
+    return this.request<ProjectRunSummary[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
+  }
+
+  // GitHub auth
+  startGitHubDeviceFlow(): Promise<GitHubDeviceFlow> {
+    return this.request<GitHubDeviceFlow>('POST', '/api/auth/github/device', {});
+  }
+
+  pollGitHubAuth(): Promise<GitHubPollResult> {
+    return this.request<GitHubPollResult>('POST', '/api/auth/github/poll', {});
+  }
+
+  getGitHubAuthStatus(): Promise<GitHubAuthStatusResponse> {
+    return this.request<GitHubAuthStatusResponse>('GET', '/api/auth/github');
+  }
+
+  signOutGitHub(): Promise<void> {
+    return this.request<void>('POST', '/api/auth/github/sign-out', {});
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

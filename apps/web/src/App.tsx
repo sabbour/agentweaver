@@ -6,9 +6,12 @@ import {
   tokens,
   webLightTheme,
 } from '@fluentui/react-components';
-import { HomePage } from './pages/HomePage';
+import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
+import { ProjectPage } from './pages/ProjectPage';
+import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { WatchPage } from './pages/WatchPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { GitHubSignIn } from './components/GitHubSignIn';
 
 const useStyles = makeStyles({
   app: {
@@ -55,11 +58,14 @@ function Shell() {
         </Link>
         <nav className={styles.headerNav} aria-label="Main navigation">
           <Link to="/settings" className={styles.navLink}>Settings</Link>
+          <GitHubSignIn />
         </nav>
       </header>
       <main className={styles.main}>
         <Routes>
-          <Route path="/" element={<HomePage />} />
+          <Route path="/" element={<ProjectGalleryPage />} />
+          <Route path="/projects/:projectId" element={<ProjectPage />} />
+          <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
           <Route path="/watch/:runId" element={<WatchPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
