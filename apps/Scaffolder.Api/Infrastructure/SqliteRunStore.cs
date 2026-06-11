@@ -19,10 +19,10 @@ public sealed class SqliteRunStore
             """
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                               submitting_user, status, started_at, ended_at, result,
-                              worktree_path, worktree_branch)
+                              worktree_path, worktree_branch, project_id, model_id)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
                     $user, $status, $startedAt, $endedAt, $result,
-                    $worktreePath, $worktreeBranch);
+                    $worktreePath, $worktreeBranch, $projectId, $modelId);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -36,6 +36,8 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$result", (object?)run.Result ?? DBNull.Value);
         command.Parameters.AddWithValue("$worktreePath", (object?)run.WorktreePath ?? DBNull.Value);
         command.Parameters.AddWithValue("$worktreeBranch", (object?)run.WorktreeBranch ?? DBNull.Value);
+        command.Parameters.AddWithValue("$projectId", (object?)run.ProjectId?.ToString() ?? DBNull.Value);
+        command.Parameters.AddWithValue("$modelId", (object?)run.ModelId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -299,16 +301,86 @@ public sealed class SqliteRunStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = SelectSql + " WHERE project_id = $projectId ORDER BY started_at DESC;";
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        var results = new List<Run>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            results.Add(Map(reader));
+        return results;
+    }
+
+    public async Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(
+        ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default)
+    {
+        var statusStrings = statuses.Select(s => s.ToApiString()).ToList();
+        var paramNames = statusStrings.Select((_, i) => $"$s{i}").ToList();
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = SelectSql + $" WHERE project_id = $projectId AND status IN ({string.Join(", ", paramNames)});";
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        for (int i = 0; i < statusStrings.Count; i++)
+            command.Parameters.AddWithValue(paramNames[i], statusStrings[i]);
+        var results = new List<Run>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            results.Add(Map(reader));
+        return results;
+    }
+
+    /// <summary>
+    /// Atomically inserts a new run row with status Pending only when the
+    /// referenced project is still Active. Returns true if the row was inserted
+    /// (project was Active); returns false if the project is Deleting or missing
+    /// (the run should be rejected with 409).
+    /// </summary>
+    public async Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = connection.BeginTransaction();
+        await using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText =
+            """
+            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
+                              submitting_user, status, started_at, ended_at, result,
+                              worktree_path, worktree_branch, project_id, model_id)
+            SELECT $runId, $repo, $branch, $modelSource, $task,
+                   $user, $status, $startedAt, NULL, NULL,
+                   NULL, NULL, $projectId, $modelId
+            WHERE EXISTS (
+                SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
+            );
+            """;
+        command.Parameters.AddWithValue("$runId", run.Id.ToString());
+        command.Parameters.AddWithValue("$repo", run.RepositoryPath);
+        command.Parameters.AddWithValue("$branch", run.OriginatingBranch);
+        command.Parameters.AddWithValue("$modelSource", run.ModelSource.ToApiString());
+        command.Parameters.AddWithValue("$task", run.Task);
+        command.Parameters.AddWithValue("$user", run.SubmittingUser);
+        command.Parameters.AddWithValue("$status", RunStatus.Pending.ToApiString());
+        command.Parameters.AddWithValue("$startedAt", run.StartedAt.ToString("O"));
+        command.Parameters.AddWithValue("$projectId", run.ProjectId!.Value.ToString());
+        command.Parameters.AddWithValue("$modelId", (object?)run.ModelId ?? DBNull.Value);
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
     // Ordinals: 0=run_id 1=repository_path 2=originating_branch 3=model_source 4=task
     //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
     //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
-    //           15=merge_conflicts
+    //           15=merge_conflicts 16=project_id 17=model_id
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
                submitting_user, status, started_at, ended_at, result,
                worktree_path, worktree_branch, tree_hash, step_count, diff,
-               merge_conflicts
+               merge_conflicts, project_id, model_id
           FROM runs
         """;
 
@@ -330,6 +402,8 @@ public sealed class SqliteRunStore
         StepCount        = r.IsDBNull(13) ? 0    : r.GetInt32(13),
         Diff             = r.IsDBNull(14) ? null : r.GetString(14),
         MergeConflicts   = r.IsDBNull(15) ? null : r.GetString(15),
+        ProjectId        = r.IsDBNull(16) ? null : ProjectId.Parse(r.GetString(16)),
+        ModelId          = r.IsDBNull(17) ? null : r.GetString(17),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
