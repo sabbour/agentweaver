@@ -74,10 +74,60 @@ public sealed class WorkflowRestartService
             var checkpointInfo = _factory.GetLatestCheckpoint(runIdStr);
             if (checkpointInfo is null)
             {
-                // No checkpoint — cannot resume the workflow, but the run is still
-                // in AwaitingReview in the DB. Create the stream entry so the review
-                // endpoint can still emit events to SSE clients.
-                _logger.LogWarning("No checkpoint found for AwaitingReview run {RunId}; stream entry re-created only", run.Id);
+                // No checkpoint — cannot resume via MAF. Before emitting a synthetic
+                // review.requested, all prerequisites must pass. These mirror the checks in
+                // ExecuteDirectReviewAsync so we never surface an approve action that is
+                // guaranteed to 500 on the /review endpoint.
+
+                if (run.WorktreePath is null || !_worktreeOps.WorktreeExists(run.WorktreePath))
+                {
+                    _logger.LogError(
+                        "Worktree missing for recovered AwaitingReview run {RunId} at {Path}; failing run",
+                        run.Id, run.WorktreePath);
+                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+                    _streamStore.Complete(runIdStr);
+                    continue;
+                }
+
+                if (run.WorktreeBranch is null)
+                {
+                    _logger.LogError(
+                        "WorktreeBranch missing for recovered AwaitingReview run {RunId}; failing run",
+                        run.Id);
+                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+                    _streamStore.Complete(runIdStr);
+                    continue;
+                }
+
+                if (run.TreeHash is null)
+                {
+                    _logger.LogError(
+                        "TreeHash missing for recovered AwaitingReview run {RunId}; failing run",
+                        run.Id);
+                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+                    _streamStore.Complete(runIdStr);
+                    continue;
+                }
+
+                // Fail-closed: null means the worktree is unreadable/corrupt.
+                var currentNoCheckpointHash = _worktreeOps.GetTreeHash(run.WorktreePath);
+                if (currentNoCheckpointHash is null || !string.Equals(currentNoCheckpointHash, run.TreeHash, StringComparison.Ordinal))
+                {
+                    _logger.LogError(
+                        "Worktree tree hash mismatch for recovered run {RunId}: expected={Expected} actual={Actual}; failing run",
+                        run.Id, run.TreeHash, currentNoCheckpointHash);
+                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+                    _streamStore.Complete(runIdStr);
+                    continue;
+                }
+
+                // All prerequisites satisfied — emit synthetic review.requested so SSE clients
+                // unblock. The /review endpoint handles runs without a live workflow via
+                // ExecuteDirectReviewAsync, so approve/decline still works for these.
+                entry.RecordNext(EventTypes.ReviewRequested, new { tree_hash = run.TreeHash, recovered = true });
+                _logger.LogInformation(
+                    "Recovered AwaitingReview run {RunId} without checkpoint; emitted synthetic review.requested for SSE clients.",
+                    run.Id);
                 continue;
             }
 
@@ -93,7 +143,8 @@ public sealed class WorkflowRestartService
             if (run.TreeHash is not null)
             {
                 var currentTreeHash = _worktreeOps.GetTreeHash(run.WorktreePath);
-                if (currentTreeHash is not null && !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
+                // Fail-closed: null means the worktree is unreadable/corrupt (FIX 2).
+                if (currentTreeHash is null || !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
                 {
                     _logger.LogError("Worktree tree hash mismatch for run {RunId}: expected={Expected} actual={Actual}; failing run",
                         run.Id, run.TreeHash, currentTreeHash);

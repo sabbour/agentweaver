@@ -313,6 +313,20 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: Li
     );
   }
 
+  // --- agent.intent: inline intent step (text only, no HTML — Y-3) ---
+  if (event.type === 'agent.intent') {
+    const intent = event.payload['intent'] ? String(event.payload['intent']) : '';
+    if (!intent) return null;
+    return (
+      <div className={styles.card}>
+        <CodeRegular className={styles.subtleIcon} aria-hidden="true" />
+        <Badge className={styles.badge} color="subtle" shape="rounded" size="small">intent</Badge>
+        {/* SECURITY (Y-3): intent rendered as escaped text — no HTML interpretation */}
+        <Text className={styles.summary}>{intent}</Text>
+      </div>
+    );
+  }
+
   // --- agent.tools: separate flat card listing registered tools ---
   if (event.type === 'agent.tools') {
     const tools = event.payload['tools'] as string[] | undefined;

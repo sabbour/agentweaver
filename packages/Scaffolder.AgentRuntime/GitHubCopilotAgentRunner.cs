@@ -220,7 +220,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         // Emit configuration snapshot for debuggability.
         Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt });
-        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)" } });
+        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)" } });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -261,12 +261,15 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce),
+            OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
-            // Do not register custom tools or restrict AvailableTools/ExcludedTools.
-            // Let Copilot CLI use its own native tools; governance runs via OnPermissionRequest.
+            // Register only report_intent so the SDK knows about it as a custom tool
+            // and routes it through OnPermissionRequest. The full SandboxToolRegistry
+            // is NOT registered wholesale — that would conflict with native tools and
+            // bypass governance for sandbox operations.
+            Tools = BuildSessionConfigTools(toolContext),
         };
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: CopilotSystemPrompt);
@@ -360,12 +363,13 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// the streaming loop (call + real result); the handler only co-emits its tool.call when it
     /// holds the SDK's real ToolCallId, so the two sources dedup instead of diverging.
     /// </summary>
-    private PermissionRequestHandler BuildPermissionHandler(
+    internal PermissionRequestHandler BuildPermissionHandler(
         SandboxGovernance governance,
         string runId,
         string workingDirectory,
         Action<string, string, object?> emitToolCallOnce,
-        Action<string, string> emitToolErrorOnce)
+        Action<string, string> emitToolErrorOnce,
+        Action<string, object> emit)
     {
         return (request, invocation) =>
         {
@@ -381,6 +385,24 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 var toolName = customTool.ToolName ?? "unknown";
                 try
                 {
+                    // report_intent is a side-effect-free observability call: approve without
+                    // governance, emit agent.intent (not tool.call / tool.result), and return.
+                    if (string.Equals(toolName, "report_intent", StringComparison.Ordinal))
+                    {
+                        string intentRaw = "";
+                        if (customTool.Args is System.Text.Json.JsonElement intentEl &&
+                            intentEl.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                            intentEl.TryGetProperty("intent", out var intentProp))
+                            intentRaw = intentProp.GetString() ?? "";
+
+                        emit(EventTypes.AgentIntent, new { intent = SanitizeIntent(intentRaw) });
+
+                        return Task.FromResult(new PermissionRequestResult
+                        {
+                            Kind = PermissionRequestResultKind.Approved,
+                        });
+                    }
+
                     // Deserialize the JSON args blob. Stamp tool_name first so it cannot be
                     // overridden by a model-supplied key (Seraph hardening).
                     var args = new Dictionary<string, object>();
@@ -609,6 +631,42 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         protected override ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments, CancellationToken cancellationToken) =>
             inner.InvokeAsync(arguments, cancellationToken);
+    }
+
+    /// <summary>
+    /// Builds the single-function tool list for <see cref="SessionConfig.Tools"/>:
+    /// only <c>report_intent</c>, wrapped as a native override so the SDK accepts it.
+    /// Registering only this function (not the full <see cref="SandboxToolRegistry.Build"/>
+    /// list) prevents conflicts with native tools and keeps governance tight.
+    /// </summary>
+    internal static IList<AIFunction> BuildSessionConfigTools(SandboxToolContext context)
+    {
+        var fn = SandboxToolRegistry.Build(context)
+            .First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
+        return [new CopilotOverrideAIFunction(fn)];
+    }
+
+    /// <summary>
+    /// Sanitizes an intent string received from the model before surfacing it in the
+    /// run stream. Keeps only printable characters plus horizontal tab and newline;
+    /// normalizes all line endings to LF; caps at 2000 characters.
+    /// </summary>
+    internal static string SanitizeIntent(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return "";
+        if (raw.Length > 2000) raw = raw[..2000];
+        raw = raw.Replace("\r\n", "\n", StringComparison.Ordinal)
+                 .Replace("\r", "\n", StringComparison.Ordinal);
+        var sb = new StringBuilder(raw.Length);
+        foreach (var c in raw)
+        {
+            // Keep horizontal tab (U+0009) and line feed (U+000A).
+            if (c == '\t' || c == '\n') { sb.Append(c); continue; }
+            // Strip NUL, remaining C0 (U+0001–U+001F), DEL (U+007F), C1 (U+0080–U+009F).
+            if (c < 0x20 || c == 0x7F || (c >= 0x80 && c <= 0x9F)) continue;
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     /// <summary>

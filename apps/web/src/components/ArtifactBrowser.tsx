@@ -237,21 +237,21 @@ const useFileTreeStyles = makeStyles({
     flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorPaletteGreenForeground1,
   },
   statusIconModified: {
     flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorPaletteDarkOrangeForeground1,
   },
   statusIconDeleted: {
     flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorPaletteRedForeground1,
   },
   fileName: {
@@ -261,6 +261,15 @@ const useFileTreeStyles = makeStyles({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+  },
+  fileNameAdded: {
+    color: tokens.colorPaletteGreenForeground1,
+  },
+  fileNameModified: {
+    color: tokens.colorPaletteDarkOrangeForeground1,
+  },
+  fileNameDeleted: {
+    color: tokens.colorPaletteRedForeground1,
   },
   emptyState: {
     padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
@@ -283,7 +292,7 @@ const useFileTreeStyles = makeStyles({
   },
   changeHeaderTitle: {
     fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
     flex: 1,
   },
   addedCount: {
@@ -301,8 +310,8 @@ const useFileTreeStyles = makeStyles({
     flexDirection: 'row',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    paddingTop: '4px',
-    paddingBottom: '4px',
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
     paddingLeft: tokens.spacingHorizontalS,
     paddingRight: tokens.spacingHorizontalS,
     cursor: 'pointer',
@@ -494,7 +503,20 @@ function renderTreeNodes({
         <span className={statusIconClass} aria-label={node.status ?? undefined}>
           <FileStatusIcon />
         </span>
-        <Text className={styles.fileName}>{node.name}</Text>
+        <Text
+          className={mergeClasses(
+            styles.fileName,
+            node.status === 'added'
+              ? styles.fileNameAdded
+              : node.status === 'modified'
+                ? styles.fileNameModified
+                : node.status === 'deleted'
+                  ? styles.fileNameDeleted
+                  : undefined,
+          )}
+        >
+          {node.name}
+        </Text>
       </div>
     );
   });

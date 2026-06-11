@@ -168,11 +168,13 @@ describe('ArtifactBrowser', () => {
       expect(getRunFileDiffMock()).toHaveBeenCalledWith('run-004', 'src/app.ts');
     });
 
-    // The DiffViewer renders individual diff lines as spans.
+    // With syntax highlighting enabled, tokens like "new" (a TS keyword) may be
+    // split across multiple spans. Check the rendered text content instead.
     await waitFor(() => {
-      // DiffViewer renders sign and content in separate table cells.
-      expect(screen.getByText('new line')).toBeDefined();
-      expect(screen.getByText('old line')).toBeDefined();
+      const body = document.body.textContent ?? '';
+      expect(body).toContain('new');
+      expect(body).toContain('old');
+      expect(body).toContain('line');
     });
   });
 

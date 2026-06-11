@@ -28,7 +28,7 @@ const useStyles = makeStyles({
   },
   chevron: {
     color: tokens.colorNeutralForeground4,
-    fontSize: '10px',
+    fontSize: tokens.fontSizeBase100,
     flexShrink: 0,
   },
   toolsList: {

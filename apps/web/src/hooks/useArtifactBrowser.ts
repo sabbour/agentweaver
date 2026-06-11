@@ -113,10 +113,6 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
             setFiles(data);
             setFilesError(null);
             setFilesLoading(false);
-            // Clear selection if the selected file no longer appears in the new list.
-            setSelectedPath((prev) =>
-              prev && !data.some((f) => f.path === prev) ? null : prev,
-            );
           }
         })
         .catch((err: unknown) => {

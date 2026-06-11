@@ -18,6 +18,7 @@ public static class EventTypes
 
     public const string AgentMessage      = "agent.message";
     public const string AgentMessageDelta = "agent.message.delta";
+    public const string AgentIntent       = "agent.intent";
     public const string ToolCall          = "tool.call";
     public const string ToolResult        = "tool.result";
     public const string ToolError         = "tool.error";

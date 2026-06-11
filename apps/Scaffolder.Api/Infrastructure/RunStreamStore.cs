@@ -71,6 +71,25 @@ public sealed class RunStreamEntry
     }
 
     /// <summary>
+    /// Atomically allocates the next sequence number and records the event under a
+    /// single lock acquisition, preventing a race between <see cref="NextSequence"/>
+    /// and <see cref="Record"/>. Use this when the caller does not already hold the
+    /// lock (e.g. recovery paths that emit a single synthetic event).
+    /// </summary>
+    public void RecordNext(string type, object payload)
+    {
+        TaskCompletionSource? previous;
+        lock (_lock)
+        {
+            if (_history.Count >= MaxEventsPerRun) return;
+            var seq = _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
+            _history.Add(new RunEvent(seq, type, payload));
+            previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+        previous.TrySetResult();
+    }
+
+    /// <summary>
     /// Records an event into the history and wakes all clients currently blocked in
     /// <see cref="WaitForChangeAsync"/>. Called by the orchestrator's recording writer.
     /// </summary>
@@ -98,6 +117,17 @@ public sealed class RunStreamEntry
             var events = _history.Where(e => e.Sequence > lastSeen).ToList();
             return new StreamSnapshot(events, _isCompleted);
         }
+    }
+
+    /// <summary>
+    /// Returns true if any recorded event has the specified <paramref name="type"/>.
+    /// Used by the SSE loop to detect reconnects at or after a known event type so
+    /// the stream can break immediately instead of polling indefinitely.
+    /// </summary>
+    public bool HasEventType(string type)
+    {
+        lock (_lock)
+            return _history.Any(e => string.Equals(e.Type, type, StringComparison.Ordinal));
     }
 
     public void MarkCompleted()

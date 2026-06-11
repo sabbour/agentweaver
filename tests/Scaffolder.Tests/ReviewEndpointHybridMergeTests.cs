@@ -398,7 +398,10 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     // =========================================================================
     // HM-11 — Restart recovery: a run left in Merging is reverted to
     // AwaitingReview by RunOrchestrator.RestartRecoveryAsync, and a fresh
-    // stream entry is re-created for the recovered run.
+    // stream entry is re-created with a synthetic review.requested event.
+    // Updated (B1 FIX 1): the run must have all merge prerequisites (WorktreePath,
+    // WorktreeBranch, TreeHash) and a matching worktree tree hash for the
+    // synthetic review.requested to be emitted instead of failing the run.
     // =========================================================================
     [Fact]
     public async Task RestartRecovery_RevertsInterruptedMerge_AndRecreatesStreamEntry()
@@ -406,23 +409,37 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         var runStore     = _factory.Services.GetRequiredService<SqliteRunStore>();
         var restartSvc   = _factory.Services.GetRequiredService<WorkflowRestartService>();
         var streamStore  = _factory.Services.GetRequiredService<RunStreamStore>();
+        var worktreeManager = _factory.Services.GetRequiredService<WorktreeManager>();
+
+        // Use a real git repo + worktree so WorktreeExists returns true and
+        // GetTreeHash can compute the real tree SHA for validation.
+        var repoPath = CreateTempGitRepo();
+        var runId    = RunId.New();
+        var worktreeInfo = worktreeManager.AddWorktree(repoPath, "main", runId);
+        _tempRepoDirs.Add(worktreeInfo.WorktreePath);
+
+        // Commit changes in the worktree so GetTreeHash returns a real SHA.
+        File.WriteAllText(Path.Combine(worktreeInfo.WorktreePath, "recovery-file.txt"), "recovery content");
+        var treeHash = worktreeManager.CommitChanges(worktreeInfo.WorktreePath, runId);
+        var diff     = worktreeManager.GetDiff(repoPath, "main", worktreeInfo.BranchName);
 
         // Simulate a run that was interrupted while in the Merging state
         // (CAS succeeded but the process died before MergeWorktree completed).
-        var runId = RunId.New();
         var run = new Run
         {
             Id                = runId,
-            RepositoryPath    = "recovery-test-dummy-path",
+            RepositoryPath    = repoPath,
             OriginatingBranch = "main",
             ModelSource       = ModelSource.GitHubCopilot,
             Task              = "recovery test task",
             SubmittingUser    = ReviewWebApplicationFactory.OwnerUser,
             Status            = RunStatus.InProgress,
             StartedAt         = DateTimeOffset.UtcNow,
+            WorktreePath      = worktreeInfo.WorktreePath,
+            WorktreeBranch    = worktreeInfo.BranchName,
         };
         await runStore.InsertAsync(run);
-        await runStore.UpdateReviewReadyAsync(runId, "treehash-recovery", "diff", 0);
+        await runStore.UpdateReviewReadyAsync(runId, treeHash, diff, 0);
 
         var casSucceeded = await runStore.TryStartMergingAsync(runId);
         casSucceeded.Should().BeTrue("setup: run must advance from awaiting_review to merging");
@@ -433,7 +450,8 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         // Trigger the restart-recovery path.
         await restartSvc.RecoverAsync(CancellationToken.None);
 
-        // The run must be reverted to awaiting_review.
+        // The run must be reverted to awaiting_review (Merging → AwaitingReview revert)
+        // and then processed as a no-checkpoint AwaitingReview run.
         var runAfterRecovery = await runStore.GetAsync(runId);
         runAfterRecovery!.Status.Should().Be(RunStatus.AwaitingReview,
             "restart recovery must revert any run stuck in merging back to awaiting_review");
@@ -444,6 +462,11 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
             "restart recovery must re-create an in-memory stream entry for the recovered awaiting_review run");
         entry!.IsAwaitingReview.Should().BeTrue(
             "the re-created stream entry must be marked as awaiting_review so it is not evicted");
+
+        // A synthetic review.requested must be emitted so SSE clients unblock (B1).
+        var snapshot = entry.GetSnapshotSince(0);
+        snapshot.Events.Should().Contain(e => e.Type == EventTypes.ReviewRequested,
+            "synthetic review.requested must be emitted for the recovered run so SSE clients can show the review UI");
     }
 
     // =========================================================================
@@ -581,6 +604,36 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
             "case-variant HEAD (Main vs main) on Windows must take the checked-out path " +
             "and update the working tree via hard reset");
         File.ReadAllText(Path.Combine(repoPath, "agent-file.txt")).Should().Be("agent content");
+    }
+
+    // =========================================================================
+    // HM-10 — GetTreeHash returns null (unreadable / non-git worktree) at
+    // approve time → fail closed with 409; run remains AwaitingReview, no
+    // merge is attempted. Exercises the security fix for the fail-open bug
+    // where a null treeHash previously skipped hash validation entirely.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_NullTreeHash_FailsClosed_Returns409_NoMerge()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
+
+        // Corrupt the worktree's git link so GetTreeHash returns null.
+        // The worktree directory still exists (WorktreeExists passes), but the
+        // .git file is removed so new Repository(worktreePath) throws and returns null.
+        var gitFile = Path.Combine(run.WorktreePath!, ".git");
+        File.Delete(gitFile);
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "an unreadable worktree (GetTreeHash=null) must fail closed with 409, not proceed to merge");
+
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var runAfterApprove = await runStore.GetAsync(run.Id);
+        runAfterApprove!.Status.Should().Be(RunStatus.AwaitingReview,
+            "the run must remain in awaiting_review when the worktree tree hash cannot be verified");
     }
 
     // =========================================================================

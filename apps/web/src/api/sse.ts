@@ -63,6 +63,7 @@ export type EventType =
   | 'agent.message'
   | 'agent.system_prompt'
   | 'agent.tools'
+  | 'agent.intent'
   | 'tool.call'
   | 'tool.result'
   | 'tool.error'

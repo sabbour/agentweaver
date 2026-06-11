@@ -310,7 +310,10 @@ app.MapGet("/api/runs/{id}/stream", async (
             // The MAF workflow pauses at the HITL gate once review.requested is emitted.
             // The stream entry is never marked completed in that state, so close the stream
             // here to let the client poll for the review decision via GET /api/runs/{id}.
-            if (entry.IsAwaitingReview && reviewRequestedSent) break;
+            // Also break when the client reconnects with Last-Event-ID at/after
+            // review.requested — in that case reviewRequestedSent stays false because
+            // GetSnapshotSince returns no events, but the event is already in history.
+            if (entry.IsAwaitingReview && (reviewRequestedSent || entry.HasEventType(EventTypes.ReviewRequested))) break;
 
             // Wait for new events or completion (with a short timeout to avoid indefinite hang).
             try { await entry.WaitForChangeAsync(ct); }
@@ -1002,10 +1005,10 @@ static async Task<IResult> ExecuteDirectReviewAsync(
     }
 
     var currentTreeHash = worktreeOps.GetTreeHash(run.WorktreePath);
-    if (currentTreeHash is not null && !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
+    if (currentTreeHash is null || !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
     {
         logger.LogError(
-            "Worktree tree hash mismatch for run {RunId} in direct review: expected={Expected} actual={Actual}",
+            "Worktree tree hash could not be verified or mismatched for run {RunId} in direct review: expected={Expected} actual={Actual}",
             id, run.TreeHash, currentTreeHash);
         return Results.Problem("Worktree content has changed since review was requested.", statusCode: 409);
     }
