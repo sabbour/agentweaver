@@ -140,8 +140,10 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, has
     return <CheckmarkCircleFilled className={mergeClasses(styles.statusIcon, styles.successIcon)} aria-hidden="true" />;
   }
 
-  // "ok" is a no-content acknowledgement — nothing useful to expand.
+  // Always expandable — args are always worth showing for debugging.
+  const hasArgs = item.args && Object.keys(item.args).length > 0;
   const hasDetail = !!(
+    hasArgs ||
     (item.result && item.result.content.trim() !== 'ok') ||
     item.error
   );
@@ -174,7 +176,22 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, has
 
       {expanded && hasDetail && (
         <div className={styles.detail}>
-          {item.result && (() => {
+          {/* Args block — always shown first so the literal tool call is visible */}
+          {hasArgs && (() => {
+            const argsJson = JSON.stringify(item.args, null, 2);
+            const { display, truncated, total } = truncate(argsJson);
+            return (
+              <div className={styles.block}>
+                <Text as="span" className={styles.blockLabel}>args</Text>
+                <Text as="pre" style={{ margin: 0, fontFamily: 'inherit', fontSize: 'inherit', display: 'inline' }}>
+                  {display}
+                </Text>
+                {truncated && <Text as="span" className={styles.truncatedNote}>[Truncated — {total.toLocaleString()} chars]</Text>}
+              </div>
+            );
+          })()}
+
+          {item.result && item.result.content.trim() !== 'ok' && (() => {
             const { display, truncated, total } = truncate(item.result.content);
             return (
               <div className={styles.block}>
