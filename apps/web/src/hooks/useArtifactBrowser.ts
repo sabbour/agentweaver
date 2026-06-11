@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { WorkspaceFileDiff, WorkspaceFileEntry } from '../api/types';
+import type { ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry } from '../api/types';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -23,6 +23,7 @@ function extractErrorMessage(err: unknown): string {
 }
 
 export interface ArtifactBrowserState {
+  runStatus: string;
   filter: FilterValue;
   activeFilter: FilterValue;
   isHistorical: boolean;
@@ -35,6 +36,10 @@ export interface ArtifactBrowserState {
   diffLoading: boolean;
   diffError: string | null;
   handleFileSelect: (path: string) => void;
+  reviewPending: boolean;
+  reviewResult: ReviewResponse | null;
+  reviewError: string | null;
+  submitReview: (approved: boolean) => Promise<void>;
 }
 
 export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBrowserState {
@@ -51,6 +56,10 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
 
+  const [reviewPending, setReviewPending] = useState(false);
+  const [reviewResult, setReviewResult] = useState<ReviewResponse | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+
   const activeFilter = isHistorical ? 'all' : filter;
 
   // Clear all local state when runId changes so stale data from the previous run
@@ -60,6 +69,8 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     setSelectedPath(null);
     setDiff(null);
     setFilter('all');
+    setReviewResult(null);
+    setReviewError(null);
   }, [runId]);
 
   // Fetch file list whenever filter or runId changes.
@@ -147,7 +158,30 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     setDiff(null);
   };
 
+  const submitReview = async (approved: boolean): Promise<void> => {
+    if (runStatus !== 'awaiting_review') return;
+    setReviewPending(true);
+    setReviewError(null);
+    try {
+      const resp = await apiClient.submitReview(runId, approved);
+      setReviewResult(resp);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setReviewError(
+          err.status === 403
+            ? 'Not authorized to review this run.'
+            : `Error ${err.status}: ${err.body}`,
+        );
+      } else {
+        setReviewError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setReviewPending(false);
+    }
+  };
+
   return {
+    runStatus,
     filter,
     activeFilter,
     isHistorical,
@@ -160,5 +194,9 @@ export function useArtifactBrowser(runId: string, runStatus: string): ArtifactBr
     diffLoading,
     diffError,
     handleFileSelect,
+    reviewPending,
+    reviewResult,
+    reviewError,
+    submitReview,
   };
 }

@@ -1,11 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Divider, Spinner, makeStyles, tokens } from '@fluentui/react-components';
+import { useEffect, useMemo, useRef } from 'react';
+import { Badge, Divider, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
-import { apiClient } from '../api/apiClient';
-import type { RunDetail, ReviewResponse } from '../api/types';
-import { DiffViewer } from './DiffViewer';
-import { ReviewPanel } from './ReviewPanel';
+import type { ReviewResponse } from '../api/types';
 import { RunHeader } from './RunHeader';
 import { RunLayout } from './RunLayout';
 import { Timeline } from './Timeline';
@@ -47,84 +44,65 @@ export function RunWatcher({ runId }: RunWatcherProps) {
   const { items } = useTimelineItems(events, runId);
   const isLiveRun = status === 'connecting' || status === 'streaming';
 
-  const [reviewRun, setReviewRun] = useState<RunDetail | null>(null);
-  const [reviewComplete, setReviewComplete] = useState<ReviewResponse | null>(null);
-  const fetchingRef = useRef(false);
+  // Auto-scroll center panel to bottom as new events arrive,
+  // unless the user has manually scrolled up.
+  const centerScrollRef = useRef<HTMLDivElement>(null);
+  const userScrolledUp = useRef(false);
+
+  const handleCenterScroll = () => {
+    const el = centerScrollRef.current;
+    if (!el) return;
+    userScrolledUp.current = el.scrollHeight - el.scrollTop - el.clientHeight > 64;
+  };
+
+  useEffect(() => {
+    if (!userScrolledUp.current && centerScrollRef.current) {
+      centerScrollRef.current.scrollTop = centerScrollRef.current.scrollHeight;
+    }
+  }, [items.length]);
 
   const hasReviewRequested = events.some((e) => e.type === 'review.requested');
 
-  useEffect(() => {
-    if (hasReviewRequested && !reviewRun && !fetchingRef.current) {
-      fetchingRef.current = true;
-      apiClient
-        .getRun(runId)
-        .then(setReviewRun)
-        .catch(() => { fetchingRef.current = false; });
-    }
-  }, [hasReviewRequested, reviewRun, runId]);
-
-  // Derive effective review status by bridging terminal merge SSE events.
-  const effectiveReviewComplete = useMemo((): ReviewResponse | null => {
-    if (reviewComplete && reviewComplete.status !== 'merging') return reviewComplete;
+  // Derive resolved status and merge result from SSE merge events.
+  const resolvedReview = useMemo((): ReviewResponse | null => {
     const mergeEvent = events.find(
       (e) => e.type === 'merge.completed' || e.type === 'merge.failed',
     );
-    if (!mergeEvent) return reviewComplete;
+    if (!mergeEvent) return null;
     if (mergeEvent.type === 'merge.completed') {
       const commitHash = mergeEvent.payload.merged_commit_hash as string | undefined;
       return {
-        run_id: reviewComplete?.run_id ?? runId,
+        run_id: runId,
         status: 'merged',
-        merge_result: commitHash ?? reviewComplete?.merge_result ?? null,
+        merge_result: commitHash ?? null,
       };
     }
     const reason = mergeEvent.payload.reason as string | undefined;
     return {
-      run_id: reviewComplete?.run_id ?? runId,
+      run_id: runId,
       status: 'merge_failed',
-      merge_result: reason ?? reviewComplete?.merge_result ?? null,
+      merge_result: reason ?? null,
     };
-  }, [reviewComplete, events, runId]);
-
-  const showReviewPanel = reviewRun?.status === 'awaiting_review' &&
-    (!effectiveReviewComplete || effectiveReviewComplete.status === 'merge_failed');
-
-  const resolvedStatus = effectiveReviewComplete?.status ?? (reviewRun && reviewRun.status !== 'awaiting_review' ? reviewRun.status : null);
+  }, [events, runId]);
 
   // Derive a stable run status string for the artifact browser panels.
   const derivedRunStatus = isLiveRun
     ? 'in_progress'
-    : (effectiveReviewComplete?.status ?? (hasReviewRequested ? 'awaiting_review' : 'completed'));
+    : (resolvedReview?.status ?? (hasReviewRequested ? 'awaiting_review' : 'completed'));
 
   const centerContent = (
     <div className={styles.centerContent}>
       <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} />
-      {hasReviewRequested && (
+      {hasReviewRequested && resolvedReview && (
         <div className={styles.reviewSection}>
           <Divider />
-          {reviewRun ? (
-            <>
-              <DiffViewer diff={reviewRun.diff} />
-              {showReviewPanel && (
-                <ReviewPanel
-                  runId={runId}
-                  treeHash={reviewRun.tree_hash}
-                  onReviewComplete={setReviewComplete}
-                />
-              )}
-              {resolvedStatus ? (
-                <Badge
-                  className={styles.resolvedBadge}
-                  color={resolvedBadgeColor(resolvedStatus)}
-                >
-                  {resolvedStatus}
-                  {effectiveReviewComplete?.merge_result ? ` \u2014 ${effectiveReviewComplete.merge_result}` : ''}
-                </Badge>
-              ) : null}
-            </>
-          ) : (
-            <Spinner size="tiny" label="Loading diff..." />
-          )}
+          <Badge
+            className={styles.resolvedBadge}
+            color={resolvedBadgeColor(resolvedReview.status)}
+          >
+            {resolvedReview.status}
+            {resolvedReview.merge_result ? ` \u2014 ${resolvedReview.merge_result}` : ''}
+          </Badge>
         </div>
       )}
     </div>
@@ -133,7 +111,13 @@ export function RunWatcher({ runId }: RunWatcherProps) {
   return (
     <div className={styles.root}>
       <RunHeader runId={runId} streamStatus={status} error={error ?? undefined} />
-      <RunLayout runId={runId} runStatus={derivedRunStatus} centerContent={centerContent} />
+      <RunLayout
+        runId={runId}
+        runStatus={derivedRunStatus}
+        centerContent={centerContent}
+        centerScrollRef={centerScrollRef}
+        onCenterScroll={handleCenterScroll}
+      />
     </div>
   );
 }

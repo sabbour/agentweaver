@@ -13,6 +13,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getRunFiles: vi.fn(),
     getRunFileDiff: vi.fn(),
+    submitReview: vi.fn(),
   },
 }));
 
@@ -82,7 +83,7 @@ describe('ArtifactBrowser', () => {
     });
   });
 
-  // AB-02: file list with one added file renders the path and an "added" badge
+  // AB-02: file list with one added file renders the file name and an "added" status icon
   // (FR-034 — each file annotated with new / modified / deleted).
   it('renders file path and added badge for a single added file', async () => {
     getRunFilesMock().mockResolvedValue([
@@ -95,16 +96,17 @@ describe('ArtifactBrowser', () => {
       </Wrapper>,
     );
 
+    // The tree shows the filename only (folder "src" is expanded by default).
     await waitFor(() => {
-      expect(screen.getByText('src/new-feature.ts')).toBeDefined();
+      expect(screen.getByText('new-feature.ts')).toBeDefined();
     });
 
-    // The Badge component renders the status string as its text content.
-    const badges = screen.getAllByText('added');
-    expect(badges.length).toBeGreaterThanOrEqual(1);
+    // The status icon has aria-label matching the status.
+    const statusIcons = screen.getAllByLabelText('added');
+    expect(statusIcons.length).toBeGreaterThanOrEqual(1);
   });
 
-  // AB-03: mixed-status file list renders correct badge labels for each entry
+  // AB-03: mixed-status file list renders correct status icons for each entry
   // (FR-034 — all three annotation types: added, modified, deleted).
   it('renders correct status badges for added, modified, and deleted files', async () => {
     getRunFilesMock().mockResolvedValue([
@@ -119,16 +121,17 @@ describe('ArtifactBrowser', () => {
       </Wrapper>,
     );
 
+    // The tree shows filenames only; folder "src" is expanded by default.
     await waitFor(() => {
-      expect(screen.getByText('src/new.ts')).toBeDefined();
-      expect(screen.getByText('src/changed.ts')).toBeDefined();
-      expect(screen.getByText('src/removed.ts')).toBeDefined();
+      expect(screen.getByText('new.ts')).toBeDefined();
+      expect(screen.getByText('changed.ts')).toBeDefined();
+      expect(screen.getByText('removed.ts')).toBeDefined();
     });
 
-    // Each status badge must appear in the rendered output.
-    expect(screen.getAllByText('added').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('modified').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('deleted').length).toBeGreaterThanOrEqual(1);
+    // Each status icon must appear with its aria-label.
+    expect(screen.getAllByLabelText('added').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByLabelText('modified').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByLabelText('deleted').length).toBeGreaterThanOrEqual(1);
   });
 
   // AB-04: selecting a file calls getRunFileDiff and renders the diff viewer
@@ -156,8 +159,8 @@ describe('ArtifactBrowser', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('src/app.ts')).toBeDefined());
-    await user.click(screen.getByText('src/app.ts'));
+    await waitFor(() => expect(screen.getByText('app.ts')).toBeDefined());
+    await user.click(screen.getByText('app.ts'));
 
     await waitFor(() => {
       expect(getRunFileDiffMock()).toHaveBeenCalledWith('run-004', 'src/app.ts');
@@ -187,8 +190,8 @@ describe('ArtifactBrowser', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('assets/image.png')).toBeDefined());
-    await user.click(screen.getByText('assets/image.png'));
+    await waitFor(() => expect(screen.getByText('image.png')).toBeDefined());
+    await user.click(screen.getByText('image.png'));
 
     await waitFor(() => {
       expect(screen.getByText('Binary file — diff not available')).toBeDefined();

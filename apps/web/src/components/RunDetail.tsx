@@ -13,8 +13,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { ReviewResponse, RunDetail as RunDetailModel, RunStatus } from '../api/types';
-import { ReviewPanel } from './ReviewPanel';
+import type { RunDetail as RunDetailModel } from '../api/types';
 import { RunLayout } from './RunLayout';
 
 const useStyles = makeStyles({
@@ -86,14 +85,6 @@ export function RunDetail({ runId }: RunDetailProps) {
     };
   }, [runId]);
 
-  const handleReviewComplete = (resp: ReviewResponse) => {
-    setRun((prev) =>
-      prev
-        ? { ...prev, status: resp.status as RunStatus, result: resp.merge_result }
-        : null,
-    );
-  };
-
   if (loading) {
     return <Spinner label="Loading run" />;
   }
@@ -133,11 +124,6 @@ export function RunDetail({ runId }: RunDetailProps) {
         <div className={styles.reviewSection}>
           <Divider />
           <Badge color="warning">Awaiting review</Badge>
-          <ReviewPanel
-            runId={runId}
-            treeHash={run.tree_hash}
-            onReviewComplete={handleReviewComplete}
-          />
         </div>
       )}
       {run.status === 'merge_failed' && (

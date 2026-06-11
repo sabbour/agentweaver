@@ -6,6 +6,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
+    maxWidth: '720px',
   },
 });
 

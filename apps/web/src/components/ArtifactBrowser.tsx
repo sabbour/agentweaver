@@ -1,20 +1,130 @@
+import { useMemo, useState } from 'react';
 import {
   Badge,
+  Button,
   MessageBar,
   Spinner,
-  Tab,
-  TabList,
   Text,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import {
-  FILTERS,
+  AddCircleRegular,
+  ChevronDownRegular,
+  ChevronRightRegular,
+  DismissCircleRegular,
+  DocumentCode16Regular,
+  DocumentDataRegular,
+  DocumentRegular,
+  DocumentTextRegular,
+  EditRegular,
+  FolderOpenRegular,
+  FolderRegular,
+  type FluentIcon,
+} from '@fluentui/react-icons';
+import {
   useArtifactBrowser,
   type ArtifactBrowserState,
-  type FilterValue,
 } from '../hooks/useArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
+
+// ---------------------------------------------------------------------------
+// Tree data model
+// ---------------------------------------------------------------------------
+
+interface TreeNode {
+  name: string;
+  fullPath: string;
+  isFolder: boolean;
+  status?: 'added' | 'modified' | 'deleted';
+  children: TreeNode[];
+}
+
+interface TreeNodeInternal {
+  name: string;
+  fullPath: string;
+  isFolder: boolean;
+  status?: 'added' | 'modified' | 'deleted';
+  childrenMap: Map<string, TreeNodeInternal>;
+}
+
+function buildFileTree(
+  entries: Array<{ path: string; status: 'added' | 'modified' | 'deleted' }>,
+): TreeNode[] {
+  const rootMap = new Map<string, TreeNodeInternal>();
+
+  for (const entry of entries) {
+    const segments = entry.path.split('/');
+    let currentMap = rootMap;
+
+    for (let i = 0; i < segments.length; i++) {
+      const name = segments[i];
+      const isLast = i === segments.length - 1;
+      const pathSoFar = segments.slice(0, i + 1).join('/');
+
+      if (!currentMap.has(name)) {
+        currentMap.set(name, {
+          name,
+          fullPath: pathSoFar,
+          isFolder: !isLast,
+          status: isLast ? entry.status : undefined,
+          childrenMap: new Map(),
+        });
+      }
+
+      if (!isLast) {
+        currentMap = currentMap.get(name)!.childrenMap;
+      }
+    }
+  }
+
+  function toSortedArray(map: Map<string, TreeNodeInternal>): TreeNode[] {
+    const nodes = [...map.values()];
+    nodes.sort((a, b) => {
+      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return nodes.map((n) => ({
+      name: n.name,
+      fullPath: n.fullPath,
+      isFolder: n.isFolder,
+      status: n.status,
+      children: toSortedArray(n.childrenMap),
+    }));
+  }
+
+  return toSortedArray(rootMap);
+}
+
+// ---------------------------------------------------------------------------
+// Icon helpers
+// ---------------------------------------------------------------------------
+
+function getFileIcon(filename: string): FluentIcon {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  if (['ts', 'tsx', 'cs', 'js', 'jsx'].includes(ext)) return DocumentCode16Regular;
+  if (ext === 'json') return DocumentDataRegular;
+  if (['md', 'css', 'txt'].includes(ext)) return DocumentTextRegular;
+  return DocumentRegular;
+}
+
+function getStatusIcon(status?: string): FluentIcon | null {
+  if (status === 'added') return AddCircleRegular;
+  if (status === 'modified') return EditRegular;
+  if (status === 'deleted') return DismissCircleRegular;
+  return null;
+}
+
+function reviewResultBadgeColor(
+  status: string,
+): 'success' | 'subtle' | 'danger' | 'warning' | 'informative' {
+  if (status === 'merged') return 'success';
+  if (status === 'declined') return 'subtle';
+  if (status === 'merge_failed') return 'danger';
+  if (status === 'merging') return 'informative';
+  return 'danger';
+}
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -27,16 +137,35 @@ const useFileTreeStyles = makeStyles({
     height: '100%',
     overflow: 'hidden',
   },
-  tabListWrapper: {
+  reviewBar: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    flexShrink: 0,
+  },
+  reviewError: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+  },
+  reviewResultBar: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
     flexShrink: 0,
   },
   fileList: {
     overflowY: 'auto',
     flex: 1,
   },
-  fileEntry: {
+  treeRow: {
     display: 'flex',
     flexDirection: 'row',
     alignItems: 'center',
@@ -47,10 +176,60 @@ const useFileTreeStyles = makeStyles({
       backgroundColor: tokens.colorNeutralBackground1Hover,
     },
   },
-  fileEntrySelected: {
+  treeRowSelected: {
     backgroundColor: tokens.colorNeutralBackground3,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground3Hover,
+    },
   },
-  filePath: {
+  chevronIcon: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
+  folderIcon: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    color: tokens.colorNeutralForeground2,
+  },
+  folderName: {
+    color: tokens.colorNeutralForeground1,
+    flex: 1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  fileIcon: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    color: tokens.colorNeutralForeground3,
+  },
+  statusIconAdded: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: '12px',
+    color: tokens.colorPaletteGreenForeground1,
+  },
+  statusIconModified: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: '12px',
+    color: tokens.colorPaletteDarkOrangeForeground1,
+  },
+  statusIconDeleted: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: '12px',
+    color: tokens.colorPaletteRedForeground1,
+  },
+  fileName: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     flex: 1,
@@ -137,18 +316,6 @@ const useStyles = makeStyles({
 });
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function statusBadgeColor(
-  status: 'added' | 'modified' | 'deleted',
-): 'success' | 'warning' | 'danger' {
-  if (status === 'added') return 'success';
-  if (status === 'modified') return 'warning';
-  return 'danger';
-}
-
-// ---------------------------------------------------------------------------
 // FileTreePanel
 // ---------------------------------------------------------------------------
 
@@ -159,31 +326,143 @@ interface FileTreePanelProps {
 export function FileTreePanel({ state }: FileTreePanelProps) {
   const styles = useFileTreeStyles();
   const {
-    activeFilter,
-    isHistorical,
-    handleFilterChange,
+    runStatus,
     files,
     filesLoading,
     filesError,
     selectedPath,
     handleFileSelect,
+    reviewPending,
+    reviewResult,
+    reviewError,
+    submitReview,
   } = state;
+
+  const tree = useMemo(() => buildFileTree(files), [files]);
+
+  // Tracks folders toggled from their default state.
+  // Top-level folders (depth 0) start expanded; nested folders start collapsed.
+  // Each toggle flips the folder from its default.
+  const [toggledFolders, setToggledFolders] = useState<Set<string>>(() => new Set<string>());
+
+  const isFolderExpanded = (fullPath: string, depth: number): boolean =>
+    depth === 0 ? !toggledFolders.has(fullPath) : toggledFolders.has(fullPath);
+
+  const toggleFolder = (fullPath: string) => {
+    setToggledFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(fullPath)) {
+        next.delete(fullPath);
+      } else {
+        next.add(fullPath);
+      }
+      return next;
+    });
+  };
+
+  const renderTree = (nodes: TreeNode[], depth: number) => {
+    return nodes.map((node) => {
+      if (node.isFolder) {
+        const expanded = isFolderExpanded(node.fullPath, depth);
+        return (
+          <div key={node.fullPath}>
+            <div
+              className={styles.treeRow}
+              style={{ paddingLeft: `${depth * 12 + 8}px` }}
+              onClick={() => toggleFolder(node.fullPath)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={expanded}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') toggleFolder(node.fullPath);
+              }}
+            >
+              <span className={styles.chevronIcon}>
+                {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
+              </span>
+              <span className={styles.folderIcon}>
+                {expanded ? <FolderOpenRegular /> : <FolderRegular />}
+              </span>
+              <Text className={styles.folderName}>{node.name}</Text>
+            </div>
+            {expanded && renderTree(node.children, depth + 1)}
+          </div>
+        );
+      }
+
+      const FileIcon = getFileIcon(node.name);
+      const StatusIcon = getStatusIcon(node.status);
+      const statusIconClass =
+        node.status === 'added'
+          ? styles.statusIconAdded
+          : node.status === 'modified'
+            ? styles.statusIconModified
+            : styles.statusIconDeleted;
+      const isSelected = node.fullPath === selectedPath;
+
+      return (
+        <div
+          key={node.fullPath}
+          className={mergeClasses(styles.treeRow, isSelected ? styles.treeRowSelected : undefined)}
+          style={{ paddingLeft: `${depth * 12 + 8}px` }}
+          onClick={() => handleFileSelect(node.fullPath)}
+          role="button"
+          tabIndex={0}
+          title={node.fullPath}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') handleFileSelect(node.fullPath);
+          }}
+        >
+          <span className={styles.fileIcon}>
+            <FileIcon />
+          </span>
+          {StatusIcon && (
+            <span className={statusIconClass} aria-label={node.status}>
+              <StatusIcon />
+            </span>
+          )}
+          <Text className={styles.fileName}>{node.name}</Text>
+        </div>
+      );
+    });
+  };
+
+  const showReviewBar = runStatus === 'awaiting_review' && reviewResult === null;
 
   return (
     <div className={styles.root}>
-      <div className={styles.tabListWrapper}>
-        <TabList
-          size="small"
-          selectedValue={activeFilter}
-          onTabSelect={(_e, data) => handleFilterChange(data.value as FilterValue)}
-        >
-          {FILTERS.map((f) => (
-            <Tab key={f.value} value={f.value} disabled={isHistorical && f.value !== 'all'}>
-              {f.label}
-            </Tab>
-          ))}
-        </TabList>
-      </div>
+      {showReviewBar && (
+        <div className={styles.reviewBar}>
+          {reviewPending ? (
+            <Spinner size="tiny" />
+          ) : (
+            <>
+              <Button
+                appearance="primary"
+                size="small"
+                disabled={reviewPending}
+                onClick={() => void submitReview(true)}
+              >
+                Approve
+              </Button>
+              <Button
+                appearance="secondary"
+                size="small"
+                disabled={reviewPending}
+                onClick={() => void submitReview(false)}
+              >
+                Decline
+              </Button>
+            </>
+          )}
+          {reviewError && <Text className={styles.reviewError}>{reviewError}</Text>}
+        </div>
+      )}
+      {reviewResult !== null && (
+        <div className={styles.reviewResultBar}>
+          <Badge color={reviewResultBadgeColor(reviewResult.status)}>{reviewResult.status}</Badge>
+        </div>
+      )}
       <div className={styles.fileList}>
         {filesLoading ? (
           <div className={styles.spinnerWrapper}>
@@ -198,31 +477,7 @@ export function FileTreePanel({ state }: FileTreePanelProps) {
             <Text>No changes</Text>
           </div>
         ) : (
-          files.map((entry) => (
-            <div
-              key={entry.path}
-              className={
-                entry.path === selectedPath
-                  ? `${styles.fileEntry} ${styles.fileEntrySelected}`
-                  : styles.fileEntry
-              }
-              onClick={() => handleFileSelect(entry.path)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  handleFileSelect(entry.path);
-                }
-              }}
-            >
-              <Text className={styles.filePath} title={entry.path}>
-                {entry.path}
-              </Text>
-              <Badge color={statusBadgeColor(entry.status)} size="small">
-                {entry.status}
-              </Badge>
-            </div>
-          ))
+          renderTree(tree, 0)
         )}
       </div>
     </div>
