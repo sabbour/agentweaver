@@ -219,19 +219,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
         // Emit configuration snapshot for debuggability.
-        // Emit the actual system prompt and tool list so they're visible in the run timeline.
         Emit("agent.system_prompt", new
         {
             provider = "copilot",
             prompt = CopilotSystemPrompt,
-            tools = new[] { "native bash/shell", "native read/write/view", "native glob/grep" },
-            sandbox = new
-            {
-                executor = executor.BackendName,
-                shell_enabled = sandboxPolicy.ShellEnabled,
-                direct = sandboxPolicy.Direct,
-                network_enabled = sandboxPolicy.NetworkEnabled,
-            },
         });
         if (executor.HasNetworkWarning)
         {

@@ -96,13 +96,6 @@ public sealed class FoundryAgentRunner : IAgentRunner
             provider = "foundry",
             prompt = SystemPrompt,
             tools = SandboxToolRegistry.GetToolNames(shellIncluded),
-            sandbox = new
-            {
-                executor = executor.BackendName,
-                shell_enabled = sandboxPolicy.ShellEnabled,
-                direct = sandboxPolicy.Direct,
-                network_enabled = sandboxPolicy.NetworkEnabled,
-            },
         });
         if (executor.HasNetworkWarning)
         {

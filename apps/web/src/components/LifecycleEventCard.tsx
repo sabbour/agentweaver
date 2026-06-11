@@ -241,14 +241,18 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event }: Li
               {prompt}
             </Text>
             {p['tools'] && (
-              <Text as="pre" style={{ margin: `${tokens.spacingVerticalXS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3 }}>
-                tools: {JSON.stringify(p['tools'])}
-              </Text>
-            )}
-            {p['sandbox'] && (
-              <Text as="pre" style={{ margin: `${tokens.spacingVerticalXS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3 }}>
-                sandbox: {JSON.stringify(p['sandbox'])}
-              </Text>
+              <div style={{
+                margin: `${tokens.spacingVerticalS} 0 0 24px`,
+                borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+                paddingTop: tokens.spacingVerticalXS,
+              }}>
+                <Text as="span" style={{ display: 'block', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, fontStyle: 'italic', marginBottom: '2px' }}>
+                  debug — registered tools (not part of prompt)
+                </Text>
+                <Text as="span" style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
+                  {(p['tools'] as string[]).join(' · ')}
+                </Text>
+              </div>
             )}
           </>
         )}
