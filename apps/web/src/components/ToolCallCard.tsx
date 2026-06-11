@@ -104,6 +104,8 @@ const useStyles = makeStyles({
 interface ToolCallCardProps {
   item: ToolCallItem;
   streamStatus: StreamStatus;
+  /** When true (report_intent only), the following tool cluster had failures — show ⚠ instead of ✅. */
+  hasFollowingErrors?: boolean;
 }
 
 function truncate(text: string) {
@@ -111,7 +113,7 @@ function truncate(text: string) {
   return { display: truncated ? text.slice(0, BLOCK_MAX) : text, truncated, total: text.length };
 }
 
-export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: ToolCallCardProps) {
+export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, hasFollowingErrors }: ToolCallCardProps) {
   const styles = useStyles();
   const [expanded, setExpanded] = useState(item.error?.isSandboxViolation ?? false);
 
@@ -134,6 +136,7 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus }: T
     if (isSandbox) return <WarningFilled className={mergeClasses(styles.statusIcon, styles.sandboxIcon)} aria-hidden="true" />;
     if (item.error) return <ErrorCircleFilled className={mergeClasses(styles.statusIcon, styles.errorIcon)} aria-hidden="true" />;
     if (isNonZeroExit) return <WarningFilled className={mergeClasses(styles.statusIcon, styles.sandboxIcon)} aria-label={`Exit code ${exitCode}`} />;
+    if (hasFollowingErrors) return <WarningFilled className={mergeClasses(styles.statusIcon, styles.sandboxIcon)} aria-label="Intent not fulfilled" />;
     return <CheckmarkCircleFilled className={mergeClasses(styles.statusIcon, styles.successIcon)} aria-hidden="true" />;
   }
 

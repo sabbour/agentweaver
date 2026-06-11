@@ -18,13 +18,15 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
         Prefer file tools over shell for all file operations — they are faster, safer, and
         always available regardless of sandbox configuration:
-        - read_file: read a file
-        - str_replace_editor: replace a unique string in a file (preferred for edits)
-        - apply_patch: apply a patch in Copilot CLI patch grammar
-        - create: create a new file (fails if it already exists)
-        - edit: write/overwrite a file
-        - grep_search: search for a pattern across files
-        - file_search: find files matching a glob pattern
+        - read_file(path): read a file (path = relative path from working directory)
+        - str_replace_editor(path, old_str, new_str): replace a unique string in a file (preferred for edits)
+        - apply_patch(patch): apply a patch in Copilot CLI patch grammar
+        - create(path, file_text): create a new file with content (fails if the file already exists; path = relative file path)
+        - edit(path, content): write or overwrite a file completely (path = relative file path, content = full file content)
+        - grep_search(pattern, path?): search for a regex pattern across files
+        - file_search(pattern): find files matching a glob pattern
+
+        All file tool 'path' arguments must be RELATIVE paths from the working directory. Never use absolute paths.
 
         Only use run_command for operations that genuinely require a shell (building,
         running tests, etc.). Do not use run_command to read, list, copy, or delete files —
@@ -271,6 +273,11 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
                 if (!allowed)
                 {
+                    _logger.LogWarning(
+                        "Governance DENIED for tool {ToolName}. ReceivedArgKeys=[{Keys}] Reason={Reason}",
+                        call.Name,
+                        string.Join(", ", toolArgs.Keys),
+                        reason);
                     var denyMsg = "Error: operation denied by sandbox policy.";
                     var modelReason = reason ?? denyMsg;
                     Emit("tool.error", new { callId = call.CallId, errorMessage = modelReason });

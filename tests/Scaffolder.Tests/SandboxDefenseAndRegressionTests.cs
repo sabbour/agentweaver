@@ -95,7 +95,28 @@ public sealed class BubblewrapSandboxCommandTests
         payload.Should().NotContain("--unshare-net",
             "--unshare-net must be absent when networkEnabled=true");
     }
+
+    [Fact]
+    public void BwrapPayload_WorktreePath_MountedAtWorkspaceNotHomePath()
+    {
+        // Simulate a worktree path under /home — the masking bug scenario.
+        var homeWorktree = "/home/asabbour/.local/share/scaffolder/worktrees/run-abc123";
+        var payload = LinuxBwrapExecutor.BuildBwrapPayload("echo ok", homeWorktree, networkEnabled: false);
+
+        // The destination bind path must NOT stay inside /home (masked by --tmpfs /home).
+        payload.Should().NotContain($"--bind '{homeWorktree}' '{homeWorktree}'",
+            "binding the worktree at its original /home path is masked by --tmpfs /home");
+
+        // The worktree must instead be mounted at /workspace.
+        payload.Should().Contain($"--bind '{homeWorktree}' /workspace",
+            "worktree must be re-mounted at /workspace to escape --tmpfs /home masking");
+
+        // Working directory inside the sandbox must be /workspace.
+        payload.Should().Contain("--chdir /workspace",
+            "chdir must point to /workspace, not the original host path under /home");
+    }
 }
+
 
 /// <summary>
 /// F. SandboxedFileTools defense-in-depth: in-tool validation provides an

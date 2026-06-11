@@ -133,7 +133,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
         // Replace broad --ro-bind /usr /usr with targeted mounts (Phase 6 alignment).
         return
             "wd=$(pwd -P); exec bwrap" +
-            " --bind \"$wd\" \"$wd\"" +
+            " --bind \"$wd\" /workspace" +
             " --ro-bind-try /usr/bin /usr/bin" +
             " --ro-bind-try /usr/lib /usr/lib" +
             " --ro-bind-try /usr/lib64 /usr/lib64" +
@@ -151,7 +151,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             " --tmpfs /tmp" +
             " --tmpfs /home" +
             " --tmpfs /root" +
-            " --chdir \"$wd\"" +
+            " --chdir /workspace" +
             " --unshare-pid" +
             " --unshare-user" +
             (networkEnabled ? "" : " --unshare-net") +

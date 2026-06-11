@@ -62,7 +62,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
         // (graceful handling of minimal container environments).
         return
             "exec bwrap" +
-            $" --bind {wd} {wd}" +
+            $" --bind {wd} /workspace" +
             " --ro-bind-try /usr/bin /usr/bin" +
             " --ro-bind-try /usr/lib /usr/lib" +
             " --ro-bind-try /usr/lib64 /usr/lib64" +
@@ -80,7 +80,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
             " --tmpfs /tmp" +
             " --tmpfs /home" +
             " --tmpfs /root" +
-            $" --chdir {wd}" +
+            " --chdir /workspace" +
             " --unshare-pid" +
             " --unshare-user" +
             (networkEnabled ? "" : " --unshare-net") +
@@ -130,6 +130,10 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
 
             var (stdout, stdoutTrunc) = await stdoutTask;
             var (stderr, stderrTrunc)  = await stderrTask;
+
+            // Redact host worktree path before it can leak to the model.
+            stdout = stdout.Replace(command.WorkingDirectory, "/workspace", StringComparison.Ordinal);
+            stderr = stderr.Replace(command.WorkingDirectory, "/workspace", StringComparison.Ordinal);
 
             stdout = SandboxOutputRedactor.Default.Redact(stdout);
             stderr = SandboxOutputRedactor.Default.Redact(stderr);

@@ -144,12 +144,18 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
               />
             );
           }
-          // report_intent
+          // report_intent — show ⚠ if the immediately following tool cluster has failures
+          const nextCluster = clusters[i + 1];
+          const hasFollowingErrors =
+            (step as ToolCallItem).toolName === 'report_intent' &&
+            nextCluster?.kind === 'cluster' &&
+            nextCluster.steps.some(s => s.error != null);
           return (
             <ToolCallCard
               key={(step as ToolCallItem).callId != null ? String((step as ToolCallItem).callId) : "ri-" + i}
               item={step as ToolCallItem}
               streamStatus={streamStatus}
+              hasFollowingErrors={hasFollowingErrors}
             />
           );
         }
