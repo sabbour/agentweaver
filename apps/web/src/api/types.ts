@@ -19,6 +19,8 @@ export interface RunSandboxInfo {
 export interface SandboxPolicy {
   repository_path: string;
   shell_enabled: boolean;
+  direct: boolean;
+  network_enabled: boolean;
   allowed_repository_roots: string[];
   destructive_command_patterns: string[];
 }

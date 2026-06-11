@@ -99,6 +99,8 @@ export function SettingsPage() {
       const updated = await apiClient.updateSandboxPolicy({
         repository_path: policy.repository_path,
         shell_enabled: policy.shell_enabled,
+        direct: policy.direct,
+        network_enabled: policy.network_enabled,
       });
       setPolicy(updated);
       setSaveSuccess(true);
@@ -162,6 +164,26 @@ export function SettingsPage() {
                 checked={policy.shell_enabled}
                 onChange={(_, data) =>
                   setPolicy((prev) => prev ? { ...prev, shell_enabled: data.checked } : prev)
+                }
+              />
+            </Field>
+
+            <Field label="Direct execution (no sandbox isolation)">
+              <Switch
+                label={policy.direct ? 'On — commands run on host shell directly' : 'Off — uses bwrap/mxc isolation'}
+                checked={policy.direct}
+                onChange={(_, data) =>
+                  setPolicy((prev) => prev ? { ...prev, direct: data.checked } : prev)
+                }
+              />
+            </Field>
+
+            <Field label="Outbound network">
+              <Switch
+                label={policy.network_enabled ? 'Enabled' : 'Blocked'}
+                checked={policy.network_enabled}
+                onChange={(_, data) =>
+                  setPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
                 }
               />
             </Field>

@@ -46,7 +46,7 @@ export class ScaffolderApiClient {
     return this.request<SandboxPolicy>('GET', `/api/sandbox-policy?repository_path=${encoded}`);
   }
 
-  updateSandboxPolicy(policy: Pick<SandboxPolicy, 'repository_path' | 'shell_enabled'>): Promise<SandboxPolicy> {
+  updateSandboxPolicy(policy: Pick<SandboxPolicy, 'repository_path' | 'shell_enabled' | 'direct' | 'network_enabled'>): Promise<SandboxPolicy> {
     return this.request<SandboxPolicy>('PUT', '/api/sandbox-policy', policy);
   }
 
