@@ -48,6 +48,7 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
               item={item}
               isLiveRun={isLiveRun}
               streamStatus={streamStatus}
+              runId={runId}
             />
           );
         }

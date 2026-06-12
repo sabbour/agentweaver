@@ -200,7 +200,7 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
   );
 }
 
-function RunRow({ run }: { run: ProjectRunSummary }) {
+function RunRow({ run, projectId }: { run: ProjectRunSummary; projectId: string }) {
   const styles = useStyles();
   return (
     <div className={styles.runRow}>
@@ -214,7 +214,7 @@ function RunRow({ run }: { run: ProjectRunSummary }) {
       <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
       <Text className={styles.runMeta}>{run.model_source}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
-      <Link to={`/watch/${run.run_id}`} style={{ textDecoration: 'none' }}>
+      <Link to={`/watch/${run.run_id}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
         <Button size="small" appearance="secondary">Watch</Button>
       </Link>
     </div>
@@ -291,7 +291,7 @@ export function ProjectPage() {
               </Link>
               <StartRunDialog
                 projectId={projectId}
-                onStarted={(runId) => navigate(`/watch/${runId}`)}
+                onStarted={(runId) => navigate(`/watch/${runId}`, { state: { projectId } })}
               />
             </div>
           </div>
@@ -336,7 +336,7 @@ export function ProjectPage() {
             <Text>No runs yet. Start one above.</Text>
           ) : (
             <div className={styles.runList}>
-              {runs.map((r) => <RunRow key={r.run_id} run={r} />)}
+              {runs.map((r) => <RunRow key={r.run_id} run={r} projectId={projectId} />)}
             </div>
           )}
         </>
