@@ -54,8 +54,8 @@ export function SignInPage() {
   return (
     <div className={styles.page}>
       <div className={styles.branding}>
-        <Title1>Scaffolder</Title1>
-        <Text className={styles.tagline}>Build and scaffold projects with AI</Text>
+        <Title1>Agentweaver</Title1>
+        <Text className={styles.tagline}>Build workflows from specialized agents</Text>
       </div>
 
       <button

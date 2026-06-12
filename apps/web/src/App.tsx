@@ -58,7 +58,7 @@ function Shell() {
     <div className={styles.app}>
       <header className={styles.header}>
         <Link to="/" className={styles.brand}>
-          <Title1>Scaffolder</Title1>
+          <Title1>Agentweaver</Title1>
         </Link>
         <nav className={styles.headerNav} aria-label="Main navigation">
           <Link to="/settings" className={styles.navLink}>Settings</Link>
