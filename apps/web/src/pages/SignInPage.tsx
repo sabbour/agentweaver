@@ -22,6 +22,11 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingVerticalS,
   },
+  logo: {
+    width: '80px',
+    height: '80px',
+    objectFit: 'contain',
+  },
   tagline: {
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
@@ -54,6 +59,7 @@ export function SignInPage() {
   return (
     <div className={styles.page}>
       <div className={styles.branding}>
+        <img src="/agentweaver.png" alt="Agentweaver" className={styles.logo} />
         <Title1>Agentweaver</Title1>
         <Text className={styles.tagline}>Build workflows from specialized agents</Text>
       </div>

@@ -3,7 +3,6 @@ import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
 import {
   FluentProvider,
   Spinner,
-  Title1,
   makeStyles,
   tokens,
   webLightTheme,
@@ -30,9 +29,10 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  brand: {
-    textDecoration: 'none',
-    color: tokens.colorNeutralForeground1,
+  brandLogo: {
+    height: '32px',
+    width: 'auto',
+    display: 'block',
   },
   headerNav: {
     display: 'flex',
@@ -57,8 +57,8 @@ function Shell() {
   return (
     <div className={styles.app}>
       <header className={styles.header}>
-        <Link to="/" className={styles.brand}>
-          <Title1>Agentweaver</Title1>
+        <Link to="/">
+          <img src="/agentweaver.png" alt="Agentweaver" className={styles.brandLogo} />
         </Link>
         <nav className={styles.headerNav} aria-label="Main navigation">
           <Link to="/settings" className={styles.navLink}>Settings</Link>
