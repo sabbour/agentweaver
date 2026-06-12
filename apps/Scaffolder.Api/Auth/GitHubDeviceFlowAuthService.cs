@@ -50,13 +50,16 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
         GitHubTokenScope scope, CancellationToken ct = default)
     {
         var clientId = RequireClientId();
-        var response = await _http.PostAsync(
-            $"{_baseUrl}/login/device/code",
-            new FormUrlEncodedContent(new Dictionary<string, string>
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/login/device/code")
+        {
+            Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 ["client_id"] = clientId,
                 ["scope"] = _scopes
-            }), ct).ConfigureAwait(false);
+            })
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadFromJsonAsync<DeviceCodeResponse>(ct)
@@ -91,14 +94,17 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
             return new GitHubDeviceFlowPollResponse(GitHubDeviceFlowPollResult.Expired, null);
         }
 
-        var response = await _http.PostAsync(
-            $"{_baseUrl}/login/oauth/access_token",
-            new FormUrlEncodedContent(new Dictionary<string, string>
+        using var pollRequest = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/login/oauth/access_token")
+        {
+            Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 ["client_id"] = RequireClientId(),
                 ["device_code"] = flow.DeviceCode,
                 ["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code"
-            }), ct).ConfigureAwait(false);
+            })
+        };
+        pollRequest.Headers.Accept.ParseAdd("application/json");
+        var response = await _http.SendAsync(pollRequest, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadFromJsonAsync<AccessTokenResponse>(ct)
