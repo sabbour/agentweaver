@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Encodings.Web;
 using Scaffolder.AgentRuntime;
 using Scaffolder.AgentRuntime.Providers;
@@ -60,7 +61,13 @@ builder.Services.AddSingleton<RunOrchestrator>();
 builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
 builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
-builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
+// Force HTTP/1.1 on all GitHub API calls. The default SocketsHttpHandler tries HTTP/2
+// with ALPN which triggers SocketException(11)/EAGAIN on ARM64 Windows; GitHub's OAuth
+// and REST endpoints are HTTP/1.1 and do not benefit from HTTP/2 connection reuse here.
+builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>()
+    .ConfigureHttpClient(c => c.DefaultRequestVersion = HttpVersion.Version11);
+builder.Services.AddHttpClient("github")
+    .ConfigureHttpClient(c => c.DefaultRequestVersion = HttpVersion.Version11);
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 
 // Project infrastructure (must be before AddAgentRuntime)
@@ -2411,7 +2418,7 @@ app.MapGet("/api/github/repos", async (
 
     try
     {
-        using var http = httpClientFactory.CreateClient();
+        using var http = httpClientFactory.CreateClient("github");
         var repos = new List<GitHubRepoResponse>();
         var page = 1;
         const int perPage = 100;
