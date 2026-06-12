@@ -1,21 +1,40 @@
 import { useEffect, useState } from 'react';
 import {
-  Button,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
   Spinner,
   Text,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { SignOutRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { GitHubAuthStatus } from '../api/types';
 
 const useStyles = makeStyles({
-  root: {
-    position: 'relative',
+  trigger: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
+    cursor: 'pointer',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium,
+    border: 'none',
+    backgroundColor: 'transparent',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+  },
+  avatar: {
+    width: '28px',
+    height: '28px',
+    borderRadius: '50%',
+    objectFit: 'cover',
+    flexShrink: '0',
   },
 });
 
@@ -70,26 +89,26 @@ export function GitHubSignIn() {
     return <Spinner size="extra-tiny" aria-label="Loading GitHub auth status" />;
   }
 
-  if (error) {
+  if (error || status !== 'signed_in') {
     return null;
   }
 
-  if (status === 'signed_in') {
-    return (
-      <div className={styles.root}>
-        {avatarUrl && (
-          <img
-            src={avatarUrl}
-            alt={login ?? ''}
-            style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }}
-          />
-        )}
-        <Text>{login}</Text>
-        <Button appearance="subtle" onClick={() => void handleSignOut()}>Sign out</Button>
-      </div>
-    );
-  }
-
-  return null;
+  return (
+    <Menu>
+      <MenuTrigger disableButtonEnhancement>
+        <button className={styles.trigger} type="button">
+          {avatarUrl && <img src={avatarUrl} alt={login ?? ''} className={styles.avatar} />}
+          <Text>{login}</Text>
+        </button>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          <MenuItem icon={<SignOutRegular />} onClick={() => void handleSignOut()}>
+            Sign out
+          </MenuItem>
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  );
 }
 
