@@ -4,7 +4,6 @@
   "description": "A team for producing and refining written content.",
   "roles": [
     "writer",
-    "editor",
-    "scribe"
+    "editor"
   ]
 }

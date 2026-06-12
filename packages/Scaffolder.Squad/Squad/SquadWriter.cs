@@ -45,6 +45,9 @@ public sealed class SquadWriter
     public void WriteTeam(Team team, string owner, DateTimeOffset createdAt)
         => WriteAllText(SquadPaths.TeamMd, TeamMarkdown.Render(team, owner, createdAt));
 
+    public bool CharterExists(string memberName)
+        => File.Exists(Resolve(SquadPaths.CharterFor(memberName)));
+
     public void WriteCharter(string memberName, string charterMarkdown)
         => WriteAllText(SquadPaths.CharterFor(memberName), charterMarkdown);
 

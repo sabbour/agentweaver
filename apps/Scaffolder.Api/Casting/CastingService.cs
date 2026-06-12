@@ -604,6 +604,11 @@ public sealed class CastingService
         foreach (var retiredName in retiredNames)
             writer.ArchiveMemberCharter(retiredName);
 
+        // Provision the built-in Scribe agent. It is never cast by the user — the framework
+        // creates it automatically so every project has a ready-to-use session-logging agent.
+        // Only write the charter if it doesn't already exist (idempotent on augment/recast).
+        ProvisionBuiltinScribe(writer);
+
         writer.EnsureGitAttributes();
 
         foreach (var member in finalMembers.Where(m => m.Status == CastMemberStatus.Active))
@@ -658,6 +663,33 @@ public sealed class CastingService
             proposalId, projectId, resolvedIntent, finalMembers.Count);
 
         return team;
+    }
+
+    // -----------------------------------------------------------------------
+    // Built-in agent provisioning
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Provisions the built-in Scribe agent charter. Scribe is a system-level MAF agent
+    /// that every project gets automatically — it is never part of a cast proposal.
+    /// The charter is written only once; subsequent calls are no-ops.
+    /// </summary>
+    private void ProvisionBuiltinScribe(SquadWriter writer)
+    {
+        const string ScribeName = "scribe";
+        if (writer.CharterExists(ScribeName)) return;
+
+        try
+        {
+            var compiler = new CharterCompiler(_catalog);
+            var charter = compiler.Compile(ScribeName, "Scribe");
+            writer.WriteCharter(ScribeName, charter);
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: if the catalog or compiler fails, log and continue.
+            _logger.LogWarning(ex, "Failed to provision built-in Scribe charter. Team was still created.");
+        }
     }
 
     // -----------------------------------------------------------------------

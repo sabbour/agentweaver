@@ -4,7 +4,6 @@
   "description": "A compact team for investigating an open question and synthesizing findings into clear conclusions.",
   "roles": [
     "lead-researcher",
-    "findings-reviewer",
-    "scribe"
+    "findings-reviewer"
   ]
 }
