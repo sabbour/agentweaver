@@ -3,8 +3,8 @@ namespace Scaffolder.Domain;
 public enum GitHubTokenStatus { SignedIn, SignedOut, NeverSignedIn }
 
 public sealed record GitHubTokenEntry(GitHubTokenStatus Status, string? AccessToken);
-public sealed record GitHubToken(string AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt, string Login, string[] Scopes);
-public sealed record GitHubIdentity(string Login);
+public sealed record GitHubToken(string AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt, string Login, string? AvatarUrl, string[] Scopes);
+public sealed record GitHubIdentity(string Login, string? AvatarUrl);
 
 public sealed record GitHubTokenScope
 {

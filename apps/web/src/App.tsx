@@ -92,7 +92,6 @@ function AuthGate() {
   const styles = useAppStyles();
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
-  const [authRevision, setAuthRevision] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,7 +109,7 @@ function AuthGate() {
         }
       });
     return () => { cancelled = true; };
-  }, [authRevision]);
+  }, []);
 
   if (!authChecked) {
     return (
@@ -121,7 +120,7 @@ function AuthGate() {
   }
 
   if (!signedIn) {
-    return <SignInPage onSignedIn={() => { setAuthRevision(r => r + 1); }} />;
+    return <SignInPage />;
   }
 
   return <Shell />;

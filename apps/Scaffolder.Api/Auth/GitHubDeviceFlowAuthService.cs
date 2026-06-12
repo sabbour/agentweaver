@@ -126,7 +126,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
             return new GitHubDeviceFlowPollResponse(GitHubDeviceFlowPollResult.Pending, null);
 
         // Fetch identity to store the login
-        var login = await FetchLoginAsync(body.AccessToken!, ct).ConfigureAwait(false);
+        var (login, avatarUrl) = await FetchUserAsync(body.AccessToken!, ct).ConfigureAwait(false);
 
         var token = new GitHubToken(
             body.AccessToken!,
@@ -134,6 +134,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
             string.IsNullOrWhiteSpace(body.RefreshTokenExpiresIn) ? null
                 : DateTimeOffset.UtcNow.AddSeconds(double.Parse(body.RefreshTokenExpiresIn)),
             login,
+            avatarUrl,
             (_scopes ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
         await _tokenStore.SetAsync(scope, token, ct).ConfigureAwait(false);
@@ -148,15 +149,15 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
     public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
         _tokenStore.SignOutAsync(scope, ct);
 
-    private async Task<string> FetchLoginAsync(string accessToken, CancellationToken ct)
+    private async Task<(string Login, string? AvatarUrl)> FetchUserAsync(string accessToken, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.UserAgent.ParseAdd("Scaffolder/1.0");
         var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode) return "unknown";
+        if (!response.IsSuccessStatusCode) return ("unknown", null);
         var body = await response.Content.ReadFromJsonAsync<GitHubUserResponse>(ct).ConfigureAwait(false);
-        return body?.Login ?? "unknown";
+        return (body?.Login ?? "unknown", body?.AvatarUrl);
     }
 
     private sealed record InFlightFlow(string DeviceCode, int Interval, DateTimeOffset ExpiresAt);
@@ -181,6 +182,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
     private sealed class GitHubUserResponse
     {
         [JsonPropertyName("login")] public string? Login { get; set; }
+        [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; set; }
     }
 }
 

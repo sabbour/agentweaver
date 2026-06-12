@@ -138,7 +138,7 @@ public sealed class GitHubDeviceFlowTests
     {
         var tokenStore = new InMemoryGitHubTokenStore();
         var scope      = GitHubTokenScope.Installation;
-        await tokenStore.SetAsync(scope, new GitHubToken("tok", null, null, "user", []));
+        await tokenStore.SetAsync(scope, new GitHubToken("tok", null, null, "user", null, []));
 
         var (service, _) = BuildService(tokenStore);
         await service.SignOutAsync(scope);

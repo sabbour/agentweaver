@@ -113,7 +113,7 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
         var store      = new SqliteProjectStore(testDb.Db);
         var tokenStore = new InMemoryGitHubTokenStore();
         var scope      = GitHubTokenScope.Installation;
-        await tokenStore.SetAsync(scope, new GitHubToken("ghp_test", null, null, "user", ["repo"]));
+        await tokenStore.SetAsync(scope, new GitHubToken("ghp_test", null, null, "user", null, ["repo"]));
 
         var svc = new ProjectService(
             store, new LocalFilesystemWorkspaceProvider(),

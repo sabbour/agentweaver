@@ -24,7 +24,7 @@ public sealed class CopilotSignOutFailClosedTests
         var scope      = GitHubTokenScope.Installation;
 
         // Sign in then explicitly sign out
-        await tokenStore.SetAsync(scope, new GitHubToken("ghp_some_token", null, null, "user", []));
+        await tokenStore.SetAsync(scope, new GitHubToken("ghp_some_token", null, null, "user", null, []));
         await tokenStore.SignOutAsync(scope);
 
         var factory = BuildFactory(tokenStore, configToken: "ghp_config_fallback_token");
@@ -85,7 +85,7 @@ public sealed class CopilotSignOutFailClosedTests
         var tokenStore = new InMemoryGitHubTokenStore();
         var scope      = GitHubTokenScope.Installation;
 
-        await tokenStore.SetAsync(scope, new GitHubToken("ghp_valid_token", null, null, "user", []));
+        await tokenStore.SetAsync(scope, new GitHubToken("ghp_valid_token", null, null, "user", null, []));
 
         var factory = BuildFactory(tokenStore, configToken: null);
 
@@ -107,7 +107,7 @@ public sealed class CopilotSignOutFailClosedTests
         var tokenStore = new InMemoryGitHubTokenStore();
         var scope      = GitHubTokenScope.Installation;
 
-        await tokenStore.SetAsync(scope, new GitHubToken("ghp_real_token", null, null, "user", []));
+        await tokenStore.SetAsync(scope, new GitHubToken("ghp_real_token", null, null, "user", null, []));
         await tokenStore.SignOutAsync(scope);
 
         // Config token also present — SignedOut must win

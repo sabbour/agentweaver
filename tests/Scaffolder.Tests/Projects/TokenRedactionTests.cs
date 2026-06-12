@@ -34,7 +34,7 @@ public sealed class TokenRedactionTests : IClassFixture<ProjectsWebApplicationFa
         await _factory.TokenStore.SetAsync(
             Scaffolder.Domain.GitHubTokenScope.Installation,
             new Scaffolder.Domain.GitHubToken(
-                SentinelToken, null, null, "tokenuser", ["repo"]));
+                SentinelToken, null, null, "tokenuser", null, ["repo"]));
 
         var response = await _client.GetAsync("/api/projects");
 
@@ -53,7 +53,7 @@ public sealed class TokenRedactionTests : IClassFixture<ProjectsWebApplicationFa
         await _factory.TokenStore.SetAsync(
             Scaffolder.Domain.GitHubTokenScope.Installation,
             new Scaffolder.Domain.GitHubToken(
-                SentinelToken, null, null, "tokenuser", ["repo"]));
+                SentinelToken, null, null, "tokenuser", null, ["repo"]));
 
         var response = await _client.GetAsync("/api/auth/github");
 
@@ -72,7 +72,7 @@ public sealed class TokenRedactionTests : IClassFixture<ProjectsWebApplicationFa
         await _factory.TokenStore.SetAsync(
             Scaffolder.Domain.GitHubTokenScope.Installation,
             new Scaffolder.Domain.GitHubToken(
-                SentinelToken, null, null, "mylogin", ["repo"]));
+                SentinelToken, null, null, "mylogin", null, ["repo"]));
 
         var response = await _client.GetAsync("/api/auth/github");
         var body     = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -98,7 +98,7 @@ public sealed class TokenRedactionTests : IClassFixture<ProjectsWebApplicationFa
     {
         await _factory.TokenStore.SetAsync(
             Scaffolder.Domain.GitHubTokenScope.Installation,
-            new Scaffolder.Domain.GitHubToken(SentinelToken, null, null, "user", []));
+            new Scaffolder.Domain.GitHubToken(SentinelToken, null, null, "user", null, []));
 
         var response = await _client.PostAsync("/api/auth/github/sign-out", null);
 

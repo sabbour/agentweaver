@@ -1,27 +1,9 @@
-import { useRef, useState } from 'react';
 import {
-  Button,
-  Spinner,
   Text,
   Title1,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { LockClosedRegular, CopyRegular, CheckmarkRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-
-function apiErrorMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 503) return 'GitHub sign-in is not configured on this server.';
-    try {
-      const problem = JSON.parse(err.body) as { detail?: string };
-      if (problem.detail) return problem.detail;
-    } catch { /* not JSON */ }
-    return `Error ${err.status}: ${err.body}`;
-  }
-  return err instanceof Error ? err.message : String(err);
-}
 
 const useStyles = makeStyles({
   page: {
@@ -43,79 +25,18 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
   },
-  card: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalXL,
-    borderRadius: tokens.borderRadiusLarge,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: `0 4px 16px ${tokens.colorNeutralShadowAmbient}, 0 0 2px ${tokens.colorNeutralShadowKey}`,
-    minWidth: '360px',
-    maxWidth: '420px',
-    width: '100%',
-  },
-  cardHeader: {
+  githubButton: {
+    backgroundColor: '#24292e',
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '12px 24px',
+    fontSize: '16px',
+    fontWeight: '600',
+    cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-  },
-  headerIcon: {
-    color: tokens.colorBrandForeground1,
-    fontSize: '20px',
-    flexShrink: '0',
-  },
-  headerTitle: {
-    color: tokens.colorBrandForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
-  },
-  instruction: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-  },
-  urlRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-  },
-  link: {
-    color: tokens.colorBrandForeground1,
-    textDecoration: 'none',
-    fontSize: tokens.fontSizeBase300,
-    flexGrow: '1',
-    ':hover': { textDecoration: 'underline' },
-  },
-  codeContainer: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.spacingHorizontalM,
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
-    borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorBrandStroke2}`,
-    backgroundColor: tokens.colorBrandBackground2,
-  },
-  code: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase600,
-    letterSpacing: '0.15em',
-    color: tokens.colorNeutralForeground1,
-  },
-  statusRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-  },
-  statusText: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-  },
-  actionsRow: {
-    display: 'flex',
-    justifyContent: 'flex-end',
+    gap: '10px',
   },
   errorText: {
     fontSize: tokens.fontSizeBase200,
@@ -123,174 +44,31 @@ const useStyles = makeStyles({
   },
 });
 
-interface SignInPageProps {
-  onSignedIn: () => void;
-}
-
-export function SignInPage({ onSignedIn }: SignInPageProps) {
+export function SignInPage() {
   const styles = useStyles();
 
-  const [userCode, setUserCode] = useState<string | null>(null);
-  const [verificationUri, setVerificationUri] = useState<string | null>(null);
-  const [polling, setPolling] = useState(false);
-  const [flowError, setFlowError] = useState<string | null>(null);
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedUri, setCopiedUri] = useState(false);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const clearPollTimer = () => {
-    if (pollTimerRef.current !== null) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-  };
-
-  const handleCopyCode = async () => {
-    if (userCode) {
-      await navigator.clipboard.writeText(userCode);
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
-    }
-  };
-
-  const handleCopyUri = async () => {
-    if (verificationUri) {
-      await navigator.clipboard.writeText(verificationUri);
-      setCopiedUri(true);
-      setTimeout(() => setCopiedUri(false), 2000);
-    }
-  };
-
-  const handleSignIn = async () => {
-    setFlowError(null);
-    setUserCode(null);
-    setVerificationUri(null);
-    try {
-      const flow = await apiClient.startGitHubDeviceFlow();
-      setUserCode(flow.user_code);
-      setVerificationUri(flow.verification_uri);
-      setPolling(true);
-
-      pollTimerRef.current = setInterval(() => {
-        void (async () => {
-          try {
-            const result = await apiClient.pollGitHubAuth();
-            if (result.status === 'success') {
-              clearPollTimer();
-              setPolling(false);
-              setUserCode(null);
-              setVerificationUri(null);
-              onSignedIn();
-            } else if (result.status === 'expired' || result.status === 'denied') {
-              clearPollTimer();
-              setPolling(false);
-              setUserCode(null);
-              setVerificationUri(null);
-              setFlowError(
-                result.status === 'expired'
-                  ? 'Authorization expired. Try again.'
-                  : 'Authorization denied.',
-              );
-            }
-          } catch (err) {
-            clearPollTimer();
-            setPolling(false);
-            setFlowError(apiErrorMessage(err));
-          }
-        })();
-      }, flow.interval * 1000);
-    } catch (err) {
-      setFlowError(apiErrorMessage(err));
-    }
-  };
+  const params = new URLSearchParams(window.location.search);
+  const authError = params.get('auth') === 'error' ? (params.get('reason') ?? 'Authentication failed.') : null;
 
   return (
     <div className={styles.page}>
       <div className={styles.branding}>
         <Title1>Scaffolder</Title1>
-        <Text className={styles.tagline}>Sign in with GitHub to get started</Text>
+        <Text className={styles.tagline}>Build and scaffold projects with AI</Text>
       </div>
 
-      <div className={styles.card}>
-        <div className={styles.cardHeader}>
-          <LockClosedRegular className={styles.headerIcon} />
-          <Text className={styles.headerTitle}>Sign in with GitHub</Text>
-        </div>
+      <button
+        className={styles.githubButton}
+        onClick={() => { window.location.href = '/auth/github/authorize'; }}
+      >
+        <svg height="20" viewBox="0 0 16 16" width="20" fill="white" aria-hidden="true">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        Sign in with GitHub
+      </button>
 
-        {!userCode && (
-          <>
-            {flowError && <Text className={styles.errorText}>{flowError}</Text>}
-            <Button
-              appearance="primary"
-              disabled={polling}
-              onClick={() => void handleSignIn()}
-            >
-              Sign in with GitHub
-            </Button>
-          </>
-        )}
-
-        {userCode && verificationUri && (
-          <>
-            <Text className={styles.instruction}>
-              Open the link below and enter the code to authorize.
-            </Text>
-
-            <div className={styles.urlRow}>
-              <a
-                href={verificationUri}
-                target="_blank"
-                rel="noreferrer"
-                className={styles.link}
-              >
-                {verificationUri}
-              </a>
-              <Button
-                appearance="subtle"
-                size="small"
-                icon={copiedUri ? <CheckmarkRegular /> : <CopyRegular />}
-                aria-label="Copy URL"
-                onClick={() => void handleCopyUri()}
-              />
-            </div>
-
-            <div className={styles.codeContainer}>
-              <span className={styles.code}>{userCode}</span>
-              <Button
-                appearance="subtle"
-                size="small"
-                icon={copiedCode ? <CheckmarkRegular /> : <CopyRegular />}
-                aria-label="Copy code"
-                onClick={() => void handleCopyCode()}
-              />
-            </div>
-
-            {polling && (
-              <div className={styles.statusRow}>
-                <Spinner size="extra-tiny" />
-                <Text className={styles.statusText}>Waiting for GitHub authorization...</Text>
-              </div>
-            )}
-
-            {flowError && <Text className={styles.errorText}>{flowError}</Text>}
-
-            <div className={styles.actionsRow}>
-              <Button
-                appearance="subtle"
-                size="small"
-                onClick={() => {
-                  clearPollTimer();
-                  setPolling(false);
-                  setUserCode(null);
-                  setVerificationUri(null);
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
+      {authError && <Text className={styles.errorText}>{authError}</Text>}
     </div>
   );
 }
+

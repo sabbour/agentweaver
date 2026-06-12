@@ -50,7 +50,8 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         {
             Status = "signed-in",
             AccessToken = token.AccessToken,
-            Login = token.Login
+            Login = token.Login,
+            AvatarUrl = token.AvatarUrl
         };
         WriteCredential(TargetName(scope), token.Login, JsonSerializer.Serialize(stored));
     }
@@ -65,7 +66,7 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         try
         {
             var stored = JsonSerializer.Deserialize<StoredCredential>(json);
-            if (stored?.Login is not null) return new GitHubIdentity(stored.Login);
+            if (stored?.Login is not null) return new GitHubIdentity(stored.Login, stored.AvatarUrl);
         }
         catch (JsonException) { }
         return null;
@@ -138,6 +139,7 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         public string? Status { get; init; }
         public string? AccessToken { get; init; }
         public string? Login { get; init; }
+        public string? AvatarUrl { get; init; }
     }
 
     private static class NativeMethods

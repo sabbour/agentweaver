@@ -178,4 +178,5 @@ export interface GitHubPollResult {
 export interface GitHubAuthStatusResponse {
   status: GitHubAuthStatus;
   login: string | null;
+  avatar_url?: string;
 }

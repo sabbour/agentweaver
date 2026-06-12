@@ -34,7 +34,7 @@ public sealed class GitHubTokenStoreTests
     {
         var store = new InMemoryGitHubTokenStore();
         var scope = GitHubTokenScope.Installation;
-        var token = new GitHubToken("ghp_test_access_token", null, null, "testuser", ["repo"]);
+        var token = new GitHubToken("ghp_test_access_token", null, null, "testuser", null, ["repo"]);
 
         await store.SetAsync(scope, token);
         var entry = await store.GetAsync(scope);
@@ -51,7 +51,7 @@ public sealed class GitHubTokenStoreTests
     {
         var store = new InMemoryGitHubTokenStore();
         var scope = GitHubTokenScope.Installation;
-        var token = new GitHubToken("ghp_test_access_token", null, null, "testuser", ["repo"]);
+        var token = new GitHubToken("ghp_test_access_token", null, null, "testuser", null, ["repo"]);
 
         await store.SetAsync(scope, token);
         await store.SignOutAsync(scope);
@@ -75,7 +75,7 @@ public sealed class GitHubTokenStoreTests
         (await store.GetAsync(scope)).Status.Should().Be(GitHubTokenStatus.NeverSignedIn);
 
         // SignedIn
-        await store.SetAsync(scope, new GitHubToken("tok", null, null, "user", []));
+        await store.SetAsync(scope, new GitHubToken("tok", null, null, "user", null, []));
         (await store.GetAsync(scope)).Status.Should().Be(GitHubTokenStatus.SignedIn);
 
         // SignedOut
@@ -93,7 +93,7 @@ public sealed class GitHubTokenStoreTests
         var scope1 = GitHubTokenScope.ForUser("user-alice");
         var scope2 = GitHubTokenScope.ForUser("user-bob");
 
-        await store.SetAsync(scope1, new GitHubToken("token-alice", null, null, "alice", []));
+        await store.SetAsync(scope1, new GitHubToken("token-alice", null, null, "alice", null, []));
         // scope2 never set
 
         var entry1 = await store.GetAsync(scope1);
@@ -115,8 +115,8 @@ public sealed class GitHubTokenStoreTests
         var scope1 = GitHubTokenScope.ForUser("user-a");
         var scope2 = GitHubTokenScope.ForUser("user-b");
 
-        await store.SetAsync(scope1, new GitHubToken("tok-a", null, null, "a", []));
-        await store.SetAsync(scope2, new GitHubToken("tok-b", null, null, "b", []));
+        await store.SetAsync(scope1, new GitHubToken("tok-a", null, null, "a", null, []));
+        await store.SetAsync(scope2, new GitHubToken("tok-b", null, null, "b", null, []));
 
         await store.SignOutAsync(scope1);
 
@@ -134,7 +134,7 @@ public sealed class GitHubTokenStoreTests
         var store = new InMemoryGitHubTokenStore();
         var scope = GitHubTokenScope.Installation;
 
-        await store.SetAsync(scope, new GitHubToken("tok", null, null, "mylogin", []));
+        await store.SetAsync(scope, new GitHubToken("tok", null, null, "mylogin", null, []));
         var identity = await store.GetIdentityAsync(scope);
 
         identity.Should().NotBeNull();
@@ -165,7 +165,7 @@ public sealed class GitHubTokenStoreTests
             initial.Status.Should().Be(GitHubTokenStatus.NeverSignedIn);
 
             // Set
-            await store.SetAsync(scope, new GitHubToken("ghp_os_test", null, null, "osuser", []));
+            await store.SetAsync(scope, new GitHubToken("ghp_os_test", null, null, "osuser", null, []));
             var after = await store.GetAsync(scope);
             after.Status.Should().Be(GitHubTokenStatus.SignedIn);
             after.AccessToken.Should().Be("ghp_os_test");

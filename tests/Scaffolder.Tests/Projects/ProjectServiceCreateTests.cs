@@ -129,7 +129,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         var tokenStore = new InMemoryGitHubTokenStore();
         var scope      = GitHubTokenScope.Installation;
         await tokenStore.SetAsync(scope, new GitHubToken(
-            "ghp_test_token", null, null, "testuser", ["repo", "read:user"]));
+            "ghp_test_token", null, null, "testuser", null, ["repo", "read:user"]));
 
         var service = BuildService(store, tokenStore: tokenStore);
         var dir     = NewDir();

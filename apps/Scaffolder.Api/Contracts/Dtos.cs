@@ -375,4 +375,5 @@ public sealed record GitHubAuthStatusResponse
 {
     [JsonPropertyName("status")] public required string Status { get; init; }   // "signed_in" | "signed_out" | "never_signed_in"
     [JsonPropertyName("login")] public string? Login { get; init; }
+    [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
 }

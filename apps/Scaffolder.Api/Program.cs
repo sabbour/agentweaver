@@ -55,6 +55,8 @@ builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenSto
 builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
+builder.Services.AddSingleton<GitHubOAuthRedirectService>();
+builder.Services.AddHttpClient<GitHubOAuthRedirectService>();
 
 // Project infrastructure (must be before AddAgentRuntime)
 builder.Services.AddSingleton<SqliteProjectStore>();
@@ -1744,6 +1746,48 @@ app.MapPost("/api/projects/{id}/runs", async (
         new CreateRunResponse { RunId = run.Id.ToString(), Status = "in_progress" });
 });
 
+// GET /auth/github/authorize — begin OAuth redirect flow
+app.MapGet("/auth/github/authorize", (GitHubOAuthRedirectService oauthService) =>
+{
+    try
+    {
+        var url = oauthService.BeginAuthorization();
+        return Results.Redirect(url);
+    }
+    catch (GitHubNotConfiguredException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 503);
+    }
+}).AllowAnonymous();
+
+// GET /auth/github/callback — receive OAuth code from GitHub, exchange for token
+app.MapGet("/auth/github/callback", async (
+    string? code,
+    string? state,
+    string? error,
+    GitHubOAuthRedirectService oauthService,
+    IConfiguration configuration,
+    CancellationToken ct) =>
+{
+    var frontendUrl = configuration["Auth:GitHub:FrontendUrl"] ?? "http://localhost:5173";
+
+    if (!string.IsNullOrWhiteSpace(error))
+        return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
+
+    if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
+        return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
+
+    try
+    {
+        await oauthService.ExchangeCodeAsync(code, state, ct).ConfigureAwait(false);
+        return Results.Redirect($"{frontendUrl}/?auth=success");
+    }
+    catch (Exception ex)
+    {
+        return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
+    }
+}).AllowAnonymous();
+
 // POST /api/auth/github/device — start device flow
 app.MapPost("/api/auth/github/device", async (
     HttpContext httpContext,
@@ -1824,6 +1868,7 @@ app.MapGet("/api/auth/github", async (
             _ => "unknown"
         },
         Login = identity?.Login,
+        AvatarUrl = identity?.AvatarUrl,
     });
 });
 

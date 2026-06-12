@@ -33,7 +33,7 @@ public sealed class InMemoryGitHubTokenStore : IGitHubTokenStore
     public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default)
     {
         if (_entries.TryGetValue(scope.Key, out var entry) && entry.Token is not null)
-            return Task.FromResult<GitHubIdentity?>(new GitHubIdentity(entry.Token.Login));
+            return Task.FromResult<GitHubIdentity?>(new GitHubIdentity(entry.Token.Login, entry.Token.AvatarUrl));
         return Task.FromResult<GitHubIdentity?>(null);
     }
 
