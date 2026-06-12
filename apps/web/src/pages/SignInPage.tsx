@@ -14,13 +14,13 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: tokens.colorNeutralBackground2,
-    gap: tokens.spacingVerticalXXL,
+    gap: tokens.spacingVerticalM,
   },
   branding: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: tokens.spacingVerticalS,
+    gap: tokens.spacingVerticalXS,
   },
   logo: {
     width: '160px',
