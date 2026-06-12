@@ -1765,6 +1765,11 @@ app.MapPost("/api/auth/github/device", async (
             Interval = result.Interval,
         });
     }
+    catch (GitHubNotConfiguredException ex)
+    {
+        logger.LogWarning("GitHub sign-in attempted but OAuth is not configured: {Message}", ex.Message);
+        return Results.Problem(ex.Message, statusCode: 503);
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to start GitHub device flow for {User}", caller.User);

@@ -42,6 +42,19 @@ const useStyles = makeStyles({
   },
 });
 
+/** Extract a human-readable message from an ApiError, handling ProblemDetails JSON bodies. */
+function apiErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 503) return 'GitHub sign-in is not configured on this server.';
+    try {
+      const problem = JSON.parse(err.body) as { detail?: string };
+      if (problem.detail) return problem.detail;
+    } catch { /* not JSON */ }
+    return `Error ${err.status}: ${err.body}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function GitHubSignIn() {
   const styles = useStyles();
   const [status, setStatus] = useState<GitHubAuthStatus | null>(null);
@@ -69,11 +82,7 @@ export function GitHubSignIn() {
       setStatus(res.status);
       setLogin(res.login);
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error ? err.message : String(err),
-      );
+      setError(apiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -89,11 +98,7 @@ export function GitHubSignIn() {
         }
       })
       .catch((err) => {
-        if (!cancelled) setError(
-          err instanceof ApiError
-            ? `API error ${err.status}: ${err.body}`
-            : err instanceof Error ? err.message : String(err),
-        );
+        if (!cancelled) setError(apiErrorMessage(err));
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => {
@@ -132,20 +137,12 @@ export function GitHubSignIn() {
           } catch (err) {
             clearPollTimer();
             setPolling(false);
-            setFlowError(
-              err instanceof ApiError
-                ? `API error ${err.status}: ${err.body}`
-                : err instanceof Error ? err.message : String(err),
-            );
+            setFlowError(apiErrorMessage(err));
           }
         })();
       }, flow.interval * 1000);
     } catch (err) {
-      setFlowError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error ? err.message : String(err),
-      );
+      setFlowError(apiErrorMessage(err));
     }
   };
 
@@ -154,11 +151,7 @@ export function GitHubSignIn() {
       await apiClient.signOutGitHub();
       await fetchStatus();
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error ? err.message : String(err),
-      );
+      setError(apiErrorMessage(err));
     }
   };
 

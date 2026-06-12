@@ -18,7 +18,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
     private const string DefaultScopes = "repo read:user";
 
     private readonly string _baseUrl;
-    private readonly string _clientId;
+    private readonly string? _clientId;
     private readonly string _scopes;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly HttpClient _http;
@@ -34,22 +34,27 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
         ILogger<GitHubDeviceFlowAuthService> logger)
     {
         _baseUrl = configuration["Auth:GitHub:BaseUrl"] ?? "https://github.com";
-        _clientId = configuration["Auth:GitHub:ClientId"]
-            ?? throw new InvalidOperationException("Auth:GitHub:ClientId must be configured.");
+        _clientId = configuration["Auth:GitHub:ClientId"];
         _scopes = configuration["Auth:GitHub:Scopes"] ?? DefaultScopes;
         _tokenStore = tokenStore;
         _http = http;
         _logger = logger;
     }
 
+    private string RequireClientId() =>
+        !string.IsNullOrWhiteSpace(_clientId)
+            ? _clientId
+            : throw new GitHubNotConfiguredException("Auth:GitHub:ClientId must be configured to use GitHub sign-in.");
+
     public async Task<GitHubDeviceFlowStart> StartDeviceFlowAsync(
         GitHubTokenScope scope, CancellationToken ct = default)
     {
+        var clientId = RequireClientId();
         var response = await _http.PostAsync(
             $"{_baseUrl}/login/device/code",
             new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["client_id"] = _clientId,
+                ["client_id"] = clientId,
                 ["scope"] = _scopes
             }), ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -90,7 +95,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
             $"{_baseUrl}/login/oauth/access_token",
             new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["client_id"] = _clientId,
+                ["client_id"] = RequireClientId(),
                 ["device_code"] = flow.DeviceCode,
                 ["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code"
             }), ct).ConfigureAwait(false);
@@ -171,4 +176,10 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
     {
         [JsonPropertyName("login")] public string? Login { get; set; }
     }
+}
+
+/// <summary>Thrown when GitHub OAuth is not configured (missing ClientId).</summary>
+public sealed class GitHubNotConfiguredException : InvalidOperationException
+{
+    public GitHubNotConfiguredException(string message) : base(message) { }
 }
