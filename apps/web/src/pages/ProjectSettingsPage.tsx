@@ -9,6 +9,7 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  Switch,
   Text,
   Title2,
   Title3,
@@ -17,7 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { Project, UpdateProjectProviderSettingsRequest } from '../api/types';
+import type { Project, SandboxPolicy, UpdateProjectProviderSettingsRequest } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -55,6 +56,26 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorPaletteRedBorder2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
+  listBox: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+  },
+  listItem: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    padding: `${tokens.spacingVerticalXS} 0`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    ':last-child': {
+      borderBottom: 'none',
+    },
+  },
+  emptyNote: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    fontStyle: 'italic',
+  },
 });
 
 export function ProjectSettingsPage() {
@@ -88,6 +109,15 @@ export function ProjectSettingsPage() {
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Sandbox policy
+  const [sandboxPolicy, setSandboxPolicy] = useState<SandboxPolicy | null>(null);
+  const [sandboxFetched, setSandboxFetched] = useState(false);
+  const [sandboxError, setSandboxError] = useState<string | null>(null);
+  const [savingSandbox, setSavingSandbox] = useState(false);
+  const [sandboxSaveError, setSandboxSaveError] = useState<string | null>(null);
+  const [sandboxSaveSuccess, setSandboxSaveSuccess] = useState(false);
+  const sandboxLoading = project !== null && !sandboxFetched;
 
   useEffect(() => {
     if (!projectId) return;
@@ -131,6 +161,54 @@ export function ProjectSettingsPage() {
       );
     } finally {
       setSavingModel(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!project?.working_directory) return;
+    let cancelled = false;
+    apiClient.getSandboxPolicy(project.working_directory)
+      .then((p) => {
+        if (!cancelled) {
+          setSandboxPolicy(p);
+          setSandboxFetched(true);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSandboxFetched(true);
+          setSandboxError(
+            err instanceof ApiError
+              ? `API error ${err.status}: ${err.body}`
+              : err instanceof Error ? err.message : String(err),
+          );
+        }
+      });
+    return () => { cancelled = true; };
+  }, [project?.working_directory]);
+
+  const handleSaveSandbox = async () => {
+    if (!sandboxPolicy) return;
+    setSavingSandbox(true);
+    setSandboxSaveError(null);
+    setSandboxSaveSuccess(false);
+    try {
+      const updated = await apiClient.updateSandboxPolicy({
+        repository_path: sandboxPolicy.repository_path,
+        shell_enabled: sandboxPolicy.shell_enabled,
+        direct: sandboxPolicy.direct,
+        network_enabled: sandboxPolicy.network_enabled,
+      });
+      setSandboxPolicy(updated);
+      setSandboxSaveSuccess(true);
+    } catch (err) {
+      setSandboxSaveError(
+        err instanceof ApiError
+          ? `API error ${err.status}: ${err.body}`
+          : err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setSavingSandbox(false);
     }
   };
 
@@ -234,6 +312,81 @@ export function ProjectSettingsPage() {
             )}
             {modelSuccess && (
               <MessageBar intent="success"><MessageBarBody>Model settings saved.</MessageBarBody></MessageBar>
+            )}
+          </div>
+
+          <Divider />
+
+          <div className={styles.section}>
+            <Title3>Sandbox policy</Title3>
+            {sandboxLoading && <Spinner size="extra-tiny" label="Loading policy" />}
+            {sandboxError && (
+              <MessageBar intent="error"><MessageBarBody>{sandboxError}</MessageBarBody></MessageBar>
+            )}
+            {sandboxPolicy && (
+              <>
+                <Field label="Shell execution">
+                  <Switch
+                    label={sandboxPolicy.shell_enabled ? 'Enabled' : 'Disabled'}
+                    checked={sandboxPolicy.shell_enabled}
+                    onChange={(_, data) =>
+                      setSandboxPolicy((prev) => prev ? { ...prev, shell_enabled: data.checked } : prev)
+                    }
+                  />
+                </Field>
+                <Field label="Direct execution (no sandbox isolation)">
+                  <Switch
+                    label={sandboxPolicy.direct ? 'On — commands run on host shell directly' : 'Off — uses bwrap/mxc isolation'}
+                    checked={sandboxPolicy.direct}
+                    onChange={(_, data) =>
+                      setSandboxPolicy((prev) => prev ? { ...prev, direct: data.checked } : prev)
+                    }
+                  />
+                </Field>
+                <Field label="Outbound network">
+                  <Switch
+                    label={sandboxPolicy.network_enabled ? 'Enabled' : 'Blocked'}
+                    checked={sandboxPolicy.network_enabled}
+                    onChange={(_, data) =>
+                      setSandboxPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
+                    }
+                  />
+                </Field>
+                <Field label="Allowed repository roots">
+                  <div className={styles.listBox}>
+                    {sandboxPolicy.allowed_repository_roots.length === 0 ? (
+                      <Text className={styles.emptyNote}>None configured</Text>
+                    ) : (
+                      sandboxPolicy.allowed_repository_roots.map((root, i) => (
+                        <div key={i} className={styles.listItem}>{root}</div>
+                      ))
+                    )}
+                  </div>
+                </Field>
+                <Field label="Blocked command patterns">
+                  <div className={styles.listBox}>
+                    {sandboxPolicy.destructive_command_patterns.length === 0 ? (
+                      <Text className={styles.emptyNote}>None configured</Text>
+                    ) : (
+                      sandboxPolicy.destructive_command_patterns.map((pat, i) => (
+                        <div key={i} className={styles.listItem}>{pat}</div>
+                      ))
+                    )}
+                  </div>
+                </Field>
+                <div className={styles.actions}>
+                  <Button appearance="primary" disabled={savingSandbox} onClick={() => void handleSaveSandbox()}>
+                    {savingSandbox ? 'Saving' : 'Save'}
+                  </Button>
+                  {savingSandbox && <Spinner size="extra-tiny" aria-hidden="true" />}
+                </div>
+                {sandboxSaveError && (
+                  <MessageBar intent="error"><MessageBarBody>{sandboxSaveError}</MessageBarBody></MessageBar>
+                )}
+                {sandboxSaveSuccess && (
+                  <MessageBar intent="success"><MessageBarBody>Sandbox policy saved.</MessageBarBody></MessageBar>
+                )}
+              </>
             )}
           </div>
 

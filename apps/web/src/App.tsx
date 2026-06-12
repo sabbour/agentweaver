@@ -11,7 +11,6 @@ import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { WatchPage } from './pages/WatchPage';
-import { SettingsPage } from './pages/SettingsPage';
 import { GitHubSignIn } from './components/GitHubSignIn';
 import { SignInPage } from './pages/SignInPage';
 import { apiClient } from './api/apiClient';
@@ -29,10 +28,21 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  brand: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    textDecoration: 'none',
+    color: tokens.colorNeutralForeground1,
+  },
   brandLogo: {
     height: '32px',
     width: 'auto',
     display: 'block',
+  },
+  brandName: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
   },
   headerNav: {
     display: 'flex',
@@ -57,11 +67,11 @@ function Shell() {
   return (
     <div className={styles.app}>
       <header className={styles.header}>
-        <Link to="/">
+        <Link to="/" className={styles.brand}>
           <img src="/agentweaver.png" alt="Agentweaver" className={styles.brandLogo} />
+          <span className={styles.brandName}>Agentweaver</span>
         </Link>
         <nav className={styles.headerNav} aria-label="Main navigation">
-          <Link to="/settings" className={styles.navLink}>Settings</Link>
           <GitHubSignIn />
         </nav>
       </header>
@@ -71,7 +81,6 @@ function Shell() {
           <Route path="/projects/:projectId" element={<ProjectPage />} />
           <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
           <Route path="/watch/:runId" element={<WatchPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
     </div>
