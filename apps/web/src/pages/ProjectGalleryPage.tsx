@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardHeader,
+  Combobox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -16,6 +17,7 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
+  Option,
   Select,
   Spinner,
   Text,
@@ -26,7 +28,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CreateProjectRequest, ModelSource, Project } from '../api/types';
+import type { CreateProjectRequest, GitHubRepo, ModelSource, Project } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -186,12 +188,43 @@ function CreateBlankDialog({ onCreated }: { onCreated: (p: Project) => void }) {
   );
 }
 
+function useGitHubRepos(open: boolean) {
+  const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [fetched, setFetched] = useState(false);
+  const [prevOpen, setPrevOpen] = useState(open);
+
+  // Derived-state pattern: reset `fetched` when the dialog opens so `loading` is
+  // truthy until the fetch completes.  Called during render (not inside an effect)
+  // so it avoids cascading-render concerns.
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) setFetched(false);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    apiClient.listGitHubRepos()
+      .then((data) => { if (!cancelled) { setRepos(data); setFetched(true); } })
+      .catch(() => { if (!cancelled) setFetched(true); });
+    return () => { cancelled = true; };
+  }, [open]);
+
+  return { repos, loading: open && !fetched };
+}
+
 function CreateFromGitHubDialog({ onCreated }: { onCreated: (p: Project) => void }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('github', onCreated);
+  const { repos, loading: reposLoading } = useGitHubRepos(d.open);
+  const [repoFilter, setRepoFilter] = useState('');
+
+  const filteredRepos = repos.filter(r =>
+    r.full_name.toLowerCase().includes(repoFilter.toLowerCase())
+  );
 
   return (
-    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) d.reset(); }}>
+    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setRepoFilter(''); } }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="secondary">Create from GitHub</Button>
       </DialogTrigger>
@@ -203,8 +236,35 @@ function CreateFromGitHubDialog({ onCreated }: { onCreated: (p: Project) => void
               <Field label="Name" required>
                 <Input value={d.name} onChange={(_, v) => d.setName(v.value)} placeholder="My project" />
               </Field>
-              <Field label="Source repository (owner/repo)" required>
-                <Input value={d.sourceRepository} onChange={(_, v) => d.setSourceRepository(v.value)} placeholder="owner/repo" />
+              <Field label="Source repository" required>
+                <Combobox
+                  freeform
+                  placeholder={reposLoading ? 'Loading repositories...' : 'Search or enter owner/repo'}
+                  value={d.sourceRepository}
+                  onInput={(e) => {
+                    const val = (e.target as HTMLInputElement).value;
+                    setRepoFilter(val);
+                    d.setSourceRepository(val);
+                  }}
+                  onOptionSelect={(_, data) => {
+                    d.setSourceRepository(data.optionValue ?? '');
+                    setRepoFilter(data.optionValue ?? '');
+                  }}
+                  disabled={reposLoading}
+                >
+                  {filteredRepos.map((repo) => (
+                    <Option key={repo.full_name} value={repo.full_name} text={repo.full_name}>
+                      <div>
+                        <Text weight="semibold">{repo.full_name}</Text>
+                        {repo.description && (
+                          <Text size={200} style={{ display: 'block', color: 'inherit', opacity: 0.7 }}>
+                            {repo.description}
+                          </Text>
+                        )}
+                      </div>
+                    </Option>
+                  ))}
+                </Combobox>
               </Field>
               <Field label="Working directory" required>
                 <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="C:/projects/my-project" />

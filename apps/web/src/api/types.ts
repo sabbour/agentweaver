@@ -180,3 +180,10 @@ export interface GitHubAuthStatusResponse {
   login: string | null;
   avatar_url?: string;
 }
+
+export interface GitHubRepo {
+  full_name: string;
+  description?: string | null;
+  private: boolean;
+  default_branch: string;
+}

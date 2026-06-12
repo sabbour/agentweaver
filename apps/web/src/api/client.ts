@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -129,6 +129,10 @@ export class ScaffolderApiClient {
 
   signOutGitHub(): Promise<void> {
     return this.request<void>('POST', '/api/auth/github/sign-out', {});
+  }
+
+  listGitHubRepos(): Promise<GitHubRepo[]> {
+    return this.request<GitHubRepo[]>('GET', '/api/github/repos');
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

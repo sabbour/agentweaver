@@ -142,6 +142,14 @@ public sealed record SandboxPolicyDto
     public int MaxOutputBytes { get; init; }
 }
 
+/// <summary>Response body for GET /api/github/repos.</summary>
+public sealed record GitHubRepoResponse(
+    string FullName,
+    string? Description,
+    bool Private,
+    string DefaultBranch
+);
+
 /// <summary>Request body for POST /api/runs/{id}/shell-approvals.</summary>
 public sealed record ShellApprovalRequest
 {

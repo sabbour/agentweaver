@@ -1871,6 +1871,66 @@ app.MapGet("/api/auth/github", async (
     });
 });
 
+// GET /api/github/repos — list authenticated user's GitHub repositories
+app.MapGet("/api/github/repos", async (
+    HttpContext httpContext,
+    IGitHubTokenStore tokenStore,
+    IGitHubTokenScopeProvider scopeProvider,
+    IHttpClientFactory httpClientFactory,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var scope = scopeProvider.Resolve(caller.User);
+    var entry = await tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
+
+    if (entry.Status != GitHubTokenStatus.SignedIn || string.IsNullOrWhiteSpace(entry.AccessToken))
+        return Results.Unauthorized();
+
+    try
+    {
+        using var http = httpClientFactory.CreateClient();
+        var repos = new List<GitHubRepoResponse>();
+        var page = 1;
+        const int perPage = 100;
+
+        while (true)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"https://api.github.com/user/repos?sort=pushed&per_page={perPage}&page={page}&affiliation=owner");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", entry.AccessToken);
+            request.Headers.UserAgent.ParseAdd("Scaffolder/1.0");
+            request.Headers.Accept.ParseAdd("application/vnd.github+json");
+
+            var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) break;
+
+            var batch = await response.Content
+                .ReadFromJsonAsync<GitHubApiRepo[]>(ct)
+                .ConfigureAwait(false);
+
+            if (batch is null || batch.Length == 0) break;
+
+            repos.AddRange(batch.Select(r => new GitHubRepoResponse(
+                r.FullName ?? string.Empty,
+                r.Description,
+                r.Private,
+                r.DefaultBranch ?? "main"
+            )));
+
+            if (batch.Length < perPage) break;
+            page++;
+        }
+
+        return Results.Ok(repos);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to list GitHub repos for {User}", caller.User);
+        return Results.Problem("Failed to fetch GitHub repositories.", statusCode: 500);
+    }
+});
+
 // POST /api/auth/github/sign-out
 app.MapPost("/api/auth/github/sign-out", async (
     HttpContext httpContext,
@@ -2284,4 +2344,17 @@ file sealed class RunOutcomePayload
 {
     public bool Achieved { get; init; }
     public string? Reason { get; init; }
+}
+
+/// <summary>Minimal GitHub API repo shape for GET /api/github/repos deserialization.</summary>
+file sealed class GitHubApiRepo
+{
+    [System.Text.Json.Serialization.JsonPropertyName("full_name")]
+    public string? FullName { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("description")]
+    public string? Description { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("private")]
+    public bool Private { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_branch")]
+    public string? DefaultBranch { get; set; }
 }
