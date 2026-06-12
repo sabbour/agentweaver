@@ -8,6 +8,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { LockClosedRegular, CopyRegular, CheckmarkRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { GitHubAuthStatus } from '../api/types';
@@ -18,23 +19,77 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
   },
-  deviceFlow: {
+  deviceCard: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    alignItems: 'flex-end',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: '0 0 2px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.14)',
+    minWidth: '320px',
   },
-  code: {
-    fontFamily: tokens.fontFamilyMonospace,
+  cardHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  headerIcon: {
+    color: tokens.colorBrandForeground1,
+    fontSize: '20px',
+    flexShrink: '0',
+  },
+  headerTitle: {
+    color: tokens.colorBrandForeground1,
     fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+  },
+  instruction: {
+    color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
-    letterSpacing: '0.1em',
+  },
+  urlRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
   link: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
+    flexGrow: '1',
     ':hover': { textDecoration: 'underline' },
+  },
+  codeContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  code: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase600,
+    letterSpacing: '0.15em',
+    color: tokens.colorNeutralForeground1,
+  },
+  statusRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  statusText: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  actionsRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
   },
   errorText: {
     fontSize: tokens.fontSizeBase200,
@@ -68,6 +123,26 @@ export function GitHubSignIn() {
   const [polling, setPolling] = useState(false);
   const [flowError, setFlowError] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Copy-to-clipboard state
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedUri, setCopiedUri] = useState(false);
+
+  const handleCopyCode = async () => {
+    if (userCode) {
+      await navigator.clipboard.writeText(userCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    }
+  };
+
+  const handleCopyUri = async () => {
+    if (verificationUri) {
+      await navigator.clipboard.writeText(verificationUri);
+      setCopiedUri(true);
+      setTimeout(() => setCopiedUri(false), 2000);
+    }
+  };
 
   const clearPollTimer = () => {
     if (pollTimerRef.current !== null) {
@@ -180,18 +255,63 @@ export function GitHubSignIn() {
 
   if (userCode && verificationUri) {
     return (
-      <div className={styles.deviceFlow}>
-        <Text size={200}>
-          Go to{' '}
+      <div className={styles.deviceCard}>
+        <div className={styles.cardHeader}>
+          <LockClosedRegular className={styles.headerIcon} />
+          <Text className={styles.headerTitle}>Sign in with GitHub</Text>
+        </div>
+
+        <Text className={styles.instruction}>
+          Open the link below and enter the code to authorize.
+        </Text>
+
+        <div className={styles.urlRow}>
           <a href={verificationUri} target="_blank" rel="noreferrer" className={styles.link}>
             {verificationUri}
           </a>
-        </Text>
-        <Text>
-          Enter code: <span className={styles.code}>{userCode}</span>
-        </Text>
-        {polling && <Spinner size="extra-tiny" label="Waiting for authorization" />}
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={copiedUri ? <CheckmarkRegular /> : <CopyRegular />}
+            aria-label="Copy URL"
+            onClick={() => void handleCopyUri()}
+          />
+        </div>
+
+        <div className={styles.codeContainer}>
+          <span className={styles.code}>{userCode}</span>
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={copiedCode ? <CheckmarkRegular /> : <CopyRegular />}
+            aria-label="Copy code"
+            onClick={() => void handleCopyCode()}
+          />
+        </div>
+
+        {polling && (
+          <div className={styles.statusRow}>
+            <Spinner size="extra-tiny" />
+            <Text className={styles.statusText}>Waiting for GitHub authorization...</Text>
+          </div>
+        )}
+
         {flowError && <Text className={styles.errorText}>{flowError}</Text>}
+
+        <div className={styles.actionsRow}>
+          <Button
+            appearance="subtle"
+            size="small"
+            onClick={() => {
+              clearPollTimer();
+              setPolling(false);
+              setUserCode(null);
+              setVerificationUri(null);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
       </div>
     );
   }
@@ -199,7 +319,7 @@ export function GitHubSignIn() {
   return (
     <div className={styles.root}>
       {flowError && <Text className={styles.errorText}>{flowError}</Text>}
-      <Button appearance="secondary" disabled={polling} onClick={() => void handleSignIn()}>
+      <Button appearance="primary" disabled={polling} onClick={() => void handleSignIn()}>
         Sign in with GitHub
       </Button>
     </div>
