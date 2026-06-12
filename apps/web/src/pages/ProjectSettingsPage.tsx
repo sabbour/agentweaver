@@ -8,7 +8,6 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
-  Select,
   Spinner,
   Text,
   Title2,
@@ -18,7 +17,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { ModelSource, Project, UpdateProjectProviderSettingsRequest } from '../api/types';
+import type { Project, UpdateProjectProviderSettingsRequest } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -67,13 +66,11 @@ export function ProjectSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Provider settings
-  const [defaultProvider, setDefaultProvider] = useState<ModelSource | ''>('');
+  // Model settings
   const [copilotModel, setCopilotModel] = useState('');
-  const [foundryModel, setFoundryModel] = useState('');
-  const [savingProvider, setSavingProvider] = useState(false);
-  const [providerError, setProviderError] = useState<string | null>(null);
-  const [providerSuccess, setProviderSuccess] = useState(false);
+  const [savingModel, setSavingModel] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelSuccess, setModelSuccess] = useState(false);
 
   // Rename
   const [newName, setNewName] = useState('');
@@ -99,9 +96,7 @@ export function ProjectSettingsPage() {
       .then((p) => {
         if (!cancelled) {
           setProject(p);
-          setDefaultProvider(p.default_provider ?? '');
           setCopilotModel(p.default_model_github_copilot ?? '');
-          setFoundryModel(p.default_model_microsoft_foundry ?? '');
           setNewName(p.name);
           setNewDir(p.working_directory);
         }
@@ -117,26 +112,25 @@ export function ProjectSettingsPage() {
     return () => { cancelled = true; };
   }, [projectId]);
 
-  const handleSaveProvider = async () => {
+  const handleSaveModel = async () => {
     if (!projectId) return;
-    setSavingProvider(true);
-    setProviderError(null);
-    setProviderSuccess(false);
+    setSavingModel(true);
+    setModelError(null);
+    setModelSuccess(false);
     try {
       const req: UpdateProjectProviderSettingsRequest = {};
-      if (defaultProvider) req.default_provider = defaultProvider;
+      req.default_provider = 'github-copilot';
       if (copilotModel.trim()) req.default_model_github_copilot = copilotModel.trim();
-      if (foundryModel.trim()) req.default_model_microsoft_foundry = foundryModel.trim();
       await apiClient.updateProjectProviderSettings(projectId, req);
-      setProviderSuccess(true);
+      setModelSuccess(true);
     } catch (err) {
-      setProviderError(
+      setModelError(
         err instanceof ApiError
           ? `API error ${err.status}: ${err.body}`
           : err instanceof Error ? err.message : String(err),
       );
     } finally {
-      setSavingProvider(false);
+      setSavingModel(false);
     }
   };
 
@@ -225,31 +219,21 @@ export function ProjectSettingsPage() {
           <Divider />
 
           <div className={styles.section}>
-            <Title3>Provider settings</Title3>
-            <Field label="Default provider">
-              <Select value={defaultProvider} onChange={(_, v) => setDefaultProvider(v.value as ModelSource | '')}>
-                <option value="">— use server default —</option>
-                <option value="github-copilot">GitHub Copilot</option>
-                <option value="microsoft-foundry">Microsoft Foundry</option>
-              </Select>
-            </Field>
-            <Field label="GitHub Copilot default model">
+            <Title3>Model settings</Title3>
+            <Field label="GitHub Copilot model">
               <Input value={copilotModel} onChange={(_, v) => setCopilotModel(v.value)} placeholder="e.g. gpt-4o" />
             </Field>
-            <Field label="Microsoft Foundry default model">
-              <Input value={foundryModel} onChange={(_, v) => setFoundryModel(v.value)} placeholder="e.g. Phi-4" />
-            </Field>
             <div className={styles.actions}>
-              <Button appearance="primary" disabled={savingProvider} onClick={() => void handleSaveProvider()}>
-                {savingProvider ? 'Saving' : 'Save'}
+              <Button appearance="primary" disabled={savingModel} onClick={() => void handleSaveModel()}>
+                {savingModel ? 'Saving' : 'Save'}
               </Button>
-              {savingProvider && <Spinner size="extra-tiny" aria-hidden="true" />}
+              {savingModel && <Spinner size="extra-tiny" aria-hidden="true" />}
             </div>
-            {providerError && (
-              <MessageBar intent="error"><MessageBarBody>{providerError}</MessageBarBody></MessageBar>
+            {modelError && (
+              <MessageBar intent="error"><MessageBarBody>{modelError}</MessageBarBody></MessageBar>
             )}
-            {providerSuccess && (
-              <MessageBar intent="success"><MessageBarBody>Provider settings saved.</MessageBarBody></MessageBar>
+            {modelSuccess && (
+              <MessageBar intent="success"><MessageBarBody>Model settings saved.</MessageBarBody></MessageBar>
             )}
           </div>
 

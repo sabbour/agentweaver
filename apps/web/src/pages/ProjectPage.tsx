@@ -14,7 +14,6 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
-  Select,
   Spinner,
   Text,
   Textarea,
@@ -25,7 +24,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CreateProjectRunRequest, ModelSource, Project, ProjectRunSummary } from '../api/types';
+import type { CreateProjectRunRequest, Project, ProjectRunSummary } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -102,7 +101,6 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
   const styles = useStyles();
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState('');
-  const [modelSource, setModelSource] = useState<ModelSource | ''>('');
   const [modelId, setModelId] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
   const [saving, setSaving] = useState(false);
@@ -110,7 +108,6 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
 
   const reset = () => {
     setTask('');
-    setModelSource('');
     setModelId('');
     setBaseBranch('');
     setError(null);
@@ -123,7 +120,7 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
     setError(null);
     try {
       const req: CreateProjectRunRequest = { task: task.trim() };
-      if (modelSource) req.model_source = modelSource;
+      req.model_source = 'github-copilot';
       if (modelId.trim()) req.model_id = modelId.trim();
       if (baseBranch.trim()) req.base_branch = baseBranch.trim();
       const result = await apiClient.startProjectRun(projectId, req);
@@ -160,13 +157,6 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
                   placeholder="Describe what the agent should do..."
                   rows={4}
                 />
-              </Field>
-              <Field label="Model source (optional)">
-                <Select value={modelSource} onChange={(_, v) => setModelSource(v.value as ModelSource | '')}>
-                  <option value="">— use project default —</option>
-                  <option value="github-copilot">GitHub Copilot</option>
-                  <option value="microsoft-foundry">Microsoft Foundry</option>
-                </Select>
               </Field>
               <Field label="Model ID (optional)">
                 <Input value={modelId} onChange={(_, v) => setModelId(v.value)} placeholder="e.g. gpt-4o" />
@@ -313,20 +303,10 @@ export function ProjectPage() {
             <Text className={styles.infoLabel}>Default branch</Text>
             <Text className={styles.infoValue}>{project.default_branch}</Text>
 
-            <Text className={styles.infoLabel}>Default provider</Text>
-            <Text className={styles.infoValue}>{project.default_provider}</Text>
-
             {project.default_model_github_copilot && (
               <>
                 <Text className={styles.infoLabel}>Copilot model</Text>
                 <Text className={styles.infoValue}>{project.default_model_github_copilot}</Text>
-              </>
-            )}
-
-            {project.default_model_microsoft_foundry && (
-              <>
-                <Text className={styles.infoLabel}>Foundry model</Text>
-                <Text className={styles.infoValue}>{project.default_model_microsoft_foundry}</Text>
               </>
             )}
           </div>

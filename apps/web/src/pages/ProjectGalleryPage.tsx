@@ -18,7 +18,6 @@ import {
   MessageBar,
   MessageBarBody,
   Option,
-  Select,
   Spinner,
   Text,
   Title2,
@@ -28,7 +27,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CreateProjectRequest, GitHubRepo, ModelSource, Project } from '../api/types';
+import type { CreateProjectRequest, GitHubRepo, Project } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -85,7 +84,6 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
   const [name, setName] = useState('');
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [sourceRepository, setSourceRepository] = useState('');
-  const [defaultProvider, setDefaultProvider] = useState<ModelSource | ''>('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,7 +91,6 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
     setName('');
     setWorkingDirectory('');
     setSourceRepository('');
-    setDefaultProvider('');
     setError(null);
     setSaving(false);
   };
@@ -110,7 +107,6 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
         working_directory: workingDirectory.trim(),
       };
       if (origin === 'github') req.source_repository = sourceRepository.trim();
-      if (defaultProvider) req.default_provider = defaultProvider;
       const project = await apiClient.createProject(req);
       onCreated(project);
       setOpen(false);
@@ -130,7 +126,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
 
   return {
     open, setOpen, name, setName, workingDirectory, setWorkingDirectory,
-    sourceRepository, setSourceRepository, defaultProvider, setDefaultProvider,
+    sourceRepository, setSourceRepository,
     saving, error, handleSubmit, reset,
   };
 }
@@ -154,13 +150,6 @@ function CreateBlankDialog({ onCreated }: { onCreated: (p: Project) => void }) {
               </Field>
               <Field label="Working directory" required>
                 <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="C:/projects/my-project" />
-              </Field>
-              <Field label="Default provider">
-                <Select value={d.defaultProvider} onChange={(_, v) => d.setDefaultProvider(v.value as ModelSource | '')}>
-                  <option value="">— use server default —</option>
-                  <option value="github-copilot">GitHub Copilot</option>
-                  <option value="microsoft-foundry">Microsoft Foundry</option>
-                </Select>
               </Field>
               {d.error && (
                 <MessageBar intent="error">
@@ -268,13 +257,6 @@ function CreateFromGitHubDialog({ onCreated }: { onCreated: (p: Project) => void
               </Field>
               <Field label="Working directory" required>
                 <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="C:/projects/my-project" />
-              </Field>
-              <Field label="Default provider">
-                <Select value={d.defaultProvider} onChange={(_, v) => d.setDefaultProvider(v.value as ModelSource | '')}>
-                  <option value="">— use server default —</option>
-                  <option value="github-copilot">GitHub Copilot</option>
-                  <option value="microsoft-foundry">Microsoft Foundry</option>
-                </Select>
               </Field>
               {d.error && (
                 <MessageBar intent="error">

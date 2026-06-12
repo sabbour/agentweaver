@@ -2,18 +2,15 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
-  Dropdown,
   Field,
   Input,
   MessageBar,
   MessageBarBody,
-  Option,
   Textarea,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
-import type { ModelSource } from '../api/types';
 import { ApiError } from '../api/client';
 
 const useStyles = makeStyles({
@@ -29,11 +26,6 @@ const useStyles = makeStyles({
   },
 });
 
-const MODEL_LABELS: Record<ModelSource, string> = {
-  'github-copilot': 'GitHub Copilot',
-  'microsoft-foundry': 'Microsoft Foundry',
-};
-
 export function RunSubmitForm() {
   const styles = useStyles();
   const navigate = useNavigate();
@@ -41,7 +33,6 @@ export function RunSubmitForm() {
   const [repositoryPath, setRepositoryPath] = useState('');
   const [originatingBranch, setOriginatingBranch] = useState('');
   const [task, setTask] = useState('');
-  const [modelSource, setModelSource] = useState<ModelSource>('github-copilot');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +44,7 @@ export function RunSubmitForm() {
         repository_path: repositoryPath,
         originating_branch: originatingBranch,
         task,
-        model_source: modelSource,
+        model_source: 'github-copilot',
       });
       navigate(`/watch/${response.run_id}`);
     } catch (err) {
@@ -105,21 +96,6 @@ export function RunSubmitForm() {
           placeholder="Describe the task for the agent to perform"
           onChange={(_, data) => setTask(data.value)}
         />
-      </Field>
-
-      <Field label="Model source" required>
-        <Dropdown
-          value={MODEL_LABELS[modelSource]}
-          selectedOptions={[modelSource]}
-          onOptionSelect={(_, data) => {
-            if (data.optionValue) {
-              setModelSource(data.optionValue as ModelSource);
-            }
-          }}
-        >
-          <Option value="github-copilot">GitHub Copilot</Option>
-          <Option value="microsoft-foundry">Microsoft Foundry</Option>
-        </Dropdown>
       </Field>
 
       <div className={styles.actions}>
