@@ -23,8 +23,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
   },
   logo: {
-    width: '80px',
-    height: '80px',
+    width: '160px',
+    height: '160px',
     objectFit: 'contain',
   },
   tagline: {
