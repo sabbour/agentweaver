@@ -23,7 +23,9 @@ internal static class CliEntryPoint
         var topCommand = args[0];
 
         if (!string.Equals(topCommand, "run", StringComparison.Ordinal) &&
-            !string.Equals(topCommand, "sandbox-policy", StringComparison.Ordinal))
+            !string.Equals(topCommand, "sandbox-policy", StringComparison.Ordinal) &&
+            !string.Equals(topCommand, "project", StringComparison.Ordinal) &&
+            !string.Equals(topCommand, "github", StringComparison.Ordinal))
         {
             AnsiConsole.MarkupLine($"[red]Unknown command:[/] {Markup.Escape(args[0])}");
             PrintUsage();
@@ -46,6 +48,16 @@ internal static class CliEntryPoint
 
         try
         {
+            if (string.Equals(topCommand, "project", StringComparison.Ordinal))
+            {
+                return await HandleProjectAsync(api, subcommand, args, cts.Token);
+            }
+
+            if (string.Equals(topCommand, "github", StringComparison.Ordinal))
+            {
+                return await HandleGitHubAsync(api, subcommand, args, cts.Token);
+            }
+
             if (string.Equals(topCommand, "sandbox-policy", StringComparison.Ordinal))
             {
                 return await HandleSandboxPolicyAsync(api, subcommand, args, cts.Token);
@@ -218,8 +230,92 @@ internal static class CliEntryPoint
         AnsiConsole.WriteLine("  scaffolder sandbox-policy get --repository-path <path>");
         AnsiConsole.WriteLine("  scaffolder sandbox-policy set --repository-path <path> --shell-enabled true|false");
         AnsiConsole.WriteLine();
+        AnsiConsole.WriteLine("  scaffolder project create --name <name> --dir <path> [--origin blank|github] ...");
+        AnsiConsole.WriteLine("  scaffolder project list");
+        AnsiConsole.WriteLine("  scaffolder project show <project-id>");
+        AnsiConsole.WriteLine("  scaffolder project run <project-id> --task <text>");
+        AnsiConsole.WriteLine("  (Run 'scaffolder project help' for full project usage)");
+        AnsiConsole.WriteLine();
+        AnsiConsole.WriteLine("  scaffolder github sign-in");
+        AnsiConsole.WriteLine("  scaffolder github sign-out");
+        AnsiConsole.WriteLine("  scaffolder github status");
+        AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("Environment:");
         AnsiConsole.WriteLine("  SCAFFOLDER_API_URL   API base URL (default: http://localhost:5000)");
         AnsiConsole.WriteLine("  SCAFFOLDER_API_KEY   API bearer key (required)");
+    }
+
+    private static async Task<int> HandleProjectAsync(
+        ApiClient api, string subcommand, string[] args, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(subcommand) || IsHelp(subcommand))
+        {
+            PrintProjectUsage();
+            return subcommand == string.Empty ? 1 : 0;
+        }
+        var projectId = args.Length >= 3 ? args[2] : string.Empty;
+
+        switch (subcommand)
+        {
+            case "create":   return await ProjectCommands.CreateAsync(api, args, ct);
+            case "list":     return await ProjectCommands.ListAsync(api, ct);
+            case "show":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]Missing project-id.[/]"); return 1; }
+                return await ProjectCommands.ShowAsync(api, projectId, ct);
+            case "configure":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]Missing project-id.[/]"); return 1; }
+                return await ProjectCommands.ConfigureAsync(api, projectId, args, ct);
+            case "rename":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]Missing project-id.[/]"); return 1; }
+                return await ProjectCommands.RenameAsync(api, projectId, args, ct);
+            case "relink":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]Missing project-id.[/]"); return 1; }
+                return await ProjectCommands.RelinkAsync(api, projectId, args, ct);
+            case "delete":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]Missing project-id.[/]"); return 1; }
+                return await ProjectCommands.DeleteAsync(api, projectId, args, ct);
+            case "run":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]Missing project-id.[/]"); return 1; }
+                return await ProjectCommands.RunAsync(api, projectId, args, ct);
+            case "runs":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]Missing project-id.[/]"); return 1; }
+                return await ProjectCommands.RunsAsync(api, projectId, ct);
+            default:
+                AnsiConsole.MarkupLine($"[red]Unknown subcommand for 'project':[/] {Markup.Escape(subcommand)}");
+                PrintProjectUsage();
+                return 1;
+        }
+    }
+
+    private static async Task<int> HandleGitHubAsync(
+        ApiClient api, string subcommand, string[] args, CancellationToken ct)
+    {
+        switch (subcommand)
+        {
+            case "sign-in":  return await GitHubAuthCommands.SignInAsync(api, ct);
+            case "sign-out": return await GitHubAuthCommands.SignOutAsync(api, ct);
+            case "status":   return await GitHubAuthCommands.StatusAsync(api, ct);
+            default:
+                AnsiConsole.MarkupLine($"[red]Unknown subcommand for 'github':[/] {Markup.Escape(subcommand)}");
+                AnsiConsole.MarkupLine("Usage:");
+                AnsiConsole.MarkupLine("  scaffolder github sign-in");
+                AnsiConsole.MarkupLine("  scaffolder github sign-out");
+                AnsiConsole.MarkupLine("  scaffolder github status");
+                return 1;
+        }
+    }
+
+    private static void PrintProjectUsage()
+    {
+        AnsiConsole.WriteLine("Usage:");
+        AnsiConsole.WriteLine("  scaffolder project create --name <name> --dir <path> [--origin blank|github] [--source-repo owner/repo]");
+        AnsiConsole.WriteLine("  scaffolder project list");
+        AnsiConsole.WriteLine("  scaffolder project show <project-id>");
+        AnsiConsole.WriteLine("  scaffolder project configure <project-id> [--provider github-copilot|microsoft-foundry] [--model-copilot <id>] [--model-foundry <id>]");
+        AnsiConsole.WriteLine("  scaffolder project rename <project-id> --name <new-name>");
+        AnsiConsole.WriteLine("  scaffolder project relink <project-id> --dir <new-path>");
+        AnsiConsole.WriteLine("  scaffolder project delete <project-id> --confirm");
+        AnsiConsole.WriteLine("  scaffolder project run <project-id> --task <text> [--provider ...] [--model <id>] [--base-branch <b>]");
+        AnsiConsole.WriteLine("  scaffolder project runs <project-id>");
     }
 }

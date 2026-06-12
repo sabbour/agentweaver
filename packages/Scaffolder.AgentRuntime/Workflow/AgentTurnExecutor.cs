@@ -44,6 +44,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 input.RepositoryPath,
                 ModelSourceExtensions.FromApiString(input.ModelSource),
                 input.RunId,
+                input.ModelId,
                 writer,
                 ct).ConfigureAwait(false);
         }

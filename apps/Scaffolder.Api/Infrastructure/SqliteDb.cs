@@ -65,6 +65,10 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN diff TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merge_conflicts TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN project_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN model_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN state TEXT NOT NULL DEFAULT 'active';", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_branch TEXT NOT NULL DEFAULT 'main';", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
@@ -116,6 +120,24 @@ public sealed class SqliteDb
         BEGIN
             SELECT RAISE(ABORT, 'run_revisions is append-only: DELETE is not permitted');
         END;
+
+        CREATE TABLE IF NOT EXISTS projects (
+            project_id              TEXT PRIMARY KEY,
+            name                    TEXT NOT NULL,
+            origin_kind             TEXT NOT NULL,
+            source_repository       TEXT,
+            working_directory       TEXT NOT NULL,
+            default_branch          TEXT NOT NULL,
+            owner                   TEXT NOT NULL,
+            default_provider        TEXT NOT NULL,
+            default_model_copilot   TEXT,
+            default_model_foundry   TEXT,
+            state                   TEXT NOT NULL DEFAULT 'active',
+            created_at              TEXT NOT NULL,
+            updated_at              TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_projects_state ON projects (state);
 
         """;
 }

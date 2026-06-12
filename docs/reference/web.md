@@ -25,12 +25,62 @@ npm run lint
 
 ## Routes
 
-| Path | Screen | Purpose |
+| Path | Page | Purpose |
 | --- | --- | --- |
-| `/` | Submit a run | Form to start a run |
+| `/` | Project gallery | Card grid of all projects; create-blank and create-from-GitHub dialogs |
+| `/projects/:projectId` | Project | Project info, run list, and start-run dialog |
+| `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, relink, delete |
 | `/watch/:runId` | Watch run | Live event stream, diff, and review panel for a run |
+| `/settings` | Settings | API connection settings |
 
 ## Flows
+
+### Project gallery
+
+The home page (`/`) shows all projects as a card grid. Each card displays the project name, origin (blank or GitHub), working directory, and availability. An unavailable project — one whose working directory cannot be found on the server — renders with a warning indicator.
+
+Two dialogs let you create a project:
+
+**Create blank project** — collects a name and a local working directory path. The directory must already exist and be a git repository.
+
+**Create from GitHub** — collects a name, GitHub repository URL, and a local path. The server clones the repository into that path.
+
+Clicking a project card navigates to the project page.
+
+### Project page
+
+The project page (`/projects/:projectId`) shows project details, a list of past runs, and a start-run dialog.
+
+The details section shows the project name, origin, source repository (for GitHub projects), working directory, default branch, and provider settings.
+
+The run list shows each run's id, status, and start time. Clicking a run navigates to the watch screen for that run.
+
+The start-run dialog collects:
+
+- **Task** — required description for the agent
+- **Provider** — optional override; falls back to the project default
+- **Model** — optional override; falls back to the project default for the selected provider
+- **Base branch** — optional; falls back to the project's default branch
+
+### Project settings
+
+The project settings page (`/projects/:projectId/settings`) has three sections:
+
+**Provider defaults** — select the default provider (`github-copilot` or `microsoft-foundry`) and enter optional per-provider model overrides. Changes are saved immediately on submit.
+
+**Rename** — enter a new display name for the project.
+
+**Relink** — enter a new working directory path. Use this after moving the repository to a different location.
+
+**Delete** — permanently deletes the project record after confirmation. The working directory and git history are not affected.
+
+### GitHub sign-in
+
+The `GitHubSignIn` component is mounted in the application header and is visible on every page.
+
+When signed out or never signed in, it shows a **Sign in with GitHub** button. Clicking the button starts the device authorization flow: the component displays the verification URL and one-time code. The component polls the API automatically and updates to show the authenticated GitHub username once the flow completes.
+
+When signed in, it shows the GitHub username and a **Sign out** button.
 
 ### Submit a run
 
@@ -118,13 +168,18 @@ src/
     DiffViewer.tsx      syntax-highlighted unified diff component
     ArtifactBrowser.tsx resizable split-panel file tree + Monaco/markdown viewer
     FileViewerModal.tsx read-only Monaco diff viewer and CommonMark preview modal
+    GitHubSignIn.tsx    header component: device-flow sign-in, polling, sign-out
   timeline/
     types.ts            discriminated union types for reducer state
     reducer.ts          pure grouping reducer (turns, steps, streaming state)
     useTimelineItems.ts hook that feeds the SSE event list into the reducer
   pages/
-    HomePage.tsx
+    ProjectGalleryPage.tsx  home: project card grid, create-blank and create-from-GitHub dialogs
+    ProjectPage.tsx         project detail, run list, start-run dialog
+    ProjectSettingsPage.tsx provider defaults, rename, relink, delete
     WatchPage.tsx
+    SettingsPage.tsx        API connection settings
+    HomePage.tsx            legacy submit form (not the default route)
   App.tsx               Fluent provider and routing
   main.tsx              entry point
   config.ts             reads VITE_API_URL and VITE_API_KEY

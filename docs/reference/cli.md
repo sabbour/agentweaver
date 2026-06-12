@@ -86,6 +86,145 @@ scaffolder run artifacts <run-id>
 
 The command exits immediately if no changes are found in the run. For in-progress runs, the file list reflects the current worktree state with a notice that the run is still active.
 
+### `scaffolder project`
+
+Commands for managing projects. A project groups related runs under a named workspace with a fixed working directory, default branch, and optional provider defaults.
+
+#### `scaffolder project create`
+
+Creates a project.
+
+```text
+scaffolder project create --name <name> --dir <path> [--origin blank|github] [--source-repo <owner/repo>] [--provider <provider>] [--model-copilot <id>] [--model-foundry <id>]
+```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--name <name>` | Yes | Display name for the project |
+| `--dir <path>` | Yes | Absolute path to the working directory |
+| `--origin blank\|github` | No | `blank` (default) uses the directory as-is; `github` clones the repository first |
+| `--source-repo <owner/repo>` | When `--origin github` | GitHub repository to clone |
+| `--provider <provider>` | No | Default provider: `github-copilot` or `microsoft-foundry` |
+| `--model-copilot <id>` | No | Model override for the GitHub Copilot provider |
+| `--model-foundry <id>` | No | Model override for the Microsoft Foundry provider |
+
+On success prints the project id, name, working directory, origin, and default branch.
+
+#### `scaffolder project list`
+
+Lists all projects with their id, name, availability, and working directory.
+
+```text
+scaffolder project list
+```
+
+#### `scaffolder project show <project-id>`
+
+Prints all fields for a single project: name, id, origin, source repository (if any), working directory, default branch, owner, provider and model defaults, availability, state, and creation date.
+
+```text
+scaffolder project show <project-id>
+```
+
+#### `scaffolder project configure <project-id>`
+
+Updates the provider and model defaults for a project.
+
+```text
+scaffolder project configure <project-id> [--provider <provider>] [--model-copilot <id>] [--model-foundry <id>]
+```
+
+Options:
+
+| Option | Description |
+| --- | --- |
+| `--provider <provider>` | New default provider: `github-copilot` or `microsoft-foundry` |
+| `--model-copilot <id>` | Model override for the GitHub Copilot provider |
+| `--model-foundry <id>` | Model override for the Microsoft Foundry provider |
+
+#### `scaffolder project rename <project-id>`
+
+Renames a project.
+
+```text
+scaffolder project rename <project-id> --name <new-name>
+```
+
+#### `scaffolder project relink <project-id>`
+
+Updates the working directory path for a project after moving the repository to a new location.
+
+```text
+scaffolder project relink <project-id> --dir <new-path>
+```
+
+#### `scaffolder project delete <project-id>`
+
+Deletes the project record. Does not touch the working directory or git history. Requires `--confirm`.
+
+```text
+scaffolder project delete <project-id> --confirm
+```
+
+Without `--confirm` the command prints a warning and exits 1.
+
+#### `scaffolder project run <project-id>`
+
+Starts a run within a project. Prints the new run id and a `scaffolder run watch` command you can use to follow the run.
+
+```text
+scaffolder project run <project-id> --task <text> [--provider <provider>] [--model <id>] [--base-branch <branch>]
+```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--task <text>` | Yes | Task description for the agent |
+| `--provider <provider>` | No | Provider override for this run |
+| `--model <id>` | No | Model override for this run |
+| `--base-branch <branch>` | No | Branch override; falls back to the project default branch |
+
+#### `scaffolder project runs <project-id>`
+
+Lists all runs for a project with their id, status, start time, and task description.
+
+```text
+scaffolder project runs <project-id>
+```
+
+### `scaffolder github`
+
+Commands for GitHub authentication. These manage the OAuth token used by the GitHub Copilot provider.
+
+#### `scaffolder github sign-in`
+
+Starts the GitHub device authorization flow. Prints the verification URL and one-time code, then polls until the user completes the authorization or the code expires.
+
+```text
+scaffolder github sign-in
+```
+
+On success prints the authenticated GitHub username. On expiry or denial prints a message and exits 1.
+
+#### `scaffolder github sign-out`
+
+Deletes the stored GitHub token.
+
+```text
+scaffolder github sign-out
+```
+
+#### `scaffolder github status`
+
+Prints the current authentication state: signed in (with username), signed out, or never signed in.
+
+```text
+scaffolder github status
+```
+
 ### `scaffolder sandbox-policy`
 
 Commands for reading and writing the per-project sandbox execution policy. Policies control whether shell execution is enabled, which commands require human approval, and output handling. See [sandbox-setup.md](sandbox-setup.md) for full setup instructions.

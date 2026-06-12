@@ -216,7 +216,21 @@ Versioning follows semantic versioning:
 - PATCH: Clarifications, wording, or non-semantic refinements.
 
 Compliance is reviewed at every pull request and plan gate. Reviewers MUST
-verify that changes satisfy all ten principles; unavoidable complexity MUST
+verify that changes satisfy all eleven principles; unavoidable complexity MUST
 be justified in the plan's Complexity Tracking section.
 
-**Version**: 1.2.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-07
+## Plan and Spec Review Process
+
+Plans and specifications MUST be gated by a single **rubber-duck review** before
+being committed. The rubber-duck reviewer checks for logic errors, design flaws,
+hidden assumptions, dependency-ordering problems, and gaps against the spec and
+constitution. It does NOT check style, formatting, or trivial matters.
+
+A separate architecture/security review pass is NOT required at the plan gate.
+Security and architecture concerns are raised through the rubber-duck review.
+
+If the rubber-duck issues a rejection, the Reviewer Rejection Protocol applies:
+the original author is locked out and a different agent owns the revision. After
+revision the rubber-duck re-reviews only its own rejected items.
+
+**Version**: 1.3.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-11

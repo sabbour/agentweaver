@@ -47,6 +47,7 @@ public sealed class TestFileEditAgentRunner : IAgentRunner
         string repositoryPath,
         ModelSource modelSource,
         string runId,
+        string? modelId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct)
     {

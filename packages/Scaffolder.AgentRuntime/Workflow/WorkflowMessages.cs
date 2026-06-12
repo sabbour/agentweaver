@@ -8,7 +8,9 @@ public sealed record AgentTurnInput(
     string WorktreeBranch,
     string RepositoryPath,
     string OriginatingBranch,
-    string ModelSource);
+    string ModelSource,
+    string? ModelId,
+    string SubmittingUser);
 
 /// <summary>Output from the agent turn executor, consumed by conditional edges.</summary>
 public sealed record AgentTurnOutput(

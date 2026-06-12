@@ -22,6 +22,16 @@ internal sealed class RunCommandTool : ISandboxTool
                     var commandHash = ComputeCommandHash(command);
                     var requestId = commandHash[..8]; // stable prefix — same command → same requestId
 
+                    // If the operator already denied this command, refuse immediately.
+                    if (ctx.IsCommandDenied?.Invoke(commandHash) == true)
+                    {
+                        ctx.Logger.LogWarning(
+                            "Shell command denied by operator — requestId={RequestId} commandHash={Hash}",
+                            requestId, commandHash);
+                        return $"This command was denied by the operator (request ID: {requestId}). " +
+                               "Do not retry this command.";
+                    }
+
                     if (ctx.IsCommandApproved?.Invoke(commandHash) == true)
                     {
                         // Approved — fall through to execution below.
@@ -40,6 +50,7 @@ internal sealed class RunCommandTool : ISandboxTool
                             requestId,
                             commandLength = command.Length,
                             commandHash,
+                            command,
                             message = "Shell command requires operator approval before execution.",
                         });
 

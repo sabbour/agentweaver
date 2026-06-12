@@ -69,7 +69,50 @@ public sealed class RunOrchestrator
             worktreeInfo.BranchName,
             run.RepositoryPath,
             run.OriginatingBranch,
-            run.ModelSource.ToApiString());
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser);
+
+        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
+        var runCt = _registry.Register(run.Id.ToString(), streamingRun);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
+    }
+
+    /// <summary>
+    /// Starts a workflow for a run that was already atomically reserved via
+    /// TryCreateProjectRunAsync (Pending row already in DB). Transitions the row to InProgress
+    /// with worktree info, then fires off the workflow. The caller is responsible for
+    /// compensating (terminalizing) the Pending row if this method throws.
+    /// </summary>
+    public async Task StartReservedProjectRunAsync(Run run, CancellationToken ct)
+    {
+        WorktreeInfo worktreeInfo;
+        try
+        {
+            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create worktree for reserved run {RunId}", run.Id);
+            throw;
+        }
+
+        await _runStore.UpdateToInProgressAsync(
+            run.Id, worktreeInfo.WorktreePath, worktreeInfo.BranchName, DateTimeOffset.UtcNow, ct)
+            .ConfigureAwait(false);
+
+        var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+
+        var input = new AgentTurnInput(
+            run.Id.ToString(),
+            run.Task,
+            worktreeInfo.WorktreePath,
+            worktreeInfo.BranchName,
+            run.RepositoryPath,
+            run.OriginatingBranch,
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
@@ -116,7 +159,9 @@ public sealed class RunOrchestrator
             run.WorktreeBranch,
             run.RepositoryPath,
             run.OriginatingBranch,
-            run.ModelSource.ToApiString());
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);

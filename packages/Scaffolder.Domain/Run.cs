@@ -27,4 +27,6 @@ public sealed record Run
     /// Example: ["src/foo.cs","src/bar.cs"]
     /// </summary>
     public string? MergeConflicts { get; init; }
+    public ProjectId? ProjectId { get; init; }
+    public string? ModelId { get; init; }
 }

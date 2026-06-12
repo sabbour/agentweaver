@@ -7,7 +7,6 @@ import {
   BranchRegular,
   DismissCircleFilled,
   ShieldRegular,
-  LockClosedRegular,
   CodeRegular,
   ChevronDownRegular,
   ChevronRightRegular,
@@ -539,6 +538,121 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
   );
 }
 
+interface ShellApprovalCardProps {
+  styles: ReturnType<typeof useStyles>;
+  requestId: string;
+  commandHash: string;
+  command: string | null;
+  runId?: string;
+  isResolved?: boolean;
+  resolvedOutcome?: 'approved' | 'denied' | null;
+}
+
+function ShellApprovalCard({ styles, requestId, commandHash, command, runId, isResolved, resolvedOutcome: resolvedOutcomeProp }: ShellApprovalCardProps) {
+  const [resolvedOutcome, setResolvedOutcome] = useState<'approved' | 'denied' | null>(
+    isResolved ? (resolvedOutcomeProp ?? 'approved') : null,
+  );
+  const [busy, setBusy] = useState(false);
+
+  const handleApprove = async () => {
+    if (!runId || resolvedOutcome !== null || busy) return;
+    setBusy(true);
+    const baseUrl = API_URL.replace(/\/+$/, '');
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/shell-approvals`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ command_hash: commandHash }),
+      });
+      if (!response.ok) {
+        console.error('Shell approval request failed:', response.status);
+        return;
+      }
+      setResolvedOutcome('approved');
+    } catch {
+      // ignore network errors
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeny = async () => {
+    if (!runId || resolvedOutcome !== null || busy) return;
+    setBusy(true);
+    const baseUrl = API_URL.replace(/\/+$/, '');
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/shell-denials`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ command_hash: commandHash }),
+      });
+      if (!response.ok) {
+        console.error('Shell denial request failed:', response.status);
+        return;
+      }
+      setResolvedOutcome('denied');
+    } catch {
+      // ignore network errors
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (resolvedOutcome !== null) {
+    const label = resolvedOutcome === 'denied'
+      ? `\u2717 Denied \u00b7 run_command`
+      : `\u2713 Approved \u00b7 run_command`;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
+        <Text size={200} style={{ color: resolvedOutcome === 'denied' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1 }}>
+          {label}
+        </Text>
+      </div>
+    );
+  }
+
+  return (
+    // SECURITY (Y-3): command and requestId rendered as text — no HTML
+    <div className={styles.approvalCard} role="alert">
+      <div className={styles.approvalHeading}>
+        <WarningFilled className={styles.warningIcon} aria-hidden="true" />
+        <Text weight="semibold">Dangerous command — approval required</Text>
+      </div>
+      {command && (
+        <Text as="pre" className={styles.approvalCommand} style={{ margin: 0 }}>
+          {command}
+        </Text>
+      )}
+      <Text className={styles.approvalMeta}>Request ID: {requestId}</Text>
+      <div className={styles.approvalActions}>
+        <Button
+          appearance="primary"
+          size="small"
+          disabled={busy || !runId}
+          onClick={() => void handleApprove()}
+        >
+          Approve
+        </Button>
+        <Button
+          appearance="outline"
+          size="small"
+          disabled={busy || !runId}
+          onClick={() => void handleDeny()}
+          style={{ borderColor: tokens.colorStatusDangerBorder1, color: tokens.colorStatusDangerForeground1 }}
+        >
+          Deny
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 interface LifecycleEventCardProps {
   event: RunStreamEvent;
   runId?: string;
@@ -638,21 +752,16 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
   // --- shell approval required ---
   if (event.type === 'shell.approval_required') {
     const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');
+    const commandHash = String(event.payload['commandHash'] ?? event.payload['command_hash'] ?? '');
     const command = event.payload['command'] ? String(event.payload['command']) : null;
     return (
-      // SECURITY (Y-3): requestId and command rendered as text — no HTML
-      <div className={styles.approvalCard} role="alert">
-        <div className={styles.approvalHeading}>
-          <WarningFilled className={styles.warningIcon} aria-hidden="true" />
-          <Text weight="semibold">Shell command requires approval</Text>
-        </div>
-        {command && (
-          <Text as="pre" className={styles.approvalCommand} style={{ margin: 0 }}>
-            {command}
-          </Text>
-        )}
-        <Text className={styles.approvalMeta}>Request ID: {requestId}</Text>
-      </div>
+      <ShellApprovalCard
+        styles={styles}
+        requestId={requestId}
+        commandHash={commandHash}
+        command={command}
+        runId={runId}
+      />
     );
   }
 

@@ -105,3 +105,85 @@ export interface RequestChangesResponse {
   run_id: string;
   status: string;
 }
+
+// Projects
+export type ProjectOrigin = 'blank' | 'github';
+export type ProjectState = 'active' | 'deleting';
+
+export interface Project {
+  project_id: string;
+  name: string;
+  origin: ProjectOrigin;
+  source_repository: string | null;
+  working_directory: string;
+  default_branch: string;
+  owner: string;
+  default_provider: ModelSource;
+  default_model_github_copilot: string | null;
+  default_model_microsoft_foundry: string | null;
+  available: boolean;
+  state: ProjectState;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  origin: ProjectOrigin;
+  source_repository?: string;
+  working_directory: string;
+  default_provider?: ModelSource;
+  default_model_github_copilot?: string;
+  default_model_microsoft_foundry?: string;
+}
+
+export interface UpdateProjectProviderSettingsRequest {
+  default_provider?: ModelSource;
+  default_model_github_copilot?: string;
+  default_model_microsoft_foundry?: string;
+}
+
+export interface CreateProjectRunRequest {
+  task: string;
+  model_source?: ModelSource;
+  model_id?: string;
+  base_branch?: string;
+}
+
+export interface ProjectRunSummary {
+  run_id: string;
+  status: string;
+  model_source: ModelSource;
+  model_id: string | null;
+  task: string | null;
+  started_at: string;
+  ended_at: string | null;
+}
+
+// GitHub auth
+export type GitHubAuthStatus = 'signed_in' | 'signed_out' | 'never_signed_in';
+
+export interface GitHubDeviceFlow {
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface GitHubPollResult {
+  status: 'pending' | 'success' | 'expired' | 'denied';
+  login: string | null;
+}
+
+export interface GitHubAuthStatusResponse {
+  status: GitHubAuthStatus;
+  login: string | null;
+  avatar_url?: string;
+}
+
+export interface GitHubRepo {
+  full_name: string;
+  description?: string | null;
+  private: boolean;
+  default_branch: string;
+}

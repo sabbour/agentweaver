@@ -67,6 +67,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
         string repositoryPath,
         ModelSource modelSource,
         string runId,
+        string? modelId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct)
     {
@@ -108,7 +109,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
             });
         }
 
-        var chatClient = _chatClient ?? _factory!.CreateChatClient();
+        var chatClient = _chatClient ?? _factory!.CreateChatClient(modelId);
         var fileTools = new SandboxedFileTools(workingDirectory);
         var searchTools = new SandboxedSearchTools(workingDirectory);
         var redactor = SandboxOutputRedactor.Default;
@@ -134,7 +135,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
             Logger: _logger,
             EmitEvent: Emit,
             RunId: runId,
-            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash));
+            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
+            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash));
         var toolFunctions = SandboxToolRegistry.Build(toolContext);
         var tools = toolFunctions.Cast<AITool>().ToList();
 

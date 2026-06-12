@@ -48,4 +48,5 @@ public static class EventTypes
 
     public const string ReviewChangesRequested = "review.changes_requested";
     public const string RevisionStarted        = "revision.started";
+    public const string RunCancelled           = "run.cancelled";
 }

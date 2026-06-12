@@ -15,5 +15,5 @@ public interface IAgentRunner
     /// The original repository path. Used to read project-scoped configuration
     /// (e.g. .scaffolder/settings.yml) from the live repo rather than the worktree checkout.
     /// </param>
-    Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, ChannelWriter<RunEvent>? stream, CancellationToken ct);
+    Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct);
 }
