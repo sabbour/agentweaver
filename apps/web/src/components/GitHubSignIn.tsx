@@ -15,11 +15,16 @@ import type { GitHubAuthStatus } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
+    position: 'relative',
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
   },
   deviceCard: {
+    position: 'absolute',
+    top: 'calc(100% + 8px)',
+    right: '0',
+    zIndex: 200,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
@@ -27,8 +32,8 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: '0 0 2px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.14)',
-    minWidth: '320px',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.14), 0 0 2px rgba(0,0,0,0.12)',
+    minWidth: '340px',
   },
   cardHeader: {
     display: 'flex',
@@ -255,7 +260,11 @@ export function GitHubSignIn() {
 
   if (userCode && verificationUri) {
     return (
-      <div className={styles.deviceCard}>
+      <div className={styles.root}>
+        <Button appearance="primary" disabled>
+          Authorizing...
+        </Button>
+        <div className={styles.deviceCard}>
         <div className={styles.cardHeader}>
           <LockClosedRegular className={styles.headerIcon} />
           <Text className={styles.headerTitle}>Sign in with GitHub</Text>
@@ -312,6 +321,7 @@ export function GitHubSignIn() {
             Cancel
           </Button>
         </div>
+        </div>
       </div>
     );
   }
@@ -320,7 +330,7 @@ export function GitHubSignIn() {
     <div className={styles.root}>
       {flowError && <Text className={styles.errorText}>{flowError}</Text>}
       <Button appearance="primary" disabled={polling} onClick={() => void handleSignIn()}>
-        Sign in with GitHub
+      Sign in with GitHub
       </Button>
     </div>
   );

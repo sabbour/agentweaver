@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
 import {
   FluentProvider,
+  Spinner,
   Title1,
   makeStyles,
   tokens,
@@ -12,6 +14,8 @@ import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { WatchPage } from './pages/WatchPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { GitHubSignIn } from './components/GitHubSignIn';
+import { SignInPage } from './pages/SignInPage';
+import { apiClient } from './api/apiClient';
 
 const useStyles = makeStyles({
   app: {
@@ -74,11 +78,60 @@ function Shell() {
   );
 }
 
+const useAppStyles = makeStyles({
+  loadingScreen: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+});
+
+function AuthGate() {
+  const styles = useAppStyles();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [authRevision, setAuthRevision] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.getGitHubAuthStatus()
+      .then((res) => {
+        if (!cancelled) {
+          setSignedIn(res.status === 'signed_in');
+          setAuthChecked(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSignedIn(false);
+          setAuthChecked(true);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [authRevision]);
+
+  if (!authChecked) {
+    return (
+      <div className={styles.loadingScreen}>
+        <Spinner size="large" />
+      </div>
+    );
+  }
+
+  if (!signedIn) {
+    return <SignInPage onSignedIn={() => { setAuthRevision(r => r + 1); }} />;
+  }
+
+  return <Shell />;
+}
+
 function App() {
   return (
     <FluentProvider theme={webLightTheme}>
       <BrowserRouter>
-        <Shell />
+        <AuthGate />
       </BrowserRouter>
     </FluentProvider>
   );
