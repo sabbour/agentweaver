@@ -171,7 +171,7 @@ export function GitHubSignIn() {
     return (
       <div className={styles.root}>
         <Text size={200}>Signed in as {login}</Text>
-        <Button size="small" appearance="subtle" onClick={() => void handleSignOut()}>
+        <Button appearance="subtle" onClick={() => void handleSignOut()}>
           Sign out
         </Button>
       </div>
@@ -199,7 +199,7 @@ export function GitHubSignIn() {
   return (
     <div className={styles.root}>
       {flowError && <Text className={styles.errorText}>{flowError}</Text>}
-      <Button size="small" appearance="secondary" disabled={polling} onClick={() => void handleSignIn()}>
+      <Button appearance="secondary" disabled={polling} onClick={() => void handleSignIn()}>
         Sign in with GitHub
       </Button>
     </div>

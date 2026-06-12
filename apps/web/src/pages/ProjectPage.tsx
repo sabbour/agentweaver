@@ -215,7 +215,7 @@ function RunRow({ run, projectId }: { run: ProjectRunSummary; projectId: string 
       <Text className={styles.runMeta}>{run.model_source}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
       <Link to={`/watch/${run.run_id}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
-        <Button size="small" appearance="secondary">Watch</Button>
+        <Button appearance="secondary">Watch</Button>
       </Link>
     </div>
   );
@@ -287,7 +287,7 @@ export function ProjectPage() {
             <Title2>{project.name}</Title2>
             <div className={styles.actions}>
               <Link to={`/projects/${projectId}/settings`} style={{ textDecoration: 'none' }}>
-                <Button appearance="secondary" size="small">Settings</Button>
+                <Button appearance="secondary">Settings</Button>
               </Link>
               <StartRunDialog
                 projectId={projectId}
