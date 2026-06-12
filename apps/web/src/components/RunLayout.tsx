@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+﻿import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ChevronLeftRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
@@ -89,7 +89,7 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
 
   useEffect(() => {
     if (runStatus === 'awaiting_review') {
-      setLeftExpanded(true);
+      setLeftExpanded(true); // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [runStatus]);
 

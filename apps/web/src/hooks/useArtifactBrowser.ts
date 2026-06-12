@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CommitResponse, RequestChangesResponse, ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
@@ -101,7 +101,7 @@ export function useArtifactBrowser(
   // suppress the review bar when the second review gate arrives.
   useEffect(() => {
     if (runStatus === 'in_progress') {
-      setRequestChangesResult(null);
+      setRequestChangesResult(null); // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [runStatus]);
 
@@ -128,6 +128,7 @@ export function useArtifactBrowser(
   // Loading/error state is reset in event handlers to avoid synchronous setState in effect body.
   useEffect(() => {
     let active = true;
+    // eslint-disable-next-line prefer-const
     let intervalId: ReturnType<typeof setInterval> | undefined;
 
     const doFetch = () => {

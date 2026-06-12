@@ -261,6 +261,152 @@ public sealed class ApiClient
     }
 
     // -----------------------------------------------------------------------
+    // Casting
+    // -----------------------------------------------------------------------
+
+    public async Task<IReadOnlyList<TeamTemplateModel>> ListScenariosAsync(CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync($"{_config.ApiUrl}/api/casting/templates", ct);
+        return await ReadJsonAsync<List<TeamTemplateModel>>(response, ct);
+    }
+
+    public async Task<CastProposalModel> CreateProposalAsync(
+        string projectId, CreateProposalRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/casting/proposals")
+        { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<CastProposalModel>(response, ct);
+    }
+
+    public async Task<CastProposalModel> GetProposalAsync(
+        string projectId, string proposalId, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/casting/proposals/{Uri.EscapeDataString(proposalId)}", ct);
+        return await ReadJsonAsync<CastProposalModel>(response, ct);
+    }
+
+    public async Task<TeamModel> ConfirmProposalAsync(
+        string projectId, string proposalId, ConfirmProposalRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/casting/proposals/{Uri.EscapeDataString(proposalId)}/confirm")
+        { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<TeamModel>(response, ct);
+    }
+
+    public async Task RejectProposalAsync(
+        string projectId, string proposalId, CancellationToken ct = default)
+    {
+        using var response = await _http.DeleteAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/casting/proposals/{Uri.EscapeDataString(proposalId)}", ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task<TeamModel> GetTeamAsync(string projectId, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team", ct);
+        return await ReadJsonAsync<TeamModel>(response, ct);
+    }
+
+    public async Task<CharterModel> GetCharterAsync(
+        string projectId, string memberName, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team/members/{Uri.EscapeDataString(memberName)}/charter", ct);
+        return await ReadJsonAsync<CharterModel>(response, ct);
+    }
+
+    public async Task<CharterModel> UpdateCharterAsync(
+        string projectId, string memberName, UpdateCharterRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team/members/{Uri.EscapeDataString(memberName)}/charter")
+        { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<CharterModel>(response, ct);
+    }
+
+    public async Task<TeamMemberModel> AddMemberAsync(
+        string projectId, AddMemberRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team/members")
+        { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<TeamMemberModel>(response, ct);
+    }
+
+    public async Task RemoveMemberAsync(
+        string projectId, string memberName, CancellationToken ct = default)
+    {
+        using var response = await _http.DeleteAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team/members/{Uri.EscapeDataString(memberName)}", ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task<TeamMemberModel> ReroleMemberAsync(
+        string projectId, string memberName, ReroleRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            new HttpMethod("PATCH"),
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team/members/{Uri.EscapeDataString(memberName)}")
+        { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+        return await ReadJsonAsync<TeamMemberModel>(response, ct);
+    }
+
+    public async Task<SyncStatusModel> GetSyncStatusAsync(
+        string projectId, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team/sync", ct);
+        return await ReadJsonAsync<SyncStatusModel>(response, ct);
+    }
+
+    public async Task<SyncCommitResponse> CommitSyncAsync(
+        string projectId, SyncCommitRequest request, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{_config.ApiUrl}/api/projects/{Uri.EscapeDataString(projectId)}/team/sync")
+        { Content = JsonContent.Create(request, options: JsonConfig.Options) };
+        using var response = await _http.SendAsync(message, ct);
+
+        var body = await response.Content.ReadAsStringAsync(ct);
+        if ((int)response.StatusCode == 409)
+        {
+            SyncConflictErrorBody? errorBody = null;
+            try
+            {
+                errorBody = JsonSerializer.Deserialize<SyncConflictErrorBody>(body, JsonConfig.Options);
+            }
+            catch (JsonException) { }
+
+            if (errorBody?.Code == "sync_state_changed")
+                throw new SyncStateChangedException(errorBody.Error);
+
+            throw new ApiException(409, body);
+        }
+
+        if (!response.IsSuccessStatusCode)
+            throw new ApiException((int)response.StatusCode, body);
+
+        var value = JsonSerializer.Deserialize<SyncCommitResponse>(body, JsonConfig.Options);
+        if (value is null)
+            throw new ApiException((int)response.StatusCode, "Response body could not be parsed.");
+        return value;
+    }
+
+    // -----------------------------------------------------------------------
     // GitHub auth
     // -----------------------------------------------------------------------
 

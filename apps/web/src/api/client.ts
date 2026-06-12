@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo } from './types';
+﻿import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -133,6 +133,65 @@ export class ScaffolderApiClient {
 
   listGitHubRepos(): Promise<GitHubRepo[]> {
     return this.request<GitHubRepo[]>('GET', '/api/github/repos');
+  }
+
+  // Casting
+  getTemplates(): Promise<TeamTemplateDto[]> {
+    return this.request<TeamTemplateDto[]>('GET', '/api/casting/templates');
+  }
+
+  createProposal(projectId: string, req: CreateProposalRequest): Promise<CastProposalDto> {
+    return this.request<CastProposalDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals`, req);
+  }
+
+  getProposal(projectId: string, proposalId: string): Promise<CastProposalDto> {
+    return this.request<CastProposalDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
+  }
+
+  amendProposal(projectId: string, proposalId: string, req: AmendProposalRequest): Promise<CastProposalDto> {
+    return this.request<CastProposalDto>('PATCH', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`, req);
+  }
+
+  confirmProposal(projectId: string, proposalId: string, req: ConfirmProposalRequest): Promise<void> {
+    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}/confirm`, req);
+  }
+
+  rejectProposal(projectId: string, proposalId: string): Promise<void> {
+    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
+  }
+
+  // Team
+  getTeam(projectId: string): Promise<TeamDto> {
+    return this.request<TeamDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team`);
+  }
+
+  getMemberCharter(projectId: string, memberName: string): Promise<CharterDto> {
+    return this.request<CharterDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`);
+  }
+
+  updateMemberCharter(projectId: string, memberName: string, content: string): Promise<void> {
+    return this.request<void>('PUT', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`, { content });
+  }
+
+  addMember(projectId: string, req: AddMemberRequest): Promise<TeamMemberDto> {
+    return this.request<TeamMemberDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/team/members`, req);
+  }
+
+  removeMember(projectId: string, memberName: string): Promise<void> {
+    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`);
+  }
+
+  reroleMember(projectId: string, memberName: string, req: ReroleRequest): Promise<TeamMemberDto> {
+    return this.request<TeamMemberDto>('PATCH', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`, req);
+  }
+
+  // Sync
+  getSyncStatus(projectId: string): Promise<SyncStatusDto> {
+    return this.request<SyncStatusDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/sync`);
+  }
+
+  commitSync(projectId: string, req: SyncCommitRequest): Promise<SyncCommitResponseDto> {
+    return this.request<SyncCommitResponseDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/team/sync`, req);
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

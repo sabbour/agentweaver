@@ -1,4 +1,4 @@
-export type ModelSource = 'github-copilot' | 'microsoft-foundry';
+﻿export type ModelSource = 'github-copilot' | 'microsoft-foundry';
 
 export type RunStatus =
   | 'pending'
@@ -186,4 +186,109 @@ export interface GitHubRepo {
   description?: string | null;
   private: boolean;
   default_branch: string;
+}
+
+// --- Casting / Team types ---
+
+export interface TeamTemplateDto {
+  id: string;
+  title: string;
+  description: string;
+  roles: RoleDto[];
+}
+
+export interface RoleDto {
+  id: string;
+  title: string;
+  summary: string;
+  default_model: string;
+}
+
+export interface ProposedMemberDto {
+  proposed_name: string;
+  role: RoleDto;
+  charter_markdown: string;
+  is_named: boolean;
+  default_model: string;
+  justification: string | null;
+}
+
+export interface CastProposalDto {
+  proposal_id: string;
+  mode: 'scenario' | 'free_text' | 'analysis';
+  universe: string;
+  members: ProposedMemberDto[];
+  existing_team_present: boolean;
+  run_id: string | null;
+  warnings: string[];
+}
+
+export interface CreateProposalRequest {
+  mode: 'scenario' | 'free_text' | 'analysis';
+  template_id?: string;
+  goal?: string;
+  universe?: string;
+  model_id?: string;
+}
+
+export interface AmendProposalRequest {
+  members?: ProposedMemberDto[];
+  universe?: string;
+}
+
+export interface ConfirmProposalRequest {
+  intent?: 'new' | 'augment' | 'recast';
+}
+
+export interface TeamMemberDto {
+  name: string;
+  role_title: string;
+  charter_path: string;
+  status: 'active' | 'retired';
+  default_model: string;
+  is_named: boolean;
+}
+
+export interface TeamDto {
+  project_name: string;
+  universe: string;
+  members: TeamMemberDto[];
+  layout: 'canonical' | 'legacy' | 'absent';
+  migration_available: boolean;
+}
+
+export interface CharterDto {
+  member_name: string;
+  content: string;
+}
+
+export interface AddMemberRequest {
+  role_id: string;
+  custom_role_title?: string;
+  model_id?: string;
+}
+
+export interface ReroleRequest {
+  new_role_id: string;
+  custom_role_title?: string;
+}
+
+export interface SyncChangeDto {
+  path: string;
+  kind: 'added' | 'modified' | 'removed';
+}
+
+export interface SyncStatusDto {
+  changes: SyncChangeDto[];
+  change_set_hash: string;
+  nothing_to_sync: boolean;
+}
+
+export interface SyncCommitRequest {
+  expected_change_set_hash: string;
+  message?: string;
+}
+
+export interface SyncCommitResponseDto {
+  commit_id: string;
 }

@@ -71,6 +71,25 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/auth/github` | Get current GitHub authentication status |
 | `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
 
+### Team casting
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/casting/scenarios` | List available scenario groupings |
+| `POST` | `/api/projects/{id}/casting/proposals` | Create a casting proposal |
+| `GET` | `/api/projects/{id}/casting/proposals/{pid}` | Get a proposal |
+| `PATCH` | `/api/projects/{id}/casting/proposals/{pid}` | Amend a proposal |
+| `POST` | `/api/projects/{id}/casting/proposals/{pid}/confirm` | Confirm a proposal and create the team |
+| `DELETE` | `/api/projects/{id}/casting/proposals/{pid}` | Reject a proposal |
+| `GET` | `/api/projects/{id}/team` | Get team roster and layout metadata |
+| `GET` | `/api/projects/{id}/team/members/{name}/charter` | Get a member's charter |
+| `PUT` | `/api/projects/{id}/team/members/{name}/charter` | Replace a member's charter |
+| `POST` | `/api/projects/{id}/team/members` | Add a team member |
+| `DELETE` | `/api/projects/{id}/team/members/{name}` | Retire a team member |
+| `PATCH` | `/api/projects/{id}/team/members/{name}` | Re-role a team member |
+| `GET` | `/api/projects/{id}/team/sync` | Get pending .squad/ changes and change set hash |
+| `POST` | `/api/projects/{id}/team/sync` | Commit pending .squad/ changes |
+
 ### POST /api/runs
 
 Submits a task and starts a run. The API creates a dedicated branch (`scaffolder/{runId}`), provisions a git worktree from the originating branch, and starts the agent loop in the background.
@@ -693,6 +712,258 @@ Response `200 OK`:
 ### POST /api/auth/github/sign-out
 
 Deletes the stored GitHub token for the calling user. Response `204 No Content`.
+
+## Team casting endpoints
+
+The team casting API manages the full lifecycle of AI-assisted agent team composition: listing available scenario groupings, creating and amending casting proposals, confirming a proposal into a live team, and committing the resulting `.squad/` files back to the repository.
+
+The provider for model-assisted casting is always GitHub Copilot. No provider field is accepted on casting requests.
+
+### GET /api/casting/scenarios
+
+Lists the available scenario groupings. A scenario groups a set of agent role configurations that the model can use as a starting point when casting in scenario mode.
+
+Response `200 OK`:
+
+```json
+[
+  {
+    "id": "web-app",
+    "name": "Web application",
+    "description": "Full-stack web project with frontend, backend, and infrastructure roles."
+  }
+]
+```
+
+### POST /api/projects/{id}/casting/proposals
+
+Creates a casting proposal. Depending on `mode`, the server either selects roles deterministically from a scenario or runs a model-assisted analysis.
+
+Request:
+
+```json
+{
+  "mode": "scenario",
+  "scenario_id": "web-app",
+  "universe": "star-wars",
+  "model_id": null
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `mode` | string | Yes | `"scenario"`, `"free_text"`, or `"analysis"` |
+| `scenario_id` | string | When `mode` is `"scenario"` | ID from `GET /api/casting/scenarios` |
+| `goal` | string | When `mode` is `"free_text"` | Natural-language description of the team goal |
+| `universe` | string | No | Thematic universe name applied to agent personas |
+| `model_id` | string | No | Overrides the role's default model for this proposal run |
+
+For `"free_text"` and `"analysis"` modes the server starts a MAF run on GitHub Copilot. The response includes a `run_id` you can use to stream events from `GET /api/runs/{id}/stream` while the proposal is being generated.
+
+Response `202 Accepted`:
+
+```json
+{
+  "proposal_id": "prop-a1b2c3",
+  "status": "pending",
+  "run_id": "f36800fd-..."
+}
+```
+
+`run_id` is `null` for scenario-mode proposals, which resolve synchronously.
+
+### GET /api/projects/{id}/casting/proposals/{pid}
+
+Returns the current state of a proposal.
+
+Response `200 OK`:
+
+```json
+{
+  "proposal_id": "prop-a1b2c3",
+  "status": "ready",
+  "mode": "free_text",
+  "run_id": "f36800fd-...",
+  "roles": [
+    {
+      "name": "Architect",
+      "description": "Designs the overall system structure.",
+      "model_id": null
+    }
+  ]
+}
+```
+
+`status` values:
+
+| Value | Meaning |
+| --- | --- |
+| `pending` | Model run is in progress |
+| `ready` | Proposal is ready to review or confirm |
+| `confirmed` | Proposal was confirmed and a team was created |
+| `rejected` | Proposal was rejected |
+
+Returns `404 Not Found` when no proposal exists for the given id.
+
+### PATCH /api/projects/{id}/casting/proposals/{pid}
+
+Amends a pending or ready proposal. Use this to add, remove, or modify proposed roles before confirming.
+
+Request:
+
+```json
+{
+  "roles": [
+    { "name": "Architect", "description": "Designs the overall system structure.", "model_id": null },
+    { "name": "QA", "description": "Owns test strategy and coverage.", "model_id": null }
+  ]
+}
+```
+
+Response `200 OK` returns the updated proposal object. Returns `409 Conflict` with `error: "proposal_not_amendable"` when the proposal is already confirmed or rejected.
+
+### POST /api/projects/{id}/casting/proposals/{pid}/confirm
+
+Confirms a proposal and materialises the team. For new projects this writes `.squad/` files. For projects with an existing team, the `intent` field controls how the new team relates to the existing one.
+
+Request:
+
+```json
+{
+  "intent": "new"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `intent` | string | Conditionally | Required when an existing team is detected. `"new"` replaces the team entirely; `"augment"` adds the proposed roles to the existing team; `"recast"` rewrites all existing charters using the proposed configuration. Omit when no existing team is present. |
+
+Notable error responses:
+
+| Status | Error | Meaning |
+| --- | --- | --- |
+| `409` | `requires_choice` | An existing team was detected and `intent` was not provided |
+| `409` | `layout_conflict` | Both the canonical `.squad/` layout and the legacy `.squad/casting/` layout are present; resolve manually before confirming |
+| `422` | `rai_flagged` | Generated content was blocked by Responsible AI policy |
+
+Response `204 No Content` on success.
+
+### DELETE /api/projects/{id}/casting/proposals/{pid}
+
+Rejects a proposal. No `.squad/` files are written or modified. Response `204 No Content`.
+
+### GET /api/projects/{id}/team
+
+Returns the current team roster and layout metadata.
+
+Response `200 OK`:
+
+```json
+{
+  "layout": "canonical",
+  "members": [
+    {
+      "name": "Architect",
+      "charter_path": ".squad/Architect/charter.md",
+      "has_charter": true
+    }
+  ]
+}
+```
+
+`layout` is `"canonical"` for the standard `.squad/<Name>/` structure or `"legacy"` for `.squad/casting/<Name>/`.
+
+### GET /api/projects/{id}/team/members/{name}/charter
+
+Returns the raw Markdown charter for a team member.
+
+Response `200 OK` with `Content-Type: text/markdown` and the charter text as the response body. Returns `404 Not Found` when the member does not exist or has no charter file.
+
+### PUT /api/projects/{id}/team/members/{name}/charter
+
+Replaces the charter for a team member with the supplied Markdown text.
+
+Request body: raw Markdown text with `Content-Type: text/markdown`.
+
+Response `204 No Content` on success. Returns `404 Not Found` when the member does not exist.
+
+### POST /api/projects/{id}/team/members
+
+Adds a new member to the team. Creates the member's `.squad/` directory and an initial charter file.
+
+Request:
+
+```json
+{
+  "name": "DataEngineer",
+  "description": "Owns data pipeline design and ETL tooling."
+}
+```
+
+Response `201 Created`:
+
+```json
+{ "name": "DataEngineer", "charter_path": ".squad/DataEngineer/charter.md" }
+```
+
+Returns `409 Conflict` with `error: "member_exists"` when a member with that name already exists.
+
+### DELETE /api/projects/{id}/team/members/{name}
+
+Retires a team member and removes their `.squad/` directory.
+
+Response `204 No Content`. Returns `404 Not Found` when the member does not exist.
+
+### PATCH /api/projects/{id}/team/members/{name}
+
+Updates the role description for an existing member and regenerates their charter.
+
+Request:
+
+```json
+{ "description": "Updated role focus." }
+```
+
+Response `204 No Content`. Returns `404 Not Found` when the member does not exist.
+
+### GET /api/projects/{id}/team/sync
+
+Returns the pending uncommitted changes in the project's `.squad/` directory and a hash of the current change set.
+
+Response `200 OK`:
+
+```json
+{
+  "changes": [
+    { "path": ".squad/Architect/charter.md", "status": "modified" }
+  ],
+  "change_set_hash": "sha256:a1b2c3..."
+}
+```
+
+`changes` is an empty array when there is nothing to commit. `change_set_hash` must be passed to `POST /api/projects/{id}/team/sync` to prevent stale commits.
+
+### POST /api/projects/{id}/team/sync
+
+Commits the pending `.squad/` changes to the project repository.
+
+Request:
+
+```json
+{
+  "expected_change_set_hash": "sha256:a1b2c3...",
+  "message": "Update Architect charter"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `expected_change_set_hash` | string | Yes | Hash from `GET /api/projects/{id}/team/sync`. The server rejects the commit if the change set has shifted since you fetched it. |
+| `message` | string | No | Commit message. A default message is used when omitted. |
+
+Returns `409 Conflict` with `error: "sync_state_changed"` when the change set hash does not match. Fetch a fresh hash from `GET /api/projects/{id}/team/sync` and retry.
+
+Response `204 No Content` on success.
 
 ## Persistence
 

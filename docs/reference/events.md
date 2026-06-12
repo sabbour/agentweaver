@@ -141,3 +141,15 @@ Emitted when the human reviewer calls `POST /api/runs/{id}/request-changes`. `co
 ### `tool.approval_required`
 
 Emitted when a tool call is paused waiting for human approval. `request_id` identifies the request and is used by `POST /api/runs/{id}/tool-approvals` and `POST /api/runs/{id}/tool-denials`. `tool_name` is the tool being called. `url` is the resource being accessed (for `web_fetch` and similar tools). `intention` is an optional human-readable description of what the agent intends to do. The run is paused until the human approves or denies; `tool.result` or `tool.error` follows once settled.
+
+## Model-assisted casting
+
+Creating a casting proposal in `free_text` or `analysis` mode starts a MAF run on GitHub Copilot. That run emits events under the same event model as a regular scaffolder run — the same envelope, the same event types, and the same SSE endpoint.
+
+The `run_id` returned in the `POST /api/projects/{id}/casting/proposals` response identifies that run. Stream its events from `GET /api/runs/{run_id}/stream` to observe the model's reasoning as it builds the proposal.
+
+The casting wizard in the web UI streams these events during the review step using the same timeline rendering as the watch screen. The CLI streams them inline while waiting for the proposal to become ready.
+
+No `.squad/` files are written during this run. The run produces a proposal, not a commit. Files are only written after the user confirms the proposal through `POST /api/projects/{id}/casting/proposals/{pid}/confirm`.
+
+Scenario-mode proposals resolve without a model run. The `run_id` field in their proposal response is `null`.

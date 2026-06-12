@@ -30,6 +30,8 @@ npm run lint
 | `/` | Project gallery | Card grid of all projects; create-blank and create-from-GitHub dialogs |
 | `/projects/:projectId` | Project | Project info, run list, and start-run dialog |
 | `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, relink, delete |
+| `/projects/:projectId/team` | Team | Current team roster, member management, charter editor, and sync panel |
+| `/projects/:projectId/team/cast` | Casting wizard | 4-step wizard for AI-assisted team composition |
 | `/watch/:runId` | Watch run | Live event stream, diff, and review panel for a run |
 | `/settings` | Settings | API connection settings |
 
@@ -144,6 +146,46 @@ The browser has two tabs:
 
 **Changes tab** — shows a flat list of all changed files with `+N / -N` line counts. Clicking a file opens the same Monaco diff view.
 
+### Team page
+
+The team page (`/projects/:projectId/team`) shows the project's agent team roster and provides all day-to-day team management operations.
+
+The roster section lists each team member's name, charter path, and a link to view or edit their charter. Clicking a member's name opens a charter dialog with the Markdown content rendered in a read-only view. An edit button inside the dialog switches to an editable textarea; saving calls `PUT /api/projects/{id}/team/members/{name}/charter`.
+
+Three roster actions are available:
+
+**Add member** — opens a dialog that collects a name and role description, then calls `POST /api/projects/{id}/team/members`.
+
+**Remove member** — prompts for confirmation, then calls `DELETE /api/projects/{id}/team/members/{name}`.
+
+**Re-role member** — opens a dialog to enter a new role description, then calls `PATCH /api/projects/{id}/team/members/{name}`.
+
+A **Cast team** button navigates to the casting wizard at `/projects/:projectId/team/cast`.
+
+The sync panel at the bottom of the page shows the pending `.squad/` changes fetched from `GET /api/projects/{id}/team/sync`. Each changed file is listed with its status (`added`, `modified`, or `deleted`). A **Commit** button opens a dialog to enter an optional commit message and then calls `POST /api/projects/{id}/team/sync` with the change set hash. If the change set shifts between the panel load and the commit, the server returns a conflict and the panel shows an error with a prompt to refresh.
+
+### Casting wizard
+
+The casting wizard (`/projects/:projectId/team/cast`) walks through four steps to create a casting proposal and confirm it as a team.
+
+**Step 1 — Mode**: Select the casting mode. Three options are available:
+
+- **From scenario** — pick a pre-defined scenario grouping
+- **From goal** — describe the team's purpose in natural language
+- **Analyze project** — let the model examine the repository and propose roles
+
+**Step 2 — Configure**: The inputs shown depend on the mode selected in step 1.
+
+- Scenario mode shows a scenario selector (populated from `GET /api/casting/scenarios`) and an optional universe field.
+- Free-text mode shows a goal text field and an optional model override.
+- Analysis mode shows only an optional model override.
+
+**Step 3 — Review**: The wizard submits the proposal to `POST /api/projects/{id}/casting/proposals`. For free-text and analysis modes, this step streams the model run events in a timeline view (using the same event rendering as the watch screen) until the proposal is ready. For scenario mode, the proposal resolves immediately. Once ready, the proposed roles are displayed in an editable list. Each role shows its name and description; roles can be added, removed, or edited inline before proceeding.
+
+**Step 4 — Confirm**: Shows a summary of the final role list and, when an existing team is detected, a choice of intent: replace (`new`), augment (`augment`), or recast (`recast`). Clicking **Confirm** calls `POST /api/projects/{id}/casting/proposals/{pid}/confirm` and navigates back to the team page on success.
+
+At any point, clicking **Reject** calls `DELETE /api/projects/{id}/casting/proposals/{pid}` and returns to the team page.
+
 ## Structure
 
 ```text
@@ -177,6 +219,8 @@ src/
     ProjectGalleryPage.tsx  home: project card grid, create-blank and create-from-GitHub dialogs
     ProjectPage.tsx         project detail, run list, start-run dialog
     ProjectSettingsPage.tsx provider defaults, rename, relink, delete
+    TeamPage.tsx            team roster, member management, charter dialogs, sync panel
+    CastingWizardPage.tsx   4-step casting wizard
     WatchPage.tsx
     SettingsPage.tsx        API connection settings
     HomePage.tsx            legacy submit form (not the default route)

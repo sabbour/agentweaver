@@ -1,0 +1,20 @@
+{
+  "id": "contributor",
+  "title": "Contributor",
+  "summary": "Implements features and fixes as contributions to the project.",
+  "default_model": "claude-sonnet-4.6",
+  "capabilities": [
+    "feature-implementation",
+    "bug-fixing",
+    "collaboration"
+  ],
+  "responsibilities": [
+    "Implement features and fixes following project conventions",
+    "Respond to review feedback",
+    "Keep changes scoped and well-tested"
+  ],
+  "boundaries": [
+    "Does not approve own contributions",
+    "Does not change project governance"
+  ]
+}

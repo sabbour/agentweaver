@@ -1,0 +1,20 @@
+{
+  "id": "frontend-engineer",
+  "title": "Frontend Engineer",
+  "summary": "Builds and maintains user interfaces and client-side application logic.",
+  "default_model": "claude-sonnet-4.6",
+  "capabilities": [
+    "ui-implementation",
+    "client-state-management",
+    "accessibility"
+  ],
+  "responsibilities": [
+    "Implement and maintain user-facing interfaces",
+    "Manage client-side state and data fetching",
+    "Ensure accessibility and responsive behavior"
+  ],
+  "boundaries": [
+    "Does not define backend business logic",
+    "Does not own data persistence decisions"
+  ]
+}

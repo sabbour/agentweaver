@@ -1,0 +1,13 @@
+{
+  "id": "product-feature-delivery",
+  "title": "Product Feature Delivery",
+  "description": "A team for delivering a product feature: product, research, design, docs, and quality.",
+  "roles": [
+    "lead-pm",
+    "customer-researcher",
+    "prototype-designer",
+    "feature-docs-writer",
+    "quality-reviewer",
+    "scribe"
+  ]
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import {
   Button,
   Dialog,
@@ -137,12 +137,12 @@ export function FileViewerModal({
 
   // Reset view mode when file changes
   useEffect(() => {
-    setViewMode(isChanged ? 'diff' : 'source');
+    setViewMode(isChanged ? 'diff' : 'source'); // eslint-disable-line react-hooks/set-state-in-effect
   }, [filePath, isChanged]);
 
   // Reset content state when the file identity changes
   useEffect(() => {
-    setFileContent(null);
+    setFileContent(null); // eslint-disable-line react-hooks/set-state-in-effect
     setContentError(null);
     setContentLoading(false);
   }, [filePath, runId]);
@@ -152,7 +152,7 @@ export function FileViewerModal({
     if (!filePath || isChanged !== false) return;
 
     let active = true;
-    setContentLoading(true);
+    setContentLoading(true); // eslint-disable-line react-hooks/set-state-in-effect
     setContentError(null);
 
     apiClient
@@ -184,7 +184,7 @@ export function FileViewerModal({
     if (fileContent !== null || contentLoading) return; // already fetched or in-flight
 
     let active = true;
-    setContentLoading(true);
+    setContentLoading(true); // eslint-disable-line react-hooks/set-state-in-effect
     setContentError(null);
 
     apiClient

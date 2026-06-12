@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
@@ -356,7 +356,7 @@ describe('ArtifactBrowser', () => {
   // the SSE stream can reconnect and receive run.merged / run.completed events.
   it('calls onCommitSuccess after a successful commit', async () => {
     getRunFilesMock().mockResolvedValue([]);
-    commitRunMock().mockResolvedValue({ run_id: 'run-010', status: 'merging' });
+    commitRunMock().mockResolvedValue({ run_id: 'run-010', status: 'merging', merge_result: null, conflicting_files: null });
 
     const onCommitSuccess = vi.fn();
     const user = userEvent.setup();

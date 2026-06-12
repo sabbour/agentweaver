@@ -1,0 +1,13 @@
+{
+  "id": "quick-software-development",
+  "title": "Quick Software Development",
+  "description": "A focused team for fast software delivery: architecture, backend, frontend, and quality.",
+  "roles": [
+    "lead-architect",
+    "backend-engineer",
+    "frontend-engineer",
+    "qa-engineer",
+    "scribe",
+    "work-monitor"
+  ]
+}

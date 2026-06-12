@@ -288,6 +288,146 @@ On success the command prints the updated policy as JSON and exits 0. API errors
 
 Additional policy fields (`destructive_command_patterns`, `require_approval_for_all_shell`, `redact_pii`, `max_output_bytes`, `allowed_repository_roots`) can only be set directly through the API (`PUT /api/sandbox-policy`) for now. The CLI exposes `--shell-enabled` as the most common operator action.
 
+### `scaffolder team`
+
+Commands for managing a project's agent team. These commands cover the full casting workflow — from selecting roles through to committing the resulting `.squad/` files — as well as day-to-day roster management.
+
+#### `scaffolder team scenarios`
+
+Lists the available scenario groupings that can be used with `team cast --scenario`.
+
+```text
+scaffolder team scenarios
+```
+
+Prints each scenario's id, name, and description.
+
+#### `scaffolder team cast`
+
+Creates a casting proposal and prints the proposal id. For `--goal` and `--analyze` modes, the command streams the model run events while the proposal is being generated, then prints the proposal id when the run completes.
+
+```text
+scaffolder team cast --scenario <id> [--universe <name>]
+scaffolder team cast --goal <text> [--model <id>]
+scaffolder team cast --analyze [--model <id>]
+```
+
+Options:
+
+| Option | Mode | Description |
+| --- | --- | --- |
+| `--scenario <id>` | scenario | Cast from the named scenario grouping |
+| `--universe <name>` | scenario | Optional thematic universe applied to agent personas |
+| `--goal <text>` | free_text | Natural-language description of the team goal |
+| `--analyze` | analysis | Let the model analyze the project and propose roles |
+| `--model <id>` | free_text, analysis | Model override for this proposal run |
+
+After a proposal is created, use `team proposal show`, `team proposal amend`, or `team proposal confirm` to review and act on it.
+
+#### `scaffolder team proposal show <id>`
+
+Prints the proposal details: mode, status, and the list of proposed roles with their descriptions.
+
+```text
+scaffolder team proposal show <id>
+```
+
+#### `scaffolder team proposal amend <id>`
+
+Opens an interactive editor to amend the proposed roles. Prompts you to add, remove, or modify roles before confirming.
+
+```text
+scaffolder team proposal amend <id>
+```
+
+#### `scaffolder team proposal confirm <id>`
+
+Confirms a proposal and writes the team to `.squad/`. If an existing team is detected, the CLI prompts for the intent: replace the team entirely (`new`), add the proposed roles to the existing team (`augment`), or rewrite all charters using the proposed configuration (`recast`).
+
+```text
+scaffolder team proposal confirm <id>
+```
+
+#### `scaffolder team proposal reject <id>`
+
+Rejects a proposal. No `.squad/` files are written or modified.
+
+```text
+scaffolder team proposal reject <id>
+```
+
+#### `scaffolder team show`
+
+Prints the current team roster: member names and their charter paths.
+
+```text
+scaffolder team show
+```
+
+#### `scaffolder team charter show <name>`
+
+Prints the raw Markdown charter for the named team member.
+
+```text
+scaffolder team charter show <name>
+```
+
+#### `scaffolder team charter edit <name>`
+
+Opens the named member's charter in your default editor.
+
+```text
+scaffolder team charter edit <name>
+```
+
+#### `scaffolder team member add`
+
+Prompts for a member name and role description, then adds the member to the team and creates an initial charter file.
+
+```text
+scaffolder team member add
+```
+
+#### `scaffolder team member remove <name>`
+
+Retires the named team member and removes their `.squad/` directory.
+
+```text
+scaffolder team member remove <name>
+```
+
+#### `scaffolder team member rerole <name>`
+
+Prompts for a new role description and updates the named member's charter.
+
+```text
+scaffolder team member rerole <name>
+```
+
+#### `scaffolder team sync status`
+
+Shows the pending uncommitted changes in the project's `.squad/` directory and the current change set hash.
+
+```text
+scaffolder team sync status
+```
+
+#### `scaffolder team sync commit`
+
+Commits the pending `.squad/` changes to the repository. Fetches the current change set hash automatically before committing.
+
+```text
+scaffolder team sync commit [--message <text>]
+```
+
+Options:
+
+| Option | Description |
+| --- | --- |
+| `--message <text>` | Commit message. A default message is used when omitted. |
+
+If the change set has shifted between the status check and the commit, the server returns a conflict and the CLI reports it; run `team sync status` again and retry.
+
 ## Exit codes
 
 | Code | Meaning |

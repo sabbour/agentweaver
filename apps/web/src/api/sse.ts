@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
 import { ScaffolderApiClient } from './client';
 
@@ -131,7 +131,7 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
       setEvents([]);
     }
 
-    setStatus('connecting');
+    setStatus('connecting'); // eslint-disable-line react-hooks/set-state-in-effect
     setError(null);
 
     const connect = async () => {
