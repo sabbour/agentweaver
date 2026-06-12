@@ -16,15 +16,18 @@ inspectable, and composable across the system. Using MAF will help us keep our p
 
 ### II. Model Sources
 
-A run's model MUST come from exactly one of two providers: GitHub Copilot CLI or Microsoft Foundry.
+A run's model MUST come from GitHub Copilot. GitHub Copilot is the single,
+approved model provider; the provider is fixed and MUST NOT be selectable per
+run, per role, or per project. No other model source is permitted.
 
-The provider MUST be selectable per run. No other model source is permitted.
+The specific model used within GitHub Copilot MAY vary (for example, a per-role
+default model with a runtime override), but the provider MUST always be GitHub
+Copilot.
 
 Microsoft Agent Framework supports multiple providers. For this project:
 - GitHub Copilot: https://docs.github.com/en/copilot/how-tos/copilot-sdk/integrations/microsoft-agent-framework
-- Microsoft Foundry: https://learn.microsoft.com/en-us/agent-framework/agents/providers/microsoft-foundry?pivots=programming-language-csharp using the ChatClientAgent
 
-Rationale: Constraining model sources to two well-defined providers keeps
+Rationale: Constraining the model source to a single, well-defined provider keeps
 authentication, billing, and capability assumptions tractable and auditable.
 
 ### III. API-First
@@ -153,8 +156,8 @@ each surface to police itself.
 ## Architecture & Technology Constraints
 
 - The Microsoft Agent Framework (.NET 10) (https://github.com/microsoft/agent-framework) is the mandated agent runtime (Principle I).
-- Model providers are limited to the GitHub Copilot CLI or Microsoft Foundry,
-  selectable per run (Principle II).
+- The model provider is fixed to GitHub Copilot and is not selectable per run;
+  only the specific model within GitHub Copilot may vary (Principle II).
 - The backend API is authoritative; clients hold no business logic
   (Principle III).
 - The two clients are a CLI (TUI) and a Web UI built with React 19 and
@@ -233,4 +236,4 @@ If the rubber-duck issues a rejection, the Reviewer Rejection Protocol applies:
 the original author is locked out and a different agent owns the revision. After
 revision the rubber-duck re-reviews only its own rejected items.
 
-**Version**: 1.3.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-11
+**Version**: 1.4.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-12
