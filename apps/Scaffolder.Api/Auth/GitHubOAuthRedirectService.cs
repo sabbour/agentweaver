@@ -23,7 +23,7 @@ public sealed class GitHubOAuthRedirectService
     private readonly string? _callbackUrl;
     private readonly string _scopes;
     private readonly IGitHubTokenStore _tokenStore;
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GitHubOAuthRedirectService> _logger;
 
     // In-memory CSRF state store: state token -> expiry
@@ -32,7 +32,7 @@ public sealed class GitHubOAuthRedirectService
     public GitHubOAuthRedirectService(
         IConfiguration configuration,
         IGitHubTokenStore tokenStore,
-        HttpClient http,
+        IHttpClientFactory httpClientFactory,
         ILogger<GitHubOAuthRedirectService> logger)
     {
         _baseUrl = configuration["Auth:GitHub:BaseUrl"] ?? "https://github.com";
@@ -41,7 +41,7 @@ public sealed class GitHubOAuthRedirectService
         _callbackUrl = configuration["Auth:GitHub:CallbackUrl"];
         _scopes = configuration["Auth:GitHub:Scopes"] ?? DefaultScopes;
         _tokenStore = tokenStore;
-        _http = http;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -99,7 +99,8 @@ public sealed class GitHubOAuthRedirectService
         };
         request.Headers.Accept.ParseAdd("application/json");
 
-        var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        using var http1 = _httpClientFactory.CreateClient();
+        var response = await http1.SendAsync(request, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadFromJsonAsync<AccessTokenResponse>(ct).ConfigureAwait(false);
@@ -131,7 +132,8 @@ public sealed class GitHubOAuthRedirectService
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.UserAgent.ParseAdd("Scaffolder/1.0");
-        var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        using var http2 = _httpClientFactory.CreateClient();
+        var response = await http2.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode) return ("unknown", null);
         var body = await response.Content.ReadFromJsonAsync<GitHubUserResponse>(ct).ConfigureAwait(false);
         return (body?.Login ?? "unknown", body?.AvatarUrl);

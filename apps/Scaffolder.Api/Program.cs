@@ -56,7 +56,6 @@ builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeP
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
-builder.Services.AddHttpClient<GitHubOAuthRedirectService>();
 
 // Project infrastructure (must be before AddAgentRuntime)
 builder.Services.AddSingleton<SqliteProjectStore>();
