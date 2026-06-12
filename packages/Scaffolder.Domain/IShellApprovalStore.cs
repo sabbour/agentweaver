@@ -12,6 +12,12 @@ public interface IShellApprovalStore
     /// <summary>Returns true if the command hash has been approved for this run.</summary>
     bool IsApproved(string runId, string commandHash);
 
+    /// <summary>Records operator denial for a command hash within a run.</summary>
+    void Deny(string runId, string commandHash);
+
+    /// <summary>Returns true if the command hash has been denied for this run.</summary>
+    bool IsDenied(string runId, string commandHash);
+
     /// <summary>Clears all approvals for a run (called on run completion).</summary>
     void Clear(string runId);
 }

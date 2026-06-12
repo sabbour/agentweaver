@@ -25,4 +25,9 @@ public sealed record SandboxToolContext(
     /// Returns true if the given command hash has been approved for this run.
     /// Null in test contexts (treated as not approved).
     /// </summary>
-    Func<string, bool>? IsCommandApproved = null);
+    Func<string, bool>? IsCommandApproved = null,
+    /// <summary>
+    /// Returns true if the given command hash has been denied for this run.
+    /// Null in test contexts (treated as not denied).
+    /// </summary>
+    Func<string, bool>? IsCommandDenied = null);

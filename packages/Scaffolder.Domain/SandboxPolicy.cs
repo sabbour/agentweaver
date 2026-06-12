@@ -41,6 +41,14 @@ public sealed record SandboxPolicy
     [
         "rm -rf", "del /s", "format ", "mkfs", "dd if=",
         "git push --force", "git reset --hard",
+        // PowerShell destructive patterns
+        "Remove-Item -Recurse", "Remove-Item -Force", "ri -r", "ri -Recurse",
+        "Format-Volume", "Clear-Disk",
+        "Stop-Process -Force",
+        "Set-ExecutionPolicy Unrestricted",
+        "Invoke-Expression", "iex ",
+        "[System.IO.File]::Delete",
+        "Get-ChildItem | Remove-Item",
     ];
 
     /// <summary>When true, ALL shell commands require human approval.</summary>

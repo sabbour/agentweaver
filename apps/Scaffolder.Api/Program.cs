@@ -1061,6 +1061,30 @@ app.MapPost("/api/runs/{id}/shell-approvals", async (
     return Results.Ok(new { run_id = id, command_hash = body.CommandHash, approved = true });
 });
 
+app.MapPost("/api/runs/{id}/shell-denials", async (
+    HttpContext httpContext,
+    string id,
+    ShellApprovalRequest body,
+    SqliteRunStore runStore,
+    IShellApprovalStore approvalStore,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    if (string.IsNullOrWhiteSpace(body.CommandHash))
+        return Results.BadRequest(new { error = "command_hash is required." });
+
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run.Status != RunStatus.InProgress)
+        return Results.Conflict(new { error = "Run is not active." });
+
+    approvalStore.Deny(id, body.CommandHash);
+    return Results.Ok(new { run_id = id, command_hash = body.CommandHash, denied = true });
+});
+
 app.MapPost("/api/runs/{id}/tool-approvals", async (
     HttpContext httpContext,
     string id,

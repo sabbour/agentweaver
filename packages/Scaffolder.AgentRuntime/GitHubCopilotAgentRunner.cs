@@ -270,7 +270,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             Logger: _logger,
             EmitEvent: Emit,
             RunId: runId,
-            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash));
+            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
+            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash));
 
         var sessionConfig = new SessionConfig
         {
