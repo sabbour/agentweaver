@@ -12,6 +12,10 @@ internal static class SquadPaths
     public const string RoutingMd = ".squad/routing.md";
     public const string DecisionsMd = ".squad/decisions.md";
 
+    public const string RaiDir = ".squad/rai";
+    public const string RaiPolicyMd = ".squad/rai/policy.md";
+    public const string RaiAuditTrailMd = ".squad/rai/audit-trail.md";
+
     public const string CanonicalDir = ".squad/casting";
     public const string CanonicalPolicy = ".squad/casting/policy.json";
     public const string CanonicalRegistry = ".squad/casting/registry.json";

@@ -108,6 +108,15 @@ public sealed class CatalogReader
     public string? LoadMafAgentTemplate(string agentName)
         => ReadResourceText($"{ResourcePrefix}.agents.{agentName.ToLowerInvariant()}.agent.md");
 
+    public string? LoadRaiPolicyTemplate()
+    {
+        var resourceName = $"{typeof(CatalogReader).Assembly.GetName().Name}.Catalog.Resources.agents.rai_policy.md";
+        using var stream = typeof(CatalogReader).Assembly.GetManifestResourceStream(resourceName);
+        if (stream is null) return null;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     private sealed record CatalogManifestDto(
         [property: JsonPropertyName("version")] string? Version,
         [property: JsonPropertyName("templates")] IReadOnlyList<string>? Templates);

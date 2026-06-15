@@ -42,8 +42,22 @@ public sealed class SquadWriter
         File.AppendAllText(full, line + "\n");
     }
 
-    public void WriteTeam(Team team, string owner, DateTimeOffset createdAt)
-        => WriteAllText(SquadPaths.TeamMd, TeamMarkdown.Render(team, owner, createdAt));
+    public void WriteTeam(Team team, string owner, DateTimeOffset createdAt, string? description = null)
+        => WriteAllText(SquadPaths.TeamMd, TeamMarkdown.Render(team, owner, createdAt, description));
+
+    public bool RaiPolicyExists()
+        => File.Exists(Resolve(SquadPaths.RaiPolicyMd));
+
+    public void WriteRaiPolicy(string content)
+        => WriteAllText(SquadPaths.RaiPolicyMd, content);
+
+    public void EnsureRaiAuditTrail()
+    {
+        var full = Resolve(SquadPaths.RaiAuditTrailMd);
+        EnsureDirectory(full);
+        if (!File.Exists(full))
+            File.WriteAllText(full, "# RAI Audit Trail\n\nAppend-only record of all RAI review findings.\n\n");
+    }
 
     public bool CharterExists(string memberName)
         => File.Exists(Resolve(SquadPaths.CharterFor(memberName)));

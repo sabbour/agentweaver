@@ -8,7 +8,7 @@ namespace Scaffolder.Squad.Squad;
 /// </summary>
 internal static class TeamMarkdown
 {
-    public static string Render(Team team, string owner, DateTimeOffset createdAt)
+    public static string Render(Team team, string owner, DateTimeOffset createdAt, string? description = null)
     {
         var sb = new StringBuilder();
         sb.Append("# Squad Team\n\n");
@@ -32,6 +32,8 @@ internal static class TeamMarkdown
         sb.Append("- **Universe:** ").Append(team.Universe).Append('\n');
         sb.Append("- **Created:** ").Append(createdAt.ToString("yyyy-MM-dd")).Append('\n');
         sb.Append("- **Requested by:** ").Append(owner).Append('\n');
+        if (!string.IsNullOrWhiteSpace(description))
+            sb.Append("- **Description:** ").Append(description).Append('\n');
         return sb.ToString();
     }
 

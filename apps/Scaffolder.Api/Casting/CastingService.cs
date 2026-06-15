@@ -761,10 +761,18 @@ public sealed class CastingService
 
         var now = DateTimeOffset.UtcNow;
 
-        writer.WriteTeam(team, owner, now);
+        writer.WriteTeam(team, owner, now, proposal.Rationale);
         writer.WriteRouting(BuildRoutingMd(team));
 
         writer.EnsureSquadDirectories();
+
+        // Provision RAI policy and audit trail (idempotent)
+        if (!writer.RaiPolicyExists())
+        {
+            var raiPolicy = _catalog.LoadRaiPolicyTemplate();
+            writer.WriteRaiPolicy(raiPolicy ?? "# RAI Policy\n\nSee .squad/rai/policy.md for RAI check configuration.\n");
+        }
+        writer.EnsureRaiAuditTrail();
 
         if (!writer.DecisionsExist())
         {
