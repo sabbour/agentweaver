@@ -99,7 +99,7 @@ public sealed class GitHubOAuthRedirectService
         };
         request.Headers.Accept.ParseAdd("application/json");
 
-        using var http1 = _httpClientFactory.CreateClient("github");
+        using var http1 = _httpClientFactory.CreateClient();
         var response = await http1.SendAsync(request, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
@@ -132,7 +132,7 @@ public sealed class GitHubOAuthRedirectService
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.UserAgent.ParseAdd("Scaffolder/1.0");
-        using var http2 = _httpClientFactory.CreateClient("github");
+        using var http2 = _httpClientFactory.CreateClient();
         var response = await http2.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode) return ("unknown", null);
         var body = await response.Content.ReadFromJsonAsync<GitHubUserResponse>(ct).ConfigureAwait(false);
