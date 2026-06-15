@@ -825,9 +825,8 @@ public sealed class CastingService
             writer.WriteAgentHistory(member.Name.ToLower(), historyContent);
         }
 
-        // Provision the built-in MAF agents (Scribe, Ralph, Rai). They are never cast by the
-        // user — the framework creates them automatically so every project has ready-to-use
-        // session-logging, work-monitoring, and responsible-AI agents. Idempotent on augment/recast.
+        // Provision the built-in agents (Scribe, Ralph, Rai) — writes charter files only.
+        // Built-ins are NOT written to .github/agents/; charters in .squad/agents/ are sufficient.
         ProvisionBuiltinAgents(writer, team, owner, project.Name);
 
         writer.EnsureGitAttributes();
@@ -912,10 +911,11 @@ public sealed class CastingService
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Provisions the built-in MAF agents (Scribe, Ralph, Rai). These are system-level agents
+    /// Provisions the built-in agents (Scribe, Ralph, Rai). These are system-level agents
     /// that every project gets automatically — they are never part of a cast proposal. For each
-    /// built-in, writes both the <c>.squad/agents/{name}/charter.md</c> and the first-class
-    /// <c>.github/agents/{name}.agent.md</c> MAF definition. All writes are idempotent.
+    /// built-in, writes <c>.squad/agents/{name}/charter.md</c>. All writes are idempotent.
+    /// Built-in agents are NOT written to <c>.github/agents/</c> — the coordinator (squad.agent.md)
+    /// is the only MAF agent file; built-ins are addressed via their charters only.
     /// </summary>
     private void ProvisionBuiltinAgents(SquadWriter writer, Team team, string owner, string projectName)
     {
@@ -923,7 +923,7 @@ public sealed class CastingService
 
         foreach (var (agentId, displayName) in builtins)
         {
-            // Write .squad/agents/{name}/charter.md (existing pattern)
+            // Write .squad/agents/{name}/charter.md — this is the only file needed for built-ins.
             if (!writer.CharterExists(agentId))
             {
                 try
@@ -945,21 +945,6 @@ public sealed class CastingService
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to provision built-in {Agent} charter.", displayName);
-                }
-            }
-
-            // Write .github/agents/{name}.agent.md (MAF agent definition)
-            if (!writer.MafAgentExists(agentId))
-            {
-                try
-                {
-                    var mafContent = _catalog.LoadMafAgentTemplate(agentId);
-                    if (mafContent is not null)
-                        writer.WriteMafAgent(agentId, mafContent);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to provision MAF agent file for {Agent}.", displayName);
                 }
             }
         }
