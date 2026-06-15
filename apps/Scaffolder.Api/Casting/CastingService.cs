@@ -290,16 +290,14 @@ public sealed class CastingService
         if (goal.Length > 2000)
             throw new ArgumentException("Goal must be 2000 characters or fewer.", nameof(goal));
 
-        var effectiveGoal = teamSize.HasValue
-            ? $"{goal}\n\nPreferred team size: {teamSize.Value} members."
-            : goal;
+        var effectiveGoal = goal;
 
         return BuildModelAssistedProposalAsync(
             projectId,
             CastMode.FreeText,
             universeOverride,
             modelId,
-            buildPrompt: roles => CastingPrompts.FreeText(effectiveGoal, roles),
+            buildPrompt: roles => CastingPrompts.FreeText(effectiveGoal, roles, teamSize),
             extraWarnings: [],
             ct);
     }
@@ -392,11 +390,8 @@ public sealed class CastingService
         {
             var signals = _signalScanner.Scan(project.WorkingDirectory);
             prompt = signals.HasNoSignals
-                ? CastingPrompts.AnalysisFallback(availableRoles)
-                : CastingPrompts.Analysis(_signalScanner.Summarize(signals), availableRoles);
-
-            if (teamSize.HasValue)
-                prompt += $"\n\nPreferred team size: {teamSize.Value} members.";
+                ? CastingPrompts.AnalysisFallback(availableRoles, teamSize)
+                : CastingPrompts.Analysis(_signalScanner.Summarize(signals), availableRoles, teamSize);
 
             if (signals.HasNoSignals)
                 warnings.Add("No project signals detected — using general-purpose defaults.");

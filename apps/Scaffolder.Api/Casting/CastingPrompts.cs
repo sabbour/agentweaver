@@ -12,7 +12,7 @@ public static class CastingPrompts
     /// <summary>
     /// Prompt for free-text goal-based casting. Returns a JSON object with rationale and role selections.
     /// </summary>
-    public static string FreeText(string goal, IReadOnlyList<Role> availableRoles)
+    public static string FreeText(string goal, IReadOnlyList<Role> availableRoles, int? teamSize = null)
     {
         var sb = new StringBuilder();
         sb.Append("You are casting a team of software agents for a project.\n\n");
@@ -22,8 +22,7 @@ public static class CastingPrompts
         sb.Append("\n```\n\n");
         AppendRoleMenu(sb, availableRoles);
         sb.Append("\nTASK:\n");
-        sb.Append("Select between 3 and 7 role archetypes from the menu above that best serve the project goal. ");
-        sb.Append("Choose only role ids that appear in the menu. Do not invent new role ids.\n\n");
+        AppendSelectionInstruction(sb, teamSize, reasonRequired: false);
         AppendOutputContract(sb, reasonRequired: false);
         return sb.ToString();
     }
@@ -31,7 +30,7 @@ public static class CastingPrompts
     /// <summary>
     /// Prompt for analysis-based casting. Returns a JSON object with rationale and role selections with justifications.
     /// </summary>
-    public static string Analysis(string signalSummary, IReadOnlyList<Role> availableRoles)
+    public static string Analysis(string signalSummary, IReadOnlyList<Role> availableRoles, int? teamSize = null)
     {
         var sb = new StringBuilder();
         sb.Append("You are casting a team of software agents for an existing project.\n\n");
@@ -40,8 +39,7 @@ public static class CastingPrompts
         sb.Append("\n\n");
         AppendRoleMenu(sb, availableRoles);
         sb.Append("\nTASK:\n");
-        sb.Append("Select between 3 and 7 role archetypes from the menu above that are justified by the detected signals. ");
-        sb.Append("Choose only role ids that appear in the menu. Do not invent new role ids. ");
+        AppendSelectionInstruction(sb, teamSize, reasonRequired: true);
         sb.Append("Each selection must include a reason that cites a specific detected signal, ");
         sb.Append("for example: \"React detected in package.json - frontend engineer needed\".\n\n");
         AppendOutputContract(sb, reasonRequired: true);
@@ -51,7 +49,7 @@ public static class CastingPrompts
     /// <summary>
     /// Default fallback prompt when no signals are detected (empty project).
     /// </summary>
-    public static string AnalysisFallback(IReadOnlyList<Role> availableRoles)
+    public static string AnalysisFallback(IReadOnlyList<Role> availableRoles, int? teamSize = null)
     {
         var sb = new StringBuilder();
         sb.Append("You are casting a team of software agents for a project.\n\n");
@@ -60,11 +58,24 @@ public static class CastingPrompts
         sb.Append("a backend engineer, and a QA engineer (or the closest equivalents in the menu).\n\n");
         AppendRoleMenu(sb, availableRoles);
         sb.Append("\nTASK:\n");
-        sb.Append("Select between 3 and 5 role archetypes from the menu above that form a sensible ");
-        sb.Append("general-purpose team. Choose only role ids that appear in the menu. ");
+        AppendSelectionInstruction(sb, teamSize ?? 3, reasonRequired: true);
         sb.Append("Each reason must note that no signals were detected.\n\n");
         AppendOutputContract(sb, reasonRequired: true);
         return sb.ToString();
+    }
+
+    private static void AppendSelectionInstruction(StringBuilder sb, int? teamSize, bool reasonRequired)
+    {
+        if (teamSize.HasValue)
+        {
+            sb.Append($"Select exactly {teamSize.Value} role archetypes from the menu above. ");
+            sb.Append($"If {teamSize.Value} distinct suitable roles cannot be found, select the closest number possible. ");
+        }
+        else
+        {
+            sb.Append("Select between 3 and 7 role archetypes from the menu above that best serve the project goal. ");
+        }
+        sb.Append("Choose only role ids that appear in the menu. Do not invent new role ids.\n\n");
     }
 
     private static void AppendRoleMenu(StringBuilder sb, IReadOnlyList<Role> availableRoles)
