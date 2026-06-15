@@ -160,6 +160,27 @@ export interface ProjectRunSummary {
   ended_at: string | null;
 }
 
+export interface CreateRunRequest {
+  repository_path?: string;
+  originating_branch: string;
+  task: string;
+  model_source?: string;
+  agent_name?: string;
+}
+
+export interface RunDto {
+  run_id: string;
+  status: string;
+  model_source: string;
+  model_id?: string;
+  agent_name?: string;
+  task: string;
+  started_at: string;
+  ended_at?: string;
+  step_count?: number;
+  originating_branch?: string;
+}
+
 // GitHub auth
 export type GitHubAuthStatus = 'signed_in' | 'signed_out' | 'never_signed_in';
 

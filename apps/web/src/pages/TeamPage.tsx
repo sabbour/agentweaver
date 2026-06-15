@@ -31,7 +31,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Dismiss24Regular, PersonAddRegular } from '@fluentui/react-icons';
+import { Dismiss24Regular, PersonAddRegular, PlayRegular, ChevronDownRegular, ChevronUpRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type {
@@ -43,8 +43,10 @@ import type {
   RoleDto,
   ReroleRequest,
   Project,
+  RunDto,
 } from '../api/types';
 import { SyncPanel } from '../components/SyncPanel';
+import { NewRunDialog } from '../components/NewRunDialog';
 
 type FilterTab = 'all' | 'active' | 'retired';
 type PanelTab = 'overview' | 'charter' | 'capabilities';
@@ -109,7 +111,7 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
-      borderColor: tokens.colorNeutralStroke1Hover,
+      border: `1px solid ${tokens.colorNeutralStroke1Hover}`,
     },
   },
   cardHeader: {
@@ -187,6 +189,42 @@ const useStyles = makeStyles({
   drawerFooterRow: {
     display: 'flex',
     gap: tokens.spacingHorizontalS,
+  },
+  runsSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  runsSectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  runsTable: {
+    display: 'flex',
+    flexDirection: 'column',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    overflow: 'hidden',
+  },
+  runsHeaderRow: {
+    display: 'grid',
+    gridTemplateColumns: '130px 1fr 130px 170px',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
+  runsRow: {
+    display: 'grid',
+    gridTemplateColumns: '130px 1fr 130px 170px',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    alignItems: 'center',
   },
 });
 
@@ -665,6 +703,24 @@ function AgentDetailPanel({
   );
 }
 
+function getStatusColor(status: string): 'warning' | 'success' | 'danger' | 'informative' {
+  switch (status) {
+    case 'in_progress': return 'warning';
+    case 'completed': return 'success';
+    case 'failed': return 'danger';
+    case 'pending': return 'informative';
+    default: return 'informative';
+  }
+}
+
+function formatRunDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+  } catch {
+    return iso;
+  }
+}
+
 export function TeamPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -677,6 +733,10 @@ export function TeamPage() {
   const [showSync, setShowSync] = useState(false);
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
   const [selectedMember, setSelectedMember] = useState<TeamMemberDto | null>(null);
+  const [newRunDialogOpen, setNewRunDialogOpen] = useState(false);
+  const [runs, setRuns] = useState<RunDto[]>([]);
+  const [runsLoading, setRunsLoading] = useState(true);
+  const [runsExpanded, setRunsExpanded] = useState(true);
 
   useEffect(() => {
     if (!projectId) return;
@@ -704,6 +764,16 @@ export function TeamPage() {
         );
       })
       .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    apiClient.getProjectRuns(projectId)
+      .then((r) => { if (!cancelled) setRuns(r); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setRunsLoading(false); });
     return () => { cancelled = true; };
   }, [projectId]);
 
@@ -767,6 +837,13 @@ export function TeamPage() {
                 onAdded={handleMemberAdded}
               />
             )}
+            <Button
+              appearance="primary"
+              icon={<PlayRegular />}
+              onClick={() => { setNewRunDialogOpen(true); }}
+            >
+              New Run
+            </Button>
             <Button
               appearance="secondary"
               onClick={() => { setShowSync((v) => !v); }}
@@ -874,6 +951,57 @@ export function TeamPage() {
           />
         )}
       </OverlayDrawer>
+
+      <div className={styles.runsSection}>
+        <div className={styles.runsSectionHeader}>
+          <Title3>Recent Runs</Title3>
+          <Button
+            appearance="subtle"
+            icon={runsExpanded ? <ChevronUpRegular /> : <ChevronDownRegular />}
+            onClick={() => { setRunsExpanded((v) => !v); }}
+          >
+            {runsExpanded ? 'Collapse' : 'Expand'}
+          </Button>
+        </div>
+        {runsExpanded && (
+          <>
+            {runsLoading && <Spinner label="Loading runs" size="small" />}
+            {!runsLoading && runs.length === 0 && (
+              <Text style={{ color: tokens.colorNeutralForeground3 }}>No runs yet.</Text>
+            )}
+            {!runsLoading && runs.length > 0 && (
+              <div className={styles.runsTable}>
+                <div className={styles.runsHeaderRow}>
+                  <span>Agent</span>
+                  <span>Task</span>
+                  <span>Status</span>
+                  <span>Started</span>
+                </div>
+                {runs.map((r) => (
+                  <div key={r.run_id} className={styles.runsRow}>
+                    <Text size={200}>{r.agent_name ?? '—'}</Text>
+                    <Text size={200} title={r.task}>
+                      {r.task.length > 60 ? `${r.task.slice(0, 60)}\u2026` : r.task}
+                    </Text>
+                    <Badge appearance="tint" color={getStatusColor(r.status)} size="small">
+                      {r.status}
+                    </Badge>
+                    <Text size={200}>{formatRunDate(r.started_at)}</Text>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <NewRunDialog
+        open={newRunDialogOpen}
+        onOpenChange={setNewRunDialogOpen}
+        projectId={projectId}
+        members={members}
+        onRunCreated={(run) => { setRuns((prev) => [run, ...prev]); }}
+      />
     </div>
   );
 }

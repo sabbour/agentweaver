@@ -537,7 +537,7 @@ export function CastingWizardPage() {
                       step={1}
                       value={teamSize}
                       onChange={(_, data) => {
-                        if (data.value !== undefined) setTeamSize(data.value);
+                        if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
                       }}
                     />
                   </Field>
@@ -604,7 +604,7 @@ export function CastingWizardPage() {
                       max={10}
                       step={1}
                       onChange={(_, data) => {
-                        if (data.value !== undefined) setTeamSize(data.value);
+                        if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
                         else if (data.displayValue) {
                           const n = parseInt(data.displayValue, 10);
                           if (!isNaN(n)) setTeamSize(Math.min(10, Math.max(2, n)));
