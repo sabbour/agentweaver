@@ -41,12 +41,23 @@ identically and that logic lives in exactly one place.
 
 ### IV. Two Front-Ends at Parity
 
-There MUST be exactly two clients over the API: a CLI (TUI) and a Web UI. The
-Web UI MUST be built with React 19 and Fluent 2. For this phase, both clients
-MUST be able to do everything the API allows.
+There MUST be exactly two clients over the API: an MCP server and a Web UI.
+The Web UI MUST be built with React 19 and Fluent 2. The MCP server MUST be
+a stdio-transport Model Context Protocol server so that any MCP-capable AI
+client (Copilot CLI, Claude, Cursor, and others) can interact with Agentweaver
+natively. Both clients MUST be able to do everything the API allows, and every
+new API capability MUST be reachable from both.
 
-Rationale: Two equally capable clients prove the API is complete and prevent
-business logic from leaking into any single front-end.
+The MCP server is a thin client over the backend API, following Principle III.
+It MUST NOT contain business logic. It MUST expose its tools via a `.mcp.json`
+registration file at the repository root so MCP-capable hosts can auto-discover
+it.
+
+Rationale: An MCP server as the programmatic client gives every AI agent and
+host a first-class, structured interface to Agentweaver — no shell-parsing,
+no subprocess management, no TTY gymnastics. The Web UI serves human users.
+Two equally capable clients prove the API is complete and prevent business
+logic from leaking into any single front-end.
 
 ### V. Observable Runs
 
@@ -160,8 +171,8 @@ each surface to police itself.
   only the specific model within GitHub Copilot may vary (Principle II).
 - The backend API is authoritative; clients hold no business logic
   (Principle III).
-- The two clients are a CLI (TUI) and a Web UI built with React 19 and
-  Fluent 2 (Principle IV).
+- The two clients are an MCP server (stdio transport, `.mcp.json` registration)
+  and a Web UI built with React 19 and Fluent 2 (Principle IV).
 - Run steps (agent messages, tool calls, tool results) MUST be streamable to
   any client (Principle V).
 - The same build MUST support both local-developer and hosted-cloud execution
@@ -182,7 +193,7 @@ each surface to police itself.
   Any deviation MUST be recorded in the plan's Complexity Tracking with an
   explicit justification, or the change MUST be revised to comply.
 - New capability exposed to users MUST be added to the API first, then made
-  reachable from both the CLI and the Web UI (Principles III and IV).
+  reachable from both the MCP server and the Web UI (Principles III and IV).
 - Run-step streaming MUST be preserved for any change that affects how runs
   execute (Principle V).
 - Changes MUST be verified to run on a developer machine and to remain
