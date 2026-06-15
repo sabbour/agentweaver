@@ -1,13 +1,13 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Button,
   Field,
-  Input,
   MessageBar,
   MessageBarBody,
   Radio,
   RadioGroup,
+  Select,
   Spinner,
   Text,
   Textarea,
@@ -187,7 +187,6 @@ export function CastingWizardPage() {
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [goal, setGoal] = useState('');
   const [universe, setUniverse] = useState('');
-  const [modelId, setModelId] = useState('');
 
   // Proposal state
   const [proposal, setProposal] = useState<CastProposalDto | null>(null);
@@ -237,7 +236,6 @@ export function CastingWizardPage() {
       if (mode === 'scenario') req.template_id = selectedTemplateId;
       if (mode === 'free_text') req.goal = goal;
       if (universe.trim()) req.universe = universe.trim();
-      if (modelId.trim()) req.model_id = modelId.trim();
       const p = await apiClient.createProposal(projectId, req);
       setProposal(p);
       setStep('review');
@@ -393,27 +391,31 @@ export function CastingWizardPage() {
           {mode === 'analysis' && (
             <Text>
               The system will analyze your project and suggest an appropriate team composition.
-              Optionally specify a model override below.
             </Text>
           )}
 
-          <Field label="Universe override (optional)">
-            <Input
+          <Field label="Universe (optional)">
+            <Select
               value={universe}
-              onChange={(_, v) => setUniverse(v.value)}
-              placeholder="e.g. starwars, marvel (leave blank for default)"
-            />
+              onChange={(_, d) => setUniverse(d.value === '__random__' ? '' : d.value)}
+            >
+              <option value="__random__">Random</option>
+              <option value="The Matrix">The Matrix</option>
+              <option value="Star Wars">Star Wars</option>
+              <option value="Inception">Inception</option>
+              <option value="Firefly">Firefly</option>
+              <option value="The Office">The Office</option>
+              <option value="Breaking Bad">Breaking Bad</option>
+              <option value="Dune">Dune</option>
+              <option value="Alien">Alien</option>
+              <option value="Blade Runner">Blade Runner</option>
+              <option value="The Lord of the Rings">The Lord of the Rings</option>
+              <option value="Star Trek">Star Trek</option>
+              <option value="Harry Potter">Harry Potter</option>
+              <option value="The Avengers">The Avengers</option>
+              <option value="Battlestar Galactica">Battlestar Galactica</option>
+            </Select>
           </Field>
-
-          {(mode === 'free_text' || mode === 'analysis') && (
-            <Field label="Model ID (optional)">
-              <Input
-                value={modelId}
-                onChange={(_, v) => setModelId(v.value)}
-                placeholder="e.g. gpt-4o"
-              />
-            </Field>
-          )}
 
           {proposalError && (
             <MessageBar intent="error">
