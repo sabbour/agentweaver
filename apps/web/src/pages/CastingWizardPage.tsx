@@ -196,7 +196,6 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     padding: tokens.spacingVerticalM,
-    minHeight: '160px',
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
@@ -636,15 +635,10 @@ export function CastingWizardPage() {
 
             {activePanel === 'analyze' && (
               <>
-                <Text className={styles.panelDesc}>
-                  The system will analyze your project and suggest roles.
-                </Text>
-                {analyzeError && (
-                  <MessageBar intent="error">
-                    <MessageBarBody>{analyzeError}</MessageBarBody>
-                  </MessageBar>
-                )}
-                <div className={styles.panelActionRow}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM }}>
+                  <Text className={styles.panelDesc} style={{ flex: 1 }}>
+                    The system will analyze your project and suggest roles.
+                  </Text>
                   {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
                   <Button
                     appearance="primary"
@@ -654,6 +648,11 @@ export function CastingWizardPage() {
                     {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
                   </Button>
                 </div>
+                {analyzeError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{analyzeError}</MessageBarBody>
+                  </MessageBar>
+                )}
               </>
             )}
 
