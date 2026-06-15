@@ -46,7 +46,7 @@ public static class CastingMappings
         Warnings = proposal.Warnings,
     };
 
-    public static TeamMemberDto ToDto(CastMember member) => new()
+    public static TeamMemberDto ToDto(CastMember member, DateTimeOffset? createdAt = null, DateTimeOffset? updatedAt = null) => new()
     {
         Name = member.Name,
         RoleTitle = member.Role.Title,
@@ -54,13 +54,15 @@ public static class CastingMappings
         Status = member.Status == CastMemberStatus.Retired ? "retired" : "active",
         DefaultModel = member.Role.DefaultModel,
         IsNamed = member.IsNamed,
+        CharterCreatedAt = createdAt,
+        CharterUpdatedAt = updatedAt,
     };
 
     public static TeamDto ToDto(Team team, SquadLayoutInfo layout) => new()
     {
         ProjectName = team.ProjectName,
         Universe = team.Universe,
-        Members = team.Members.Select(ToDto).ToList(),
+        Members = team.Members.Select(m => ToDto(m)).ToList(),
         Layout = layout.HasConflict ? "conflict"
             : layout.HasCanonical ? "canonical"
             : layout.HasLegacy ? "legacy"

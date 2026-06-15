@@ -1936,7 +1936,7 @@ app.MapPost("/api/projects/{id}/casting/proposals/{proposalId}/confirm", async (
         {
             ProjectName = team.ProjectName,
             Universe = team.Universe,
-            Members = team.Members.Select(CastingMappings.ToDto).ToList(),
+            Members = team.Members.Select(m => CastingMappings.ToDto(m)).ToList(),
             Layout = "canonical",
             MigrationAvailable = false,
         };
@@ -2014,7 +2014,25 @@ app.MapGet("/api/projects/{id}/team", async (
 
         if (team is null) return Results.NotFound();
 
-        return Results.Ok(CastingMappings.ToDto(team, layout));
+        var members = team.Members.Select(m =>
+        {
+            var charterFile = Path.Combine(project.WorkingDirectory, m.CharterPath);
+            DateTimeOffset? created = File.Exists(charterFile) ? new DateTimeOffset(File.GetCreationTimeUtc(charterFile), TimeSpan.Zero) : null;
+            DateTimeOffset? updated = File.Exists(charterFile) ? new DateTimeOffset(File.GetLastWriteTimeUtc(charterFile), TimeSpan.Zero) : null;
+            return CastingMappings.ToDto(m, created, updated);
+        }).ToList();
+
+        return Results.Ok(new TeamDto
+        {
+            ProjectName = team.ProjectName,
+            Universe = team.Universe,
+            Members = members,
+            Layout = layout.HasConflict ? "conflict"
+                : layout.HasCanonical ? "canonical"
+                : layout.HasLegacy ? "legacy"
+                : "absent",
+            MigrationAvailable = layout.HasLegacy && !layout.HasCanonical,
+        });
     }
     catch (SquadLayoutConflictException ex)
     {
@@ -2091,11 +2109,41 @@ app.MapPut("/api/projects/{id}/team/members/{name}/charter", async (
     }
 });
 
+// GET /api/projects/{id}/team/members/{name}/history — get agent history
+app.MapGet("/api/projects/{id}/team/members/{name}/history", async (
+    string id,
+    string name,
+    CastingService castingService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var content = await castingService.GetHistoryAsync(id, name, ct);
+        if (content is null) return Results.NotFound();
+        return Results.Ok(new HistoryDto { MemberName = name, Content = content });
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to get history for {Name} in project {ProjectId}", name, id);
+        return Results.Problem("Failed to get history.", statusCode: 500);
+    }
+});
+
 // POST /api/projects/{id}/team/members — add member
 app.MapPost("/api/projects/{id}/team/members", async (
     string id,
     AddMemberRequest request,
     CastingService castingService,
+    IProjectStore projectStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -2105,7 +2153,22 @@ app.MapPost("/api/projects/{id}/team/members", async (
     try
     {
         var member = await castingService.AddMemberAsync(id, request.RoleId, request.CustomRoleTitle, request.ModelId, ct);
-        return Results.Ok(CastingMappings.ToDto(member));
+        DateTimeOffset? created = null;
+        DateTimeOffset? updated = null;
+        if (ProjectId.TryParse(id, out var addProjectId))
+        {
+            var project = await projectStore.GetAsync(addProjectId, ct);
+            if (project is not null)
+            {
+                var charterFile = Path.Combine(project.WorkingDirectory, member.CharterPath);
+                if (File.Exists(charterFile))
+                {
+                    created = new DateTimeOffset(File.GetCreationTimeUtc(charterFile), TimeSpan.Zero);
+                    updated = new DateTimeOffset(File.GetLastWriteTimeUtc(charterFile), TimeSpan.Zero);
+                }
+            }
+        }
+        return Results.Ok(CastingMappings.ToDto(member, created, updated));
     }
     catch (ProjectNotFoundException)
     {
@@ -2176,6 +2239,7 @@ app.MapMethods("/api/projects/{id}/team/members/{name}", ["PATCH"], async (
     string name,
     ReroleRequest request,
     CastingService castingService,
+    IProjectStore projectStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -2185,7 +2249,22 @@ app.MapMethods("/api/projects/{id}/team/members/{name}", ["PATCH"], async (
     try
     {
         var member = await castingService.ReroleMemberAsync(id, name, request.NewRoleId, request.CustomRoleTitle, ct);
-        return Results.Ok(CastingMappings.ToDto(member));
+        DateTimeOffset? created = null;
+        DateTimeOffset? updated = null;
+        if (ProjectId.TryParse(id, out var reroleProjectId))
+        {
+            var project = await projectStore.GetAsync(reroleProjectId, ct);
+            if (project is not null)
+            {
+                var charterFile = Path.Combine(project.WorkingDirectory, member.CharterPath);
+                if (File.Exists(charterFile))
+                {
+                    created = new DateTimeOffset(File.GetCreationTimeUtc(charterFile), TimeSpan.Zero);
+                    updated = new DateTimeOffset(File.GetLastWriteTimeUtc(charterFile), TimeSpan.Zero);
+                }
+            }
+        }
+        return Results.Ok(CastingMappings.ToDto(member, created, updated));
     }
     catch (ProjectNotFoundException)
     {

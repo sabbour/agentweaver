@@ -96,6 +96,12 @@ public sealed class SquadReader
         return ResolveExisting(rel) is { } path ? File.ReadAllText(path) : null;
     }
 
+    public string? ReadHistory(string memberName)
+    {
+        var rel = SquadPaths.HistoryFor(memberName);
+        return ResolveExisting(rel) is { } path ? File.ReadAllText(path) : null;
+    }
+
     public SquadLayoutInfo DetectLayout()
     {
         var hasCanonical =

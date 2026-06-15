@@ -714,6 +714,13 @@ public sealed class CastingService
         return reader.ReadCharter(memberName);
     }
 
+    public async Task<string?> GetHistoryAsync(string projectId, string memberName, CancellationToken ct)
+    {
+        var (project, _) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+        var reader = new SquadReader(project.WorkingDirectory);
+        return reader.ReadHistory(memberName);
+    }
+
     public async Task UpdateCharterAsync(
         string projectId, string memberName, string content, CancellationToken ct)
     {

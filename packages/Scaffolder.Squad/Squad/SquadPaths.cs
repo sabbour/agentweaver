@@ -44,6 +44,9 @@ internal static class SquadPaths
     public static string CharterFor(string memberName)
         => $".squad/agents/{ValidatedSlugName(memberName)}/charter.md";
 
+    public static string HistoryFor(string memberName)
+        => $".squad/agents/{ValidatedSlugName(memberName)}/history.md";
+
     public static string AlumniCharterFor(string memberName)
         => $".squad/agents/_alumni/{ValidatedSlugName(memberName)}/charter.md";
 }
