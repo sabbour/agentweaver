@@ -1,4 +1,4 @@
-﻿import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -183,6 +183,10 @@ export class ScaffolderApiClient {
 
   reroleMember(projectId: string, memberName: string, req: ReroleRequest): Promise<TeamMemberDto> {
     return this.request<TeamMemberDto>('PATCH', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`, req);
+  }
+
+  getMemberHistory(projectId: string, memberName: string): Promise<HistoryDto> {
+    return this.request<HistoryDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/history`);
   }
 
   // Sync

@@ -1,4 +1,4 @@
-﻿export type ModelSource = 'github-copilot' | 'microsoft-foundry';
+export type ModelSource = 'github-copilot' | 'microsoft-foundry';
 
 export type RunStatus =
   | 'pending'
@@ -247,6 +247,13 @@ export interface TeamMemberDto {
   status: 'active' | 'retired';
   default_model: string;
   is_named: boolean;
+  charter_created_at?: string | null;
+  charter_updated_at?: string | null;
+}
+
+export interface HistoryDto {
+  member_name: string;
+  content: string;
 }
 
 export interface TeamDto {
