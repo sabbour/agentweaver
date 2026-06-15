@@ -336,11 +336,13 @@ export function CastingWizardPage() {
   const handleCastTeam = async () => {
     if (activePanel === 'formulate' && formulateProposal) {
       setProposal(formulateProposal);
+      setUniverse(formulateProposal.universe ?? '');
       setStep('review');
       return;
     }
     if (activePanel === 'analyze' && analyzeProposal) {
       setProposal(analyzeProposal);
+      setUniverse(analyzeProposal.universe ?? '');
       setStep('review');
       return;
     }
@@ -352,6 +354,7 @@ export function CastingWizardPage() {
         if (universe) req.universe = universe;
         const p = await apiClient.createProposal(projectId, req);
         setProposal(p);
+        setUniverse(p.universe ?? '');
         setStep('review');
       } catch (err) {
         setCastError(
@@ -379,6 +382,39 @@ export function CastingWizardPage() {
         members: proposal.members.filter((m) => m.proposed_name !== member.proposed_name),
       });
       setProposal(updated);
+    } catch (err) {
+      setProposalError(
+        err instanceof ApiError
+          ? `API error ${err.status}: ${err.body}`
+          : err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setProposalLoading(false);
+    }
+  };
+
+  const handleProceedToConfirm = async () => {
+    if (!proposal) return;
+    const proposalUniverse = proposal.universe ?? '';
+    if (universe === proposalUniverse) {
+      setStep('confirm');
+      return;
+    }
+    setProposalLoading(true);
+    setProposalError(null);
+    try {
+      let req: CreateProposalRequest;
+      if (activePanel === 'formulate') {
+        req = { mode: 'free_text', goal };
+      } else if (activePanel === 'template') {
+        req = { mode: 'scenario', template_id: selectedTemplateId };
+      } else {
+        req = { mode: 'analysis' };
+      }
+      if (universe) req.universe = universe;
+      const p = await apiClient.createProposal(projectId, req);
+      setProposal(p);
+      setStep('confirm');
     } catch (err) {
       setProposalError(
         err instanceof ApiError
@@ -542,18 +578,6 @@ export function CastingWizardPage() {
             )}
           </div>
 
-          <Field label="Universe">
-            <Select
-              value={universe}
-              onChange={(_, data) => setUniverse(data.value)}
-            >
-              <option value="">Random (any universe)</option>
-              {UNIVERSE_POOLS.map((u) => (
-                <option key={u.name} value={u.name}>{u.name}</option>
-              ))}
-            </Select>
-          </Field>
-
           {castError && (
             <MessageBar intent="error">
               <MessageBarBody>{castError}</MessageBarBody>
@@ -599,6 +623,18 @@ export function CastingWizardPage() {
               </RadioGroup>
             </div>
           )}
+
+          <Field label="Universe">
+            <Select
+              value={universe}
+              onChange={(_, data) => setUniverse(data.value)}
+            >
+              <option value="">Random (any universe)</option>
+              {UNIVERSE_POOLS.map((u) => (
+                <option key={u.name} value={u.name}>{u.name}</option>
+              ))}
+            </Select>
+          </Field>
 
           <div className={styles.memberList}>
             {proposal.members.map((member) => (
@@ -648,7 +684,7 @@ export function CastingWizardPage() {
             <Button
               appearance="primary"
               disabled={proposal.members.length === 0 || proposalLoading}
-              onClick={() => setStep('confirm')}
+              onClick={() => void handleProceedToConfirm()}
             >
               Confirm
             </Button>
