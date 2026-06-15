@@ -31,7 +31,7 @@ npm run lint
 | `/projects/:projectId` | Project | Project info, run list, and start-run dialog |
 | `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, relink, delete |
 | `/projects/:projectId/team` | Team | Current team roster, member management, charter editor, and sync panel |
-| `/projects/:projectId/team/cast` | Casting wizard | 4-step wizard for AI-assisted team composition |
+| `/projects/:projectId/team/cast` | Casting wizard | Single-page casting wizard with Formulate, Template, and Analyze tabs |
 | `/watch/:runId` | Watch run | Live event stream, diff, and review panel for a run |
 | `/settings` | Settings | API connection settings |
 
@@ -148,43 +148,66 @@ The browser has two tabs:
 
 ### Team page
 
-The team page (`/projects/:projectId/team`) shows the project's agent team roster and provides all day-to-day team management operations.
+The team page (`/projects/:projectId/team`) shows the current cast team as a card grid. Each card displays the agent's name, role, and a status badge (**Active** or **Retired**).
 
-The roster section lists each team member's name, charter path, and a link to view or edit their charter. Clicking a member's name opens a charter dialog with the Markdown content rendered in a read-only view. An edit button inside the dialog switches to an editable textarea; saving calls `PUT /api/projects/{id}/team/members/{name}/charter`.
+Clicking a card opens a slide-in panel with three tabs:
 
-Three roster actions are available:
+- **Overview** — member summary, role, status, and charter timestamps (created and last updated)
+- **Charter** — the agent's full charter text in a read-only view
+- **Capabilities** — role capabilities pulled from the catalog
 
-**Add member** — opens a dialog that collects a name and role description, then calls `POST /api/projects/{id}/team/members`.
+Filter tabs at the top of the grid narrow the view: **All**, **Active**, **Retired**.
 
-**Remove member** — prompts for confirmation, then calls `DELETE /api/projects/{id}/team/members/{name}`.
+Two action buttons appear in the page header:
 
-**Re-role member** — opens a dialog to enter a new role description, then calls `PATCH /api/projects/{id}/team/members/{name}`.
+**Add member** — opens a dialog to select a role from the full catalog and cast a new team member directly, without going through the casting wizard.
+
+**New Run** — opens the New Run dialog (see below).
 
 A **Cast team** button navigates to the casting wizard at `/projects/:projectId/team/cast`.
 
-The sync panel at the bottom of the page shows the pending `.squad/` changes fetched from `GET /api/projects/{id}/team/sync`. Each changed file is listed with its status (`added`, `modified`, or `deleted`). A **Commit** button opens a dialog to enter an optional commit message and then calls `POST /api/projects/{id}/team/sync` with the change set hash. If the change set shifts between the panel load and the commit, the server returns a conflict and the panel shows an error with a prompt to refresh.
+The sync panel at the bottom of the page shows the pending uncommitted changes fetched from `GET /api/projects/{id}/team/sync`. Each changed file is listed with its status (`added`, `modified`, or `deleted`). A **Commit** button opens a dialog to enter an optional commit message and then calls `POST /api/projects/{id}/team/sync` with the change set hash. If the change set shifts between the panel load and the commit, the server returns a conflict and the panel shows an error with a prompt to refresh.
 
 ### Casting wizard
 
-The casting wizard (`/projects/:projectId/team/cast`) walks through four steps to create a casting proposal and confirm it as a team.
+The casting wizard (`/projects/:projectId/team/cast`) is a single-page form with three strategy tabs:
 
-**Step 1 — Mode**: Select the casting mode. Three options are available:
+**Formulate** — describe the goal in natural language. The AI analyzes the description and proposes a set of roles with a team rationale sentence.
 
-- **From scenario** — pick a pre-defined scenario grouping
-- **From goal** — describe the team's purpose in natural language
-- **Analyze project** — let the model examine the repository and propose roles
+**Template** — pick from pre-built team templates (Quick Software Development, Product Feature Delivery, Azure Feature Delivery, Content Authoring & Research). The template description and pre-selected roles are shown.
 
-**Step 2 — Configure**: The inputs shown depend on the mode selected in step 1.
+**Analyze** — the AI scans the project repository (README, package files, source structure) to detect the tech stack and team shape automatically.
 
-- Scenario mode shows a scenario selector (populated from `GET /api/casting/scenarios`) and an optional universe field.
-- Free-text mode shows a goal text field and an optional model override.
-- Analysis mode shows only an optional model override.
+All three tabs share:
 
-**Step 3 — Review**: The wizard submits the proposal to `POST /api/projects/{id}/casting/proposals`. For free-text and analysis modes, this step streams the model run events in a timeline view (using the same event rendering as the watch screen) until the proposal is ready. For scenario mode, the proposal resolves immediately. Once ready, the proposed roles are displayed in an editable list. Each role shows its name and description; roles can be added, removed, or edited inline before proceeding.
+- **Team size** — SpinButton to specify the exact number of roles
+- **Roles** — checkbox grid of all available catalog roles; two-way bound with the AI proposal
+- **Universe** — collapsible accordion to select the character universe for agent names (15 available)
 
-**Step 4 — Confirm**: Shows a summary of the final role list and, when an existing team is detected, a choice of intent: replace (`new`), augment (`augment`), or recast (`recast`). Clicking **Confirm** calls `POST /api/projects/{id}/casting/proposals/{pid}/confirm` and navigates back to the team page on success.
+After proposing, a **Why this team** sentence explains the rationale. Clicking **Confirm** writes the team to `.squad/` and navigates back to the team page. At any point, clicking **Reject** discards the proposal and returns to the team page.
 
-At any point, clicking **Reject** calls `DELETE /api/projects/{id}/casting/proposals/{pid}` and returns to the team page.
+When an existing team is detected, a choice of intent is presented before confirming: replace (`new`), augment (`augment`), or recast (`recast`).
+
+### New Run dialog
+
+On the team page, clicking **New Run** opens a dialog with:
+
+- **Agent** — dropdown of active team members showing name and role
+- **Task** — multi-line text area describing what to do
+- **Branch** — branch to run against (defaults to the project's default branch)
+
+Submitting starts a project-scoped run via `POST /api/projects/{id}/runs` with the selected agent's name in `agent_name`. The agent's charter is injected as their system prompt. The new run appears immediately in the Recent Runs section at the bottom of the team page.
+
+### Recent Runs section
+
+Below the team member grid on the team page, a collapsible **Recent Runs** section lists all runs for the project fetched from `GET /api/projects/{id}/runs`. Each entry shows:
+
+- Agent name (which team member ran it)
+- Task description (truncated)
+- Status badge (color-coded: warning for in-progress, success for completed, danger for failed)
+- Started time
+
+Clicking a run navigates to the watch screen for that run.
 
 ## Structure
 
@@ -220,7 +243,7 @@ src/
     ProjectPage.tsx         project detail, run list, start-run dialog
     ProjectSettingsPage.tsx provider defaults, rename, relink, delete
     TeamPage.tsx            team roster, member management, charter dialogs, sync panel
-    CastingWizardPage.tsx   4-step casting wizard
+    CastingWizardPage.tsx   Single-page casting wizard (Formulate / Template / Analyze tabs)
     WatchPage.tsx
     SettingsPage.tsx        API connection settings
     HomePage.tsx            legacy submit form (not the default route)

@@ -294,74 +294,97 @@ Commands for managing a project's agent team. These commands cover the full cast
 
 #### `scaffolder team scenarios`
 
-Lists the available scenario groupings that can be used with `team cast --scenario`.
+Lists the available team templates that can be used with `team cast --scenario`.
 
 ```text
 scaffolder team scenarios
 ```
 
-Prints each scenario's id, name, and description.
+Prints each template's id, title, description, and the roles it contains.
 
 #### `scaffolder team cast`
 
-Creates a casting proposal and prints the proposal id. For `--goal` and `--analyze` modes, the command streams the model run events while the proposal is being generated, then prints the proposal id when the run completes.
+Creates a casting proposal from a template and prints the proposed team. Displays a table of proposed members with their name, role, and whether a character name was assigned.
 
 ```text
-scaffolder team cast --scenario <id> [--universe <name>]
-scaffolder team cast --goal <text> [--model <id>]
-scaffolder team cast --analyze [--model <id>]
+scaffolder team cast --project-id <id> --scenario <template-id> [--universe <name>]
 ```
 
 Options:
 
-| Option | Mode | Description |
+| Option | Required | Description |
 | --- | --- | --- |
-| `--scenario <id>` | scenario | Cast from the named scenario grouping |
-| `--universe <name>` | scenario | Optional thematic universe applied to agent personas |
-| `--goal <text>` | free_text | Natural-language description of the team goal |
-| `--analyze` | analysis | Let the model analyze the project and propose roles |
-| `--model <id>` | free_text, analysis | Model override for this proposal run |
+| `--project-id <id>` | Yes | Project to cast a team for |
+| `--scenario <id>` | Yes | Template ID from `team scenarios` |
+| `--universe <name>` | No | Thematic universe applied to agent persona names |
 
-After a proposal is created, use `team proposal show`, `team proposal amend`, or `team proposal confirm` to review and act on it.
+After the proposal is displayed, follow up with `team proposal confirm` or `team proposal reject`.
 
-#### `scaffolder team proposal show <id>`
-
-Prints the proposal details: mode, status, and the list of proposed roles with their descriptions.
+Example output:
 
 ```text
-scaffolder team proposal show <id>
+Proposal created: prop-a1b2c3
+  Universe: star-wars
+  Members:  3
+
+Name       Role               Named
+Han Solo   Software Engineer  yes
+Leia       Product Manager    yes
+Chewie     QA Engineer        yes
+
+Confirm with:  scaffolder team proposal confirm prop-a1b2c3 --project-id <id>
+Reject with:   scaffolder team proposal reject  prop-a1b2c3 --project-id <id>
 ```
 
-#### `scaffolder team proposal amend <id>`
+#### `scaffolder team proposal show <proposal-id>`
 
-Opens an interactive editor to amend the proposed roles. Prompts you to add, remove, or modify roles before confirming.
+Prints the details of a proposal: mode, universe, any warnings, and the full proposed member list.
 
 ```text
-scaffolder team proposal amend <id>
+scaffolder team proposal show <proposal-id> --project-id <id>
 ```
 
-#### `scaffolder team proposal confirm <id>`
+#### `scaffolder team proposal confirm <proposal-id>`
 
-Confirms a proposal and writes the team to `.squad/`. If an existing team is detected, the CLI prompts for the intent: replace the team entirely (`new`), add the proposed roles to the existing team (`augment`), or rewrite all charters using the proposed configuration (`recast`).
+Confirms a proposal and writes the team to `.squad/`. If an existing team is detected and `--intent` is not provided, the CLI prompts interactively to choose how to apply the cast.
 
 ```text
-scaffolder team proposal confirm <id>
+scaffolder team proposal confirm <proposal-id> --project-id <id> [--intent new|augment|recast]
 ```
 
-#### `scaffolder team proposal reject <id>`
+Options:
+
+| Option | Description |
+| --- | --- |
+| `--project-id <id>` | Required. Project id. |
+| `--intent new\|augment\|recast` | How to apply the cast when an existing team is present. Prompted interactively when omitted. `new` replaces the team entirely; `augment` adds the proposed roles; `recast` rewrites existing charters. |
+
+On success prints the confirmed team roster.
+
+#### `scaffolder team proposal reject <proposal-id>`
 
 Rejects a proposal. No `.squad/` files are written or modified.
 
 ```text
-scaffolder team proposal reject <id>
+scaffolder team proposal reject <proposal-id> --project-id <id>
 ```
 
 #### `scaffolder team show`
 
-Prints the current team roster: member names and their charter paths.
+Prints the current team roster: member names, roles, status, and default model.
 
 ```text
-scaffolder team show
+scaffolder team show --project-id <id>
+```
+
+Example output:
+
+```text
+my-project  Universe: star-wars  Layout: canonical
+
+Name       Role               Status   Model
+Han Solo   Software Engineer  active   gpt-4o
+Leia       Product Manager    active   gpt-4o
 ```
 
 #### `scaffolder team charter show <name>`
@@ -369,64 +392,81 @@ scaffolder team show
 Prints the raw Markdown charter for the named team member.
 
 ```text
-scaffolder team charter show <name>
+scaffolder team charter show <name> --project-id <id>
 ```
 
 #### `scaffolder team charter edit <name>`
 
-Opens the named member's charter in your default editor.
+Opens a terminal prompt to enter new charter content for the named member. Type the charter line by line; enter a single period (`.`) on its own line to finish and save.
 
 ```text
-scaffolder team charter edit <name>
+scaffolder team charter edit <name> --project-id <id>
 ```
 
 #### `scaffolder team member add`
 
-Prompts for a member name and role description, then adds the member to the team and creates an initial charter file.
+Adds a new member to the team from the role catalog, creating their `.squad/` directory and an initial charter.
 
 ```text
-scaffolder team member add
+scaffolder team member add --project-id <id> --role-id <role-id> [--custom-title <title>] [--model <model-id>]
 ```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--project-id <id>` | Yes | Project id |
+| `--role-id <id>` | Yes | Role ID from `GET /api/catalog/roles` (see `scaffolder team scenarios` for available roles) |
+| `--custom-title <title>` | No | Override the role's default title for this member |
+| `--model <model-id>` | No | Override the role's default model for this member |
+
+On success prints the new member's name and role title.
 
 #### `scaffolder team member remove <name>`
 
-Retires the named team member and removes their `.squad/` directory.
+Retires the named team member. Their `.squad/` directory is preserved; the member's status is set to retired.
 
 ```text
-scaffolder team member remove <name>
+scaffolder team member remove <name> --project-id <id>
 ```
 
 #### `scaffolder team member rerole <name>`
 
-Prompts for a new role description and updates the named member's charter.
+Changes an existing member's role and regenerates their charter.
 
 ```text
-scaffolder team member rerole <name>
+scaffolder team member rerole <name> --project-id <id> --role-id <role-id> [--custom-title <title>]
 ```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--project-id <id>` | Yes | Project id |
+| `--role-id <id>` | Yes | New role ID from the catalog |
+| `--custom-title <title>` | No | Override the role's default title |
 
 #### `scaffolder team sync status`
 
 Shows the pending uncommitted changes in the project's `.squad/` directory and the current change set hash.
 
 ```text
-scaffolder team sync status
+scaffolder team sync status --project-id <id>
 ```
 
 #### `scaffolder team sync commit`
 
-Commits the pending `.squad/` changes to the repository. Fetches the current change set hash automatically before committing.
+Commits the pending `.squad/` changes to the repository. Fetches the current change set hash automatically before committing. If the change set shifts between the status check and the commit, the server returns a conflict; run `team sync status` again and retry.
 
 ```text
-scaffolder team sync commit [--message <text>]
+scaffolder team sync commit --project-id <id> [--message <text>]
 ```
 
 Options:
 
 | Option | Description |
 | --- | --- |
-| `--message <text>` | Commit message. A default message is used when omitted. |
-
-If the change set has shifted between the status check and the commit, the server returns a conflict and the CLI reports it; run `team sync status` again and retry.
+| `--message <text>` | Commit message. A default message is used when omitted. Prompted interactively when omitted and not provided via flag. |
 
 ## Exit codes
 

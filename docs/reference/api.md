@@ -75,7 +75,8 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/casting/scenarios` | List available scenario groupings |
+| `GET` | `/api/casting/templates` | List available scenario groupings (team templates) |
+| `GET` | `/api/catalog/roles` | List all available role definitions |
 | `POST` | `/api/projects/{id}/casting/proposals` | Create a casting proposal |
 | `GET` | `/api/projects/{id}/casting/proposals/{pid}` | Get a proposal |
 | `PATCH` | `/api/projects/{id}/casting/proposals/{pid}` | Amend a proposal |
@@ -84,6 +85,7 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/projects/{id}/team` | Get team roster and layout metadata |
 | `GET` | `/api/projects/{id}/team/members/{name}/charter` | Get a member's charter |
 | `PUT` | `/api/projects/{id}/team/members/{name}/charter` | Replace a member's charter |
+| `GET` | `/api/projects/{id}/team/members/{name}/history` | Get agent interaction history |
 | `POST` | `/api/projects/{id}/team/members` | Add a team member |
 | `DELETE` | `/api/projects/{id}/team/members/{name}` | Retire a team member |
 | `PATCH` | `/api/projects/{id}/team/members/{name}` | Re-role a team member |
@@ -601,7 +603,7 @@ Without `confirm=true` the request returns `400 Bad Request`. Response `204 No C
 
 ### GET /api/projects/{id}/runs
 
-Lists all runs for a project. Returns a JSON array:
+Lists all runs for a project. Returns a JSON array. Each entry includes `agent_name` identifying which team member executed the run (null when the run was not started by a cast team member):
 
 ```json
 [
@@ -611,6 +613,7 @@ Lists all runs for a project. Returns a JSON array:
     "model_source": "github-copilot",
     "model_id": null,
     "task": "add license headers",
+    "agent_name": "Aria",
     "started_at": "2026-06-07T21:09:45+00:00",
     "ended_at": "2026-06-07T21:10:12+00:00"
   }
@@ -628,7 +631,8 @@ Request:
   "task": "add a license header to every source file",
   "model_source": "github-copilot",
   "model_id": null,
-  "base_branch": "main"
+  "base_branch": "main",
+  "agent_name": "Aria"
 }
 ```
 
@@ -638,6 +642,7 @@ Request:
 | `model_source` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the project default, then the runtime default. |
 | `model_id` | string | No | Model override. Falls back to the project default for the resolved provider, then `null`. |
 | `base_branch` | string | No | Branch to run from. Falls back to the project's `default_branch`. |
+| `agent_name` | string | No | Name of a cast team member. When provided, that member's charter is injected as the agent's system prompt. |
 
 Provider and model resolution order:
 1. Value in the request body
@@ -719,112 +724,148 @@ The team casting API manages the full lifecycle of AI-assisted agent team compos
 
 The provider for model-assisted casting is always GitHub Copilot. No provider field is accepted on casting requests.
 
-### GET /api/casting/scenarios
+### GET /api/casting/templates
 
-Lists the available scenario groupings. A scenario groups a set of agent role configurations that the model can use as a starting point when casting in scenario mode.
+Lists the available team templates (scenario groupings). Each template groups a curated set of agent roles suitable for a particular project type.
 
 Response `200 OK`:
 
 ```json
 [
   {
-    "id": "web-app",
-    "name": "Web application",
-    "description": "Full-stack web project with frontend, backend, and infrastructure roles."
+    "id": "quick-software-development",
+    "title": "Quick Software Development",
+    "description": "Lean team for rapid software delivery.",
+    "roles": [
+      {
+        "id": "software-engineer",
+        "title": "Software Engineer",
+        "summary": "Implements features and fixes bugs.",
+        "default_model": "gpt-4o"
+      }
+    ]
   }
 ]
 ```
 
+### GET /api/catalog/roles
+
+Returns all available role definitions from the catalog. Use the `id` values when creating proposals in `manual` mode or adding individual members.
+
+Response `200 OK`: a JSON array of role objects, each with `id`, `title`, `summary`, and `default_model`.
+
 ### POST /api/projects/{id}/casting/proposals
 
-Creates a casting proposal. Depending on `mode`, the server either selects roles deterministically from a scenario or runs a model-assisted analysis.
+Creates a casting proposal. Depending on `mode`, the server selects roles deterministically from a template, runs a model-assisted analysis, or accepts an explicit role list.
 
 Request:
 
 ```json
 {
   "mode": "scenario",
-  "scenario_id": "web-app",
+  "template_id": "quick-software-development",
   "universe": "star-wars",
-  "model_id": null
+  "team_size": null,
+  "model_id": null,
+  "goal": null,
+  "role_ids": null
 }
 ```
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `mode` | string | Yes | `"scenario"`, `"free_text"`, or `"analysis"` |
-| `scenario_id` | string | When `mode` is `"scenario"` | ID from `GET /api/casting/scenarios` |
+| `mode` | string | Yes | `"scenario"`, `"free_text"`, `"analysis"`, or `"manual"` |
+| `template_id` | string | When `mode` is `"scenario"` | ID from `GET /api/casting/templates` |
 | `goal` | string | When `mode` is `"free_text"` | Natural-language description of the team goal |
-| `universe` | string | No | Thematic universe name applied to agent personas |
-| `model_id` | string | No | Overrides the role's default model for this proposal run |
+| `role_ids` | string[] | When `mode` is `"manual"` | Explicit list of role IDs from `GET /api/catalog/roles` |
+| `universe` | string | No | Thematic universe name applied to agent personas (e.g. `"star-wars"`) |
+| `team_size` | int | No | Desired number of team members; guides model-assisted modes |
+| `model_id` | string | No | Model override for `free_text` and `analysis` modes |
 
-For `"free_text"` and `"analysis"` modes the server starts a MAF run on GitHub Copilot. The response includes a `run_id` you can use to stream events from `GET /api/runs/{id}/stream` while the proposal is being generated.
+For `"free_text"` and `"analysis"` modes the server runs a GitHub Copilot model to propose roles. All modes return the proposal synchronously once ready.
 
-Response `202 Accepted`:
-
-```json
-{
-  "proposal_id": "prop-a1b2c3",
-  "status": "pending",
-  "run_id": "f36800fd-..."
-}
-```
-
-`run_id` is `null` for scenario-mode proposals, which resolve synchronously.
-
-### GET /api/projects/{id}/casting/proposals/{pid}
-
-Returns the current state of a proposal.
-
-Response `200 OK`:
+Response `200 OK` — a `CastProposalDto`:
 
 ```json
 {
   "proposal_id": "prop-a1b2c3",
-  "status": "ready",
-  "mode": "free_text",
-  "run_id": "f36800fd-...",
-  "roles": [
+  "mode": "scenario",
+  "universe": "star-wars",
+  "run_id": null,
+  "existing_team_present": false,
+  "warnings": [],
+  "rationale": "A balanced team for rapid software delivery.",
+  "members": [
     {
-      "name": "Architect",
-      "description": "Designs the overall system structure.",
-      "model_id": null
+      "proposed_name": "Han Solo",
+      "role": {
+        "id": "software-engineer",
+        "title": "Software Engineer",
+        "summary": "Implements features and fixes bugs.",
+        "default_model": "gpt-4o"
+      },
+      "charter_markdown": "# Han Solo\n...",
+      "is_named": true,
+      "default_model": "gpt-4o",
+      "justification": null
     }
   ]
 }
 ```
 
-`status` values:
+`run_id` is populated for `free_text` and `analysis` modes. Use `GET /api/runs/{id}/stream` to follow the model run while the proposal is being generated; the proposal is ready when the run completes. `run_id` is `null` for `scenario` and `manual` modes, which resolve synchronously.
 
-| Value | Meaning |
-| --- | --- |
-| `pending` | Model run is in progress |
-| `ready` | Proposal is ready to review or confirm |
-| `confirmed` | Proposal was confirmed and a team was created |
-| `rejected` | Proposal was rejected |
+Error responses:
+
+| Status | Error | Meaning |
+| --- | --- | --- |
+| `400` | — | `mode` is invalid, or a required mode-specific field is missing |
+| `404` | — | Project not found |
+| `409` | `project_unavailable` | The project's working directory is not accessible |
+| `409` | `layout_conflict` | Both canonical and legacy `.squad/` layouts are present |
+
+### GET /api/projects/{id}/casting/proposals/{pid}
+
+Returns the current state of a proposal.
+
+Response `200 OK` — a `CastProposalDto` (same shape as the `POST` response above).
 
 Returns `404 Not Found` when no proposal exists for the given id.
 
 ### PATCH /api/projects/{id}/casting/proposals/{pid}
 
-Amends a pending or ready proposal. Use this to add, remove, or modify proposed roles before confirming.
+Amends a proposal by replacing its member list and/or universe. Use this to add, remove, or modify proposed members before confirming.
 
 Request:
 
 ```json
 {
-  "roles": [
-    { "name": "Architect", "description": "Designs the overall system structure.", "model_id": null },
-    { "name": "QA", "description": "Owns test strategy and coverage.", "model_id": null }
+  "universe": "marvel",
+  "members": [
+    {
+      "proposed_name": "Tony Stark",
+      "role": {
+        "id": "software-engineer",
+        "title": "Software Engineer",
+        "summary": "Implements features and fixes bugs.",
+        "default_model": "gpt-4o"
+      },
+      "charter_markdown": "# Tony Stark\n...",
+      "is_named": true,
+      "default_model": "gpt-4o",
+      "justification": null
+    }
   ]
 }
 ```
 
-Response `200 OK` returns the updated proposal object. Returns `409 Conflict` with `error: "proposal_not_amendable"` when the proposal is already confirmed or rejected.
+Both `members` and `universe` are optional; omit either to leave it unchanged.
+
+Response `200 OK` returns the updated `CastProposalDto`. Returns `404 Not Found` when the proposal does not exist.
 
 ### POST /api/projects/{id}/casting/proposals/{pid}/confirm
 
-Confirms a proposal and materialises the team. For new projects this writes `.squad/` files. For projects with an existing team, the `intent` field controls how the new team relates to the existing one.
+Confirms a proposal and materialises the team by writing `.squad/` files. For projects with an existing team, the `intent` field controls how the proposed team relates to the existing one.
 
 Request:
 
@@ -838,15 +879,37 @@ Request:
 | --- | --- | --- | --- |
 | `intent` | string | Conditionally | Required when an existing team is detected. `"new"` replaces the team entirely; `"augment"` adds the proposed roles to the existing team; `"recast"` rewrites all existing charters using the proposed configuration. Omit when no existing team is present. |
 
+Response `200 OK` — a `TeamDto` (same shape as `GET /api/projects/{id}/team`):
+
+```json
+{
+  "project_name": "my-project",
+  "universe": "star-wars",
+  "layout": "canonical",
+  "migration_available": false,
+  "members": [
+    {
+      "name": "Han Solo",
+      "role_title": "Software Engineer",
+      "charter_path": ".squad/HanSolo/charter.md",
+      "status": "active",
+      "default_model": "gpt-4o",
+      "is_named": true,
+      "charter_created_at": "2026-06-07T21:00:00+00:00",
+      "charter_updated_at": "2026-06-07T21:00:00+00:00"
+    }
+  ]
+}
+```
+
 Notable error responses:
 
 | Status | Error | Meaning |
 | --- | --- | --- |
+| `404` | — | Proposal or project not found |
 | `409` | `requires_choice` | An existing team was detected and `intent` was not provided |
-| `409` | `layout_conflict` | Both the canonical `.squad/` layout and the legacy `.squad/casting/` layout are present; resolve manually before confirming |
-| `422` | `rai_flagged` | Generated content was blocked by Responsible AI policy |
-
-Response `204 No Content` on success.
+| `409` | `layout_conflict` | Both canonical and legacy `.squad/` layouts are present; resolve manually before confirming |
+| `409` | `project_unavailable` | The project's working directory is not accessible |
 
 ### DELETE /api/projects/{id}/casting/proposals/{pid}
 
@@ -860,71 +923,109 @@ Response `200 OK`:
 
 ```json
 {
+  "project_name": "my-project",
+  "universe": "star-wars",
   "layout": "canonical",
+  "migration_available": false,
   "members": [
     {
-      "name": "Architect",
-      "charter_path": ".squad/Architect/charter.md",
-      "has_charter": true
+      "name": "Han Solo",
+      "role_title": "Software Engineer",
+      "charter_path": ".squad/HanSolo/charter.md",
+      "status": "active",
+      "default_model": "gpt-4o",
+      "is_named": true,
+      "charter_created_at": "2026-06-07T21:00:00+00:00",
+      "charter_updated_at": "2026-06-07T21:05:00+00:00"
     }
   ]
 }
 ```
 
-`layout` is `"canonical"` for the standard `.squad/<Name>/` structure or `"legacy"` for `.squad/casting/<Name>/`.
+| Field | Values | Notes |
+| --- | --- | --- |
+| `layout` | `"canonical"`, `"legacy"`, `"conflict"`, `"absent"` | `.squad/<Name>/` = canonical; `.squad/casting/<Name>/` = legacy; both present = conflict |
+| `migration_available` | bool | `true` when a legacy layout exists and no canonical layout is present |
+| `status` | `"active"`, `"retired"` | Member lifecycle state |
+
+Returns `404 Not Found` when no team exists for the project.
 
 ### GET /api/projects/{id}/team/members/{name}/charter
 
-Returns the raw Markdown charter for a team member.
+Returns the charter for a team member as a JSON object.
 
-Response `200 OK` with `Content-Type: text/markdown` and the charter text as the response body. Returns `404 Not Found` when the member does not exist or has no charter file.
+Response `200 OK`:
+
+```json
+{
+  "member_name": "Han Solo",
+  "content": "# Han Solo\n\nYou are Han Solo, Software Engineer..."
+}
+```
+
+Returns `404 Not Found` when the member does not exist or has no charter file.
 
 ### PUT /api/projects/{id}/team/members/{name}/charter
 
-Replaces the charter for a team member with the supplied Markdown text.
-
-Request body: raw Markdown text with `Content-Type: text/markdown`.
-
-Response `204 No Content` on success. Returns `404 Not Found` when the member does not exist.
-
-### POST /api/projects/{id}/team/members
-
-Adds a new member to the team. Creates the member's `.squad/` directory and an initial charter file.
+Replaces the charter for a team member.
 
 Request:
 
 ```json
 {
-  "name": "DataEngineer",
-  "description": "Owns data pipeline design and ETL tooling."
+  "content": "# Han Solo\n\nUpdated charter content..."
 }
 ```
 
-Response `201 Created`:
+Response `204 No Content` on success. Returns `404 Not Found` when the member does not exist.
+
+### POST /api/projects/{id}/team/members
+
+Adds a new member to the team. Creates the member's `.squad/` directory and an initial charter file generated from the specified role.
+
+Request:
 
 ```json
-{ "name": "DataEngineer", "charter_path": ".squad/DataEngineer/charter.md" }
+{
+  "role_id": "software-engineer",
+  "custom_role_title": null,
+  "model_id": null
+}
 ```
 
-Returns `409 Conflict` with `error: "member_exists"` when a member with that name already exists.
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `role_id` | string | Yes | Role ID from `GET /api/catalog/roles` |
+| `custom_role_title` | string | No | Override the role's default title for this member |
+| `model_id` | string | No | Override the role's default model for this member |
+
+Response `200 OK` — a `TeamMemberDto` (same shape as members in `GET /api/projects/{id}/team`).
 
 ### DELETE /api/projects/{id}/team/members/{name}
 
-Retires a team member and removes their `.squad/` directory.
+Retires a team member. Their `.squad/` directory and charter file are preserved; the member's status is set to `"retired"`.
 
 Response `204 No Content`. Returns `404 Not Found` when the member does not exist.
 
 ### PATCH /api/projects/{id}/team/members/{name}
 
-Updates the role description for an existing member and regenerates their charter.
+Re-roles an existing member, regenerating their charter for the new role.
 
 Request:
 
 ```json
-{ "description": "Updated role focus." }
+{
+  "new_role_id": "product-manager",
+  "custom_role_title": null
+}
 ```
 
-Response `204 No Content`. Returns `404 Not Found` when the member does not exist.
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `new_role_id` | string | Yes | New role ID from `GET /api/catalog/roles` |
+| `custom_role_title` | string | No | Override the role's default title |
+
+Response `200 OK` — the updated `TeamMemberDto`. Returns `404 Not Found` when the member does not exist.
 
 ### GET /api/projects/{id}/team/sync
 
@@ -935,13 +1036,14 @@ Response `200 OK`:
 ```json
 {
   "changes": [
-    { "path": ".squad/Architect/charter.md", "status": "modified" }
+    { "path": ".squad/HanSolo/charter.md", "kind": "modified" }
   ],
-  "change_set_hash": "sha256:a1b2c3..."
+  "change_set_hash": "sha256:a1b2c3...",
+  "nothing_to_sync": false
 }
 ```
 
-`changes` is an empty array when there is nothing to commit. `change_set_hash` must be passed to `POST /api/projects/{id}/team/sync` to prevent stale commits.
+`changes` is an empty array and `nothing_to_sync` is `true` when there is nothing to commit. `change_set_hash` must be passed to `POST /api/projects/{id}/team/sync` to prevent stale commits.
 
 ### POST /api/projects/{id}/team/sync
 
@@ -952,7 +1054,7 @@ Request:
 ```json
 {
   "expected_change_set_hash": "sha256:a1b2c3...",
-  "message": "Update Architect charter"
+  "message": "Update Han Solo charter"
 }
 ```
 
