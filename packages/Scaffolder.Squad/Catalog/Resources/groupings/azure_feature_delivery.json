@@ -1,0 +1,13 @@
+{
+  "id": "azure-feature-delivery",
+  "title": "Azure Feature Delivery",
+  "description": "A PM-led team for delivering Azure product features: strategy, UX, implementation, content, and security.",
+  "roles": [
+    "lead-pm",
+    "customer-researcher",
+    "prototype-designer",
+    "core-implementer",
+    "feature-docs-writer",
+    "ai-safety-reviewer"
+  ]
+}
