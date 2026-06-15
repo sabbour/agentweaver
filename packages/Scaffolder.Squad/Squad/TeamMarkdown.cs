@@ -13,6 +13,10 @@ internal static class TeamMarkdown
         var sb = new StringBuilder();
         sb.Append("# Squad Team\n\n");
         sb.Append("> ").Append(team.ProjectName).Append("\n\n");
+        sb.Append("## Coordinator\n\n");
+        sb.Append("| Name | Role | Notes |\n");
+        sb.Append("|------|------|-------|\n");
+        sb.Append("| Squad | Coordinator | Routes work, enforces handoffs and reviewer gates. Does not generate domain artifacts. |\n\n");
         sb.Append("## Members\n\n");
         sb.Append("| Name | Role | Charter | Status |\n");
         sb.Append("|------|------|---------|--------|\n");

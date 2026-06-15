@@ -766,6 +766,12 @@ public sealed class CastingService
 
         writer.EnsureSquadDirectories();
 
+        if (!writer.ConfigExists())
+            writer.WriteConfig("{\n  \"version\": 1\n}\n");
+
+        writer.EnsureIdentityFiles(project.Name, now);
+        writer.EnsureFirstRunMarker(now);
+
         // Provision RAI policy and audit trail (idempotent)
         if (!writer.RaiPolicyExists())
         {
@@ -776,8 +782,14 @@ public sealed class CastingService
 
         if (!writer.DecisionsExist())
         {
-            writer.WriteDecisions("# Decisions\n\nThis log records project decisions, their rationale, and the alternatives considered.\n\n" +
-                "_No decisions recorded yet._\n");
+            writer.WriteDecisions(
+                "# Squad Decisions\n\n" +
+                "## Active Decisions\n\n" +
+                "No decisions recorded yet.\n\n" +
+                "## Governance\n\n" +
+                "- All meaningful changes require team consensus\n" +
+                "- Document architectural decisions here\n" +
+                "- Keep history focused on work, decisions focused on direction\n");
         }
 
         var chartersByName = proposal.Members
@@ -797,15 +809,18 @@ public sealed class CastingService
         {
             if (writer.HistoryExists(member.Name.ToLower())) continue;
 
-            var historyContent = $"# {member.Name} — {member.Role.Title}\n\n" +
-                $"## Project Context\n\n" +
-                $"**Project:** {project.Name}\n" +
-                $"**Requested by:** {owner}\n" +
-                $"**Team cast:** {now:yyyy-MM-dd}\n\n" +
-                $"## Initial Context\n\n" +
-                (string.IsNullOrWhiteSpace(proposal.Rationale)
-                    ? $"Member of the {project.Name} team."
-                    : proposal.Rationale) + "\n";
+            var historyContent =
+                $"# Project Context\n\n" +
+                $"- **Owner:** {owner}\n" +
+                $"- **Project:** {project.Name}\n" +
+                (string.IsNullOrWhiteSpace(proposal.Rationale) ? "" : $"- **Description:** {proposal.Rationale}\n") +
+                $"- **Created:** {now:yyyy-MM-dd}\n\n" +
+                $"## Core Context\n\n" +
+                $"Agent {member.Name} initialized and ready for work on {project.Name}.\n\n" +
+                $"## Recent Updates\n\n" +
+                $"Team initialized on {now:yyyy-MM-dd}.\n\n" +
+                $"## Learnings\n\n" +
+                "Initial setup complete.\n";
 
             writer.WriteAgentHistory(member.Name.ToLower(), historyContent);
         }
@@ -816,6 +831,7 @@ public sealed class CastingService
         ProvisionBuiltinAgents(writer, team, owner, project.Name);
 
         writer.EnsureGitAttributes();
+        writer.EnsureGitIgnoreEntries();
 
         var builtinNames = new HashSet<string>(
             builtinRoles.Select(b => b.Name), StringComparer.OrdinalIgnoreCase);

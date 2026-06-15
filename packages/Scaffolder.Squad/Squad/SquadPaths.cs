@@ -8,6 +8,13 @@ internal static class SquadPaths
     public const string SquadDir = ".squad";
     public const string TeamMd = ".squad/team.md";
     public const string GitAttributes = ".gitattributes";
+    public const string ConfigJson = ".squad/config.json";
+
+    public const string IdentityDir = ".squad/identity";
+    public const string IdentityNowMd = ".squad/identity/now.md";
+    public const string IdentityWisdomMd = ".squad/identity/wisdom.md";
+
+    public const string FirstRunMarker = ".squad/.first-run";
 
     public const string RoutingMd = ".squad/routing.md";
     public const string DecisionsMd = ".squad/decisions.md";

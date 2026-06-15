@@ -45,6 +45,45 @@ public sealed class SquadWriter
     public void WriteTeam(Team team, string owner, DateTimeOffset createdAt, string? description = null)
         => WriteAllText(SquadPaths.TeamMd, TeamMarkdown.Render(team, owner, createdAt, description));
 
+    public bool ConfigExists()
+        => File.Exists(Resolve(SquadPaths.ConfigJson));
+
+    public void WriteConfig(string content)
+        => WriteAllText(SquadPaths.ConfigJson, content);
+
+    public void EnsureIdentityFiles(string projectName, DateTimeOffset createdAt)
+    {
+        var nowPath = Resolve(SquadPaths.IdentityNowMd);
+        EnsureDirectory(nowPath);
+        if (!File.Exists(nowPath))
+        {
+            var nowContent =
+                $"---\nupdated_at: {createdAt:yyyy-MM-ddTHH:mm:ssZ}\nfocus_area: Initial setup\nactive_issues: []\n---\n\n" +
+                $"# What We're Focused On\n\nGetting started on {projectName}. Updated by coordinator at session start.\n";
+            File.WriteAllText(nowPath, nowContent);
+        }
+
+        var wisdomPath = Resolve(SquadPaths.IdentityWisdomMd);
+        if (!File.Exists(wisdomPath))
+        {
+            var wisdomContent =
+                $"---\nlast_updated: {createdAt:yyyy-MM-ddTHH:mm:ssZ}\n---\n\n" +
+                "# Team Wisdom\n\nReusable patterns and heuristics learned through work. " +
+                "NOT transcripts — each entry is a distilled, actionable insight.\n\n" +
+                "## Patterns\n\n" +
+                "<!-- Append entries below. Format: **Pattern:** description. **Context:** when it applies. -->\n";
+            File.WriteAllText(wisdomPath, wisdomContent);
+        }
+    }
+
+    public void EnsureFirstRunMarker(DateTimeOffset createdAt)
+    {
+        var path = Resolve(SquadPaths.FirstRunMarker);
+        EnsureDirectory(path);
+        if (!File.Exists(path))
+            File.WriteAllText(path, createdAt.ToString("yyyy-MM-ddTHH:mm:ssZ") + "\n");
+    }
+
     public bool RaiPolicyExists()
         => File.Exists(Resolve(SquadPaths.RaiPolicyMd));
 
@@ -101,6 +140,31 @@ public sealed class SquadWriter
             var history = SquadSerialization.RebuildHistory(File.ReadAllLines(historyEvents));
             WriteAllText(SquadPaths.CanonicalHistory, JsonSerializer.Serialize(history, SquadSerialization.Options));
         }
+    }
+
+    public void EnsureGitIgnoreEntries()
+    {
+        var required = new[]
+        {
+            ".squad/orchestration-log/",
+            ".squad/log/",
+            ".squad/decisions/inbox/",
+            ".squad/sessions/",
+            ".squad/.scratch/",
+            ".squad/.cache/",
+            ".squad-workstream",
+        };
+
+        var fullPath = Resolve(".gitignore");
+        EnsureDirectory(fullPath);
+
+        var existing = File.Exists(fullPath) ? File.ReadAllText(fullPath) : string.Empty;
+        var toAdd = required.Where(line => !existing.Contains(line)).ToList();
+        if (toAdd.Count == 0) return;
+
+        var header = existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : string.Empty;
+        header += "# Squad: runtime state (not committed)\n";
+        File.AppendAllText(fullPath, header + string.Join("\n", toAdd) + "\n");
     }
 
     public void EnsureGitAttributes()
