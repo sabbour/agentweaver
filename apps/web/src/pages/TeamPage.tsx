@@ -31,7 +31,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Dismiss24Regular } from '@fluentui/react-icons';
+import { Dismiss24Regular, PersonAddRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type {
@@ -41,7 +41,6 @@ import type {
   HistoryDto,
   TeamTemplateDto,
   RoleDto,
-  AddMemberRequest,
   ReroleRequest,
   Project,
 } from '../api/types';
@@ -352,35 +351,32 @@ function ReroleDialog({
 
 function AddMemberDialog({
   projectId,
-  scenarios,
   onAdded,
 }: {
   projectId: string;
-  scenarios: TeamTemplateDto[];
   onAdded: (member: TeamMemberDto) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [roleId, setRoleId] = useState('');
-  const [customTitle, setCustomTitle] = useState('');
-  const [modelId, setModelId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [catalogRoles, setCatalogRoles] = useState<RoleDto[]>([]);
 
-  const allRoles: RoleDto[] = scenarios.flatMap((g) => g.roles);
+  // Load catalog roles when dialog opens
+  useEffect(() => {
+    if (open && catalogRoles.length === 0) {
+      void apiClient.getRoles().then(setCatalogRoles).catch(() => {});
+    }
+  }, [open, catalogRoles.length]);
 
-  const reset = () => { setRoleId(''); setCustomTitle(''); setModelId(''); setError(null); setSaving(false); };
+  const reset = () => { setRoleId(''); setError(null); setSaving(false); };
 
   const handleAdd = async () => {
     if (!roleId) return;
     setSaving(true);
     setError(null);
     try {
-      const req: AddMemberRequest = {
-        role_id: roleId,
-        custom_role_title: customTitle.trim() || undefined,
-        model_id: modelId.trim() || undefined,
-      };
-      const member = await apiClient.addMember(projectId, req);
+      const member = await apiClient.addMember(projectId, { role_id: roleId });
       setOpen(false);
       reset();
       onAdded(member);
@@ -395,10 +391,12 @@ function AddMemberDialog({
     }
   };
 
+  const selectedRole = catalogRoles.find(r => r.id === roleId);
+
   return (
     <Dialog open={open} onOpenChange={(_, s) => { setOpen(s.open); if (!s.open) reset(); }}>
       <DialogTrigger disableButtonEnhancement>
-        <Button appearance="secondary">Add member</Button>
+        <Button appearance="primary" icon={<PersonAddRegular />}>Add member</Button>
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
@@ -408,25 +406,16 @@ function AddMemberDialog({
               <Field label="Role" required>
                 <Select value={roleId} onChange={(_, v) => setRoleId(v.value)}>
                   <option value="">Select a role</option>
-                  {allRoles.map((r) => (
+                  {catalogRoles.map((r) => (
                     <option key={r.id} value={r.id}>{r.title}</option>
                   ))}
                 </Select>
               </Field>
-              <Field label="Custom role title (optional)">
-                <Input
-                  value={customTitle}
-                  onChange={(_, v) => setCustomTitle(v.value)}
-                  placeholder="Override the role title"
-                />
-              </Field>
-              <Field label="Model ID (optional)">
-                <Input
-                  value={modelId}
-                  onChange={(_, v) => setModelId(v.value)}
-                  placeholder="e.g. gpt-4o"
-                />
-              </Field>
+              {selectedRole && (
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  {selectedRole.summary}
+                </Text>
+              )}
               {error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{error}</MessageBarBody>
@@ -435,17 +424,10 @@ function AddMemberDialog({
             </div>
           </DialogContent>
           <DialogActions>
-            <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary" disabled={saving}>Cancel</Button>
-            </DialogTrigger>
-            <Button
-              appearance="primary"
-              disabled={!roleId || saving}
-              onClick={() => void handleAdd()}
-            >
-              {saving ? 'Adding' : 'Add'}
+            <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button appearance="primary" disabled={!roleId || saving} onClick={() => void handleAdd()}>
+              {saving ? 'Adding...' : 'Cast member'}
             </Button>
-            {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
           </DialogActions>
         </DialogBody>
       </DialogSurface>
@@ -782,7 +764,6 @@ export function TeamPage() {
             {team && (
               <AddMemberDialog
                 projectId={projectId}
-                scenarios={scenarios}
                 onAdded={handleMemberAdded}
               />
             )}
