@@ -1,5 +1,7 @@
 # CLI reference
 
+> **Deprecated — see [mcp.md](mcp.md) when available.** The CLI (`apps/Scaffolder.Cli`) is being replaced by an MCP server (`apps/Scaffolder.Mcp`) as part of spec 007. The MCP server exposes the same capabilities as structured tool calls consumable by any MCP-capable AI client (Copilot CLI, Claude, Cursor, and others). This document remains accurate for the current CLI release but will not be updated beyond the MCP migration.
+
 The Scaffolder CLI is a terminal client over the backend API. It submits runs, streams live events, shows run details, and records your review decision before anything merges. The CLI holds no run logic of its own.
 
 ## Configuration
