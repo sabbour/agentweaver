@@ -82,6 +82,22 @@ public sealed class CatalogReader
             dto.Boundaries ?? []);
     }
 
+    public IReadOnlyList<Role> LoadAllRoles()
+    {
+        var prefix = $"{ResourcePrefix}.roles.";
+        var roleNames = _asm.GetManifestResourceNames()
+            .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal));
+
+        var result = new List<Role>();
+        foreach (var resourceName in roleNames)
+        {
+            var id = resourceName[prefix.Length..^".json".Length].Replace('_', '-');
+            var role = LoadRole(id);
+            if (role is not null) result.Add(role);
+        }
+        return result;
+    }
+
     public string? LoadCharterTemplate(string roleId)
         => ReadResourceText($"{ResourcePrefix}.charters.{Fid(roleId)}.md");
 

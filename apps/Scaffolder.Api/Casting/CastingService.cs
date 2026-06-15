@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Scaffolder.Api.Contracts;
 using Scaffolder.Domain;
 using Scaffolder.Squad.Analysis;
 using Scaffolder.Squad.Catalog;
@@ -61,6 +62,15 @@ public sealed class CastingService
     // -----------------------------------------------------------------------
     // Phase 1 — scenario casting
     // -----------------------------------------------------------------------
+
+    /// <summary>Returns all role archetypes from the catalog, sorted by title.</summary>
+    public IReadOnlyList<RoleDto> GetAllRoles()
+    {
+        return _catalog.LoadAllRoles()
+            .OrderBy(r => r.Title)
+            .Select(CastingMappings.ToDto)
+            .ToList();
+    }
 
     /// <summary>
     /// Builds a cast proposal from a catalog team template. Does not write any files.

@@ -1792,6 +1792,13 @@ app.MapGet("/api/casting/templates", (CastingService castingService, CatalogRead
     return Results.Ok(templates.Select(CastingMappings.ToDto));
 });
 
+// GET /api/catalog/roles — list all available role archetypes
+app.MapGet("/api/catalog/roles", (CastingService castingService) =>
+{
+    var roles = castingService.GetAllRoles();
+    return Results.Ok(roles);
+});
+
 // POST /api/projects/{id}/casting/proposals — create a new proposal
 app.MapPost("/api/projects/{id}/casting/proposals", async (
     string id,
