@@ -101,6 +101,13 @@ public sealed class CatalogReader
     public string? LoadCharterTemplate(string roleId)
         => ReadResourceText($"{ResourcePrefix}.charters.{Fid(roleId)}.md");
 
+    /// <summary>
+    /// Loads a built-in MAF agent template (<c>.github/agents/{name}.agent.md</c> content)
+    /// by agent name. Returns <c>null</c> if no embedded template exists for the agent.
+    /// </summary>
+    public string? LoadMafAgentTemplate(string agentName)
+        => ReadResourceText($"{ResourcePrefix}.agents.{agentName.ToLowerInvariant()}.agent.md");
+
     private sealed record CatalogManifestDto(
         [property: JsonPropertyName("version")] string? Version,
         [property: JsonPropertyName("templates")] IReadOnlyList<string>? Templates);

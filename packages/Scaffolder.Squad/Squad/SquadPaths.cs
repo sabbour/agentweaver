@@ -52,4 +52,7 @@ internal static class SquadPaths
 
     public static string AlumniCharterFor(string memberName)
         => $".squad/agents/_alumni/{ValidatedSlugName(memberName)}/charter.md";
+
+    public static string MafAgentFor(string agentName)
+        => $".github/agents/{agentName.ToLowerInvariant()}.agent.md";
 }

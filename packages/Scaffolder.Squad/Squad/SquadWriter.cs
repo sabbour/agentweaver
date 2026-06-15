@@ -57,6 +57,12 @@ public sealed class SquadWriter
     public void WriteAgentHistory(string memberName, string content)
         => WriteAllText(SquadPaths.HistoryFor(memberName), content);
 
+    public void WriteMafAgent(string agentName, string content)
+        => WriteAllText(SquadPaths.MafAgentFor(agentName), content);
+
+    public bool MafAgentExists(string agentName)
+        => File.Exists(Resolve(SquadPaths.MafAgentFor(agentName)));
+
     public void AppendRegistryEvent(object eventRecord)
         => AppendLine(SquadPaths.CanonicalRegistryEvents, SquadSerialization.SerializeLine(eventRecord));
 

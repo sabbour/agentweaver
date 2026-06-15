@@ -732,6 +732,28 @@ public sealed class CastingService
             retiredNames = existingTeam?.Members.Select(m => m.Name).ToList() ?? [];
         }
 
+        // Built-in MAF agents (Scribe, Ralph, Rai) are always part of every team.
+        // They are never proposed by the user — the framework provisions them automatically.
+        var builtinRoles = new (string Name, string RoleTitle, string RoleId)[]
+        {
+            ("Scribe", "Scribe", "scribe"),
+            ("Ralph", "Work Monitor", "work-monitor"),
+            ("Rai", "RAI Reviewer", "rai-reviewer"),
+        };
+
+        foreach (var (name, title, roleId) in builtinRoles)
+        {
+            if (finalMembers.Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            finalMembers.Add(new CastMember(
+                Name: name,
+                Role: new Role(roleId, title, $"Built-in {title} agent.", "claude-sonnet-4.6", [], [], []),
+                CharterPath: CharterPath(name.ToLower()),
+                Status: CastMemberStatus.Active,
+                IsNamed: false));
+        }
+
         var team = new Team(
             ProjectName: project.Name,
             Universe: proposal.Universe,
@@ -780,14 +802,17 @@ public sealed class CastingService
             writer.WriteAgentHistory(member.Name.ToLower(), historyContent);
         }
 
-        // Provision the built-in Scribe agent. It is never cast by the user — the framework
-        // creates it automatically so every project has a ready-to-use session-logging agent.
-        // Only write the charter if it doesn't already exist (idempotent on augment/recast).
-        ProvisionBuiltinScribe(writer);
+        // Provision the built-in MAF agents (Scribe, Ralph, Rai). They are never cast by the
+        // user — the framework creates them automatically so every project has ready-to-use
+        // session-logging, work-monitoring, and responsible-AI agents. Idempotent on augment/recast.
+        ProvisionBuiltinAgents(writer, team, owner, project.Name);
 
         writer.EnsureGitAttributes();
 
-        foreach (var member in finalMembers.Where(m => m.Status == CastMemberStatus.Active))
+        var builtinNames = new HashSet<string>(
+            builtinRoles.Select(b => b.Name), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var member in finalMembers.Where(m => m.Status == CastMemberStatus.Active && !builtinNames.Contains(m.Name)))
         {
             var registryMember = new RegistryMember(
                 Name: member.Name,
@@ -801,6 +826,23 @@ public sealed class CastingService
                 RetiredAt: null,
                 CharterPath: member.CharterPath);
             writer.AppendRegistryEvent(registryMember);
+        }
+
+        // Register the built-in agents so they appear in the registry alongside cast members.
+        foreach (var (name, title, roleId) in builtinRoles)
+        {
+            var builtinRegistryMember = new RegistryMember(
+                Name: name,
+                PersistentName: name.ToLower(),
+                Universe: team.Universe,
+                DefaultModel: "claude-sonnet-4.6",
+                Status: CastMemberStatus.Active,
+                CreatedAt: now,
+                PreviousName: null,
+                SucceededBy: null,
+                RetiredAt: null,
+                CharterPath: CharterPath(name.ToLower()));
+            writer.AppendRegistryEvent(builtinRegistryMember);
         }
 
         foreach (var retiredName in retiredNames)
@@ -846,25 +888,56 @@ public sealed class CastingService
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Provisions the built-in Scribe agent charter. Scribe is a system-level MAF agent
-    /// that every project gets automatically — it is never part of a cast proposal.
-    /// The charter is written only once; subsequent calls are no-ops.
+    /// Provisions the built-in MAF agents (Scribe, Ralph, Rai). These are system-level agents
+    /// that every project gets automatically — they are never part of a cast proposal. For each
+    /// built-in, writes both the <c>.squad/agents/{name}/charter.md</c> and the first-class
+    /// <c>.github/agents/{name}.agent.md</c> MAF definition. All writes are idempotent.
     /// </summary>
-    private void ProvisionBuiltinScribe(SquadWriter writer)
+    private void ProvisionBuiltinAgents(SquadWriter writer, Team team, string owner, string projectName)
     {
-        const string ScribeName = "scribe";
-        if (writer.CharterExists(ScribeName)) return;
+        var builtins = new[] { ("scribe", "Scribe"), ("ralph", "Ralph"), ("rai", "Rai") };
 
-        try
+        foreach (var (agentId, displayName) in builtins)
         {
-            var compiler = new CharterCompiler(_catalog);
-            var charter = compiler.Compile(ScribeName, "Scribe");
-            writer.WriteCharter(ScribeName, charter);
-        }
-        catch (Exception ex)
-        {
-            // Non-fatal: if the catalog or compiler fails, log and continue.
-            _logger.LogWarning(ex, "Failed to provision built-in Scribe charter. Team was still created.");
+            // Write .squad/agents/{name}/charter.md (existing pattern)
+            if (!writer.CharterExists(agentId))
+            {
+                try
+                {
+                    var compiler = new CharterCompiler(_catalog);
+                    string charter;
+                    try
+                    {
+                        charter = compiler.Compile(agentId, displayName);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // No catalog charter template — use MAF content as charter fallback
+                        var mafContent = _catalog.LoadMafAgentTemplate(agentId);
+                        charter = mafContent ?? $"# {displayName}\n\nBuilt-in Squad agent.\n";
+                    }
+                    writer.WriteCharter(agentId, charter);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to provision built-in {Agent} charter.", displayName);
+                }
+            }
+
+            // Write .github/agents/{name}.agent.md (MAF agent definition)
+            if (!writer.MafAgentExists(agentId))
+            {
+                try
+                {
+                    var mafContent = _catalog.LoadMafAgentTemplate(agentId);
+                    if (mafContent is not null)
+                        writer.WriteMafAgent(agentId, mafContent);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to provision MAF agent file for {Agent}.", displayName);
+                }
+            }
         }
     }
 
