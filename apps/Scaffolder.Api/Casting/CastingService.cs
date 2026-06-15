@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Scaffolder.Api.Contracts;
+using Scaffolder.Api.Infrastructure;
 using Scaffolder.Domain;
 using Scaffolder.Squad.Analysis;
 using Scaffolder.Squad.Catalog;
@@ -404,17 +405,10 @@ public sealed class CastingService
         var runId = Guid.NewGuid().ToString("N");
 
         string result;
+        await using var runtime = new ScaffolderAgentRuntime(_agentRunner, project.WorkingDirectory, modelId);
         try
         {
-            result = await _agentRunner.ExecuteAsync(
-                task: prompt,
-                workingDirectory: project.WorkingDirectory,
-                repositoryPath: project.WorkingDirectory,
-                modelSource: ModelSource.GitHubCopilot,
-                runId: runId,
-                modelId: modelId,
-                stream: null,
-                ct: ct).ConfigureAwait(false);
+            result = await runtime.RunAsync(prompt, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
