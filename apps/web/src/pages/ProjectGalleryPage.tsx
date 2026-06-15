@@ -300,7 +300,6 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
         }
       />
       <div className={styles.cardMeta}>
-        <Badge appearance="tint" color="informative">{project.origin}</Badge>
         {project.source_repository && (
           <Text size={200}>{project.source_repository}</Text>
         )}
