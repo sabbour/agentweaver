@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Badge,
@@ -39,6 +39,7 @@ import type {
   RoleDto,
   AddMemberRequest,
   ReroleRequest,
+  Project,
 } from '../api/types';
 import { SyncPanel } from '../components/SyncPanel';
 
@@ -483,6 +484,7 @@ export function TeamPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const [team, setTeam] = useState<TeamDto | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scenarios, setScenarios] = useState<TeamTemplateDto[]>([]);
@@ -497,11 +499,13 @@ export function TeamPage() {
         throw err;
       }),
       apiClient.getTemplates().catch(() => [] as TeamTemplateDto[]),
+      apiClient.getProject(projectId).catch(() => null as Project | null),
     ])
-      .then(([t, s]) => {
+      .then(([t, s, p]) => {
         if (!cancelled) {
           setTeam(t);
           setScenarios(s);
+          setProject(p);
         }
       })
       .catch((err) => {
@@ -544,7 +548,7 @@ export function TeamPage() {
         <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
         <span>/</span>
         <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
-          {team?.project_name ?? projectId}
+          {project?.name ?? team?.project_name ?? projectId}
         </Link>
         <span>/</span>
         <span>Team</span>
