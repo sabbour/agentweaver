@@ -740,6 +740,15 @@ public sealed class CastingService
         var now = DateTimeOffset.UtcNow;
 
         writer.WriteTeam(team, owner, now);
+        writer.WriteRouting(BuildRoutingMd(team));
+
+        writer.EnsureSquadDirectories();
+
+        if (!writer.DecisionsExist())
+        {
+            writer.WriteDecisions("# Decisions\n\nThis log records project decisions, their rationale, and the alternatives considered.\n\n" +
+                "_No decisions recorded yet._\n");
+        }
 
         var chartersByName = proposal.Members
             .ToDictionary(m => m.ProposedName, m => m.CharterMarkdown, StringComparer.OrdinalIgnoreCase);
@@ -752,6 +761,24 @@ public sealed class CastingService
 
         foreach (var retiredName in retiredNames)
             writer.ArchiveMemberCharter(retiredName);
+
+        // Seed history.md for each new member (idempotent — skip if already exists)
+        foreach (var member in finalMembers.Where(m => addedNames.Contains(m.Name) && m.Status == CastMemberStatus.Active))
+        {
+            if (writer.HistoryExists(member.Name.ToLower())) continue;
+
+            var historyContent = $"# {member.Name} — {member.Role.Title}\n\n" +
+                $"## Project Context\n\n" +
+                $"**Project:** {project.Name}\n" +
+                $"**Requested by:** {owner}\n" +
+                $"**Team cast:** {now:yyyy-MM-dd}\n\n" +
+                $"## Initial Context\n\n" +
+                (string.IsNullOrWhiteSpace(proposal.Rationale)
+                    ? $"Member of the {project.Name} team."
+                    : proposal.Rationale) + "\n";
+
+            writer.WriteAgentHistory(member.Name.ToLower(), historyContent);
+        }
 
         // Provision the built-in Scribe agent. It is never cast by the user — the framework
         // creates it automatically so every project has a ready-to-use session-logging agent.
@@ -839,6 +866,50 @@ public sealed class CastingService
             // Non-fatal: if the catalog or compiler fails, log and continue.
             _logger.LogWarning(ex, "Failed to provision built-in Scribe charter. Team was still created.");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Routing helpers
+    // -----------------------------------------------------------------------
+
+    private static string BuildRoutingMd(Team team)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("# Routing\n\n");
+        sb.Append("## Work Assignment\n\n");
+        sb.Append("| Signal | Agent |\n");
+        sb.Append("|--------|-------|\n");
+
+        foreach (var member in team.Members.Where(m => m.Status == CastMemberStatus.Active))
+        {
+            var signal = member.Role.Title switch
+            {
+                var t when t.Contains("Frontend", StringComparison.OrdinalIgnoreCase) => "UI / frontend work",
+                var t when t.Contains("Backend", StringComparison.OrdinalIgnoreCase) => "API / backend / server work",
+                var t when t.Contains("Architect", StringComparison.OrdinalIgnoreCase) => "Architecture decisions, system design",
+                var t when t.Contains("QA", StringComparison.OrdinalIgnoreCase) || t.Contains("Quality", StringComparison.OrdinalIgnoreCase) => "Testing, quality, bug fixes",
+                var t when t.Contains("PM", StringComparison.OrdinalIgnoreCase) || t.Contains("Product", StringComparison.OrdinalIgnoreCase) => "Product decisions, scope, prioritization",
+                var t when t.Contains("Docs", StringComparison.OrdinalIgnoreCase) || t.Contains("Writer", StringComparison.OrdinalIgnoreCase) => "Documentation, content, guides",
+                var t when t.Contains("Research", StringComparison.OrdinalIgnoreCase) => "Research, investigation, analysis",
+                var t when t.Contains("Designer", StringComparison.OrdinalIgnoreCase) => "Design, prototyping, UX",
+                var t when t.Contains("Agent", StringComparison.OrdinalIgnoreCase) || t.Contains("Prompt", StringComparison.OrdinalIgnoreCase) => "AI agent design, prompt engineering",
+                var t when t.Contains("Security", StringComparison.OrdinalIgnoreCase) || t.Contains("Safety", StringComparison.OrdinalIgnoreCase) => "Security, safety, compliance",
+                var t when t.Contains("Incident", StringComparison.OrdinalIgnoreCase) => "Incidents, escalations, on-call",
+                var t when t.Contains("Triage", StringComparison.OrdinalIgnoreCase) => "Issue triage, backlog prioritization",
+                var t when t.Contains("Library", StringComparison.OrdinalIgnoreCase) || t.Contains("Maintainer", StringComparison.OrdinalIgnoreCase) => "Library direction, contribution review",
+                _ => member.Role.Title + " work",
+            };
+            sb.Append($"| {signal} | {member.Name} |\n");
+        }
+
+        sb.Append("\n## Built-in Agents\n\n");
+        sb.Append("| Signal | Agent |\n");
+        sb.Append("|--------|-------|\n");
+        sb.Append("| Session logging, decision recording, memory | Scribe |\n");
+        sb.Append("| Work queue monitoring, backlog, keep-alive | Ralph |\n");
+        sb.Append("| Safety review, content compliance | Rai |\n");
+
+        return sb.ToString();
     }
 
     // -----------------------------------------------------------------------

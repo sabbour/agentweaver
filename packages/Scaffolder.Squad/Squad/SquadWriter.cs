@@ -51,6 +51,12 @@ public sealed class SquadWriter
     public void WriteCharter(string memberName, string charterMarkdown)
         => WriteAllText(SquadPaths.CharterFor(memberName), charterMarkdown);
 
+    public bool HistoryExists(string memberName)
+        => File.Exists(Resolve(SquadPaths.HistoryFor(memberName)));
+
+    public void WriteAgentHistory(string memberName, string content)
+        => WriteAllText(SquadPaths.HistoryFor(memberName), content);
+
     public void AppendRegistryEvent(object eventRecord)
         => AppendLine(SquadPaths.CanonicalRegistryEvents, SquadSerialization.SerializeLine(eventRecord));
 
@@ -79,10 +85,56 @@ public sealed class SquadWriter
 
     public void EnsureGitAttributes()
     {
-        const string content =
-            "casting/registry.events.jsonl merge=union\n" +
-            "casting/history.events.jsonl merge=union\n";
-        WriteAllText(SquadPaths.GitAttributes, content);
+        var required = new[]
+        {
+            ".squad/decisions.md merge=union",
+            ".squad/agents/*/history.md merge=union",
+            ".squad/log/** merge=union",
+            ".squad/orchestration-log/** merge=union",
+            ".squad/rai/audit-trail.md merge=union",
+            ".squad/casting/registry.events.jsonl merge=union",
+            ".squad/casting/history.events.jsonl merge=union",
+        };
+
+        var fullPath = Resolve(SquadPaths.GitAttributes);
+        EnsureDirectory(fullPath);
+
+        var existing = File.Exists(fullPath)
+            ? File.ReadAllText(fullPath)
+            : string.Empty;
+
+        var toAdd = required.Where(line => !existing.Contains(line)).ToList();
+        if (toAdd.Count == 0) return;
+
+        var separator = existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : string.Empty;
+        File.AppendAllText(fullPath, separator + string.Join("\n", toAdd) + "\n");
+    }
+
+    public void WriteRouting(string content)
+        => WriteAllText(SquadPaths.RoutingMd, content);
+
+    public void WriteDecisions(string content)
+        => WriteAllText(SquadPaths.DecisionsMd, content);
+
+    public bool DecisionsExist()
+        => File.Exists(Resolve(SquadPaths.DecisionsMd));
+
+    public void EnsureSquadDirectories()
+    {
+        foreach (var dir in new[]
+        {
+            ".squad/log",
+            ".squad/orchestration-log",
+            ".squad/skills",
+            ".squad/rai",
+            ".squad/decisions/inbox",
+        })
+        {
+            var full = Resolve(dir);
+            Directory.CreateDirectory(full);
+            var gitkeep = Path.Combine(full, ".gitkeep");
+            if (!File.Exists(gitkeep)) File.WriteAllText(gitkeep, string.Empty);
+        }
     }
 
     /// <summary>

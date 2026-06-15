@@ -7,7 +7,10 @@ internal static class SquadPaths
 {
     public const string SquadDir = ".squad";
     public const string TeamMd = ".squad/team.md";
-    public const string GitAttributes = ".squad/.gitattributes";
+    public const string GitAttributes = ".gitattributes";
+
+    public const string RoutingMd = ".squad/routing.md";
+    public const string DecisionsMd = ".squad/decisions.md";
 
     public const string CanonicalDir = ".squad/casting";
     public const string CanonicalPolicy = ".squad/casting/policy.json";
