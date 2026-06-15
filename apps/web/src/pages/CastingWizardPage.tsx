@@ -2,12 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Button,
-  Field,
   MessageBar,
   MessageBarBody,
   Radio,
   RadioGroup,
-  Select,
   Spinner,
   Text,
   Textarea,
@@ -25,6 +23,23 @@ import type {
   CreateProposalRequest,
   ConfirmProposalRequest,
 } from '../api/types';
+
+const UNIVERSE_POOLS: { name: string; count: number }[] = [
+  { name: 'The Matrix', count: 13 },
+  { name: 'Star Wars', count: 13 },
+  { name: 'Inception', count: 9 },
+  { name: 'Firefly', count: 12 },
+  { name: 'The Office', count: 16 },
+  { name: 'Breaking Bad', count: 12 },
+  { name: 'Dune', count: 12 },
+  { name: 'Alien', count: 13 },
+  { name: 'Blade Runner', count: 10 },
+  { name: 'The Lord of the Rings', count: 13 },
+  { name: 'Star Trek', count: 13 },
+  { name: 'Harry Potter', count: 12 },
+  { name: 'The Avengers', count: 12 },
+  { name: 'Battlestar Galactica', count: 12 },
+];
 
 const useStyles = makeStyles({
   root: {
@@ -69,6 +84,17 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
     alignItems: 'center',
     justifyContent: 'flex-end',
+  },
+  castNavRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  castNavRowRight: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'center',
   },
   memberCard: {
     padding: tokens.spacingVerticalM,
@@ -120,15 +146,65 @@ const useStyles = makeStyles({
     paddingTop: tokens.spacingVerticalXS,
     margin: '0',
   },
+  panelActive: {
+    padding: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `2px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    cursor: 'default',
+  },
+  panelInactive: {
+    padding: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    cursor: 'pointer',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground2,
+    },
+  },
+  panelHeading: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+  },
+  panelDesc: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+  },
+  panelActionRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  panelRationale: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  panelsContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  templateGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: tokens.spacingHorizontalM,
+  },
   templateCard: {
     padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusSmall,
     cursor: 'pointer',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground3,
     },
@@ -139,33 +215,59 @@ const useStyles = makeStyles({
     border: `2px solid ${tokens.colorBrandStroke1}`,
     borderRadius: tokens.borderRadiusSmall,
     cursor: 'pointer',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
   },
   templateTitle: {
     fontWeight: tokens.fontWeightSemibold,
     display: 'block',
   },
-  templateDesc: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-    display: 'block',
-  },
-  templateList: {
+  universeSection: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
+  universeSectionLabel: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+  },
+  universeGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: tokens.spacingHorizontalM,
+  },
+  universeCard: {
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusSmall,
+    cursor: 'pointer',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground3,
+    },
+  },
+  universeCardSelected: {
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `2px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusSmall,
+    cursor: 'pointer',
+  },
+  universeCardName: {
+    fontWeight: tokens.fontWeightSemibold,
+    display: 'block',
+  },
+  universeCardCount: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    display: 'block',
+  },
 });
 
-type Mode = 'scenario' | 'free_text' | 'analysis';
-type Step = 'mode' | 'configure' | 'review' | 'confirm';
+type Step = 'cast' | 'review' | 'confirm';
+type ActivePanel = 'formulate' | 'template' | 'analyze';
 
-const STEPS: Step[] = ['mode', 'configure', 'review', 'confirm'];
+const STEPS: Step[] = ['cast', 'review', 'confirm'];
 const STEP_LABELS: Record<Step, string> = {
-  mode: 'Choose mode',
-  configure: 'Configure',
+  cast: 'Cast',
   review: 'Review proposal',
   confirm: 'Confirm',
 };
@@ -175,25 +277,38 @@ export function CastingWizardPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
 
-  // Step state
-  const [step, setStep] = useState<Step>('mode');
+  const [step, setStep] = useState<Step>('cast');
 
-  // Mode selection
-  const [mode, setMode] = useState<Mode>('scenario');
-
-  // Configure state
-  const [templates, setTemplates] = useState<TeamTemplateDto[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(false);
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  // Cast step
+  const [activePanel, setActivePanel] = useState<ActivePanel>('formulate');
   const [goal, setGoal] = useState('');
   const [universe, setUniverse] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
 
-  // Proposal state
+  // Formulate panel
+  const [formulateProposal, setFormulateProposal] = useState<CastProposalDto | null>(null);
+  const [formulateLoading, setFormulateLoading] = useState(false);
+  const [formulateError, setFormulateError] = useState<string | null>(null);
+
+  // Analyze panel
+  const [analyzeProposal, setAnalyzeProposal] = useState<CastProposalDto | null>(null);
+  const [analyzeLoading, setAnalyzeLoading] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+
+  // Template cast loading
+  const [castLoading, setCastLoading] = useState(false);
+  const [castError, setCastError] = useState<string | null>(null);
+
+  // Templates data
+  const [templates, setTemplates] = useState<TeamTemplateDto[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+
+  // Proposal (review / confirm)
   const [proposal, setProposal] = useState<CastProposalDto | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
 
-  // Charter expand state
+  // Charter expand
   const [expandedCharters, setExpandedCharters] = useState<Set<string>>(new Set());
   const toggleCharter = (name: string) => {
     setExpandedCharters((prev) => {
@@ -203,16 +318,16 @@ export function CastingWizardPage() {
     });
   };
 
-  // Review / intent state
+  // Review intent
   const [intent, setIntent] = useState<'augment' | 'recast'>('augment');
 
-  // Confirm state
+  // Confirm
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
-  // Load templates on mount — used in scenario mode configure step
   useEffect(() => {
     let cancelled = false;
+    setTemplatesLoading(true);
     apiClient.getTemplates()
       .then((data) => { if (!cancelled) setTemplates(data); })
       .catch(() => { if (!cancelled) setTemplates([]); })
@@ -228,27 +343,87 @@ export function CastingWizardPage() {
     else navigate(`/projects/${projectId}/team`);
   };
 
-  const handleCreateProposal = async () => {
-    setProposalLoading(true);
-    setProposalError(null);
+  const handleCancel = async () => {
+    if (proposal) {
+      try { await apiClient.rejectProposal(projectId, proposal.proposal_id); } catch { /* best-effort */ }
+    }
+    navigate(`/projects/${projectId}/team`);
+  };
+
+  const handleFormulate = async () => {
+    setFormulateLoading(true);
+    setFormulateError(null);
     try {
-      const req: CreateProposalRequest = { mode };
-      if (mode === 'scenario') req.template_id = selectedTemplateId;
-      if (mode === 'free_text') req.goal = goal;
-      if (universe.trim()) req.universe = universe.trim();
+      const req: CreateProposalRequest = { mode: 'free_text', goal };
+      if (universe) req.universe = universe;
       const p = await apiClient.createProposal(projectId, req);
-      setProposal(p);
-      setStep('review');
+      setFormulateProposal(p);
     } catch (err) {
-      setProposalError(
+      setFormulateError(
         err instanceof ApiError
           ? `API error ${err.status}: ${err.body}`
           : err instanceof Error ? err.message : String(err),
       );
     } finally {
-      setProposalLoading(false);
+      setFormulateLoading(false);
     }
   };
+
+  const handleAnalyze = async () => {
+    setAnalyzeLoading(true);
+    setAnalyzeError(null);
+    try {
+      const req: CreateProposalRequest = { mode: 'analysis' };
+      if (universe) req.universe = universe;
+      const p = await apiClient.createProposal(projectId, req);
+      setAnalyzeProposal(p);
+    } catch (err) {
+      setAnalyzeError(
+        err instanceof ApiError
+          ? `API error ${err.status}: ${err.body}`
+          : err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setAnalyzeLoading(false);
+    }
+  };
+
+  const handleCastTeam = async () => {
+    if (activePanel === 'formulate' && formulateProposal) {
+      setProposal(formulateProposal);
+      setStep('review');
+      return;
+    }
+    if (activePanel === 'analyze' && analyzeProposal) {
+      setProposal(analyzeProposal);
+      setStep('review');
+      return;
+    }
+    if (activePanel === 'template' && selectedTemplateId) {
+      setCastLoading(true);
+      setCastError(null);
+      try {
+        const req: CreateProposalRequest = { mode: 'scenario', template_id: selectedTemplateId };
+        if (universe) req.universe = universe;
+        const p = await apiClient.createProposal(projectId, req);
+        setProposal(p);
+        setStep('review');
+      } catch (err) {
+        setCastError(
+          err instanceof ApiError
+            ? `API error ${err.status}: ${err.body}`
+            : err instanceof Error ? err.message : String(err),
+        );
+      } finally {
+        setCastLoading(false);
+      }
+    }
+  };
+
+  const canCastTeam =
+    (activePanel === 'formulate' && formulateProposal !== null) ||
+    (activePanel === 'template' && selectedTemplateId !== '') ||
+    (activePanel === 'analyze' && analyzeProposal !== null);
 
   const handleRemoveMember = async (member: ProposedMemberDto) => {
     if (!proposal) return;
@@ -290,22 +465,6 @@ export function CastingWizardPage() {
     }
   };
 
-  const handleCancel = async () => {
-    if (proposal) {
-      try {
-        await apiClient.rejectProposal(projectId, proposal.proposal_id);
-      } catch {
-        // best-effort
-      }
-    }
-    navigate(`/projects/${projectId}/team`);
-  };
-
-  const canProceedFromConfigure =
-    (mode === 'scenario' && selectedTemplateId !== '') ||
-    (mode === 'free_text' && goal.trim() !== '') ||
-    mode === 'analysis';
-
   return (
     <div className={styles.root}>
       <div className={styles.breadcrumb}>
@@ -316,7 +475,7 @@ export function CastingWizardPage() {
         <span>Cast</span>
       </div>
 
-      <Title2>Cast team</Title2>
+      <Title2>Cast a team</Title2>
 
       <div className={styles.stepIndicator}>
         {STEPS.map((s, i) => (
@@ -326,119 +485,178 @@ export function CastingWizardPage() {
         ))}
       </div>
 
-      {/* Step 1: Choose mode */}
-      {step === 'mode' && (
-        <div className={styles.card}>
-          <Title3>Choose casting mode</Title3>
-          <RadioGroup
-            value={mode}
-            onChange={(_, data) => setMode(data.value as Mode)}
-          >
-            <Radio value="scenario" label="Team template — choose from a curated set of team templates" />
-            <Radio value="free_text" label="Describe a goal — describe what you want to build" />
-            <Radio value="analysis" label="Analyze project — let the system analyze the project and suggest roles" />
-          </RadioGroup>
-          <div className={styles.navRow}>
-            <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
-            <Button appearance="primary" onClick={() => setStep('configure')}>Next</Button>
-          </div>
-        </div>
-      )}
+      {/* Step 1: Cast */}
+      {step === 'cast' && (
+        <>
+          <div className={styles.panelsContainer}>
+            {/* Formulate with AI */}
+            <div
+              className={activePanel === 'formulate' ? styles.panelActive : styles.panelInactive}
+              onClick={() => setActivePanel('formulate')}
+            >
+              <Text className={styles.panelHeading}>🧪 Formulate with AI</Text>
+              <Text className={styles.panelDesc}>
+                Sketch the team in plain language; AI picks a universe, team size, and required roles.
+              </Text>
+              <Textarea
+                value={goal}
+                onChange={(_, v) => setGoal(v.value)}
+                placeholder="e.g. a small team of 3 to ship a SaaS MVP fast..."
+                rows={3}
+              />
+              {formulateError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>{formulateError}</MessageBarBody>
+                </MessageBar>
+              )}
+              <div className={styles.panelActionRow}>
+                {formulateLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+                <Button
+                  appearance="primary"
+                  size="small"
+                  disabled={goal.trim() === '' || formulateLoading}
+                  onClick={(e) => { e.stopPropagation(); void handleFormulate(); }}
+                >
+                  {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
+                </Button>
+              </div>
+              {formulateProposal && (
+                <Text className={styles.panelRationale}>
+                  <strong>Why this team:</strong>{' '}
+                  {formulateProposal.warnings.length > 0
+                    ? formulateProposal.warnings[0]
+                    : 'Team formulated.'}
+                </Text>
+              )}
+            </div>
 
-      {/* Step 2: Configure */}
-      {step === 'configure' && (
-        <div className={styles.card}>
-          <Title3>Configure</Title3>
-
-          {mode === 'scenario' && (
-            <>
-              {templatesLoading && <Spinner label="Loading templates" />}
+            {/* Start from template */}
+            <div
+              className={activePanel === 'template' ? styles.panelActive : styles.panelInactive}
+              onClick={() => setActivePanel('template')}
+            >
+              <Text className={styles.panelHeading}>📋 Start from template</Text>
+              {templatesLoading && <Spinner label="Loading templates..." size="small" />}
+              {!templatesLoading && templates.length === 0 && (
+                <Text className={styles.panelDesc}>No templates available.</Text>
+              )}
               {!templatesLoading && templates.length > 0 && (
-                <div className={styles.templateList}>
-                  {templates.map((g) => (
+                <div className={styles.templateGrid}>
+                  {templates.map((t) => (
                     <div
-                      key={g.id}
-                      className={selectedTemplateId === g.id ? styles.templateCardSelected : styles.templateCard}
-                      onClick={() => setSelectedTemplateId(g.id)}
+                      key={t.id}
+                      className={selectedTemplateId === t.id ? styles.templateCardSelected : styles.templateCard}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActivePanel('template');
+                        setSelectedTemplateId(t.id);
+                      }}
                       role="button"
                       tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedTemplateId(g.id); }}
-                      aria-pressed={selectedTemplateId === g.id}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          setActivePanel('template');
+                          setSelectedTemplateId(t.id);
+                        }
+                      }}
+                      aria-pressed={selectedTemplateId === t.id}
                     >
-                      <Text className={styles.templateTitle}>{g.title}</Text>
-                      <Text className={styles.templateDesc}>{g.description}</Text>
+                      <Text className={styles.templateTitle}>{t.title}</Text>
                     </div>
                   ))}
                 </div>
               )}
-              {!templatesLoading && templates.length === 0 && (
-                <Text>No team templates available.</Text>
-              )}
-            </>
-          )}
+            </div>
 
-          {mode === 'free_text' && (
-            <Field label="Goal description" required>
-              <Textarea
-                value={goal}
-                onChange={(_, v) => setGoal(v.value)}
-                placeholder="Describe what you want to build or accomplish..."
-                rows={4}
-              />
-            </Field>
-          )}
-
-          {mode === 'analysis' && (
-            <Text>
-              The system will analyze your project and suggest an appropriate team composition.
-            </Text>
-          )}
-
-          <Field label="Universe (optional)">
-            <Select
-              value={universe}
-              onChange={(_, d) => setUniverse(d.value === '__random__' ? '' : d.value)}
+            {/* Analyze project */}
+            <div
+              className={activePanel === 'analyze' ? styles.panelActive : styles.panelInactive}
+              onClick={() => setActivePanel('analyze')}
             >
-              <option value="__random__">Random</option>
-              <option value="The Matrix">The Matrix</option>
-              <option value="Star Wars">Star Wars</option>
-              <option value="Inception">Inception</option>
-              <option value="Firefly">Firefly</option>
-              <option value="The Office">The Office</option>
-              <option value="Breaking Bad">Breaking Bad</option>
-              <option value="Dune">Dune</option>
-              <option value="Alien">Alien</option>
-              <option value="Blade Runner">Blade Runner</option>
-              <option value="The Lord of the Rings">The Lord of the Rings</option>
-              <option value="Star Trek">Star Trek</option>
-              <option value="Harry Potter">Harry Potter</option>
-              <option value="The Avengers">The Avengers</option>
-              <option value="Battlestar Galactica">Battlestar Galactica</option>
-            </Select>
-          </Field>
+              <Text className={styles.panelHeading}>🔍 Analyze project</Text>
+              <Text className={styles.panelDesc}>
+                The system will analyze your project and suggest roles.
+              </Text>
+              {analyzeError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>{analyzeError}</MessageBarBody>
+                </MessageBar>
+              )}
+              <div className={styles.panelActionRow}>
+                {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+                <Button
+                  appearance="primary"
+                  size="small"
+                  disabled={analyzeLoading}
+                  onClick={(e) => { e.stopPropagation(); void handleAnalyze(); }}
+                >
+                  {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
+                </Button>
+              </div>
+              {analyzeProposal && (
+                <Text className={styles.panelRationale}>
+                  Analysis complete.{' '}
+                  {analyzeProposal.members.length} role{analyzeProposal.members.length !== 1 ? 's' : ''} suggested.
+                </Text>
+              )}
+            </div>
+          </div>
 
-          {proposalError && (
+          {/* Universe section */}
+          <div className={styles.universeSection}>
+            <Text className={styles.universeSectionLabel}>Universe</Text>
+            <div className={styles.universeGrid}>
+              <div
+                className={styles.universeCard}
+                onClick={() => setUniverse('')}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setUniverse(''); }}
+                aria-pressed={universe === ''}
+              >
+                <Text className={styles.universeCardName}>🎲 Random</Text>
+                <Text className={styles.universeCardCount}>Any universe</Text>
+              </div>
+              {UNIVERSE_POOLS.map((u) => (
+                <div
+                  key={u.name}
+                  className={universe === u.name ? styles.universeCardSelected : styles.universeCard}
+                  onClick={() => setUniverse(u.name)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setUniverse(u.name); }}
+                  aria-pressed={universe === u.name}
+                >
+                  <Text className={styles.universeCardName}>{u.name}</Text>
+                  <Text className={styles.universeCardCount}>{u.count} characters available</Text>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {castError && (
             <MessageBar intent="error">
-              <MessageBarBody>{proposalError}</MessageBarBody>
+              <MessageBarBody>{castError}</MessageBarBody>
             </MessageBar>
           )}
 
-          <div className={styles.navRow}>
-            <Button appearance="secondary" onClick={goBack}>Back</Button>
+          <div className={styles.castNavRow}>
             <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
-            <Button
-              appearance="primary"
-              disabled={!canProceedFromConfigure || proposalLoading}
-              onClick={() => void handleCreateProposal()}
-            >
-              {proposalLoading ? 'Generating' : 'Next'}
-            </Button>
-            {proposalLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+            <div className={styles.castNavRowRight}>
+              {castLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+              <Button
+                appearance="primary"
+                disabled={!canCastTeam || castLoading}
+                onClick={() => void handleCastTeam()}
+              >
+                {castLoading ? 'Casting' : 'Cast Team \u2192'}
+              </Button>
+            </div>
           </div>
-        </div>
+        </>
       )}
 
-      {/* Step 3: Review proposal */}
+      {/* Step 2: Review proposal */}
       {step === 'review' && proposal && (
         <div className={styles.card}>
           <Title3>Review proposal</Title3>
@@ -518,7 +736,7 @@ export function CastingWizardPage() {
         </div>
       )}
 
-      {/* Step 4: Confirm */}
+      {/* Step 3: Confirm */}
       {step === 'confirm' && proposal && (
         <div className={styles.card}>
           <Title3>Create team</Title3>
