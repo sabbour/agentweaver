@@ -6,6 +6,7 @@ import {
   AccordionItem,
   AccordionPanel,
   Button,
+  Checkbox,
   Field,
   Input,
   MessageBar,
@@ -28,7 +29,6 @@ import {
   SparkleRegular,
   DocumentBulletListRegular,
   SearchRegular,
-  SettingsRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
@@ -231,38 +231,24 @@ const useStyles = makeStyles({
     gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
     gap: tokens.spacingVerticalS,
   },
-  roleCard: {
-    padding: tokens.spacingVerticalS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    cursor: 'pointer',
-    userSelect: 'none',
+  rolesSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
   },
-  roleCardSelected: {
-    padding: tokens.spacingVerticalS,
-    border: `2px solid ${tokens.colorBrandStroke1}`,
-    borderRadius: tokens.borderRadiusMedium,
-    cursor: 'pointer',
-    userSelect: 'none',
-    backgroundColor: tokens.colorBrandBackground2,
-  },
-  roleCardTitle: {
+  rolesSectionLabel: {
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300,
-    display: 'block',
   },
-  roleCardSummary: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
+  rolesGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+    gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
   },
 });
 
 type Step = 'cast' | 'review' | 'confirm';
-type ActivePanel = 'formulate' | 'template' | 'analyze' | 'configure';
+type ActivePanel = 'formulate' | 'template' | 'analyze';
 
 const STEPS: Step[] = ['cast', 'review', 'confirm'];
 const STEP_LABELS: Record<Step, string> = {
@@ -360,10 +346,17 @@ export function CastingWizardPage() {
       let composedGoal = goal;
       if (teamSize !== 4) composedGoal += `\n\nPreferred team size: ${teamSize}`;
       if (requiredRoles.trim()) composedGoal += `\n\nRequired roles: ${requiredRoles.trim()}`;
+      if (selectedRoleIds.length > 0) {
+        const roleTitles = selectedRoleIds
+          .map(id => allCatalogRoles.find(r => r.id === id)?.title ?? id)
+          .join(', ');
+        composedGoal += `\n\nPreferred roles: ${roleTitles}`;
+      }
       const req: CreateProposalRequest = { mode: 'free_text', goal: composedGoal };
       if (universe) req.universe = universe;
       const p = await apiClient.createProposal(projectId, req);
       setFormulateProposal(p);
+      setSelectedRoleIds(p.members.map((m) => m.role.id));
     } catch (err) {
       setFormulateError(
         err instanceof ApiError
@@ -383,6 +376,7 @@ export function CastingWizardPage() {
       if (universe) req.universe = universe;
       const p = await apiClient.createProposal(projectId, req);
       setAnalyzeProposal(p);
+      setSelectedRoleIds(p.members.map((m) => m.role.id));
     } catch (err) {
       setAnalyzeError(
         err instanceof ApiError
@@ -424,32 +418,12 @@ export function CastingWizardPage() {
         setCastLoading(false);
       }
     }
-    if (activePanel === 'configure' && selectedRoleIds.length > 0) {
-      setCastLoading(true);
-      setCastError(null);
-      try {
-        const req: CreateProposalRequest = { mode: 'manual', role_ids: selectedRoleIds };
-        if (universe) req.universe = universe;
-        const p = await apiClient.createProposal(projectId, req);
-        setProposal(p);
-        setStep('review');
-      } catch (err) {
-        setCastError(
-          err instanceof ApiError
-            ? `API error ${err.status}: ${err.body}`
-            : err instanceof Error ? err.message : String(err),
-        );
-      } finally {
-        setCastLoading(false);
-      }
-    }
   };
 
   const canCastTeam =
     (activePanel === 'formulate' && formulateProposal !== null) ||
     (activePanel === 'template' && selectedTemplateId !== '') ||
-    (activePanel === 'analyze' && analyzeProposal !== null) ||
-    (activePanel === 'configure' && selectedRoleIds.length > 0);
+    (activePanel === 'analyze' && analyzeProposal !== null);
 
   const handleRemoveMember = async (member: ProposedMemberDto) => {
     if (!proposal) return;
@@ -511,12 +485,6 @@ export function CastingWizardPage() {
       const tpl = templates.find((t) => t.id === selectedTemplateId);
       return tpl?.description ?? null;
     }
-    if (activePanel === 'configure' && selectedRoleIds.length > 0) {
-      const titles = selectedRoleIds
-        .map((id) => allCatalogRoles.find((r) => r.id === id)?.title ?? id)
-        .join(', ');
-      return `Custom team: ${titles}`;
-    }
     return null;
   })();
 
@@ -550,7 +518,6 @@ export function CastingWizardPage() {
             <Tab icon={<SparkleRegular />} value="formulate">Formulate</Tab>
             <Tab icon={<DocumentBulletListRegular />} value="template">Template</Tab>
             <Tab icon={<SearchRegular />} value="analyze">Analyze</Tab>
-            <Tab icon={<SettingsRegular />} value="configure">Configure</Tab>
           </TabList>
 
           <div className={styles.tabContent}>
@@ -615,12 +582,16 @@ export function CastingWizardPage() {
                       <div
                         key={t.id}
                         className={selectedTemplateId === t.id ? styles.templateCardSelected : styles.templateCard}
-                        onClick={() => setSelectedTemplateId(t.id)}
+                        onClick={() => {
+                          setSelectedTemplateId(t.id);
+                          setSelectedRoleIds(t.roles.map((r) => r.id));
+                        }}
                         role="button"
                         tabIndex={0}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                             setSelectedTemplateId(t.id);
+                            setSelectedRoleIds(t.roles.map((r) => r.id));
                           }
                         }}
                         aria-pressed={selectedTemplateId === t.id}
@@ -656,50 +627,6 @@ export function CastingWizardPage() {
               </>
             )}
 
-            {activePanel === 'configure' && (
-              <>
-                <Text className={styles.panelDesc}>Select the roles for your team:</Text>
-                {templatesLoading && <Spinner label="Loading roles..." size="small" />}
-                {!templatesLoading && allCatalogRoles.length === 0 && (
-                  <Text className={styles.panelDesc}>No roles available.</Text>
-                )}
-                {!templatesLoading && allCatalogRoles.length > 0 && (
-                  <div className={styles.roleGrid}>
-                    {allCatalogRoles.map((role) => {
-                      const isSelected = selectedRoleIds.includes(role.id);
-                      return (
-                        <div
-                          key={role.id}
-                          className={isSelected ? styles.roleCardSelected : styles.roleCard}
-                          onClick={() =>
-                            setSelectedRoleIds((prev) =>
-                              prev.includes(role.id)
-                                ? prev.filter((id) => id !== role.id)
-                                : [...prev, role.id],
-                            )
-                          }
-                          role="checkbox"
-                          aria-checked={isSelected}
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              setSelectedRoleIds((prev) =>
-                                prev.includes(role.id)
-                                  ? prev.filter((id) => id !== role.id)
-                                  : [...prev, role.id],
-                              );
-                            }
-                          }}
-                        >
-                          <span className={styles.roleCardTitle}>{role.title}</span>
-                          <span className={styles.roleCardSummary}>{role.summary}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            )}
           </div>
 
           {rationale && (
@@ -708,6 +635,30 @@ export function CastingWizardPage() {
               <Text>{rationale}</Text>
             </div>
           )}
+
+          {/* Roles section */}
+          <div className={styles.rolesSection}>
+            <Text className={styles.rolesSectionLabel}>Roles</Text>
+            {templatesLoading && <Spinner size="extra-tiny" />}
+            {!templatesLoading && (
+              <div className={styles.rolesGrid}>
+                {allCatalogRoles.map((role) => (
+                  <Checkbox
+                    key={role.id}
+                    label={role.title}
+                    checked={selectedRoleIds.includes(role.id)}
+                    onChange={(_, data) => {
+                      setSelectedRoleIds((prev) =>
+                        data.checked
+                          ? [...prev, role.id]
+                          : prev.filter((id) => id !== role.id)
+                      );
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
 
           <Accordion collapsible>
             <AccordionItem value="universe">
