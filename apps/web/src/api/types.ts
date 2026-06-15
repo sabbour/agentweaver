@@ -221,6 +221,7 @@ export interface CastProposalDto {
   existing_team_present: boolean;
   run_id: string | null;
   warnings: string[];
+  rationale?: string;
 }
 
 export interface CreateProposalRequest {

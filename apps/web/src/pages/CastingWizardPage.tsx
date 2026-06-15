@@ -250,26 +250,11 @@ type Step = 'cast' | 'review' | 'confirm';
 
 function buildRationale(proposal: CastProposalDto | null, selectedTemplate: TeamTemplateDto | null): string {
   if (!proposal) return '';
-
-  if (proposal.mode === 'scenario' && selectedTemplate) {
+  if (proposal.rationale) return proposal.rationale;
+  // Fallback for scenario mode (template description from frontend)
+  if (proposal.mode === 'scenario' && selectedTemplate?.description)
     return selectedTemplate.description;
-  }
-
-  if (proposal.mode === 'manual') {
-    return `Team manually configured with ${proposal.members.length} role${proposal.members.length !== 1 ? 's' : ''}.`;
-  }
-
-  // For free_text and analysis modes: aggregate per-member justifications
-  const justifications = proposal.members
-    .filter(m => m.justification)
-    .map(m => `${m.role.title}: ${m.justification}`)
-    .join(' ');
-
-  if (justifications) return justifications;
-
-  // Fallback
-  const label = proposal.mode === 'analysis' ? 'project analysis' : 'your description';
-  return `${proposal.members.length} role${proposal.members.length !== 1 ? 's' : ''} selected from ${label}.`;
+  return '';
 }
 type ActivePanel = 'formulate' | 'template' | 'analyze';
 
