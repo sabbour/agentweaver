@@ -4,9 +4,9 @@
   "description": "A team for delivering a product feature: product, research, design, docs, and quality.",
   "roles": [
     "lead-pm",
-    "customer-researcher",
     "prototype-designer",
-    "feature-docs-writer",
-    "quality-reviewer"
+    "lead-architect",
+    "core-implementer",
+    "feature-docs-writer"
   ]
 }

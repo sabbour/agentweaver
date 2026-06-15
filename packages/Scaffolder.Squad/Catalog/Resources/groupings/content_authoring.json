@@ -1,9 +1,0 @@
-{
-  "id": "content-authoring",
-  "title": "Content Authoring",
-  "description": "A team for producing and refining written content.",
-  "roles": [
-    "writer",
-    "editor"
-  ]
-}
