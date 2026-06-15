@@ -247,6 +247,30 @@ const useStyles = makeStyles({
 });
 
 type Step = 'cast' | 'review' | 'confirm';
+
+function buildRationale(proposal: CastProposalDto | null, selectedTemplate: TeamTemplateDto | null): string {
+  if (!proposal) return '';
+
+  if (proposal.mode === 'scenario' && selectedTemplate) {
+    return selectedTemplate.description;
+  }
+
+  if (proposal.mode === 'manual') {
+    return `Team manually configured with ${proposal.members.length} role${proposal.members.length !== 1 ? 's' : ''}.`;
+  }
+
+  // For free_text and analysis modes: aggregate per-member justifications
+  const justifications = proposal.members
+    .filter(m => m.justification)
+    .map(m => `${m.role.title}: ${m.justification}`)
+    .join(' ');
+
+  if (justifications) return justifications;
+
+  // Fallback
+  const label = proposal.mode === 'analysis' ? 'project analysis' : 'your description';
+  return `${proposal.members.length} role${proposal.members.length !== 1 ? 's' : ''} selected from ${label}.`;
+}
 type ActivePanel = 'formulate' | 'template' | 'analyze';
 
 const STEPS: Step[] = ['cast', 'review', 'confirm'];
@@ -342,7 +366,6 @@ export function CastingWizardPage() {
     setFormulateError(null);
     try {
       let composedGoal = goal;
-      if (requiredRoles.trim()) composedGoal += `\n\nRequired roles: ${requiredRoles.trim()}`;
       if (selectedRoleIds.length > 0) {
         const roleTitles = selectedRoleIds
           .map(id => allCatalogRoles.find(r => r.id === id)?.title ?? id)
@@ -469,23 +492,13 @@ export function CastingWizardPage() {
     (r, i, arr) => arr.findIndex((x) => x.id === r.id) === i,
   );
 
-  const rationale: string | null = (() => {
-    if (activePanel === 'formulate' && formulateProposal) {
-      return formulateProposal.warnings.length > 0
-        ? formulateProposal.warnings[0]
-        : `Team of ${formulateProposal.members.length} formulated from your description.`;
-    }
-    if (activePanel === 'analyze' && analyzeProposal) {
-      return analyzeProposal.warnings.length > 0
-        ? analyzeProposal.warnings[0]
-        : `${analyzeProposal.members.length} role${analyzeProposal.members.length !== 1 ? 's' : ''} suggested from project analysis.`;
-    }
-    if (activePanel === 'template' && selectedTemplateId) {
-      const tpl = templates.find((t) => t.id === selectedTemplateId);
-      return tpl?.description ?? null;
-    }
-    return null;
-  })();
+  const selectedTemplate: TeamTemplateDto | null = templates.find((t) => t.id === selectedTemplateId) ?? null;
+
+  const castRationale = buildRationale(
+    activePanel === 'formulate' ? formulateProposal :
+    activePanel === 'analyze' ? analyzeProposal : null,
+    selectedTemplate,
+  );
 
   return (
     <div className={styles.root}>
@@ -541,13 +554,6 @@ export function CastingWizardPage() {
                       onChange={(_, data) => {
                         if (data.value !== undefined) setTeamSize(data.value);
                       }}
-                    />
-                  </Field>
-                  <Field label="Required roles (optional)">
-                    <Input
-                      placeholder="e.g. PM, Designer, Engineer"
-                      value={requiredRoles}
-                      onChange={(_, d) => setRequiredRoles(d.value)}
                     />
                   </Field>
                 </div>
@@ -645,10 +651,10 @@ export function CastingWizardPage() {
 
           </div>
 
-          {rationale && (
+          {castRationale && (
             <div className={styles.rationaleBox}>
               <Text className={styles.rationaleLabel}>Why this team</Text>
-              <Text>{rationale}</Text>
+              <Text>{castRationale}</Text>
             </div>
           )}
 
