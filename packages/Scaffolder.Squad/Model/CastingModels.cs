@@ -1,7 +1,7 @@
 namespace Scaffolder.Squad.Model;
 
 public enum CastMemberStatus { Active, Retired }
-public enum CastMode { Scenario, FreeText, Analysis }
+public enum CastMode { Scenario, FreeText, Analysis, Manual }
 public enum CastIntent { New, Augment, Recast }
 public enum SyncChangeKind { Added, Modified, Removed }
 

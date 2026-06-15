@@ -1802,8 +1802,8 @@ app.MapPost("/api/projects/{id}/casting/proposals", async (
 {
     var mode = (request.Mode ?? string.Empty).ToLowerInvariant();
 
-    if (mode is not ("scenario" or "free_text" or "analysis"))
-        return Results.BadRequest(new { error = "mode must be scenario, free_text, or analysis." });
+    if (mode is not ("scenario" or "free_text" or "analysis" or "manual"))
+        return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
 
     try
     {
@@ -1830,8 +1830,17 @@ app.MapPost("/api/projects/{id}/casting/proposals", async (
                     id, request.Universe, request.ModelId, ct);
                 return Results.Ok(CastingMappings.ToDto(proposal));
             }
+            case "manual":
+            {
+                if (request.RoleIds is null || request.RoleIds.Count == 0)
+                    return Results.BadRequest(new { error = "role_ids is required for manual mode." });
+
+                var (proposal, _) = await castingService.ProposeManualCastAsync(
+                    id, request.RoleIds, request.Universe, ct);
+                return Results.Ok(CastingMappings.ToDto(proposal));
+            }
             default:
-                return Results.BadRequest(new { error = "mode must be scenario, free_text, or analysis." });
+                return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
         }
     }
     catch (ProjectNotFoundException)

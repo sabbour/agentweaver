@@ -165,6 +165,97 @@ public sealed class CastingService
     }
 
     // -----------------------------------------------------------------------
+    // Phase 2b — manual casting (no AI, explicit role IDs)
+    // -----------------------------------------------------------------------
+
+    public async Task<(CastProposal Proposal, string ProjectOwner)> ProposeManualCastAsync(
+        string projectId,
+        IReadOnlyList<string> roleIds,
+        string? universeOverride,
+        CancellationToken ct)
+    {
+        var (project, owner) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+
+        var reader = new SquadReader(project.WorkingDirectory);
+
+        bool existingTeamPresent = reader.TeamExists();
+
+        var policy = reader.ReadPolicy();
+        var registry = reader.ReadRegistry();
+        var history = reader.ReadHistory();
+
+        var reservedNames = new HashSet<string>(
+            registry.Agents.Keys, StringComparer.OrdinalIgnoreCase);
+
+        var allocator = new UniverseAllocator(policy);
+
+        string universe;
+        if (!string.IsNullOrWhiteSpace(universeOverride))
+        {
+            universe = allocator.IsValidUniverse(universeOverride)
+                ? universeOverride
+                : allocator.ProposeUniverse(history.UniverseUsageHistory, projectId);
+        }
+        else
+        {
+            universe = allocator.ProposeUniverse(history.UniverseUsageHistory, projectId);
+        }
+
+        var allocations = allocator.AllocateNames(universe, reservedNames, roleIds.Count);
+
+        var compiler = new CharterCompiler(_catalog);
+        var proposedMembers = new List<ProposedMember>();
+
+        for (var i = 0; i < roleIds.Count; i++)
+        {
+            var roleId = roleIds[i];
+            var role = _catalog.LoadRole(roleId);
+            if (role is null)
+            {
+                _logger.LogWarning("Manual cast: unknown role id '{RoleId}'; skipping", roleId);
+                continue;
+            }
+
+            var (name, isNamed) = allocations[i];
+            string charter;
+            try
+            {
+                charter = compiler.Compile(role.Id, name);
+            }
+            catch (InvalidOperationException)
+            {
+                charter = compiler.CompileCustom(name, role.Title, role.Summary,
+                    role.Capabilities, role.Responsibilities, role.Boundaries);
+            }
+
+            proposedMembers.Add(new ProposedMember(
+                ProposedName: name,
+                Role: role,
+                CharterMarkdown: charter,
+                IsNamed: isNamed,
+                DefaultModel: role.DefaultModel,
+                Justification: $"Manually selected role: {role.Title}"));
+        }
+
+        var proposal = new CastProposal(
+            ProposalId: Guid.NewGuid().ToString("N"),
+            Mode: CastMode.Manual,
+            Universe: universe,
+            Members: proposedMembers,
+            ExistingTeamPresent: existingTeamPresent,
+            RunId: null,
+            Warnings: []);
+
+        _proposalStore.Store(projectId, proposal, owner);
+
+        _logger.LogInformation(
+            "Created manual proposal {ProposalId} for project {ProjectId} with {Count} members",
+            proposal.ProposalId, projectId, proposedMembers.Count);
+
+        return (proposal, owner);
+    }
+
+    // -----------------------------------------------------------------------
     // Phase 3 / 4 — model-assisted casting (read-only proposal-generation run)
     // -----------------------------------------------------------------------
 
