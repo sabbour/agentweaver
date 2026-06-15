@@ -6,15 +6,20 @@
   "capabilities": [
     "quality-review",
     "acceptance-verification",
-    "readiness-assessment"
+    "readiness-assessment",
+    "code-review",
+    "convention-enforcement"
   ],
   "responsibilities": [
+    "Review changes for correctness and maintainability",
+    "Enforce coding conventions and standards",
     "Review the feature against acceptance criteria",
-    "Verify completeness and readiness",
     "Surface quality risks before launch"
   ],
   "boundaries": [
     "Does not implement the feature",
-    "Does not own the release decision alone"
+    "Does not own the release decision alone",
+    "Does not author the changes under review",
+    "Does not merge without maintainer approval"
   ]
 }

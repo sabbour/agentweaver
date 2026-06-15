@@ -215,7 +215,7 @@ export interface ProposedMemberDto {
 
 export interface CastProposalDto {
   proposal_id: string;
-  mode: 'scenario' | 'free_text' | 'analysis';
+  mode: 'scenario' | 'free_text' | 'analysis' | 'manual';
   universe: string;
   members: ProposedMemberDto[];
   existing_team_present: boolean;

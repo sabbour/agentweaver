@@ -8,7 +8,6 @@ import {
   Button,
   Checkbox,
   Field,
-  Input,
   MessageBar,
   MessageBarBody,
   Radio,
@@ -270,7 +269,6 @@ export function CastingWizardPage() {
   const [universe, setUniverse] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [teamSize, setTeamSize] = useState(4);
-  const [requiredRoles, setRequiredRoles] = useState('');
 
   // Formulate panel
   const [formulateProposal, setFormulateProposal] = useState<CastProposalDto | null>(null);
