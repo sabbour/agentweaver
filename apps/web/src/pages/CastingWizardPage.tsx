@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
   Button,
   Field,
+  Input,
   MessageBar,
   MessageBarBody,
   Radio,
   RadioGroup,
   Select,
+  SpinButton,
   Spinner,
   Tab,
   TabList,
@@ -165,11 +171,25 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'flex-end',
   },
-  panelRationale: {
+  rationaleBox: {
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  rationaleLabel: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-    paddingTop: tokens.spacingVerticalS,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.05em',
+  },
+  teamSizeRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'flex-start',
   },
   tabContent: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -230,6 +250,8 @@ export function CastingWizardPage() {
   const [goal, setGoal] = useState('');
   const [universe, setUniverse] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [teamSize, setTeamSize] = useState(4);
+  const [requiredRoles, setRequiredRoles] = useState('');
 
   // Formulate panel
   const [formulateProposal, setFormulateProposal] = useState<CastProposalDto | null>(null);
@@ -299,7 +321,10 @@ export function CastingWizardPage() {
     setFormulateLoading(true);
     setFormulateError(null);
     try {
-      const req: CreateProposalRequest = { mode: 'free_text', goal };
+      let composedGoal = goal;
+      if (teamSize !== 4) composedGoal += `\n\nPreferred team size: ${teamSize}`;
+      if (requiredRoles.trim()) composedGoal += `\n\nRequired roles: ${requiredRoles.trim()}`;
+      const req: CreateProposalRequest = { mode: 'free_text', goal: composedGoal };
       if (universe) req.universe = universe;
       const p = await apiClient.createProposal(projectId, req);
       setFormulateProposal(p);
@@ -336,13 +361,11 @@ export function CastingWizardPage() {
   const handleCastTeam = async () => {
     if (activePanel === 'formulate' && formulateProposal) {
       setProposal(formulateProposal);
-      setUniverse(formulateProposal.universe ?? '');
       setStep('review');
       return;
     }
     if (activePanel === 'analyze' && analyzeProposal) {
       setProposal(analyzeProposal);
-      setUniverse(analyzeProposal.universe ?? '');
       setStep('review');
       return;
     }
@@ -354,7 +377,6 @@ export function CastingWizardPage() {
         if (universe) req.universe = universe;
         const p = await apiClient.createProposal(projectId, req);
         setProposal(p);
-        setUniverse(p.universe ?? '');
         setStep('review');
       } catch (err) {
         setCastError(
@@ -393,38 +415,6 @@ export function CastingWizardPage() {
     }
   };
 
-  const handleProceedToConfirm = async () => {
-    if (!proposal) return;
-    const proposalUniverse = proposal.universe ?? '';
-    if (universe === proposalUniverse) {
-      setStep('confirm');
-      return;
-    }
-    setProposalLoading(true);
-    setProposalError(null);
-    try {
-      let req: CreateProposalRequest;
-      if (activePanel === 'formulate') {
-        req = { mode: 'free_text', goal };
-      } else if (activePanel === 'template') {
-        req = { mode: 'scenario', template_id: selectedTemplateId };
-      } else {
-        req = { mode: 'analysis' };
-      }
-      if (universe) req.universe = universe;
-      const p = await apiClient.createProposal(projectId, req);
-      setProposal(p);
-      setStep('confirm');
-    } catch (err) {
-      setProposalError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setProposalLoading(false);
-    }
-  };
 
   const handleConfirm = async () => {
     if (!proposal) return;
@@ -445,6 +435,24 @@ export function CastingWizardPage() {
       setConfirming(false);
     }
   };
+
+  const rationale: string | null = (() => {
+    if (activePanel === 'formulate' && formulateProposal) {
+      return formulateProposal.warnings.length > 0
+        ? formulateProposal.warnings[0]
+        : `Team of ${formulateProposal.members.length} formulated from your description.`;
+    }
+    if (activePanel === 'analyze' && analyzeProposal) {
+      return analyzeProposal.warnings.length > 0
+        ? analyzeProposal.warnings[0]
+        : `${analyzeProposal.members.length} role${analyzeProposal.members.length !== 1 ? 's' : ''} suggested from project analysis.`;
+    }
+    if (activePanel === 'template' && selectedTemplateId) {
+      const tpl = templates.find((t) => t.id === selectedTemplateId);
+      return tpl?.description ?? null;
+    }
+    return null;
+  })();
 
   return (
     <div className={styles.root}>
@@ -490,6 +498,26 @@ export function CastingWizardPage() {
                   placeholder="e.g. a small team of 3 to ship a SaaS MVP fast..."
                   rows={3}
                 />
+                <div className={styles.teamSizeRow}>
+                  <Field label="Team size">
+                    <SpinButton
+                      min={2}
+                      max={10}
+                      step={1}
+                      value={teamSize}
+                      onChange={(_, data) => {
+                        if (data.value !== undefined) setTeamSize(data.value);
+                      }}
+                    />
+                  </Field>
+                  <Field label="Required roles (optional)">
+                    <Input
+                      placeholder="e.g. PM, Designer, Engineer"
+                      value={requiredRoles}
+                      onChange={(_, d) => setRequiredRoles(d.value)}
+                    />
+                  </Field>
+                </div>
                 {formulateError && (
                   <MessageBar intent="error">
                     <MessageBarBody>{formulateError}</MessageBarBody>
@@ -499,21 +527,12 @@ export function CastingWizardPage() {
                   {formulateLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
                   <Button
                     appearance="primary"
-                    size="small"
                     disabled={goal.trim() === '' || formulateLoading}
                     onClick={() => void handleFormulate()}
                   >
                     {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
                   </Button>
                 </div>
-                {formulateProposal && (
-                  <Text className={styles.panelRationale}>
-                    <strong>Why this team:</strong>{' '}
-                    {formulateProposal.warnings.length > 0
-                      ? formulateProposal.warnings[0]
-                      : 'Team formulated.'}
-                  </Text>
-                )}
               </>
             )}
 
@@ -561,22 +580,39 @@ export function CastingWizardPage() {
                   {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
                   <Button
                     appearance="primary"
-                    size="small"
                     disabled={analyzeLoading}
                     onClick={() => void handleAnalyze()}
                   >
                     {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
                   </Button>
                 </div>
-                {analyzeProposal && (
-                  <Text className={styles.panelRationale}>
-                    Analysis complete.{' '}
-                    {analyzeProposal.members.length} role{analyzeProposal.members.length !== 1 ? 's' : ''} suggested.
-                  </Text>
-                )}
               </>
             )}
           </div>
+
+          {rationale && (
+            <div className={styles.rationaleBox}>
+              <Text className={styles.rationaleLabel}>Why this team</Text>
+              <Text>{rationale}</Text>
+            </div>
+          )}
+
+          <Accordion collapsible>
+            <AccordionItem value="universe">
+              <AccordionHeader>Universe</AccordionHeader>
+              <AccordionPanel>
+                <Select
+                  value={universe}
+                  onChange={(_, data) => setUniverse(data.value)}
+                >
+                  <option value="">Random (any universe)</option>
+                  {UNIVERSE_POOLS.map((u) => (
+                    <option key={u.name} value={u.name}>{u.name}</option>
+                  ))}
+                </Select>
+              </AccordionPanel>
+            </AccordionItem>
+          </Accordion>
 
           {castError && (
             <MessageBar intent="error">
@@ -623,18 +659,6 @@ export function CastingWizardPage() {
               </RadioGroup>
             </div>
           )}
-
-          <Field label="Universe">
-            <Select
-              value={universe}
-              onChange={(_, data) => setUniverse(data.value)}
-            >
-              <option value="">Random (any universe)</option>
-              {UNIVERSE_POOLS.map((u) => (
-                <option key={u.name} value={u.name}>{u.name}</option>
-              ))}
-            </Select>
-          </Field>
 
           <div className={styles.memberList}>
             {proposal.members.map((member) => (
@@ -684,7 +708,7 @@ export function CastingWizardPage() {
             <Button
               appearance="primary"
               disabled={proposal.members.length === 0 || proposalLoading}
-              onClick={() => void handleProceedToConfirm()}
+              onClick={() => setStep('confirm')}
             >
               Confirm
             </Button>
