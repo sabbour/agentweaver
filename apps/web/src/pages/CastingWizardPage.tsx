@@ -14,6 +14,12 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import {
+  SparkleRegular,
+  DocumentBulletListRegular,
+  SearchRegular,
+  ArrowShuffleRegular,
+} from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type {
@@ -172,6 +178,9 @@ const useStyles = makeStyles({
   panelHeading: {
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase400,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
   panelDesc: {
     color: tokens.colorNeutralForeground2,
@@ -253,7 +262,9 @@ const useStyles = makeStyles({
   },
   universeCardName: {
     fontWeight: tokens.fontWeightSemibold,
-    display: 'block',
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
   universeCardCount: {
     color: tokens.colorNeutralForeground2,
@@ -494,7 +505,7 @@ export function CastingWizardPage() {
               className={activePanel === 'formulate' ? styles.panelActive : styles.panelInactive}
               onClick={() => setActivePanel('formulate')}
             >
-              <Text className={styles.panelHeading}>🧪 Formulate with AI</Text>
+              <div className={styles.panelHeading}><SparkleRegular />Formulate with AI</div>
               <Text className={styles.panelDesc}>
                 Sketch the team in plain language; AI picks a universe, team size, and required roles.
               </Text>
@@ -535,7 +546,7 @@ export function CastingWizardPage() {
               className={activePanel === 'template' ? styles.panelActive : styles.panelInactive}
               onClick={() => setActivePanel('template')}
             >
-              <Text className={styles.panelHeading}>📋 Start from template</Text>
+              <div className={styles.panelHeading}><DocumentBulletListRegular />Start from template</div>
               {templatesLoading && <Spinner label="Loading templates..." size="small" />}
               {!templatesLoading && templates.length === 0 && (
                 <Text className={styles.panelDesc}>No templates available.</Text>
@@ -573,7 +584,7 @@ export function CastingWizardPage() {
               className={activePanel === 'analyze' ? styles.panelActive : styles.panelInactive}
               onClick={() => setActivePanel('analyze')}
             >
-              <Text className={styles.panelHeading}>🔍 Analyze project</Text>
+              <div className={styles.panelHeading}><SearchRegular />Analyze project</div>
               <Text className={styles.panelDesc}>
                 The system will analyze your project and suggest roles.
               </Text>
@@ -614,7 +625,7 @@ export function CastingWizardPage() {
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setUniverse(''); }}
                 aria-pressed={universe === ''}
               >
-                <Text className={styles.universeCardName}>🎲 Random</Text>
+                <div className={styles.universeCardName}><ArrowShuffleRegular />Random</div>
                 <Text className={styles.universeCardCount}>Any universe</Text>
               </div>
               {UNIVERSE_POOLS.map((u) => (
