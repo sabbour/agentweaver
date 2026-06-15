@@ -269,7 +269,8 @@ public sealed class CastingService
         string goal,
         string? universeOverride,
         string? modelId,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? teamSize = null)
     {
         if (string.IsNullOrWhiteSpace(goal))
             throw new ArgumentException("Goal must not be empty.", nameof(goal));
@@ -277,12 +278,16 @@ public sealed class CastingService
         if (goal.Length > 2000)
             throw new ArgumentException("Goal must be 2000 characters or fewer.", nameof(goal));
 
+        var effectiveGoal = teamSize.HasValue
+            ? $"{goal}\n\nPreferred team size: {teamSize.Value} members."
+            : goal;
+
         return BuildModelAssistedProposalAsync(
             projectId,
             CastMode.FreeText,
             universeOverride,
             modelId,
-            buildPrompt: roles => CastingPrompts.FreeText(goal, roles),
+            buildPrompt: roles => CastingPrompts.FreeText(effectiveGoal, roles),
             extraWarnings: [],
             ct);
     }
@@ -296,7 +301,8 @@ public sealed class CastingService
         string projectId,
         string? universeOverride,
         string? modelId,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? teamSize = null)
     {
         return BuildModelAssistedProposalAsync(
             projectId,
@@ -306,7 +312,8 @@ public sealed class CastingService
             buildPrompt: null, // built inside, needs the scanned signals
             extraWarnings: null,
             ct,
-            analysisMode: true);
+            analysisMode: true,
+            teamSize: teamSize);
     }
 
     private async Task<(CastProposal Proposal, string ProjectOwner)> BuildModelAssistedProposalAsync(
@@ -317,7 +324,8 @@ public sealed class CastingService
         Func<IReadOnlyList<Role>, string>? buildPrompt,
         IReadOnlyList<string>? extraWarnings,
         CancellationToken ct,
-        bool analysisMode = false)
+        bool analysisMode = false,
+        int? teamSize = null)
     {
         var (project, owner) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
 
@@ -374,6 +382,9 @@ public sealed class CastingService
             prompt = signals.HasNoSignals
                 ? CastingPrompts.AnalysisFallback(availableRoles)
                 : CastingPrompts.Analysis(_signalScanner.Summarize(signals), availableRoles);
+
+            if (teamSize.HasValue)
+                prompt += $"\n\nPreferred team size: {teamSize.Value} members.";
 
             if (signals.HasNoSignals)
                 warnings.Add("No project signals detected — using general-purpose defaults.");

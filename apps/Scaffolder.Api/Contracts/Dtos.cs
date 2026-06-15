@@ -397,6 +397,7 @@ public sealed record CreateProposalRequest
     [JsonPropertyName("goal")] public string? Goal { get; init; }
     [JsonPropertyName("universe")] public string? Universe { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }
+    [JsonPropertyName("team_size")] public int? TeamSize { get; init; }
     // mode: "scenario" | "free_text" | "analysis" | "manual"
     [JsonPropertyName("role_ids")] public IReadOnlyList<string>? RoleIds { get; init; }
 }

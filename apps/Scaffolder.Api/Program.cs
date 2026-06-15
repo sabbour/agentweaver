@@ -1821,13 +1821,13 @@ app.MapPost("/api/projects/{id}/casting/proposals", async (
             case "free_text":
             {
                 var (proposal, _) = await castingService.ProposeFreetextCastAsync(
-                    id, request.Goal ?? "", request.Universe, request.ModelId, ct);
+                    id, request.Goal ?? "", request.Universe, request.ModelId, ct, request.TeamSize);
                 return Results.Ok(CastingMappings.ToDto(proposal));
             }
             case "analysis":
             {
                 var (proposal, _) = await castingService.ProposeAnalysisCastAsync(
-                    id, request.Universe, request.ModelId, ct);
+                    id, request.Universe, request.ModelId, ct, request.TeamSize);
                 return Results.Ok(CastingMappings.ToDto(proposal));
             }
             case "manual":
