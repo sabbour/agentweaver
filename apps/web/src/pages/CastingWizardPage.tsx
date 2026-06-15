@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Button,
+  Field,
   MessageBar,
   MessageBarBody,
   Radio,
   RadioGroup,
+  Select,
   Spinner,
+  Tab,
+  TabList,
   Text,
   Textarea,
   Title2,
@@ -18,7 +22,6 @@ import {
   SparkleRegular,
   DocumentBulletListRegular,
   SearchRegular,
-  ArrowShuffleRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
@@ -152,36 +155,6 @@ const useStyles = makeStyles({
     paddingTop: tokens.spacingVerticalXS,
     margin: '0',
   },
-  panelActive: {
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorBrandBackground2,
-    border: `2px solid ${tokens.colorBrandStroke1}`,
-    borderRadius: tokens.borderRadiusMedium,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    cursor: 'default',
-  },
-  panelInactive: {
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    cursor: 'pointer',
-    ':hover': {
-      backgroundColor: tokens.colorNeutralBackground2,
-    },
-  },
-  panelHeading: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-  },
   panelDesc: {
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
@@ -198,7 +171,11 @@ const useStyles = makeStyles({
     paddingTop: tokens.spacingVerticalS,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  panelsContainer: {
+  tabContent: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalM,
+    minHeight: '160px',
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
@@ -227,48 +204,6 @@ const useStyles = makeStyles({
   },
   templateTitle: {
     fontWeight: tokens.fontWeightSemibold,
-    display: 'block',
-  },
-  universeSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-  },
-  universeSectionLabel: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
-  },
-  universeGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: tokens.spacingHorizontalM,
-  },
-  universeCard: {
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground2,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusSmall,
-    cursor: 'pointer',
-    ':hover': {
-      backgroundColor: tokens.colorNeutralBackground3,
-    },
-  },
-  universeCardSelected: {
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorBrandBackground2,
-    border: `2px solid ${tokens.colorBrandStroke1}`,
-    borderRadius: tokens.borderRadiusSmall,
-    cursor: 'pointer',
-  },
-  universeCardName: {
-    fontWeight: tokens.fontWeightSemibold,
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-  },
-  universeCardCount: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
     display: 'block',
   },
 });
@@ -338,7 +273,6 @@ export function CastingWizardPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setTemplatesLoading(true);
     apiClient.getTemplates()
       .then((data) => { if (!cancelled) setTemplates(data); })
       .catch(() => { if (!cancelled) setTemplates([]); })
@@ -499,151 +433,126 @@ export function CastingWizardPage() {
       {/* Step 1: Cast */}
       {step === 'cast' && (
         <>
-          <div className={styles.panelsContainer}>
-            {/* Formulate with AI */}
-            <div
-              className={activePanel === 'formulate' ? styles.panelActive : styles.panelInactive}
-              onClick={() => setActivePanel('formulate')}
-            >
-              <div className={styles.panelHeading}><SparkleRegular />Formulate with AI</div>
-              <Text className={styles.panelDesc}>
-                Sketch the team in plain language; AI picks a universe, team size, and required roles.
-              </Text>
-              <Textarea
-                value={goal}
-                onChange={(_, v) => setGoal(v.value)}
-                placeholder="e.g. a small team of 3 to ship a SaaS MVP fast..."
-                rows={3}
-              />
-              {formulateError && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{formulateError}</MessageBarBody>
-                </MessageBar>
-              )}
-              <div className={styles.panelActionRow}>
-                {formulateLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
-                <Button
-                  appearance="primary"
-                  size="small"
-                  disabled={goal.trim() === '' || formulateLoading}
-                  onClick={(e) => { e.stopPropagation(); void handleFormulate(); }}
-                >
-                  {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
-                </Button>
-              </div>
-              {formulateProposal && (
-                <Text className={styles.panelRationale}>
-                  <strong>Why this team:</strong>{' '}
-                  {formulateProposal.warnings.length > 0
-                    ? formulateProposal.warnings[0]
-                    : 'Team formulated.'}
-                </Text>
-              )}
-            </div>
+          <TabList
+            selectedValue={activePanel}
+            onTabSelect={(_, data) => setActivePanel(data.value as ActivePanel)}
+          >
+            <Tab icon={<SparkleRegular />} value="formulate">Formulate</Tab>
+            <Tab icon={<DocumentBulletListRegular />} value="template">Template</Tab>
+            <Tab icon={<SearchRegular />} value="analyze">Analyze</Tab>
+          </TabList>
 
-            {/* Start from template */}
-            <div
-              className={activePanel === 'template' ? styles.panelActive : styles.panelInactive}
-              onClick={() => setActivePanel('template')}
-            >
-              <div className={styles.panelHeading}><DocumentBulletListRegular />Start from template</div>
-              {templatesLoading && <Spinner label="Loading templates..." size="small" />}
-              {!templatesLoading && templates.length === 0 && (
-                <Text className={styles.panelDesc}>No templates available.</Text>
-              )}
-              {!templatesLoading && templates.length > 0 && (
-                <div className={styles.templateGrid}>
-                  {templates.map((t) => (
-                    <div
-                      key={t.id}
-                      className={selectedTemplateId === t.id ? styles.templateCardSelected : styles.templateCard}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActivePanel('template');
-                        setSelectedTemplateId(t.id);
-                      }}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          setActivePanel('template');
-                          setSelectedTemplateId(t.id);
-                        }
-                      }}
-                      aria-pressed={selectedTemplateId === t.id}
-                    >
-                      <Text className={styles.templateTitle}>{t.title}</Text>
-                    </div>
-                  ))}
+          <div className={styles.tabContent}>
+            {activePanel === 'formulate' && (
+              <>
+                <Text className={styles.panelDesc}>
+                  Sketch the team in plain language; AI picks a universe, team size, and required roles.
+                </Text>
+                <Textarea
+                  value={goal}
+                  onChange={(_, v) => setGoal(v.value)}
+                  placeholder="e.g. a small team of 3 to ship a SaaS MVP fast..."
+                  rows={3}
+                />
+                {formulateError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{formulateError}</MessageBarBody>
+                  </MessageBar>
+                )}
+                <div className={styles.panelActionRow}>
+                  {formulateLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    disabled={goal.trim() === '' || formulateLoading}
+                    onClick={() => void handleFormulate()}
+                  >
+                    {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
+                  </Button>
                 </div>
-              )}
-            </div>
+                {formulateProposal && (
+                  <Text className={styles.panelRationale}>
+                    <strong>Why this team:</strong>{' '}
+                    {formulateProposal.warnings.length > 0
+                      ? formulateProposal.warnings[0]
+                      : 'Team formulated.'}
+                  </Text>
+                )}
+              </>
+            )}
 
-            {/* Analyze project */}
-            <div
-              className={activePanel === 'analyze' ? styles.panelActive : styles.panelInactive}
-              onClick={() => setActivePanel('analyze')}
-            >
-              <div className={styles.panelHeading}><SearchRegular />Analyze project</div>
-              <Text className={styles.panelDesc}>
-                The system will analyze your project and suggest roles.
-              </Text>
-              {analyzeError && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{analyzeError}</MessageBarBody>
-                </MessageBar>
-              )}
-              <div className={styles.panelActionRow}>
-                {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
-                <Button
-                  appearance="primary"
-                  size="small"
-                  disabled={analyzeLoading}
-                  onClick={(e) => { e.stopPropagation(); void handleAnalyze(); }}
-                >
-                  {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
-                </Button>
-              </div>
-              {analyzeProposal && (
-                <Text className={styles.panelRationale}>
-                  Analysis complete.{' '}
-                  {analyzeProposal.members.length} role{analyzeProposal.members.length !== 1 ? 's' : ''} suggested.
+            {activePanel === 'template' && (
+              <>
+                {templatesLoading && <Spinner label="Loading templates..." size="small" />}
+                {!templatesLoading && templates.length === 0 && (
+                  <Text className={styles.panelDesc}>No templates available.</Text>
+                )}
+                {!templatesLoading && templates.length > 0 && (
+                  <div className={styles.templateGrid}>
+                    {templates.map((t) => (
+                      <div
+                        key={t.id}
+                        className={selectedTemplateId === t.id ? styles.templateCardSelected : styles.templateCard}
+                        onClick={() => setSelectedTemplateId(t.id)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            setSelectedTemplateId(t.id);
+                          }
+                        }}
+                        aria-pressed={selectedTemplateId === t.id}
+                      >
+                        <Text className={styles.templateTitle}>{t.title}</Text>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {activePanel === 'analyze' && (
+              <>
+                <Text className={styles.panelDesc}>
+                  The system will analyze your project and suggest roles.
                 </Text>
-              )}
-            </div>
+                {analyzeError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{analyzeError}</MessageBarBody>
+                  </MessageBar>
+                )}
+                <div className={styles.panelActionRow}>
+                  {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    disabled={analyzeLoading}
+                    onClick={() => void handleAnalyze()}
+                  >
+                    {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
+                  </Button>
+                </div>
+                {analyzeProposal && (
+                  <Text className={styles.panelRationale}>
+                    Analysis complete.{' '}
+                    {analyzeProposal.members.length} role{analyzeProposal.members.length !== 1 ? 's' : ''} suggested.
+                  </Text>
+                )}
+              </>
+            )}
           </div>
 
-          {/* Universe section */}
-          <div className={styles.universeSection}>
-            <Text className={styles.universeSectionLabel}>Universe</Text>
-            <div className={styles.universeGrid}>
-              <div
-                className={styles.universeCard}
-                onClick={() => setUniverse('')}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setUniverse(''); }}
-                aria-pressed={universe === ''}
-              >
-                <div className={styles.universeCardName}><ArrowShuffleRegular />Random</div>
-                <Text className={styles.universeCardCount}>Any universe</Text>
-              </div>
+          <Field label="Universe">
+            <Select
+              value={universe}
+              onChange={(_, data) => setUniverse(data.value)}
+            >
+              <option value="">Random (any universe)</option>
               {UNIVERSE_POOLS.map((u) => (
-                <div
-                  key={u.name}
-                  className={universe === u.name ? styles.universeCardSelected : styles.universeCard}
-                  onClick={() => setUniverse(u.name)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setUniverse(u.name); }}
-                  aria-pressed={universe === u.name}
-                >
-                  <Text className={styles.universeCardName}>{u.name}</Text>
-                  <Text className={styles.universeCardCount}>{u.count} characters available</Text>
-                </div>
+                <option key={u.name} value={u.name}>{u.name}</option>
               ))}
-            </div>
-          </div>
+            </Select>
+          </Field>
 
           {castError && (
             <MessageBar intent="error">
@@ -660,7 +569,7 @@ export function CastingWizardPage() {
                 disabled={!canCastTeam || castLoading}
                 onClick={() => void handleCastTeam()}
               >
-                {castLoading ? 'Casting' : 'Cast Team \u2192'}
+                {castLoading ? 'Casting' : 'Review'}
               </Button>
             </div>
           </div>
@@ -741,7 +650,7 @@ export function CastingWizardPage() {
               disabled={proposal.members.length === 0 || proposalLoading}
               onClick={() => setStep('confirm')}
             >
-              Next
+              Confirm
             </Button>
           </div>
         </div>
@@ -750,7 +659,7 @@ export function CastingWizardPage() {
       {/* Step 3: Confirm */}
       {step === 'confirm' && proposal && (
         <div className={styles.card}>
-          <Title3>Create team</Title3>
+          <Title3>Cast team</Title3>
           <Text>
             You are about to create a team with {proposal.members.length} member{proposal.members.length !== 1 ? 's' : ''}.
             {proposal.existing_team_present && intent === 'recast' && ' The existing team will be replaced.'}
@@ -771,7 +680,7 @@ export function CastingWizardPage() {
               disabled={confirming}
               onClick={() => void handleConfirm()}
             >
-              {confirming ? 'Creating' : 'Create team'}
+              {confirming ? 'Casting' : 'Cast team'}
             </Button>
             {confirming && <Spinner size="extra-tiny" aria-hidden="true" />}
           </div>
