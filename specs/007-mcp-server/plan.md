@@ -166,6 +166,51 @@ apps/Scaffolder.Mcp/
 3. Create `docs/reference/mcp.md` — one section per tool group; describes each tool's parameters and return shape
 4. Update `docs/guide/getting-started.md` — replace CLI setup steps with MCP server auto-discovery note
 
+### Phase 9 — Agentweaver Squad coordinator template (FR-015 – FR-020)
+
+**Goal**: When a team is cast (or a repo on-boarded), write `squad-agentweaver.agent.md` into the managed project's `.github/agents/` directory. This coordinator uses Agentweaver MCP tools for all work dispatch instead of the generic `task` tool.
+
+**Template location**: `packages/Scaffolder.Squad/Templates/agentweaver-squad-coordinator.md`  
+**Embedded resource**: added to `Scaffolder.Squad.csproj` as `EmbeddedResource`  
+**Written by**: new `SquadWriter.WriteAgentWeaverCoordinatorAsync(projectRootPath)` method
+
+**Template content outline**:
+```
+# You are Squad (Agentweaver Coordinator)
+
+## Session Start
+1. Run `project_list` — find the entry whose `repository_path` matches the current
+   working directory. Store the result as PROJECT_ID for this session.
+2. Read `.squad/team.md` — load the roster (cast names, roles).
+3. Announce: "Squad (Agentweaver) ready. Project: {name}. Team: {cast names}."
+
+## Dispatching Work
+When routing work to a team member:
+1. Call `run_submit` with `project_id: PROJECT_ID`, `agent_name: {member}`,
+   `task: {task description}`.
+2. Call `run_watch` with the returned `run_id` — surface progress notifications live.
+3. When `run_watch` returns status `awaiting_review`:
+   - Present the diff summary to the user.
+   - Ask: "Approve and merge, or decline?"
+   - Call `run_review` with the decision.
+4. Report the final outcome (merged / declined / failed).
+
+## What You Do NOT Do
+- You do NOT use the `task` or `runSubagent` tool — all work goes through `run_submit`.
+- You do NOT write code, generate designs, or produce domain artifacts yourself.
+- You do NOT hardcode the project ID — always resolve it via `project_list` at session start.
+
+## Team Management
+- `team_get` — show current roster
+- `team_cast` — propose roster changes
+- `team_member_add` / `team_member_retire` — add or retire members
+```
+
+**SquadWriter change**: Add `WriteAgentWeaverCoordinatorAsync` method. Called from:
+- `CastingService.ConfirmCastAsync` (new projects + on-boarded repos after team confirm)
+
+**On-boarding hook**: The on-boarding flow (GitHub import + local path creation) already calls `ConfirmCastAsync` at the team-confirm step — no separate hook needed.
+
 ---
 
 ## Success Verification
@@ -177,6 +222,7 @@ For each phase, build passes (`dotnet build`) before committing. Final verificat
 3. With the API running locally, an MCP client can call `project_list` and receive structured output
 4. `run_watch` produces progress notifications while a run is in-progress
 5. `dotnet build` succeeds with no errors and `apps/Scaffolder.Cli` is gone from the solution
+6. After confirming a cast, `.github/agents/squad-agentweaver.agent.md` exists in the managed repo with no hardcoded project ID
 
 ---
 
