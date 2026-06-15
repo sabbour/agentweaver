@@ -28,6 +28,7 @@ import {
   SparkleRegular,
   DocumentBulletListRegular,
   SearchRegular,
+  SettingsRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
@@ -226,10 +227,43 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     display: 'block',
   },
+  roleGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gap: tokens.spacingVerticalS,
+  },
+  roleCard: {
+    padding: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    cursor: 'pointer',
+    userSelect: 'none',
+  },
+  roleCardSelected: {
+    padding: tokens.spacingVerticalS,
+    border: `2px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusMedium,
+    cursor: 'pointer',
+    userSelect: 'none',
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  roleCardTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    display: 'block',
+  },
+  roleCardSummary: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
 });
 
 type Step = 'cast' | 'review' | 'confirm';
-type ActivePanel = 'formulate' | 'template' | 'analyze';
+type ActivePanel = 'formulate' | 'template' | 'analyze' | 'configure';
 
 const STEPS: Step[] = ['cast', 'review', 'confirm'];
 const STEP_LABELS: Record<Step, string> = {
@@ -270,6 +304,9 @@ export function CastingWizardPage() {
   // Templates data
   const [templates, setTemplates] = useState<TeamTemplateDto[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
+
+  // Configure panel
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
 
   // Proposal (review / confirm)
   const [proposal, setProposal] = useState<CastProposalDto | null>(null);
@@ -388,12 +425,32 @@ export function CastingWizardPage() {
         setCastLoading(false);
       }
     }
+    if (activePanel === 'configure' && selectedRoleIds.length > 0) {
+      setCastLoading(true);
+      setCastError(null);
+      try {
+        const req: CreateProposalRequest = { mode: 'manual', role_ids: selectedRoleIds };
+        if (universe) req.universe = universe;
+        const p = await apiClient.createProposal(projectId, req);
+        setProposal(p);
+        setStep('review');
+      } catch (err) {
+        setCastError(
+          err instanceof ApiError
+            ? `API error ${err.status}: ${err.body}`
+            : err instanceof Error ? err.message : String(err),
+        );
+      } finally {
+        setCastLoading(false);
+      }
+    }
   };
 
   const canCastTeam =
     (activePanel === 'formulate' && formulateProposal !== null) ||
     (activePanel === 'template' && selectedTemplateId !== '') ||
-    (activePanel === 'analyze' && analyzeProposal !== null);
+    (activePanel === 'analyze' && analyzeProposal !== null) ||
+    (activePanel === 'configure' && selectedRoleIds.length > 0);
 
   const handleRemoveMember = async (member: ProposedMemberDto) => {
     if (!proposal) return;
@@ -436,6 +493,10 @@ export function CastingWizardPage() {
     }
   };
 
+  const allCatalogRoles = templates.flatMap((t) => t.roles).filter(
+    (r, i, arr) => arr.findIndex((x) => x.id === r.id) === i,
+  );
+
   const rationale: string | null = (() => {
     if (activePanel === 'formulate' && formulateProposal) {
       return formulateProposal.warnings.length > 0
@@ -450,6 +511,12 @@ export function CastingWizardPage() {
     if (activePanel === 'template' && selectedTemplateId) {
       const tpl = templates.find((t) => t.id === selectedTemplateId);
       return tpl?.description ?? null;
+    }
+    if (activePanel === 'configure' && selectedRoleIds.length > 0) {
+      const titles = selectedRoleIds
+        .map((id) => allCatalogRoles.find((r) => r.id === id)?.title ?? id)
+        .join(', ');
+      return `Custom team: ${titles}`;
     }
     return null;
   })();
@@ -484,6 +551,7 @@ export function CastingWizardPage() {
             <Tab icon={<SparkleRegular />} value="formulate">Formulate</Tab>
             <Tab icon={<DocumentBulletListRegular />} value="template">Template</Tab>
             <Tab icon={<SearchRegular />} value="analyze">Analyze</Tab>
+            <Tab icon={<SettingsRegular />} value="configure">Configure</Tab>
           </TabList>
 
           <div className={styles.tabContent}>
@@ -586,6 +654,51 @@ export function CastingWizardPage() {
                     {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
                   </Button>
                 </div>
+              </>
+            )}
+
+            {activePanel === 'configure' && (
+              <>
+                <Text className={styles.panelDesc}>Select the roles for your team:</Text>
+                {templatesLoading && <Spinner label="Loading roles..." size="small" />}
+                {!templatesLoading && allCatalogRoles.length === 0 && (
+                  <Text className={styles.panelDesc}>No roles available.</Text>
+                )}
+                {!templatesLoading && allCatalogRoles.length > 0 && (
+                  <div className={styles.roleGrid}>
+                    {allCatalogRoles.map((role) => {
+                      const isSelected = selectedRoleIds.includes(role.id);
+                      return (
+                        <div
+                          key={role.id}
+                          className={isSelected ? styles.roleCardSelected : styles.roleCard}
+                          onClick={() =>
+                            setSelectedRoleIds((prev) =>
+                              prev.includes(role.id)
+                                ? prev.filter((id) => id !== role.id)
+                                : [...prev, role.id],
+                            )
+                          }
+                          role="checkbox"
+                          aria-checked={isSelected}
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              setSelectedRoleIds((prev) =>
+                                prev.includes(role.id)
+                                  ? prev.filter((id) => id !== role.id)
+                                  : [...prev, role.id],
+                              );
+                            }
+                          }}
+                        >
+                          <span className={styles.roleCardTitle}>{role.title}</span>
+                          <span className={styles.roleCardSummary}>{role.summary}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </>
             )}
           </div>

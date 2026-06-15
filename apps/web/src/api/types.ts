@@ -224,11 +224,12 @@ export interface CastProposalDto {
 }
 
 export interface CreateProposalRequest {
-  mode: 'scenario' | 'free_text' | 'analysis';
+  mode: 'scenario' | 'free_text' | 'analysis' | 'manual';
   template_id?: string;
   goal?: string;
   universe?: string;
   model_id?: string;
+  role_ids?: string[];
 }
 
 export interface AmendProposalRequest {
