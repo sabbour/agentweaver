@@ -116,6 +116,22 @@ public sealed class SquadWriter
     public bool MafAgentExists(string agentName)
         => File.Exists(Resolve(SquadPaths.MafAgentFor(agentName)));
 
+    public async Task WriteAgentWeaverCoordinatorAsync()
+    {
+        var full = Resolve(SquadPaths.AgentWeaverCoordinatorMd);
+        EnsureDirectory(full);
+
+        var assembly = typeof(SquadWriter).Assembly;
+        var resourceName = assembly.GetManifestResourceNames()
+            .First(n => n.EndsWith("agentweaver-squad-coordinator.md", StringComparison.OrdinalIgnoreCase));
+
+        await using var stream = assembly.GetManifestResourceStream(resourceName)!;
+        using var reader = new StreamReader(stream);
+        var content = await reader.ReadToEndAsync();
+
+        await File.WriteAllTextAsync(full, content);
+    }
+
     public void AppendRegistryEvent(object eventRecord)
         => AppendLine(SquadPaths.CanonicalRegistryEvents, SquadSerialization.SerializeLine(eventRecord));
 
