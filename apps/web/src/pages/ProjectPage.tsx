@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Badge,
@@ -278,6 +278,9 @@ export function ProjectPage() {
             <div className={styles.actions}>
               <Link to={`/projects/${projectId}/settings`} style={{ textDecoration: 'none' }}>
                 <Button appearance="secondary">Settings</Button>
+              </Link>
+              <Link to={`/projects/${projectId}/team`} style={{ textDecoration: 'none' }}>
+                <Button appearance="secondary">Team</Button>
               </Link>
               <StartRunDialog
                 projectId={projectId}

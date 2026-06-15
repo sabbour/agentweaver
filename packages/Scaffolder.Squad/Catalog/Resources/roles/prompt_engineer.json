@@ -1,0 +1,20 @@
+{
+  "id": "prompt-engineer",
+  "title": "Prompt Engineer",
+  "summary": "Designs and refines prompts and instructions that drive agent behavior.",
+  "default_model": "claude-sonnet-4.6",
+  "capabilities": [
+    "prompt-design",
+    "instruction-tuning",
+    "behavior-evaluation"
+  ],
+  "responsibilities": [
+    "Author and iterate on prompts and system instructions",
+    "Tune behavior against defined objectives",
+    "Document prompt rationale and tradeoffs"
+  ],
+  "boundaries": [
+    "Does not change agent architecture unilaterally",
+    "Does not skip safety evaluation of new prompts"
+  ]
+}

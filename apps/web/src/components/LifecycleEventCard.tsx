@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+﻿import { memo, useState } from 'react';
 import { Badge, Button, Text, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
@@ -144,7 +144,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorStatusInformativeBorder1}`,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
@@ -156,8 +156,8 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorStatusInformativeBackground1,
-    borderBottom: `1px solid ${tokens.colorStatusInformativeBorder1}`,
+    backgroundColor: tokens.colorBrandBackground2,
+    borderBottom: `1px solid ${tokens.colorBrandStroke2}`,
   },
   approvalBodyRedesign: {
     display: 'flex',
@@ -439,10 +439,10 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
     <div className={styles.approvalCardRedesign} role="alert">
       <div className={styles.approvalHeaderRedesign}>
         <ShieldLockRegular
-          style={{ fontSize: '18px', color: tokens.colorStatusInformativeForeground1 }}
+          style={{ fontSize: '18px', color: tokens.colorBrandForeground1 }}
           aria-hidden="true"
         />
-        <Text weight="semibold" size={300} style={{ color: tokens.colorStatusInformativeForeground1 }}>
+        <Text weight="semibold" size={300} style={{ color: tokens.colorBrandForeground1 }}>
           Tool Approval Required
         </Text>
       </div>

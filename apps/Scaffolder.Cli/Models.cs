@@ -267,6 +267,196 @@ public sealed record ProjectRunSummary
 }
 
 // -----------------------------------------------------------------------
+// Casting
+// -----------------------------------------------------------------------
+
+public sealed record RoleModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public required string Id { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("title")]
+    public required string Title { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model")]
+    public required string DefaultModel { get; init; }
+}
+
+public sealed record ProposedMemberModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("proposed_name")]
+    public required string ProposedName { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("role")]
+    public required RoleModel Role { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("charter_markdown")]
+    public required string CharterMarkdown { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("is_named")]
+    public required bool IsNamed { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model")]
+    public required string DefaultModel { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("justification")]
+    public string? Justification { get; init; }
+}
+
+public sealed record TeamTemplateModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public required string Id { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("title")]
+    public required string Title { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("description")]
+    public required string Description { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("roles")]
+    public required IReadOnlyList<RoleModel> Roles { get; init; }
+}
+
+public sealed record CastProposalModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("proposal_id")]
+    public required string ProposalId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("universe")]
+    public required string Universe { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("members")]
+    public required IReadOnlyList<ProposedMemberModel> Members { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("existing_team_present")]
+    public required bool ExistingTeamPresent { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("run_id")]
+    public string? RunId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("warnings")]
+    public required IReadOnlyList<string> Warnings { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("rationale")]
+    public string? Rationale { get; init; }
+}
+
+public sealed record TeamMemberModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public required string Name { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("role_title")]
+    public required string RoleTitle { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("charter_path")]
+    public required string CharterPath { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required string Status { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("default_model")]
+    public required string DefaultModel { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("is_named")]
+    public required bool IsNamed { get; init; }
+}
+
+public sealed record TeamModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("project_name")]
+    public required string ProjectName { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("universe")]
+    public required string Universe { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("members")]
+    public required IReadOnlyList<TeamMemberModel> Members { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("layout")]
+    public required string Layout { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("migration_available")]
+    public required bool MigrationAvailable { get; init; }
+}
+
+public sealed record CharterModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("member_name")]
+    public required string MemberName { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("content")]
+    public required string Content { get; init; }
+}
+
+public sealed record CreateProposalRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("mode")]
+    public required string Mode { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("template_id")]
+    public string? TemplateId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("universe")]
+    public string? Universe { get; init; }
+}
+
+public sealed record ConfirmProposalRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("intent")]
+    public string? Intent { get; init; }
+}
+
+public sealed record AddMemberRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("role_id")]
+    public required string RoleId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("custom_role_title")]
+    public string? CustomRoleTitle { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("model_id")]
+    public string? ModelId { get; init; }
+}
+
+public sealed record ReroleRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("new_role_id")]
+    public required string NewRoleId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("custom_role_title")]
+    public string? CustomRoleTitle { get; init; }
+}
+
+public sealed record UpdateCharterRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("content")]
+    public required string Content { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// Sync
+// -----------------------------------------------------------------------
+
+public sealed record SyncChangeModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("path")]
+    public required string Path { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+}
+
+public sealed record SyncStatusModel
+{
+    [System.Text.Json.Serialization.JsonPropertyName("changes")]
+    public required IReadOnlyList<SyncChangeModel> Changes { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("change_set_hash")]
+    public required string ChangeSetHash { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("nothing_to_sync")]
+    public required bool NothingToSync { get; init; }
+}
+
+public sealed record SyncCommitRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("expected_change_set_hash")]
+    public required string ExpectedChangeSetHash { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public string? Message { get; init; }
+}
+
+public sealed record SyncCommitResponse
+{
+    [System.Text.Json.Serialization.JsonPropertyName("commit_id")]
+    public required string CommitId { get; init; }
+}
+
+/// <summary>Raised when POST /team/sync returns 409 with code sync_state_changed.</summary>
+public sealed class SyncStateChangedException(string message) : Exception(message);
+
+/// <summary>Error body for 409 sync conflict responses.</summary>
+public sealed record SyncConflictErrorBody
+{
+    [System.Text.Json.Serialization.JsonPropertyName("error")]
+    public required string Error { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required string Code { get; init; }
+}
+
+// -----------------------------------------------------------------------
 // GitHub auth
 // -----------------------------------------------------------------------
 

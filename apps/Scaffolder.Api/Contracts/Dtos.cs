@@ -16,6 +16,9 @@ public sealed record CreateRunRequest
 
     [JsonPropertyName("model_source")]
     public string? ModelSource { get; init; }
+
+    [JsonPropertyName("agent_name")]
+    public string? AgentName { get; init; }
 }
 
 /// <summary>Response body for POST /api/runs.</summary>
@@ -95,6 +98,9 @@ public sealed record RunResponse
     /// </summary>
     [JsonPropertyName("outcome_reason")]
     public string? OutcomeReason { get; init; }
+
+    [JsonPropertyName("agent_name")]
+    public string? AgentName { get; init; }
 }
 
 public sealed record SandboxStatusDto
@@ -359,6 +365,7 @@ public sealed record CreateProjectRunRequest
     [JsonPropertyName("model_source")] public string? ModelSource { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }
     [JsonPropertyName("base_branch")] public string? BaseBranch { get; init; }
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
 }
 
 // -----------------------------------------------------------------------
@@ -384,4 +391,143 @@ public sealed record GitHubAuthStatusResponse
     [JsonPropertyName("status")] public required string Status { get; init; }   // "signed_in" | "signed_out" | "never_signed_in"
     [JsonPropertyName("login")] public string? Login { get; init; }
     [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// Casting
+// -----------------------------------------------------------------------
+
+public sealed record CreateProposalRequest
+{
+    [JsonPropertyName("mode")] public required string Mode { get; init; }
+    [JsonPropertyName("template_id")] public string? TemplateId { get; init; }
+    [JsonPropertyName("goal")] public string? Goal { get; init; }
+    [JsonPropertyName("universe")] public string? Universe { get; init; }
+    [JsonPropertyName("model_id")] public string? ModelId { get; init; }
+    [JsonPropertyName("team_size")] public int? TeamSize { get; init; }
+    // mode: "scenario" | "free_text" | "analysis" | "manual"
+    [JsonPropertyName("role_ids")] public IReadOnlyList<string>? RoleIds { get; init; }
+}
+
+public sealed record AmendProposalRequest
+{
+    [JsonPropertyName("members")] public IReadOnlyList<ProposedMemberDto>? Members { get; init; }
+    [JsonPropertyName("universe")] public string? Universe { get; init; }
+}
+
+public sealed record ConfirmProposalRequest
+{
+    [JsonPropertyName("intent")] public string? Intent { get; init; }
+}
+
+public sealed record RoleDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("title")] public required string Title { get; init; }
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+    [JsonPropertyName("default_model")] public required string DefaultModel { get; init; }
+}
+
+public sealed record ProposedMemberDto
+{
+    [JsonPropertyName("proposed_name")] public required string ProposedName { get; init; }
+    [JsonPropertyName("role")] public required RoleDto Role { get; init; }
+    [JsonPropertyName("charter_markdown")] public required string CharterMarkdown { get; init; }
+    [JsonPropertyName("is_named")] public required bool IsNamed { get; init; }
+    [JsonPropertyName("default_model")] public required string DefaultModel { get; init; }
+    [JsonPropertyName("justification")] public string? Justification { get; init; }
+}
+
+public sealed record TeamTemplateDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("title")] public required string Title { get; init; }
+    [JsonPropertyName("description")] public required string Description { get; init; }
+    [JsonPropertyName("roles")] public required IReadOnlyList<RoleDto> Roles { get; init; }
+}
+
+public sealed record CastProposalDto
+{
+    [JsonPropertyName("proposal_id")] public required string ProposalId { get; init; }
+    [JsonPropertyName("mode")] public required string Mode { get; init; }
+    [JsonPropertyName("universe")] public required string Universe { get; init; }
+    [JsonPropertyName("members")] public required IReadOnlyList<ProposedMemberDto> Members { get; init; }
+    [JsonPropertyName("existing_team_present")] public required bool ExistingTeamPresent { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("warnings")] public required IReadOnlyList<string> Warnings { get; init; }
+    [JsonPropertyName("rationale")] public string? Rationale { get; init; }
+}
+
+public sealed record TeamMemberDto
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("role_title")] public required string RoleTitle { get; init; }
+    [JsonPropertyName("charter_path")] public required string CharterPath { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("default_model")] public required string DefaultModel { get; init; }
+    [JsonPropertyName("is_named")] public required bool IsNamed { get; init; }
+    [JsonPropertyName("charter_created_at")] public DateTimeOffset? CharterCreatedAt { get; init; }
+    [JsonPropertyName("charter_updated_at")] public DateTimeOffset? CharterUpdatedAt { get; init; }
+}
+
+public sealed record TeamDto
+{
+    [JsonPropertyName("project_name")] public required string ProjectName { get; init; }
+    [JsonPropertyName("universe")] public required string Universe { get; init; }
+    [JsonPropertyName("members")] public required IReadOnlyList<TeamMemberDto> Members { get; init; }
+    [JsonPropertyName("layout")] public required string Layout { get; init; }
+    [JsonPropertyName("migration_available")] public required bool MigrationAvailable { get; init; }
+}
+
+public sealed record CharterDto
+{
+    [JsonPropertyName("member_name")] public required string MemberName { get; init; }
+    [JsonPropertyName("content")] public required string Content { get; init; }
+}
+
+public sealed record HistoryDto
+{
+    [JsonPropertyName("member_name")] public required string MemberName { get; init; }
+    [JsonPropertyName("content")] public required string Content { get; init; }
+}
+
+public sealed record AddMemberRequest
+{
+    [JsonPropertyName("role_id")] public required string RoleId { get; init; }
+    [JsonPropertyName("custom_role_title")] public string? CustomRoleTitle { get; init; }
+    [JsonPropertyName("model_id")] public string? ModelId { get; init; }
+}
+
+public sealed record ReroleRequest
+{
+    [JsonPropertyName("new_role_id")] public required string NewRoleId { get; init; }
+    [JsonPropertyName("custom_role_title")] public string? CustomRoleTitle { get; init; }
+}
+
+public sealed record UpdateCharterRequest
+{
+    [JsonPropertyName("content")] public required string Content { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// Sync
+// -----------------------------------------------------------------------
+
+public sealed record SyncChangeDto
+{
+    [JsonPropertyName("path")] public required string Path { get; init; }
+    [JsonPropertyName("kind")] public required string Kind { get; init; }
+}
+
+public sealed record SyncStatusResponse
+{
+    [JsonPropertyName("changes")] public required IReadOnlyList<SyncChangeDto> Changes { get; init; }
+    [JsonPropertyName("change_set_hash")] public required string ChangeSetHash { get; init; }
+    [JsonPropertyName("nothing_to_sync")] public required bool NothingToSync { get; init; }
+}
+
+public sealed record SyncCommitRequest
+{
+    [JsonPropertyName("expected_change_set_hash")] public string? ExpectedChangeSetHash { get; init; }
+    [JsonPropertyName("message")] public string? Message { get; init; }
 }

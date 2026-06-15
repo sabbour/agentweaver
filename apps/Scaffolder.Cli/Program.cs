@@ -1,4 +1,5 @@
 using Scaffolder.Cli;
+using Scaffolder.Cli.Commands;
 using Spectre.Console;
 
 return await CliEntryPoint.RunAsync(args);
@@ -25,7 +26,8 @@ internal static class CliEntryPoint
         if (!string.Equals(topCommand, "run", StringComparison.Ordinal) &&
             !string.Equals(topCommand, "sandbox-policy", StringComparison.Ordinal) &&
             !string.Equals(topCommand, "project", StringComparison.Ordinal) &&
-            !string.Equals(topCommand, "github", StringComparison.Ordinal))
+            !string.Equals(topCommand, "github", StringComparison.Ordinal) &&
+            !string.Equals(topCommand, "team", StringComparison.Ordinal))
         {
             AnsiConsole.MarkupLine($"[red]Unknown command:[/] {Markup.Escape(args[0])}");
             PrintUsage();
@@ -51,6 +53,11 @@ internal static class CliEntryPoint
             if (string.Equals(topCommand, "project", StringComparison.Ordinal))
             {
                 return await HandleProjectAsync(api, subcommand, args, cts.Token);
+            }
+
+            if (string.Equals(topCommand, "team", StringComparison.Ordinal))
+            {
+                return await HandleTeamAsync(api, subcommand, args, cts.Token);
             }
 
             if (string.Equals(topCommand, "github", StringComparison.Ordinal))
@@ -240,9 +247,165 @@ internal static class CliEntryPoint
         AnsiConsole.WriteLine("  scaffolder github sign-out");
         AnsiConsole.WriteLine("  scaffolder github status");
         AnsiConsole.WriteLine();
+        AnsiConsole.WriteLine("  scaffolder team scenarios");
+        AnsiConsole.WriteLine("  scaffolder team cast --project-id <id> --scenario <template-id>");
+        AnsiConsole.WriteLine("  scaffolder team show --project-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team proposal show <proposalId> --project-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team proposal confirm <proposalId> --project-id <id> [--intent new|augment|recast]");
+        AnsiConsole.WriteLine("  scaffolder team proposal reject <proposalId> --project-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team charter show <name> --project-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team charter edit <name> --project-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team member add --project-id <id> --role-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team member remove <name> --project-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team member rerole <name> --project-id <id> --role-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team sync status --project-id <id>");
+        AnsiConsole.WriteLine("  scaffolder team sync commit --project-id <id> [--message <msg>]");
+        AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("Environment:");
         AnsiConsole.WriteLine("  SCAFFOLDER_API_URL   API base URL (default: http://localhost:5000)");
         AnsiConsole.WriteLine("  SCAFFOLDER_API_KEY   API bearer key (required)");
+    }
+
+    private static async Task<int> HandleTeamAsync(
+        ApiClient api, string subcommand, string[] args, CancellationToken ct)
+    {
+        var projectId = GetFlag(args, "--project-id") ?? string.Empty;
+
+        switch (subcommand)
+        {
+            case "scenarios":
+                return await TeamCommands.ScenariosAsync(api, ct);
+
+            case "cast":
+            {
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                var scenarioId = GetFlag(args, "--scenario");
+                if (string.IsNullOrWhiteSpace(scenarioId))
+                {
+                    AnsiConsole.MarkupLine("[red]--scenario is required for scenario casting. Use --goal or --analyze for other modes.[/]");
+                    return 1;
+                }
+                var universe = GetFlag(args, "--universe");
+                return await TeamCommands.CastScenarioAsync(api, projectId, scenarioId, universe, ct);
+            }
+
+            case "show":
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                return await TeamCommands.ShowTeamAsync(api, projectId, ct);
+
+            case "proposal":
+            {
+                var prop = args.Length >= 3 ? args[2] : string.Empty;
+                var proposalId = args.Length >= 4 && !args[3].StartsWith('-') ? args[3] : GetFlag(args, "--proposal-id") ?? string.Empty;
+
+                // Derive proposalId: for "proposal show <id>", "proposal confirm <id>", "proposal reject <id>"
+                // args[2] = "proposal", args[3] = subcommand, args[4] = proposalId
+                var propSubcommand = args.Length >= 4 ? args[3] : string.Empty;
+                var propArg = args.Length >= 5 && !args[4].StartsWith('-') ? args[4] : GetFlag(args, "--proposal-id") ?? string.Empty;
+
+                switch (propSubcommand)
+                {
+                    case "show":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        if (string.IsNullOrWhiteSpace(propArg)) { AnsiConsole.MarkupLine("[red]proposal-id is required.[/]"); return 1; }
+                        return await TeamCommands.ProposalShowAsync(api, projectId, propArg, ct);
+
+                    case "confirm":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        if (string.IsNullOrWhiteSpace(propArg)) { AnsiConsole.MarkupLine("[red]proposal-id is required.[/]"); return 1; }
+                        var intent = GetFlag(args, "--intent");
+                        return await TeamCommands.ProposalConfirmAsync(api, projectId, propArg, intent, ct);
+
+                    case "reject":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        if (string.IsNullOrWhiteSpace(propArg)) { AnsiConsole.MarkupLine("[red]proposal-id is required.[/]"); return 1; }
+                        return await TeamCommands.ProposalRejectAsync(api, projectId, propArg, ct);
+
+                    default:
+                        AnsiConsole.MarkupLine($"[red]Unknown proposal subcommand:[/] {Markup.Escape(propSubcommand)}");
+                        AnsiConsole.MarkupLine("Usage: scaffolder team proposal show|confirm|reject <proposalId> --project-id <id>");
+                        return 1;
+                }
+            }
+
+            case "charter":
+            {
+                var charterSubcommand = args.Length >= 4 ? args[3] : string.Empty;
+                var memberName = args.Length >= 5 && !args[4].StartsWith('-') ? args[4] : GetFlag(args, "--member") ?? string.Empty;
+
+                switch (charterSubcommand)
+                {
+                    case "show":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        if (string.IsNullOrWhiteSpace(memberName)) { AnsiConsole.MarkupLine("[red]member name is required.[/]"); return 1; }
+                        return await TeamCommands.CharterShowAsync(api, projectId, memberName, ct);
+
+                    case "edit":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        if (string.IsNullOrWhiteSpace(memberName)) { AnsiConsole.MarkupLine("[red]member name is required.[/]"); return 1; }
+                        return await TeamCommands.CharterEditAsync(api, projectId, memberName, ct);
+
+                    default:
+                        AnsiConsole.MarkupLine($"[red]Unknown charter subcommand:[/] {Markup.Escape(charterSubcommand)}");
+                        AnsiConsole.MarkupLine("Usage: scaffolder team charter show|edit <name> --project-id <id>");
+                        return 1;
+                }
+            }
+
+            case "member":
+            {
+                var memberSubcommand = args.Length >= 4 ? args[3] : string.Empty;
+                var memberArg = args.Length >= 5 && !args[4].StartsWith('-') ? args[4] : string.Empty;
+
+                switch (memberSubcommand)
+                {
+                    case "add":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        return await TeamCommands.MemberAddAsync(api, args, projectId, ct);
+
+                    case "remove":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        if (string.IsNullOrWhiteSpace(memberArg)) { AnsiConsole.MarkupLine("[red]member name is required.[/]"); return 1; }
+                        return await TeamCommands.MemberRemoveAsync(api, projectId, memberArg, ct);
+
+                    case "rerole":
+                        if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                        if (string.IsNullOrWhiteSpace(memberArg)) { AnsiConsole.MarkupLine("[red]member name is required.[/]"); return 1; }
+                        return await TeamCommands.MemberReroleAsync(api, args, projectId, memberArg, ct);
+
+                    default:
+                        AnsiConsole.MarkupLine($"[red]Unknown member subcommand:[/] {Markup.Escape(memberSubcommand)}");
+                        AnsiConsole.MarkupLine("Usage: scaffolder team member add|remove|rerole ...");
+                        return 1;
+                }
+            }
+
+            case "sync":
+            {
+                if (string.IsNullOrWhiteSpace(projectId)) { AnsiConsole.MarkupLine("[red]--project-id is required.[/]"); return 1; }
+                var syncSubcommand = args.Length >= 4 ? args[3] : string.Empty;
+
+                switch (syncSubcommand)
+                {
+                    case "status":
+                        return await TeamCommands.SyncStatusAsync(api, projectId, ct);
+
+                    case "commit":
+                        var messageArg = GetFlag(args, "--message");
+                        return await TeamCommands.SyncCommitAsync(api, projectId, messageArg, ct);
+
+                    default:
+                        AnsiConsole.MarkupLine($"[red]Unknown sync subcommand:[/] {Markup.Escape(syncSubcommand)}");
+                        AnsiConsole.MarkupLine("Usage: scaffolder team sync status|commit --project-id <id>");
+                        return 1;
+                }
+            }
+
+            default:
+                AnsiConsole.MarkupLine($"[red]Unknown subcommand for 'team':[/] {Markup.Escape(subcommand)}");
+                AnsiConsole.MarkupLine("Run 'scaffolder team --help' for usage.");
+                return 1;
+        }
     }
 
     private static async Task<int> HandleProjectAsync(

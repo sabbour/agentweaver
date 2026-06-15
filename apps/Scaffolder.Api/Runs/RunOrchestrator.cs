@@ -51,12 +51,15 @@ public sealed class RunOrchestrator
             throw;
         }
 
+        var agentCharter = ResolveAgentCharter(run);
+
         var started = run with
         {
             Status = RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             WorktreePath = worktreeInfo.WorktreePath,
             WorktreeBranch = worktreeInfo.BranchName,
+            AgentCharter = agentCharter,
         };
 
         await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
@@ -71,7 +74,8 @@ public sealed class RunOrchestrator
             run.OriginatingBranch,
             run.ModelSource.ToApiString(),
             run.ModelId,
-            run.SubmittingUser);
+            run.SubmittingUser,
+            agentCharter);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
@@ -112,7 +116,8 @@ public sealed class RunOrchestrator
             run.OriginatingBranch,
             run.ModelSource.ToApiString(),
             run.ModelId,
-            run.SubmittingUser);
+            run.SubmittingUser,
+            run.AgentCharter);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
@@ -161,10 +166,27 @@ public sealed class RunOrchestrator
             run.OriginatingBranch,
             run.ModelSource.ToApiString(),
             run.ModelId,
-            run.SubmittingUser);
+            run.SubmittingUser,
+            run.AgentCharter);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, generation, runCt);
+    }
+
+    /// <summary>
+    /// Resolves the agent charter for the given run by reading the .squad/agents/{name}/charter.md file.
+    /// Returns null if no AgentName is set or the charter file does not exist.
+    /// </summary>
+    public string? ResolveAgentCharter(Run run)
+    {
+        if (string.IsNullOrWhiteSpace(run.AgentName) || string.IsNullOrWhiteSpace(run.RepositoryPath))
+            return null;
+
+        var squadCharter = Path.Combine(run.RepositoryPath, ".squad", "agents", run.AgentName, "charter.md");
+        if (File.Exists(squadCharter))
+            return File.ReadAllText(squadCharter);
+
+        return null;
     }
 }

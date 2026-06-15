@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
 import {
   FluentProvider,
@@ -11,6 +11,8 @@ import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { WatchPage } from './pages/WatchPage';
+import { TeamPage } from './pages/TeamPage';
+import { CastingWizardPage } from './pages/CastingWizardPage';
 import { GitHubSignIn } from './components/GitHubSignIn';
 import { SignInPage } from './pages/SignInPage';
 import { apiClient } from './api/apiClient';
@@ -80,6 +82,8 @@ function Shell() {
           <Route path="/" element={<ProjectGalleryPage />} />
           <Route path="/projects/:projectId" element={<ProjectPage />} />
           <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
+          <Route path="/projects/:projectId/team" element={<TeamPage />} />
+          <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
           <Route path="/watch/:runId" element={<WatchPage />} />
         </Routes>
       </main>

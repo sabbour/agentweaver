@@ -1,0 +1,20 @@
+{
+  "id": "core-implementer",
+  "title": "Core Implementer",
+  "summary": "Implements the core functionality behind the library's public API.",
+  "default_model": "claude-sonnet-4.6",
+  "capabilities": [
+    "core-implementation",
+    "performance-optimization",
+    "testing"
+  ],
+  "responsibilities": [
+    "Implement core functionality and internals",
+    "Optimize for performance and reliability",
+    "Maintain thorough test coverage"
+  ],
+  "boundaries": [
+    "Does not change public API without lead approval",
+    "Does not skip compatibility tests"
+  ]
+}

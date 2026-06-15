@@ -3,6 +3,7 @@ using Scaffolder.AgentRuntime;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Auth;
+using Scaffolder.Api.Casting;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Git;
 using Scaffolder.Api.Infrastructure;
@@ -10,6 +11,11 @@ using Scaffolder.Api.Projects;
 using Scaffolder.Api.Runs;
 using Scaffolder.Api.Security;
 using Scaffolder.Domain;
+using Scaffolder.Squad.Catalog;
+using Scaffolder.Squad.Model;
+using Scaffolder.Squad.Squad;
+using Scaffolder.Squad.Analysis;
+using Scaffolder.Squad.Sync;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -76,6 +82,12 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
 // Checkpoint GC background service (Guardrail 8)
 builder.Services.AddHostedService<CheckpointGcService>();
 
+// Casting
+builder.Services.AddSingleton<CatalogReader>();
+builder.Services.AddSingleton<CastProposalStore>();
+builder.Services.AddSingleton<ProjectSignalScanner>();
+builder.Services.AddSingleton<CastingService>();
+
 var app = builder.Build();
 
 await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
@@ -134,6 +146,7 @@ app.MapPost("/api/runs", async (
         SubmittingUser = caller.User,
         Status = RunStatus.Pending,
         StartedAt = DateTimeOffset.UtcNow,
+        AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
     };
 
     try
@@ -258,6 +271,7 @@ app.MapGet("/api/runs/{id}", async (
         WorktreeBranch = run.WorktreeBranch,
         OutcomeAchieved = outcomeAchieved,
         OutcomeReason = outcomeReason,
+        AgentName = run.AgentName,
     });
 });
 
@@ -1655,6 +1669,7 @@ app.MapGet("/api/projects/{id}/runs", async (
         task = r.Task,
         started_at = r.StartedAt,
         ended_at = r.EndedAt,
+        agent_name = r.AgentName,
     }));
 });
 
@@ -1730,7 +1745,13 @@ app.MapPost("/api/projects/{id}/runs", async (
         Status = RunStatus.Pending,
         StartedAt = DateTimeOffset.UtcNow,
         ProjectId = projectId,
+        AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
     };
+
+    // Resolve charter from .squad/agents/{name}/charter.md before reserving the row so it is persisted.
+    var agentCharter = orchestrator.ResolveAgentCharter(run);
+    if (agentCharter is not null)
+        run = run with { AgentCharter = agentCharter };
 
     // Atomically reserve the run row (Pending) only when project is still Active
     bool reserved = await runStore.TryCreateProjectRunAsync(run, ct);
@@ -1767,6 +1788,587 @@ app.MapPost("/api/projects/{id}/runs", async (
     return Results.Accepted(
         $"/api/runs/{run.Id}",
         new CreateRunResponse { RunId = run.Id.ToString(), Status = "in_progress" });
+});
+
+// -----------------------------------------------------------------------
+// Casting & Team endpoints
+// -----------------------------------------------------------------------
+
+// GET /api/casting/templates — list all team templates from the catalog
+app.MapGet("/api/casting/templates", (CastingService castingService, CatalogReader catalog) =>
+{
+    var templates = catalog.LoadTemplates();
+    return Results.Ok(templates.Select(CastingMappings.ToDto));
+});
+
+// GET /api/catalog/roles — list all available role archetypes
+app.MapGet("/api/catalog/roles", (CastingService castingService) =>
+{
+    var roles = castingService.GetAllRoles();
+    return Results.Ok(roles);
+});
+
+// POST /api/projects/{id}/casting/proposals — create a new proposal
+app.MapPost("/api/projects/{id}/casting/proposals", async (
+    string id,
+    CreateProposalRequest request,
+    CastingService castingService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    var mode = (request.Mode ?? string.Empty).ToLowerInvariant();
+
+    if (mode is not ("scenario" or "free_text" or "analysis" or "manual"))
+        return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
+
+    try
+    {
+        switch (mode)
+        {
+            case "scenario":
+            {
+                if (string.IsNullOrWhiteSpace(request.TemplateId))
+                    return Results.BadRequest(new { error = "template_id is required for scenario mode." });
+
+                var (proposal, _) = await castingService.ProposeScenarioCastAsync(
+                    id, request.TemplateId, request.Universe, ct);
+                return Results.Ok(CastingMappings.ToDto(proposal));
+            }
+            case "free_text":
+            {
+                var (proposal, _) = await castingService.ProposeFreetextCastAsync(
+                    id, request.Goal ?? "", request.Universe, request.ModelId, ct, request.TeamSize);
+                return Results.Ok(CastingMappings.ToDto(proposal));
+            }
+            case "analysis":
+            {
+                var (proposal, _) = await castingService.ProposeAnalysisCastAsync(
+                    id, request.Universe, request.ModelId, ct, request.TeamSize);
+                return Results.Ok(CastingMappings.ToDto(proposal));
+            }
+            case "manual":
+            {
+                if (request.RoleIds is null || request.RoleIds.Count == 0)
+                    return Results.BadRequest(new { error = "role_ids is required for manual mode." });
+
+                var (proposal, _) = await castingService.ProposeManualCastAsync(
+                    id, request.RoleIds, request.Universe, ct);
+                return Results.Ok(CastingMappings.ToDto(proposal));
+            }
+            default:
+                return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
+        }
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (SquadLayoutConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (ModelRunFailedException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "model_run_failed" });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to create proposal for project {ProjectId}", id);
+        return Results.Problem("Failed to create proposal.", statusCode: 500);
+    }
+});
+
+// GET /api/projects/{id}/casting/proposals/{proposalId} — get proposal
+app.MapGet("/api/projects/{id}/casting/proposals/{proposalId}", (
+    string id,
+    string proposalId,
+    CastProposalStore proposalStore) =>
+{
+    var (proposal, _) = proposalStore.Get(id, proposalId);
+    if (proposal is null) return Results.NotFound();
+    return Results.Ok(CastingMappings.ToDto(proposal));
+});
+
+// PATCH /api/projects/{id}/casting/proposals/{proposalId} — amend proposal
+app.MapMethods("/api/projects/{id}/casting/proposals/{proposalId}", ["PATCH"], async (
+    string id,
+    string proposalId,
+    AmendProposalRequest request,
+    CastingService castingService,
+    CatalogReader catalog) =>
+{
+    IReadOnlyList<Scaffolder.Squad.Model.ProposedMember>? members = null;
+    if (request.Members is not null)
+    {
+        var converted = new List<Scaffolder.Squad.Model.ProposedMember>();
+        foreach (var m in request.Members)
+        {
+            var role = new Scaffolder.Squad.Model.Role(
+                Id: m.Role.Id,
+                Title: m.Role.Title,
+                Summary: m.Role.Summary,
+                DefaultModel: m.Role.DefaultModel,
+                Capabilities: [],
+                Responsibilities: [],
+                Boundaries: []);
+            converted.Add(new Scaffolder.Squad.Model.ProposedMember(
+                ProposedName: m.ProposedName,
+                Role: role,
+                CharterMarkdown: m.CharterMarkdown,
+                IsNamed: m.IsNamed,
+                DefaultModel: m.DefaultModel,
+                Justification: m.Justification));
+        }
+        members = converted;
+    }
+
+    try
+    {
+        var updated = castingService.AmendProposal(id, proposalId, members, request.Universe);
+        return Results.Ok(CastingMappings.ToDto(updated));
+    }
+    catch (ProposalNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+// POST /api/projects/{id}/casting/proposals/{proposalId}/confirm — confirm proposal
+app.MapPost("/api/projects/{id}/casting/proposals/{proposalId}/confirm", async (
+    string id,
+    string proposalId,
+    ConfirmProposalRequest request,
+    CastingService castingService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var team = await castingService.ConfirmProposalAsync(id, proposalId, request.Intent, ct);
+        var teamDto = new TeamDto
+        {
+            ProjectName = team.ProjectName,
+            Universe = team.Universe,
+            Members = team.Members.Select(m => CastingMappings.ToDto(m)).ToList(),
+            Layout = "canonical",
+            MigrationAvailable = false,
+        };
+        return Results.Ok(teamDto);
+    }
+    catch (ProposalNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (RequiresChoiceException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "requires_choice" });
+    }
+    catch (SquadLayoutConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to confirm proposal {ProposalId} for project {ProjectId}", proposalId, id);
+        return Results.Problem("Failed to confirm proposal.", statusCode: 500);
+    }
+});
+
+// DELETE /api/projects/{id}/casting/proposals/{proposalId} — reject proposal
+app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", (
+    string id,
+    string proposalId,
+    CastingService castingService) =>
+{
+    try
+    {
+        castingService.RejectProposal(id, proposalId);
+        return Results.NoContent();
+    }
+    catch (ProposalNotFoundException)
+    {
+        return Results.NotFound();
+    }
+});
+
+// GET /api/projects/{id}/team — get team
+app.MapGet("/api/projects/{id}/team", async (
+    string id,
+    CastingService castingService,
+    IProjectStore projectStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (!ProjectId.TryParse(id, out var projectId))
+            return Results.BadRequest(new { error = "Invalid project id." });
+
+        var project = await projectStore.GetAsync(projectId, ct);
+        if (project is null) return Results.NotFound();
+        if (project.State == ProjectState.Deleting)
+            return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+
+        var reader = new SquadReader(project.WorkingDirectory);
+        var layout = reader.DetectLayout();
+        var team = reader.ReadTeam();
+
+        if (team is null) return Results.NotFound();
+
+        var members = team.Members.Select(m =>
+        {
+            var charterFile = Path.Combine(project.WorkingDirectory, m.CharterPath);
+            DateTimeOffset? created = File.Exists(charterFile) ? new DateTimeOffset(File.GetCreationTimeUtc(charterFile), TimeSpan.Zero) : null;
+            DateTimeOffset? updated = File.Exists(charterFile) ? new DateTimeOffset(File.GetLastWriteTimeUtc(charterFile), TimeSpan.Zero) : null;
+            return CastingMappings.ToDto(m, created, updated);
+        }).ToList();
+
+        return Results.Ok(new TeamDto
+        {
+            ProjectName = team.ProjectName,
+            Universe = team.Universe,
+            Members = members,
+            Layout = layout.HasConflict ? "conflict"
+                : layout.HasCanonical ? "canonical"
+                : layout.HasLegacy ? "legacy"
+                : "absent",
+            MigrationAvailable = layout.HasLegacy && !layout.HasCanonical,
+        });
+    }
+    catch (SquadLayoutConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to get team for project {ProjectId}", id);
+        return Results.Problem("Failed to get team.", statusCode: 500);
+    }
+});
+
+// GET /api/projects/{id}/team/members/{name}/charter — get charter
+app.MapGet("/api/projects/{id}/team/members/{name}/charter", async (
+    string id,
+    string name,
+    CastingService castingService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var content = await castingService.GetCharterAsync(id, name, ct);
+        if (content is null) return Results.NotFound();
+        return Results.Ok(new CharterDto { MemberName = name, Content = content });
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to get charter for {Name} in project {ProjectId}", name, id);
+        return Results.Problem("Failed to get charter.", statusCode: 500);
+    }
+});
+
+// PUT /api/projects/{id}/team/members/{name}/charter — update charter
+app.MapPut("/api/projects/{id}/team/members/{name}/charter", async (
+    string id,
+    string name,
+    UpdateCharterRequest request,
+    CastingService castingService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Content))
+        return Results.BadRequest(new { error = "content is required." });
+
+    if (request.Content.Length > 50_000)
+        return Results.BadRequest(new { error = "Charter content must be 50,000 characters or fewer." });
+
+    try
+    {
+        await castingService.UpdateCharterAsync(id, name, request.Content, ct);
+        return Results.Ok(new CharterDto { MemberName = name, Content = request.Content });
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to update charter for {Name} in project {ProjectId}", name, id);
+        return Results.Problem("Failed to update charter.", statusCode: 500);
+    }
+});
+
+// GET /api/projects/{id}/team/members/{name}/history — get agent history
+app.MapGet("/api/projects/{id}/team/members/{name}/history", async (
+    string id,
+    string name,
+    CastingService castingService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var content = await castingService.GetHistoryAsync(id, name, ct);
+        if (content is null) return Results.NotFound();
+        return Results.Ok(new HistoryDto { MemberName = name, Content = content });
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to get history for {Name} in project {ProjectId}", name, id);
+        return Results.Problem("Failed to get history.", statusCode: 500);
+    }
+});
+
+// POST /api/projects/{id}/team/members — add member
+app.MapPost("/api/projects/{id}/team/members", async (
+    string id,
+    AddMemberRequest request,
+    CastingService castingService,
+    IProjectStore projectStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.RoleId))
+        return Results.BadRequest(new { error = "role_id is required." });
+
+    try
+    {
+        var member = await castingService.AddMemberAsync(id, request.RoleId, request.CustomRoleTitle, request.ModelId, ct);
+        DateTimeOffset? created = null;
+        DateTimeOffset? updated = null;
+        if (ProjectId.TryParse(id, out var addProjectId))
+        {
+            var project = await projectStore.GetAsync(addProjectId, ct);
+            if (project is not null)
+            {
+                var charterFile = Path.Combine(project.WorkingDirectory, member.CharterPath);
+                if (File.Exists(charterFile))
+                {
+                    created = new DateTimeOffset(File.GetCreationTimeUtc(charterFile), TimeSpan.Zero);
+                    updated = new DateTimeOffset(File.GetLastWriteTimeUtc(charterFile), TimeSpan.Zero);
+                }
+            }
+        }
+        return Results.Ok(CastingMappings.ToDto(member, created, updated));
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (SquadLayoutConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to add member to project {ProjectId}", id);
+        return Results.Problem("Failed to add member.", statusCode: 500);
+    }
+});
+
+// DELETE /api/projects/{id}/team/members/{name} — retire member
+app.MapDelete("/api/projects/{id}/team/members/{name}", async (
+    string id,
+    string name,
+    CastingService castingService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    try
+    {
+        await castingService.RetireMemberAsync(id, name, ct);
+        return Results.NoContent();
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (MemberNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (SquadLayoutConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to retire member {Name} from project {ProjectId}", name, id);
+        return Results.Problem("Failed to retire member.", statusCode: 500);
+    }
+});
+
+// PATCH /api/projects/{id}/team/members/{name} — re-role member
+app.MapMethods("/api/projects/{id}/team/members/{name}", ["PATCH"], async (
+    string id,
+    string name,
+    ReroleRequest request,
+    CastingService castingService,
+    IProjectStore projectStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.NewRoleId))
+        return Results.BadRequest(new { error = "new_role_id is required." });
+
+    try
+    {
+        var member = await castingService.ReroleMemberAsync(id, name, request.NewRoleId, request.CustomRoleTitle, ct);
+        DateTimeOffset? created = null;
+        DateTimeOffset? updated = null;
+        if (ProjectId.TryParse(id, out var reroleProjectId))
+        {
+            var project = await projectStore.GetAsync(reroleProjectId, ct);
+            if (project is not null)
+            {
+                var charterFile = Path.Combine(project.WorkingDirectory, member.CharterPath);
+                if (File.Exists(charterFile))
+                {
+                    created = new DateTimeOffset(File.GetCreationTimeUtc(charterFile), TimeSpan.Zero);
+                    updated = new DateTimeOffset(File.GetLastWriteTimeUtc(charterFile), TimeSpan.Zero);
+                }
+            }
+        }
+        return Results.Ok(CastingMappings.ToDto(member, created, updated));
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+    }
+    catch (MemberNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (SquadLayoutConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to re-role member {Name} in project {ProjectId}", name, id);
+        return Results.Problem("Failed to re-role member.", statusCode: 500);
+    }
+});
+
+// GET /api/projects/{projectId}/team/sync
+app.MapGet("/api/projects/{projectId}/team/sync", async (
+    string projectId,
+    CastingService castingService,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var status = await castingService.GetSyncStatusAsync(projectId, ct);
+        return Results.Ok(new SyncStatusResponse
+        {
+            Changes = status.Changes.Select(c => new SyncChangeDto
+            {
+                Path = c.RelativePath,
+                Kind = c.Kind.ToString().ToLowerInvariant()
+            }).ToList(),
+            ChangeSetHash = status.ChangeSetHash,
+            NothingToSync = status.NothingToSync
+        });
+    }
+    catch (ProjectNotFoundException) { return Results.NotFound(); }
+    catch (ProjectUnavailableException) { return Results.Conflict(new { error = "Project unavailable.", code = "project_unavailable" }); }
+    catch (Exception ex) when (ex.Message.Contains("not inside a git repository"))
+    {
+        return Results.BadRequest(new { error = "Project working directory is not a git repository." });
+    }
+});
+
+// POST /api/projects/{projectId}/team/sync
+app.MapPost("/api/projects/{projectId}/team/sync", async (
+    string projectId,
+    SyncCommitRequest request,
+    CastingService castingService,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.ExpectedChangeSetHash))
+        return Results.BadRequest(new { error = "expected_change_set_hash is required." });
+
+    try
+    {
+        var commitId = await castingService.CommitSyncAsync(
+            projectId, request.ExpectedChangeSetHash, request.Message, ct);
+        return Results.Ok(new { commit_id = commitId });
+    }
+    catch (ProjectNotFoundException) { return Results.NotFound(); }
+    catch (ProjectUnavailableException) { return Results.Conflict(new { error = "Project unavailable.", code = "project_unavailable" }); }
+    catch (SyncStateChangedException ex) { return Results.Conflict(new { error = ex.Message, code = "sync_state_changed" }); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("Nothing to sync"))
+    {
+        return Results.BadRequest(new { error = "Nothing to sync." });
+    }
 });
 
 // GET /auth/github/authorize — begin OAuth redirect flow
@@ -1913,7 +2515,7 @@ app.MapGet("/api/github/repos", async (
 
     try
     {
-        using var http = httpClientFactory.CreateClient();
+        using var http = httpClientFactory.CreateClient("github");
         var repos = new List<GitHubRepoResponse>();
         var page = 1;
         const int perPage = 100;
