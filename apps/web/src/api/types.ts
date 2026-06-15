@@ -230,6 +230,7 @@ export interface CreateProposalRequest {
   universe?: string;
   model_id?: string;
   role_ids?: string[];
+  team_size?: number;
 }
 
 export interface AmendProposalRequest {

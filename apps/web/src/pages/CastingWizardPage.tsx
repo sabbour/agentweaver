@@ -344,7 +344,6 @@ export function CastingWizardPage() {
     setFormulateError(null);
     try {
       let composedGoal = goal;
-      if (teamSize !== 4) composedGoal += `\n\nPreferred team size: ${teamSize}`;
       if (requiredRoles.trim()) composedGoal += `\n\nRequired roles: ${requiredRoles.trim()}`;
       if (selectedRoleIds.length > 0) {
         const roleTitles = selectedRoleIds
@@ -354,6 +353,7 @@ export function CastingWizardPage() {
       }
       const req: CreateProposalRequest = { mode: 'free_text', goal: composedGoal };
       if (universe) req.universe = universe;
+      if (teamSize !== 4) req.team_size = teamSize;
       const p = await apiClient.createProposal(projectId, req);
       setFormulateProposal(p);
       setSelectedRoleIds(p.members.map((m) => m.role.id));
@@ -374,6 +374,7 @@ export function CastingWizardPage() {
     try {
       const req: CreateProposalRequest = { mode: 'analysis' };
       if (universe) req.universe = universe;
+      if (teamSize !== 4) req.team_size = teamSize;
       const p = await apiClient.createProposal(projectId, req);
       setAnalyzeProposal(p);
       setSelectedRoleIds(p.members.map((m) => m.role.id));
@@ -606,6 +607,23 @@ export function CastingWizardPage() {
 
             {activePanel === 'analyze' && (
               <>
+                <div className={styles.teamSizeRow}>
+                  <Field label="Team size">
+                    <SpinButton
+                      value={teamSize}
+                      min={2}
+                      max={10}
+                      step={1}
+                      onChange={(_, data) => {
+                        if (data.value !== undefined) setTeamSize(data.value);
+                        else if (data.displayValue) {
+                          const n = parseInt(data.displayValue, 10);
+                          if (!isNaN(n)) setTeamSize(Math.min(10, Math.max(2, n)));
+                        }
+                      }}
+                    />
+                  </Field>
+                </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM }}>
                   <Text className={styles.panelDesc} style={{ flex: 1 }}>
                     The system will analyze your project and suggest roles.
