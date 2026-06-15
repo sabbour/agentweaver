@@ -4,7 +4,7 @@ Scaffolders runs as a single ASP.NET Core process. The API, run orchestration, e
 
 The `RunOrchestrator` provisions a per-run git worktree, persists run state, emits `run.started`, and launches the agent loop as hosted background work inside the process. The agent loop uses the shared runtime, evaluates every tool call through a deny-by-default governance gate before it executes, applies content safety, and writes every event to the durable log before publishing it live.
 
-SQLite stores both mutable run state and the append-only event log. `RunEventBroadcaster` fans live events out through `Channel<RunEvent>` so the CLI and web UI can subscribe to the same stream without owning any run logic. When the run finishes, the orchestrator commits the worktree, requests human review, and lets `LibGit2Sharp` merge only after approval.
+SQLite stores both mutable run state and the append-only event log. `RunEventBroadcaster` fans live events out through `Channel<RunEvent>` so the MCP server and web UI can subscribe to the same stream without owning any run logic. When the run finishes, the orchestrator commits the worktree, requests human review, and lets `LibGit2Sharp` merge only after approval.
 
 ## End-to-end flow
 
@@ -56,7 +56,7 @@ Human review gate
 | `SandboxedFileTools` | Defense-in-depth file reads and writes inside the run worktree; validates and re-verifies every path after open |
 | SQLite stores | Persist `runs`, `run_events`, and operational records |
 | `RunEventBroadcaster` | Fans events out to live subscribers through in-memory channels |
-| CLI and web UI | Thin clients that submit runs, watch events, and record review decisions |
+| MCP server and web UI | Thin clients that submit runs, watch events, and record review decisions |
 
 ## Review and merge model
 

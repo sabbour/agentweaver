@@ -1,6 +1,6 @@
 # Configuration
 
-This page collects the API, CLI, and web configuration in one place.
+This page collects the API and web configuration in one place.
 
 ## API configuration
 
@@ -44,13 +44,6 @@ The API reads standard ASP.NET Core configuration sources. In local development,
 
 Some local samples still show `Providers:Foundry` with `DeploymentName`. The current runtime reads `Providers:MicrosoftFoundry:Endpoint`, `Providers:MicrosoftFoundry:ApiKey`, and `Providers:MicrosoftFoundry:Deployment`.
 
-## CLI environment variables
-
-| Variable | Required | Default | Purpose |
-| --- | --- | --- | --- |
-| `SCAFFOLDER_API_URL` | No | `http://localhost:5000` | API base URL |
-| `SCAFFOLDER_API_KEY` | Yes | none | Bearer API key sent on every request |
-
 ## Web environment variables
 
 | Variable | Required | Default | Purpose |
@@ -62,8 +55,6 @@ Some local samples still show `Providers:Foundry` with `DeploymentName`. The cur
 
 ```powershell
 $env:ASPNETCORE_ENVIRONMENT = "Local"
-$env:SCAFFOLDER_API_URL = "http://localhost:5000"
-$env:SCAFFOLDER_API_KEY = "dev-local-key"
 ```
 
 ```dotenv

@@ -11,11 +11,8 @@ hero:
     - theme: alt
       text: API reference
       link: /reference/api
-    - theme: alt
-      text: CLI reference
-      link: /reference/cli
 ---
 
 ## How it works
 
-Scaffolders starts from an existing local Git repository and an originating branch that you choose at submission time. The API creates a dedicated worktree for the run, starts one agent inside that boundary, and records every event in a durable SQLite log. The CLI and web UI stream the same ordered events over server-sent events, so you can watch messages, tool calls, and tool outcomes as they happen. When the agent stops, Scaffolders commits the worktree state, asks for human review, and merges only after you approve. If the run fails, hits a bound, or the merge conflicts, the originating branch stays unchanged.
+Scaffolders starts from an existing local Git repository and an originating branch that you choose at submission time. The API creates a dedicated worktree for the run, starts one agent inside that boundary, and records every event in a durable SQLite log. The web UI and MCP server stream the same ordered events over server-sent events, so you can watch messages, tool calls, and tool outcomes as they happen. When the agent stops, Scaffolders commits the worktree state, asks for human review, and merges only after you approve. If the run fails, hits a bound, or the merge conflicts, the originating branch stays unchanged.

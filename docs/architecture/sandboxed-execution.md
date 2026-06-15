@@ -134,7 +134,7 @@ The same `SandboxExecutorFactory` runs on all targets. Each target gets real iso
 | Windows with WSL2 | `wsl-lxc` | Falls through to this when processcontainer is unavailable |
 | Linux cloud (Constitution VI) | `lxc-native-linux` | Requires `lxc-exec` at a known absolute path |
 
-Both clients (CLI and Web UI) reach the same endpoints. Executor selection happens in the backend, not the client. There is no client-side isolation logic.
+Both clients (MCP server and Web UI) reach the same endpoints. Executor selection happens in the backend, not the client. There is no client-side isolation logic.
 
 ## Windows ARM64 runbook
 

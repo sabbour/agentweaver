@@ -148,7 +148,7 @@ Creating a casting proposal in `free_text` or `analysis` mode starts a MAF run o
 
 The `run_id` returned in the `POST /api/projects/{id}/casting/proposals` response identifies that run. Stream its events from `GET /api/runs/{run_id}/stream` to observe the model's reasoning as it builds the proposal.
 
-The casting wizard in the web UI streams these events during the review step using the same timeline rendering as the watch screen. The CLI streams them inline while waiting for the proposal to become ready.
+The casting wizard in the web UI streams these events during the review step using the same timeline rendering as the watch screen. MCP clients receive them as progress notifications during a `team_cast` tool call.
 
 No `.squad/` files are written during this run. The run produces a proposal, not a commit. Files are only written after the user confirms the proposal through `POST /api/projects/{id}/casting/proposals/{pid}/confirm`.
 
