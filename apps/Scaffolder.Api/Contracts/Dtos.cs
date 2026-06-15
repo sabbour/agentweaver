@@ -448,6 +448,7 @@ public sealed record CastProposalDto
     [JsonPropertyName("existing_team_present")] public required bool ExistingTeamPresent { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("warnings")] public required IReadOnlyList<string> Warnings { get; init; }
+    [JsonPropertyName("rationale")] public string? Rationale { get; init; }
 }
 
 public sealed record TeamMemberDto

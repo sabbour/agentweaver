@@ -326,6 +326,8 @@ public sealed record CastProposalModel
     public string? RunId { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("warnings")]
     public required IReadOnlyList<string> Warnings { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("rationale")]
+    public string? Rationale { get; init; }
 }
 
 public sealed record TeamMemberModel

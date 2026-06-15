@@ -153,7 +153,8 @@ public sealed class CastingService
             Members: proposedMembers,
             ExistingTeamPresent: existingTeamPresent,
             RunId: null,
-            Warnings: []);
+            Warnings: [],
+            Rationale: template.Description);
 
         _proposalStore.Store(projectId, proposal, owner);
 
@@ -244,7 +245,8 @@ public sealed class CastingService
             Members: proposedMembers,
             ExistingTeamPresent: existingTeamPresent,
             RunId: null,
-            Warnings: []);
+            Warnings: [],
+            Rationale: $"Team manually configured with {proposedMembers.Count} role{(proposedMembers.Count != 1 ? "s" : "")}.");
 
         _proposalStore.Store(projectId, proposal, owner);
 
@@ -416,7 +418,7 @@ public sealed class CastingService
             throw new ModelRunFailedException("The casting model run failed to complete.");
         }
 
-        var selections = ParseRoleSelections(result);
+        var (rationale, selections) = ParseRoleSelections(result);
         if (selections.Count == 0)
         {
             _logger.LogWarning(
@@ -479,7 +481,8 @@ public sealed class CastingService
             Members: proposedMembers,
             ExistingTeamPresent: existingTeamPresent,
             RunId: runId,
-            Warnings: warnings);
+            Warnings: warnings,
+            Rationale: rationale);
 
         _proposalStore.Store(projectId, proposal, owner);
 
@@ -492,49 +495,88 @@ public sealed class CastingService
 
     private sealed record RoleSelection(string RoleId, string? Reason);
 
-    private static List<RoleSelection> ParseRoleSelections(string modelOutput)
+    private static (string? Rationale, List<RoleSelection> Selections) ParseRoleSelections(string modelOutput)
     {
         if (string.IsNullOrWhiteSpace(modelOutput))
-            return [];
+            return (null, []);
 
-        var json = ExtractJsonArray(modelOutput);
-        if (json is null)
-            return [];
+        // Try new object format first: {"rationale": "...", "roles": [...]}
+        var jsonObj = ExtractJsonObject(modelOutput);
+        if (jsonObj is not null)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(jsonObj);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    string? rationale = null;
+                    if (doc.RootElement.TryGetProperty("rationale", out var rProp) &&
+                        rProp.ValueKind == JsonValueKind.String)
+                        rationale = rProp.GetString()?.Trim();
+
+                    List<RoleSelection> selections = [];
+                    if (doc.RootElement.TryGetProperty("roles", out var rolesProp) &&
+                        rolesProp.ValueKind == JsonValueKind.Array)
+                        selections = ParseRoleArray(rolesProp);
+
+                    if (selections.Count > 0)
+                        return (rationale, selections);
+                }
+            }
+            catch (JsonException) { }
+        }
+
+        // Fall back to old bare-array format for backward compat
+        var jsonArr = ExtractJsonArray(modelOutput);
+        if (jsonArr is null)
+            return (null, []);
 
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(jsonArr);
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                return [];
-
-            var result = new List<RoleSelection>();
-            foreach (var element in doc.RootElement.EnumerateArray())
-            {
-                if (element.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                string? roleId = null;
-                if (element.TryGetProperty("role_id", out var idProp) &&
-                    idProp.ValueKind == JsonValueKind.String)
-                    roleId = idProp.GetString();
-
-                if (string.IsNullOrWhiteSpace(roleId))
-                    continue;
-
-                string? reason = null;
-                if (element.TryGetProperty("reason", out var reasonProp) &&
-                    reasonProp.ValueKind == JsonValueKind.String)
-                    reason = reasonProp.GetString();
-
-                result.Add(new RoleSelection(roleId.Trim(), reason));
-            }
-
-            return result;
+                return (null, []);
+            return (null, ParseRoleArray(doc.RootElement));
         }
         catch (JsonException)
         {
-            return [];
+            return (null, []);
         }
+    }
+
+    private static List<RoleSelection> ParseRoleArray(JsonElement arrayElement)
+    {
+        var result = new List<RoleSelection>();
+        foreach (var element in arrayElement.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                continue;
+
+            string? roleId = null;
+            if (element.TryGetProperty("role_id", out var idProp) &&
+                idProp.ValueKind == JsonValueKind.String)
+                roleId = idProp.GetString();
+
+            if (string.IsNullOrWhiteSpace(roleId))
+                continue;
+
+            string? reason = null;
+            if (element.TryGetProperty("reason", out var reasonProp) &&
+                reasonProp.ValueKind == JsonValueKind.String)
+                reason = reasonProp.GetString();
+
+            result.Add(new RoleSelection(roleId.Trim(), reason));
+        }
+        return result;
+    }
+
+    private static string? ExtractJsonObject(string text)
+    {
+        var start = text.IndexOf('{');
+        var end = text.LastIndexOf('}');
+        if (start < 0 || end <= start)
+            return null;
+        return text[start..(end + 1)];
     }
 
     private static string? ExtractJsonArray(string text)

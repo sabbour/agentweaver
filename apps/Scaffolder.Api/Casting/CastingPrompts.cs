@@ -10,7 +10,7 @@ namespace Scaffolder.Api.Casting;
 public static class CastingPrompts
 {
     /// <summary>
-    /// Prompt for free-text goal-based casting. Returns a JSON array of role selections.
+    /// Prompt for free-text goal-based casting. Returns a JSON object with rationale and role selections.
     /// </summary>
     public static string FreeText(string goal, IReadOnlyList<Role> availableRoles)
     {
@@ -29,7 +29,7 @@ public static class CastingPrompts
     }
 
     /// <summary>
-    /// Prompt for analysis-based casting. Returns a JSON array of role selections with justifications.
+    /// Prompt for analysis-based casting. Returns a JSON object with rationale and role selections with justifications.
     /// </summary>
     public static string Analysis(string signalSummary, IReadOnlyList<Role> availableRoles)
     {
@@ -87,18 +87,21 @@ public static class CastingPrompts
     private static void AppendOutputContract(StringBuilder sb, bool reasonRequired)
     {
         sb.Append("OUTPUT FORMAT:\n");
-        sb.Append("Respond with ONLY a JSON array and nothing else. ");
-        sb.Append("Do not include markdown code fences, explanations, or any text outside the array. ");
+        sb.Append("Respond with ONLY a JSON object and nothing else. ");
+        sb.Append("Do not include markdown code fences, explanations, or any text outside the object. ");
         sb.Append("Do not use emojis. ");
+        sb.Append("The object must have:\n");
+        sb.Append("- \"rationale\": a single sentence explaining why this combination of roles fits the project.\n");
+        sb.Append("- \"roles\": an array of role selection objects. ");
         sb.Append("Each element must be an object with a \"role_id\" string");
         if (reasonRequired)
-            sb.Append(" and a \"reason\" string (a one-sentence justification).\n");
+            sb.Append(" and a \"reason\" string (a one-sentence justification citing a specific signal).\n");
         else
             sb.Append(" and an optional \"reason\" string.\n");
         sb.Append("Example:\n");
         if (reasonRequired)
-            sb.Append("[{\"role_id\":\"backend-engineer\",\"reason\":\"...\"},{\"role_id\":\"qa-engineer\",\"reason\":\"...\"}]\n");
+            sb.Append("{\"rationale\":\"A backend-heavy stack with testing gaps calls for an engineer, a QA specialist, and a lead.\",\"roles\":[{\"role_id\":\"backend-engineer\",\"reason\":\"...\"},{\"role_id\":\"qa-engineer\",\"reason\":\"...\"}]}\n");
         else
-            sb.Append("[{\"role_id\":\"backend-engineer\",\"reason\":\"\"},{\"role_id\":\"qa-engineer\",\"reason\":\"\"}]\n");
+            sb.Append("{\"rationale\":\"A full-stack SaaS project needs a lead, frontend, backend, and QA to ship reliably.\",\"roles\":[{\"role_id\":\"backend-engineer\",\"reason\":\"\"},{\"role_id\":\"qa-engineer\",\"reason\":\"\"}]}\n");
     }
 }

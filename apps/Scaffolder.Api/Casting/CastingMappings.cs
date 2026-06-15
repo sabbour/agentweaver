@@ -44,6 +44,7 @@ public static class CastingMappings
         ExistingTeamPresent = proposal.ExistingTeamPresent,
         RunId = proposal.RunId,
         Warnings = proposal.Warnings,
+        Rationale = proposal.Rationale,
     };
 
     public static TeamMemberDto ToDto(CastMember member, DateTimeOffset? createdAt = null, DateTimeOffset? updatedAt = null) => new()

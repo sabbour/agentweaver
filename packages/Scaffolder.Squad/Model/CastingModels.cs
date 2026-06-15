@@ -41,7 +41,8 @@ public sealed record CastProposal(
     IReadOnlyList<ProposedMember> Members,
     bool ExistingTeamPresent,
     string? RunId,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    string? Rationale);
 
 public sealed record TeamTemplate(
     string Id,
