@@ -146,6 +146,7 @@ app.MapPost("/api/runs", async (
         SubmittingUser = caller.User,
         Status = RunStatus.Pending,
         StartedAt = DateTimeOffset.UtcNow,
+        AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
     };
 
     try
@@ -270,6 +271,7 @@ app.MapGet("/api/runs/{id}", async (
         WorktreeBranch = run.WorktreeBranch,
         OutcomeAchieved = outcomeAchieved,
         OutcomeReason = outcomeReason,
+        AgentName = run.AgentName,
     });
 });
 
@@ -1667,6 +1669,7 @@ app.MapGet("/api/projects/{id}/runs", async (
         task = r.Task,
         started_at = r.StartedAt,
         ended_at = r.EndedAt,
+        agent_name = r.AgentName,
     }));
 });
 
@@ -1742,7 +1745,13 @@ app.MapPost("/api/projects/{id}/runs", async (
         Status = RunStatus.Pending,
         StartedAt = DateTimeOffset.UtcNow,
         ProjectId = projectId,
+        AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
     };
+
+    // Resolve charter from .squad/agents/{name}/charter.md before reserving the row so it is persisted.
+    var agentCharter = orchestrator.ResolveAgentCharter(run);
+    if (agentCharter is not null)
+        run = run with { AgentCharter = agentCharter };
 
     // Atomically reserve the run row (Pending) only when project is still Active
     bool reserved = await runStore.TryCreateProjectRunAsync(run, ct);

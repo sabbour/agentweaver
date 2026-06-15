@@ -29,4 +29,8 @@ public sealed record Run
     public string? MergeConflicts { get; init; }
     public ProjectId? ProjectId { get; init; }
     public string? ModelId { get; init; }
+    /// <summary>The cast team member name executing this run (e.g. "morpheus"). Null for non-team runs.</summary>
+    public string? AgentName { get; init; }
+    /// <summary>The agent's charter content injected as system prompt. Null for non-team runs.</summary>
+    public string? AgentCharter { get; init; }
 }

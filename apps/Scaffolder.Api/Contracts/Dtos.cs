@@ -16,6 +16,9 @@ public sealed record CreateRunRequest
 
     [JsonPropertyName("model_source")]
     public string? ModelSource { get; init; }
+
+    [JsonPropertyName("agent_name")]
+    public string? AgentName { get; init; }
 }
 
 /// <summary>Response body for POST /api/runs.</summary>
@@ -95,6 +98,9 @@ public sealed record RunResponse
     /// </summary>
     [JsonPropertyName("outcome_reason")]
     public string? OutcomeReason { get; init; }
+
+    [JsonPropertyName("agent_name")]
+    public string? AgentName { get; init; }
 }
 
 public sealed record SandboxStatusDto
@@ -359,6 +365,7 @@ public sealed record CreateProjectRunRequest
     [JsonPropertyName("model_source")] public string? ModelSource { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }
     [JsonPropertyName("base_branch")] public string? BaseBranch { get; init; }
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
 }
 
 // -----------------------------------------------------------------------
