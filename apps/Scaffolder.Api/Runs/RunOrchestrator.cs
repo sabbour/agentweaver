@@ -196,7 +196,8 @@ public sealed class RunOrchestrator
             systemPromptContext,
             run.ProjectId?.ToString(),
             run.AgentName,
-            run.StartedAt);
+            run.StartedAt,
+            IsRevision: true);
 
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.

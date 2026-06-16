@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using GitHub.Copilot.SDK;
 using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Providers;
@@ -238,6 +239,21 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         if (_inner is null)
             throw new InvalidOperationException("SetupAsync must be called before CreateSessionAsync.");
         return _inner.CreateSessionAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Resumes an existing Copilot SDK session so the agent retains conversation history
+    /// across reviewer-requested-changes revision cycles. Uses the deterministic session ID
+    /// (<c>scaffolder-run-{runId}</c>) set during <see cref="SetupAsync"/>.
+    /// </summary>
+    public async ValueTask<AgentSession> ResumeSessionAsync(CancellationToken cancellationToken)
+    {
+        if (_inner is null)
+            throw new InvalidOperationException("SetupAsync must be called before ResumeSessionAsync.");
+        if (_inner is GitHubCopilotAgent ghAgent)
+            return await ghAgent.CreateSessionAsync($"scaffolder-run-{_runId}").ConfigureAwait(false);
+        // Fallback for non-Copilot inner agents (test doubles, etc.): create a fresh session.
+        return await _inner.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Runs the agent for a turn (non-streaming). Delegates to the inner agent.</summary>

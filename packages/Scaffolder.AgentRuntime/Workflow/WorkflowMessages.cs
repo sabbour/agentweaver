@@ -18,7 +18,9 @@ public sealed record AgentTurnInput(
     /// <summary>Revision loop counter. Incremented each time Rai or a reviewer sends work back.</summary>
     int Iteration = 0,
     /// <summary>Set by revision adapters when the iteration cap is reached; routes to terminal.</summary>
-    bool MaxIterationsReached = false);
+    bool MaxIterationsReached = false,
+    /// <summary>True when this turn continues an existing session (reviewer requested changes). Causes <see cref="CopilotAIAgent.ResumeSessionAsync"/> to be called instead of CreateSessionAsync.</summary>
+    bool IsRevision = false);
 
 /// <summary>Output from the agent turn executor, consumed by conditional edges.</summary>
 public sealed record AgentTurnOutput(

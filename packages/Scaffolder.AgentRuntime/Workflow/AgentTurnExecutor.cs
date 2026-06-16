@@ -61,7 +61,9 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 _apiKey,
                 ct).ConfigureAwait(false);
 
-            var session = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+            var session = input.IsRevision
+                ? await _agent.ResumeSessionAsync(ct).ConfigureAwait(false)
+                : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
 
             await _agent.ExecuteStreamingLoopAsync(input.Task, session, ct).ConfigureAwait(false);
         }
