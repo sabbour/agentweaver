@@ -87,7 +87,6 @@ function Shell() {
           <Route path="/projects/:projectId/team" element={<TeamPage />} />
           <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
           <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
-          <Route path="/watch/:runId" element={<WatchPage />} />
           <Route path="/projects/:projectId/runs/:runId/execution/:executionId" element={<WatchPage />} />
           <Route path="/projects/:projectId/runs/:runId/workflow" element={<WorkflowRunPage />} />
         </Routes>
