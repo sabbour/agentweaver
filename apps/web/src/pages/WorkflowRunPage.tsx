@@ -10,6 +10,7 @@ import {
 } from '@fluentui/react-components';
 import type { FluentIcon } from '@fluentui/react-icons';
 import {
+  ArrowLeftRegular,
   ArrowSyncRegular,
   BotRegular,
   CheckmarkCircleRegular,
@@ -210,6 +211,35 @@ const useStyles = makeStyles({
   cardActions: {
     marginTop: tokens.spacingVerticalXS,
   },
+  // Feedback loop arc — shown below pipeline when Rai or Review triggers rework
+  feedbackRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalS,
+    paddingBlock: tokens.spacingVerticalXS,
+    paddingInline: tokens.spacingHorizontalM,
+    borderTop: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
+    borderLeft: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
+    borderBottom: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
+    borderRadius: '0 0 0 6px',
+    backgroundColor: tokens.colorPaletteYellowBackground1,
+  },
+  feedbackIcon: {
+    display: 'flex',
+    color: tokens.colorPaletteYellowForeground1,
+    flexShrink: 0,
+  },
+  feedbackLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorPaletteYellowForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  feedbackSublabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    marginLeft: tokens.spacingHorizontalXS,
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -326,6 +356,29 @@ function ExecutorCard({ def, state, agentName, runId, projectId }: ExecutorCardP
 }
 
 // ---------------------------------------------------------------------------
+// Feedback Arc — shown when Rai or Review blocks and sends work back to agent
+// ---------------------------------------------------------------------------
+
+interface FeedbackArcProps {
+  source: 'rai' | 'review';
+}
+
+function FeedbackArc({ source }: FeedbackArcProps) {
+  const styles = useStyles();
+  const label = source === 'rai' ? 'RAI rejected' : 'Changes requested';
+  const sublabel = '— revision sent back to agent';
+  return (
+    <div className={styles.feedbackRow} role="status" aria-label={`${label} ${sublabel}`}>
+      <span className={styles.feedbackIcon} aria-hidden="true">
+        <ArrowLeftRegular fontSize={14} />
+      </span>
+      <span className={styles.feedbackLabel}>{label}</span>
+      <span className={styles.feedbackSublabel}>{sublabel}</span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -415,6 +468,12 @@ export function WorkflowRunPage() {
     return executorStates[key] ?? { status: 'pending' };
   }
 
+  const raiStatus = getState('rai').status;
+  const reviewStatus = getState('review').status;
+  const raiRejected = raiStatus === 'failed';
+  // Review declined: step failed, OR run ended in 'declined' terminal status
+  const reviewDeclined = reviewStatus === 'failed' || runStatus === 'declined';
+
   return (
     <div className={styles.root}>
       {/* Breadcrumb */}
@@ -454,29 +513,33 @@ export function WorkflowRunPage() {
         </div>
 
         {/* Parallel group: Rai (top) + Review (bottom) — each with own connectors */}
-        <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
-          <div className={styles.parallelRow}>
-            <PipeConnector />
-            <ExecutorCard
-              def={raiDef}
-              state={getState('rai')}
-              agentName={undefined}
-              runId={runId}
-              projectId={projectId}
-            />
-            <PipeConnector />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+          <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
+            <div className={styles.parallelRow}>
+              <PipeConnector />
+              <ExecutorCard
+                def={raiDef}
+                state={getState('rai')}
+                agentName={undefined}
+                runId={runId}
+                projectId={projectId}
+              />
+              <PipeConnector />
+            </div>
+            <div className={styles.parallelRow}>
+              <PipeConnector />
+              <ExecutorCard
+                def={reviewDef}
+                state={getState('review')}
+                agentName={undefined}
+                runId={runId}
+                projectId={projectId}
+              />
+              <PipeConnector />
+            </div>
           </div>
-          <div className={styles.parallelRow}>
-            <PipeConnector />
-            <ExecutorCard
-              def={reviewDef}
-              state={getState('review')}
-              agentName={undefined}
-              runId={runId}
-              projectId={projectId}
-            />
-            <PipeConnector />
-          </div>
+          {raiRejected && <FeedbackArc source="rai" />}
+          {!raiRejected && reviewDeclined && <FeedbackArc source="review" />}
         </div>
 
         {/* Merge */}
