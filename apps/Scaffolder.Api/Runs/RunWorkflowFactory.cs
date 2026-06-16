@@ -316,9 +316,25 @@ public sealed class RunWorkflowFactory
             "scribe-input-merge",
             async (output, ctx, ct) =>
             {
-                var run = RunId.TryParse(output.RunId, out var rid)
-                    ? await _runStore.GetAsync(rid, ct).ConfigureAwait(false)
-                    : null;
+                Scaffolder.Domain.Run? run = null;
+                if (!RunId.TryParse(output.RunId, out var rid))
+                {
+                    _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                        .LogWarning("scribe-input-merge: RunId.TryParse failed for value '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                }
+                else
+                {
+                    run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
+                    if (run is null)
+                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                            .LogWarning("scribe-input-merge: _runStore.GetAsync returned null for RunId '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                    else if (string.IsNullOrEmpty(run.AgentName))
+                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                            .LogWarning("scribe-input-merge: run {RunId} has no AgentName — Scribe will skip", output.RunId);
+                    else if (run.ProjectId is null)
+                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                            .LogWarning("scribe-input-merge: run {RunId} has no ProjectId — Scribe will skip", output.RunId);
+                }
                 return new ScribeTurnInput(
                     output.RunId,
                     run?.ProjectId?.ToString() ?? "",
@@ -336,9 +352,25 @@ public sealed class RunWorkflowFactory
             "scribe-input-no-changes",
             async (output, ctx, ct) =>
             {
-                var run = RunId.TryParse(output.RunId, out var rid)
-                    ? await _runStore.GetAsync(rid, ct).ConfigureAwait(false)
-                    : null;
+                Scaffolder.Domain.Run? run = null;
+                if (!RunId.TryParse(output.RunId, out var rid))
+                {
+                    _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                        .LogWarning("scribe-input-no-changes: RunId.TryParse failed for value '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                }
+                else
+                {
+                    run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
+                    if (run is null)
+                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                            .LogWarning("scribe-input-no-changes: _runStore.GetAsync returned null for RunId '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                    else if (string.IsNullOrEmpty(run.AgentName))
+                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                            .LogWarning("scribe-input-no-changes: run {RunId} has no AgentName — Scribe will skip", output.RunId);
+                    else if (run.ProjectId is null)
+                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                            .LogWarning("scribe-input-no-changes: run {RunId} has no ProjectId — Scribe will skip", output.RunId);
+                }
                 return new ScribeTurnInput(
                     output.RunId,
                     run?.ProjectId?.ToString() ?? "",

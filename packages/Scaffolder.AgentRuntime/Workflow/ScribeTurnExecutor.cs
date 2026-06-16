@@ -92,7 +92,11 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     {
         if (string.IsNullOrEmpty(input.ProjectId) || string.IsNullOrEmpty(input.AgentName))
         {
-            _logger.LogDebug("Scribe skipped for run {RunId} — no project/agent context", input.RunId);
+            _logger.LogWarning(
+                "Scribe skipped for run {RunId} — missing context: ProjectId='{ProjectId}' AgentName='{AgentName}'",
+                input.RunId,
+                string.IsNullOrEmpty(input.ProjectId) ? "<empty>" : input.ProjectId,
+                string.IsNullOrEmpty(input.AgentName) ? "<empty>" : input.AgentName);
             WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, input.RunId, "scribe", "skipped", "Scribe pass");
             return input;
         }
