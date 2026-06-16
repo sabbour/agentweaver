@@ -89,9 +89,20 @@ public sealed class WorkflowRestartService
             var checkpointInfo = _factory.GetLatestCheckpoint(runIdStr);
             if (checkpointInfo is null)
             {
-                // No checkpoint — cannot resume via MAF. Before emitting a synthetic
-                // review.requested, all prerequisites must pass. These mirror the checks in
-                // ExecuteDirectReviewAsync so we never surface an approve action that is
+                // No checkpoint — cannot resume via MAF. Auto-expire runs older than 24 hours
+                // to prevent stale dev/test runs accumulating forever on every restart.
+                if (DateTimeOffset.UtcNow - run.StartedAt > TimeSpan.FromHours(24))
+                {
+                    _logger.LogWarning(
+                        "Auto-expiring stale no-checkpoint AwaitingReview run {RunId} (age={Age:g}); failing run",
+                        run.Id, DateTimeOffset.UtcNow - run.StartedAt);
+                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+                    _streamStore.Complete(runIdStr);
+                    continue;
+                }
+
+                // Before emitting a synthetic review.requested, all prerequisites must pass.
+                // These mirror the checks in ExecuteDirectReviewAsync so we never surface an approve action that is
                 // guaranteed to 500 on the /review endpoint.
 
                 if (run.WorktreePath is null || !_worktreeOps.WorktreeExists(run.WorktreePath))
