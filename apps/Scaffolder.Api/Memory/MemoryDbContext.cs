@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Scaffolder.Api.Runs;
 
 namespace Scaffolder.Api.Memory;
 
@@ -8,6 +9,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
+    public DbSet<RunEventRecord> RunEvents => Set<RunEventRecord>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -19,5 +21,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.Type });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.EndedAt });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
+        model.Entity<RunEventRecord>().HasIndex(e => e.RunId);
+        model.Entity<RunEventRecord>().HasIndex(e => new { e.RunId, e.Sequence }).IsUnique();
     }
 }

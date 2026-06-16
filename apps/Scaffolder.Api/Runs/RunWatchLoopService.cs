@@ -2,6 +2,7 @@ using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Infrastructure;
+using Scaffolder.Api.Memory;
 using Scaffolder.Domain;
 
 using RunStatus = Scaffolder.Domain.RunStatus;
@@ -21,6 +22,7 @@ public sealed class RunWatchLoopService
     private readonly PendingRequestStore _pendingStore;
     private readonly RunWorkflowFactory _factory;
     private readonly IWorktreeOperations _worktreeOps;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<RunWatchLoopService> _logger;
     private readonly CancellationToken _appStopping;
 
@@ -32,6 +34,7 @@ public sealed class RunWatchLoopService
         RunWorkflowFactory factory,
         IWorktreeOperations worktreeOps,
         IHostApplicationLifetime lifetime,
+        IServiceScopeFactory scopeFactory,
         ILogger<RunWatchLoopService> logger)
     {
         _runStore = runStore;
@@ -40,6 +43,7 @@ public sealed class RunWatchLoopService
         _pendingStore = pendingStore;
         _factory = factory;
         _worktreeOps = worktreeOps;
+        _scopeFactory = scopeFactory;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
     }
@@ -118,6 +122,7 @@ public sealed class RunWatchLoopService
                         tree_hash = reviewReq?.TreeHash,
                         request_id = rie.Request.RequestId
                     });
+                    entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "started", label = "Review" });
                     break;
 
                 case WorkflowOutputEvent woe:

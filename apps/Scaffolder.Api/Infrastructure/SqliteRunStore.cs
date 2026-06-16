@@ -320,6 +320,13 @@ public sealed class SqliteRunStore
             }, ct).ConfigureAwait(false);
     }
 
+    public async Task DeleteAsync(RunId runId, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            "DELETE FROM runs WHERE run_id = $runId;",
+            cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()), ct).ConfigureAwait(false);
+    }
+
     private async Task ExecuteNonQueryAsync(string sql, Action<SqliteCommand> bind, CancellationToken ct)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);

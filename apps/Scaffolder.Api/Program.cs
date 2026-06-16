@@ -108,6 +108,19 @@ using (var scope = app.Services.CreateScope())
 {
     var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
     await memoryDb.Database.EnsureCreatedAsync();
+    // Ensure RunEventRecord table exists for databases created before this migration.
+    await memoryDb.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS "RunEventRecord" (
+            "Id" INTEGER NOT NULL CONSTRAINT "PK_RunEventRecord" PRIMARY KEY AUTOINCREMENT,
+            "RunId" TEXT NOT NULL,
+            "Sequence" INTEGER NOT NULL,
+            "EventType" TEXT NOT NULL,
+            "PayloadJson" TEXT NOT NULL,
+            "CreatedAt" TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEventRecord_RunId_Sequence" ON "RunEventRecord" ("RunId", "Sequence");
+        CREATE INDEX IF NOT EXISTS "IX_RunEventRecord_RunId" ON "RunEventRecord" ("RunId");
+        """);
 }
 await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
 
@@ -293,6 +306,46 @@ app.MapGet("/api/runs/{id}", async (
     });
 });
 
+app.MapDelete("/api/runs/{id}", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    RunStreamStore streamStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for deletion", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (!string.Equals(caller.User, run.SubmittingUser, StringComparison.Ordinal))
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var terminalStatuses = new[] { RunStatus.Merged, RunStatus.Declined, RunStatus.MergeFailed, RunStatus.Failed, RunStatus.Completed };
+    if (!terminalStatuses.Contains(run.Status))
+        return Results.Conflict(new { error = "Cannot delete an in-progress run." });
+
+    try { await runStore.DeleteAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to delete run {RunId}", runId);
+        return Results.Problem("Failed to delete the run.", statusCode: 500);
+    }
+
+    streamStore.Remove(id);
+    return Results.NoContent();
+});
+
+
 app.MapGet("/api/runs/{id}/stream", async (
     HttpContext httpContext,
     string id,
@@ -301,11 +354,27 @@ app.MapGet("/api/runs/{id}/stream", async (
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
+    // Sub-stream IDs (e.g. "{runId}-rai", "{runId}-scribe") are valid and don't parse as RunId.
+    // Try to parse as a plain RunId first; if that fails, check for a sub-stream pattern.
+    var isSubStream = false;
     if (!RunId.TryParse(id, out var runId))
     {
-        httpContext.Response.StatusCode = 400;
-        await httpContext.Response.WriteAsJsonAsync(new { error = "Invalid run id." }, ct);
-        return;
+        var suffixes = new[] { "-rai", "-scribe" };
+        var knownSuffix = suffixes.FirstOrDefault(s => id.EndsWith(s, StringComparison.Ordinal));
+        if (knownSuffix is null)
+        {
+            httpContext.Response.StatusCode = 400;
+            await httpContext.Response.WriteAsJsonAsync(new { error = "Invalid run id." }, ct);
+            return;
+        }
+        isSubStream = true;
+        var parentId = id[..^knownSuffix.Length];
+        if (!RunId.TryParse(parentId, out runId))
+        {
+            httpContext.Response.StatusCode = 400;
+            await httpContext.Response.WriteAsJsonAsync(new { error = "Invalid run id." }, ct);
+            return;
+        }
     }
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
@@ -323,6 +392,7 @@ app.MapGet("/api/runs/{id}/stream", async (
     }
     else
     {
+        // For sub-streams, authorize against the parent run record.
         Run? run;
         try { run = await runStore.GetAsync(runId, ct); }
             catch (OperationCanceledException) { return; }
@@ -334,19 +404,36 @@ app.MapGet("/api/runs/{id}/stream", async (
                 return;
             }
 
-        if (run is null || !string.Equals(caller.User, run.SubmittingUser, StringComparison.Ordinal))
+        if (!isSubStream && (run is null || !string.Equals(caller.User, run.SubmittingUser, StringComparison.Ordinal)))
         {
             httpContext.Response.StatusCode = 404;
             return;
         }
 
-        // No retained event stream (for example after a process restart). Fall back to the
-        // persisted result as a single message; the live delta sequence is not durable.
+        // No retained event stream (for example after a process restart). Replay from DB if available.
         httpContext.Response.Headers.ContentType = "text/event-stream";
         httpContext.Response.Headers.CacheControl = "no-cache";
         httpContext.Response.Headers.Connection = "keep-alive";
 
-        if (run.Result is not null)
+        using var dbScope = httpContext.RequestServices.CreateScope();
+        var db = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var persistedEvents = db.RunEvents
+            .Where(e => e.RunId == id)
+            .OrderBy(e => e.Sequence)
+            .ToList();
+
+        if (persistedEvents.Any())
+        {
+            foreach (var rec in persistedEvents)
+            {
+                object payload;
+                try { payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson); }
+                catch { payload = new { }; }
+                var evt = new RunEvent(rec.Sequence, rec.EventType, payload);
+                await WriteSseEventAsync(httpContext.Response, evt, ct);
+            }
+        }
+        else if (!isSubStream && run?.Result is not null)
         {
             var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = run.Result });
             await WriteSseEventAsync(httpContext.Response, evt, ct);
