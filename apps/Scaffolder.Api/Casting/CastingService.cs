@@ -896,6 +896,7 @@ public sealed class CastingService
 
         writer.AppendHistoryEvent(snapshot);
         writer.RegenerateCanonicalJson();
+        await writer.WriteAgentWeaverCoordinatorAsync().ConfigureAwait(false);
 
         _proposalStore.Remove(projectId, proposalId);
 

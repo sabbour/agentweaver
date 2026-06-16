@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Scaffolder.Cli;
+namespace Scaffolder.Mcp;
 
 /// <summary>One parsed server-sent event frame.</summary>
 public readonly record struct SseEvent(string? Id, string Data);
@@ -46,7 +46,7 @@ public sealed class SseClient(HttpClient http, string apiKey)
                 if (!response.IsSuccessStatusCode)
                 {
                     var body = await response.Content.ReadAsStringAsync(ct);
-                    throw new ApiException((int)response.StatusCode, body);
+                    throw new McpApiException((int)response.StatusCode, body);
                 }
 
                 stream = await response.Content.ReadAsStreamAsync(ct);

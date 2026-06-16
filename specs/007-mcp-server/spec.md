@@ -95,6 +95,25 @@ An AI developer assistant uses the MCP server to inspect available agent roles, 
 
 ---
 
+### User Story 6 - Agentweaver-Aware Squad Coordinator Initialized into Managed Repos (Priority: P2)
+
+When a project team is confirmed through the casting wizard, Agentweaver writes a custom Squad coordinator agent definition (`squad-agentweaver.agent.md`) into the managed repository's `.github/agents/` directory. This coordinator knows how to dispatch work through the Agentweaver MCP server — submitting runs, watching live progress, and routing review decisions — instead of using the generic `task`/`runSubagent` dispatch mechanism. Developers who open the managed repo in an MCP-capable host (Copilot CLI, Claude, Cursor) get an AI team coordinator that is natively wired into Agentweaver's run lifecycle.
+
+**Why this priority**: Without this, developers in managed repos must manually wire up run dispatch. With it, saying "Ripley, refactor the auth module" automatically submits a run against Ripley's charter, streams the result live, and asks for review — no extra configuration.
+
+**Independent Test**: Cast a team for a project via the wizard. Open the managed repository in an MCP-capable host. Send a message targeting a team member (e.g., "Ripley, add error handling to the export function"). Verify the coordinator resolves the project ID dynamically, calls `run_submit` with `agent_name: "ripley"`, surfaces live progress via `run_watch`, and prompts for `run_review` when the run reaches `awaiting_review`.
+
+**Acceptance Scenarios**:
+
+1. **Given** a team has been cast for a project, **When** the cast is confirmed, **Then** `.github/agents/squad-agentweaver.agent.md` is written to the managed repository.
+2. **Given** the coordinator is active in a repo, **When** the session starts, **Then** the coordinator calls `project_list` and matches the current working directory against each project's repository path to resolve its project ID — no hardcoded ID in the coordinator file.
+3. **Given** a user addresses a team member by name, **When** the coordinator routes the work, **Then** it calls `run_submit` with the member's `agent_name` and the task description, returning a run ID.
+4. **Given** a run has been submitted, **When** the coordinator calls `run_watch`, **Then** live agent messages and tool call events are surfaced to the user as progress until the run completes.
+5. **Given** a run has reached `awaiting_review`, **When** the coordinator detects this terminal state, **Then** it presents the diff summary and asks the user to approve or decline, then calls `run_review` with the decision.
+6. **Given** a project is on-boarded from an existing GitHub repository, **When** on-boarding completes, **Then** the coordinator is written to `.github/agents/squad-agentweaver.agent.md` using the same template as new projects.
+
+---
+
 ### Edge Cases
 
 - What happens when the REST API is unreachable when a tool is called? The tool returns a human-readable MCP error describing the connection failure, not a raw exception.
@@ -123,6 +142,12 @@ An AI developer assistant uses the MCP server to inspect available agent roles, 
 - **FR-012**: The `team_cast` tool MUST support both a single-call flow (goal → proposal → confirm) and a two-step flow (separate proposal and confirm calls) to accommodate different AI client interaction patterns.
 - **FR-013**: The MCP server MUST start up and be ready to receive tool calls within a time that does not degrade the MCP host's startup experience.
 - **FR-014**: Invalid tool parameters MUST be rejected with a schema validation error before any request is forwarded to the REST API.
+- **FR-015**: When a project team is confirmed, `SquadWriter` MUST write the Agentweaver Squad coordinator template to `.github/agents/squad-agentweaver.agent.md` inside the managed repository.
+- **FR-016**: The coordinator template MUST resolve its Agentweaver project ID dynamically at session start by calling `project_list` and matching the current working directory against each project's `repository_path`. It MUST NOT contain a hardcoded project ID.
+- **FR-017**: The coordinator template MUST route all team-member work dispatches to `run_submit` (with `agent_name` identifying the target member) instead of the generic `task` or `runSubagent` tool.
+- **FR-018**: After calling `run_submit`, the coordinator MUST call `run_watch` and surface live progress (agent messages, tool call events) to the user.
+- **FR-019**: When `run_watch` returns a run in `awaiting_review` state, the coordinator MUST present the diff summary to the user, ask for approval or decline, and call `run_review` with the decision.
+- **FR-020**: The same coordinator template MUST be written during on-boarding of existing repositories (GitHub import or local path) as during new project creation.
 
 ### Key Entities
 
@@ -131,6 +156,7 @@ An AI developer assistant uses the MCP server to inspect available agent roles, 
 - **Tool Schema**: The JSON Schema definition of a tool's input parameters, used by the MCP host to validate calls and by AI clients to understand what arguments to provide.
 - **Registration File (`.mcp.json`)**: A JSON file at the repository root that declares how MCP hosts should launch and configure the MCP server, including command, arguments, and environment variables.
 - **API Key**: A credential injected via the `SCAFFOLDER_API_KEY` environment variable. It is forwarded as a bearer token (or equivalent) on every REST API request and MUST NOT appear in any tool schema.
+- **Agentweaver Squad Coordinator (`squad-agentweaver.agent.md`)**: A customized Squad coordinator agent definition written by Agentweaver into managed repositories. It co-exists with any generic `squad.agent.md` and overrides dispatch behavior to use Agentweaver MCP tools for run submission, watching, and review.
 
 ## Success Criteria *(mandatory)*
 
@@ -143,6 +169,8 @@ An AI developer assistant uses the MCP server to inspect available agent roles, 
 - **SC-005**: A developer can add the repository to any MCP-capable host and have Agentweaver tools available with no configuration steps beyond setting the `SCAFFOLDER_API_KEY` environment variable.
 - **SC-006**: The MCP server contains no business logic; all business outcomes are determined solely by the REST API responses.
 - **SC-007**: All HTTP error responses from the REST API are surfaced to the AI client as human-readable MCP tool errors, with enough detail for the client to understand and describe the failure.
+- **SC-008**: When a team is cast and confirmed, `squad-agentweaver.agent.md` is present in `.github/agents/` of the managed repository and contains a coordinator that routes work via Agentweaver MCP tools.
+- **SC-009**: The Agentweaver coordinator resolves its project ID dynamically; no project ID appears as a literal value inside the coordinator file.
 
 ## Assumptions
 

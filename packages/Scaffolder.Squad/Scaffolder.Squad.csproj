@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Catalog\Resources\**\*" />
+    <EmbeddedResource Include="Templates\agentweaver-squad-coordinator.md" />
   </ItemGroup>
 
 </Project>
