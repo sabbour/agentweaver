@@ -75,10 +75,12 @@ public sealed class PostRunScribeService(
                          && (e.Type == "architectural" || e.Type == "scope"));
 
             // Step 3: Append outcome to the current open session.
-            var session = await memoryDb.SessionContexts
+            // EF Core/SQLite cannot translate DateTimeOffset in ORDER BY — load then sort in memory.
+            var session = (await memoryDb.SessionContexts
                 .Where(s => s.ProjectId == projectId && s.EndedAt == null)
+                .ToListAsync(ct).ConfigureAwait(false))
                 .OrderByDescending(s => s.StartedAt)
-                .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+                .FirstOrDefault();
 
             if (session is not null)
             {
@@ -109,24 +111,27 @@ public sealed class PostRunScribeService(
         var project = await projectStore.GetAsync(pid, ct).ConfigureAwait(false);
         if (project is null || string.IsNullOrEmpty(project.WorkingDirectory)) return;
 
-        var decisions = await memoryDb.Decisions
+        var decisions = (await memoryDb.Decisions
             .Where(d => d.ProjectId == projectId && d.Status == "active")
+            .ToListAsync(ct).ConfigureAwait(false))
             .OrderBy(d => d.CreatedAt)
-            .ToListAsync(ct).ConfigureAwait(false);
+            .ToList();
 
         var inbox = await memoryDb.DecisionInbox
             .Where(e => e.ProjectId == projectId && e.Status == "pending")
             .ToListAsync(ct).ConfigureAwait(false);
 
-        var memories = await memoryDb.AgentMemory
+        var memories = (await memoryDb.AgentMemory
             .Where(m => m.ProjectId == projectId)
+            .ToListAsync(ct).ConfigureAwait(false))
             .OrderBy(m => m.CreatedAt)
-            .ToListAsync(ct).ConfigureAwait(false);
+            .ToList();
 
-        var session = await memoryDb.SessionContexts
+        var session = (await memoryDb.SessionContexts
             .Where(s => s.ProjectId == projectId && s.EndedAt == null)
+            .ToListAsync(ct).ConfigureAwait(false))
             .OrderByDescending(s => s.StartedAt)
-            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+            .FirstOrDefault();
 
         var exporter = new SquadMemoryExporter(project.WorkingDirectory);
 

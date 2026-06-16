@@ -2802,10 +2802,11 @@ app.MapGet("/api/projects/{id}/decisions/inbox", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    var entries = await memoryDb.DecisionInbox
+    var entries = (await memoryDb.DecisionInbox
         .Where(e => e.ProjectId == id)
+        .ToListAsync(ct))
         .OrderByDescending(e => e.CreatedAt)
-        .ToListAsync(ct);
+        .ToList();
     return Results.Ok(entries.Select(e => new
     {
         e.Id, e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale, e.Status,
@@ -2893,10 +2894,11 @@ app.MapGet("/api/projects/{id}/decisions", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    var decisions = await memoryDb.Decisions
+    var decisions = (await memoryDb.Decisions
         .Where(d => d.ProjectId == id)
+        .ToListAsync(ct))
         .OrderByDescending(d => d.CreatedAt)
-        .ToListAsync(ct);
+        .ToList();
     return Results.Ok(decisions.Select(d => new
     {
         d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
@@ -3002,7 +3004,9 @@ app.MapGet("/api/projects/{id}/memory", async (
             query = query.Where(m => m.Tags != null && EF.Functions.Like(m.Tags, $"%,{tag},%"));
     }
 
-    var memories = await query.OrderByDescending(m => m.CreatedAt).ToListAsync(ct);
+    var memories = (await query.ToListAsync(ct))
+        .OrderByDescending(m => m.CreatedAt)
+        .ToList();
     return Results.Ok(memories.Select(m => new
     {
         m.Id, m.AgentName, m.Type, m.Importance, m.Content, m.Tags,
@@ -3022,10 +3026,11 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    var memories = await memoryDb.AgentMemory
+    var memories = (await memoryDb.AgentMemory
         .Where(m => m.ProjectId == id && m.AgentName == name)
+        .ToListAsync(ct))
         .OrderByDescending(m => m.CreatedAt)
-        .ToListAsync(ct);
+        .ToList();
     return Results.Ok(memories.Select(m => new
     {
         m.Id, m.AgentName, m.Type, m.Importance, m.Content, m.Tags,
@@ -3107,10 +3112,11 @@ app.MapGet("/api/projects/{id}/sessions/current", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    var session = await memoryDb.SessionContexts
+    var session = (await memoryDb.SessionContexts
         .Where(s => s.ProjectId == id && s.EndedAt == null)
+        .ToListAsync(ct))
         .OrderByDescending(s => s.StartedAt)
-        .FirstOrDefaultAsync(ct);
+        .FirstOrDefault();
     if (session is null) return Results.NotFound();
     return Results.Ok(new
     {
@@ -3186,10 +3192,11 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    var session = await memoryDb.SessionContexts
+    var session = (await memoryDb.SessionContexts
         .Where(s => s.ProjectId == id && s.EndedAt == null)
+        .ToListAsync(ct))
         .OrderByDescending(s => s.StartedAt)
-        .FirstOrDefaultAsync(ct);
+        .FirstOrDefault();
 
     // Auto-create an open session if none exists so agents can always call update_session.
     if (session is null)
@@ -3232,10 +3239,11 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     var inbox = await memoryDb.DecisionInbox
         .Where(e => e.ProjectId == id && e.Status == "pending").ToListAsync(ct);
     var memories = await memoryDb.AgentMemory.Where(m => m.ProjectId == id).ToListAsync(ct);
-    var session = await memoryDb.SessionContexts
+    var session = (await memoryDb.SessionContexts
         .Where(s => s.ProjectId == id && s.EndedAt == null)
+        .ToListAsync(ct))
         .OrderByDescending(s => s.StartedAt)
-        .FirstOrDefaultAsync(ct);
+        .FirstOrDefault();
 
     var decisionDtos = decisions.Select(d => new Scaffolder.Squad.Memory.DecisionExportDto(
         d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList();
