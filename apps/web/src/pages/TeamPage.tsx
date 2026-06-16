@@ -98,6 +98,30 @@ const useStyles = makeStyles({
     gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
     gap: tokens.spacingVerticalM,
   },
+  systemSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  systemSectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    paddingTop: tokens.spacingVerticalXS,
+  },
+  systemSectionRule: {
+    flex: 1,
+    height: '1px',
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+  systemSectionLabel: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground3,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.05em',
+    whiteSpace: 'nowrap' as const,
+  },
   card: {
     display: 'flex',
     flexDirection: 'column',
@@ -690,6 +714,64 @@ function AgentDetailPanel({
   );
 }
 
+type TeamPageStyles = ReturnType<typeof useStyles>;
+
+function MemberCard({
+  member,
+  styles,
+  onClick,
+}: {
+  member: TeamMemberDto;
+  styles: TeamPageStyles;
+  onClick: () => void;
+}) {
+  return (
+    <div
+      className={styles.card}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open details for ${member.name}`}
+      onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
+    >
+      <div className={styles.cardHeader}>
+        <AgentAvatar
+          name={member.name}
+          size={40}
+          isBuiltIn={member.is_built_in}
+          isRetired={member.status === 'retired'}
+        />
+        <div className={styles.cardInfo}>
+          <Text className={styles.cardName}>{member.name}</Text>
+          <Text className={styles.cardRole}>{member.role_title}</Text>
+        </div>
+      </div>
+      <div className={styles.cardFooter}>
+        <span
+          aria-hidden="true"
+          style={{
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            display: 'inline-block',
+            flexShrink: 0,
+            backgroundColor: member.status === 'active' ? '#107c10' : '#8a8886',
+          }}
+        />
+        {member.is_built_in ? (
+          <Badge appearance="tint" color="brand" size="small">
+            System agent
+          </Badge>
+        ) : (
+          <Badge appearance="tint" color="informative" size="small">
+            Project agent
+          </Badge>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TeamPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -761,6 +843,9 @@ export function TeamPage() {
   const filteredMembers = filterTab === 'all'
     ? members
     : members.filter((m) => m.status === filterTab);
+
+  const projectMembers = filteredMembers.filter((m) => !m.is_built_in);
+  const builtInMembers = filteredMembers.filter((m) => m.is_built_in);
 
   return (
     <div className={styles.root}>
@@ -834,54 +919,37 @@ export function TeamPage() {
             <Tab value="retired">Retired ({retiredCount})</Tab>
           </TabList>
 
-          <div className={styles.cardGrid}>
-            {filteredMembers.map((member) => (
-              <div
-                key={member.name}
-                className={styles.card}
-                role="button"
-                tabIndex={0}
-                aria-label={`Open details for ${member.name}`}
-                onClick={() => { setSelectedMember(member); }}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedMember(member); }}
-              >
-                <div className={styles.cardHeader}>
-                  <AgentAvatar
-                    name={member.name}
-                    size={40}
-                    isBuiltIn={member.is_built_in}
-                    isRetired={member.status === 'retired'}
-                  />
-                  <div className={styles.cardInfo}>
-                    <Text className={styles.cardName}>{member.name}</Text>
-                    <Text className={styles.cardRole}>{member.role_title}</Text>
-                  </div>
-                </div>
-                <div className={styles.cardFooter}>
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '50%',
-                      display: 'inline-block',
-                      flexShrink: 0,
-                      backgroundColor: member.status === 'active' ? '#107c10' : '#8a8886',
-                    }}
-                  />
-                  {member.is_built_in ? (
-                    <Badge appearance="tint" color="brand" size="small">
-                      System agent
-                    </Badge>
-                  ) : (
-                    <Badge appearance="tint" color="informative" size="small">
-                      Project agent
-                    </Badge>
-                  )}
-                </div>
+          {projectMembers.length > 0 && (
+            <div className={styles.cardGrid}>
+              {projectMembers.map((member) => (
+                <MemberCard
+                  key={member.name}
+                  member={member}
+                  styles={styles}
+                  onClick={() => { setSelectedMember(member); }}
+                />
+              ))}
+            </div>
+          )}
+
+          {builtInMembers.length > 0 && (
+            <div className={styles.systemSection}>
+              <div className={styles.systemSectionHeader}>
+                <span className={styles.systemSectionLabel}>System agents</span>
+                <div className={styles.systemSectionRule} />
               </div>
-            ))}
-          </div>
+              <div className={styles.cardGrid}>
+                {builtInMembers.map((member) => (
+                  <MemberCard
+                    key={member.name}
+                    member={member}
+                    styles={styles}
+                    onClick={() => { setSelectedMember(member); }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
 
