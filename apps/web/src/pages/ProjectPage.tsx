@@ -223,21 +223,25 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
 
 function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; projectId: string; onDeleted: (runId: string) => void }) {
   const styles = useStyles();
-  const [deleting, setDeleting] = useState(false);
+  const [acting, setActing] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleDeleteConfirmed = async () => {
+  const isAwaitingReview = run.status === 'awaiting_review';
+  const isTerminal = ['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status);
+
+  const handleConfirmed = async () => {
     setConfirmOpen(false);
-    setDeleting(true);
+    setActing(true);
+    setError(null);
     try {
       await apiClient.deleteRun(run.run_id);
       onDeleted(run.run_id);
-    } catch {
-      setDeleting(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Action failed.');
+      setActing(false);
     }
   };
-
-  const isDeletable = ['completed', 'merged', 'failed', 'merge_failed', 'declined', 'awaiting_review'].includes(run.status);
 
   return (
     <div className={styles.runRow}>
@@ -254,12 +258,38 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
       <Link to={`/projects/${projectId}/runs/${run.run_id}/workflow`} style={{ textDecoration: 'none' }}>
         <Button appearance="secondary">Workflow</Button>
       </Link>
-      {isDeletable && (
+      {isAwaitingReview && (
+        <>
+          <Button appearance="subtle" disabled={acting} onClick={() => setConfirmOpen(true)}>
+            Abandon
+          </Button>
+          <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Abandon run?</DialogTitle>
+                <DialogContent>
+                  This will abandon the run and discard any pending changes. This cannot be undone.
+                  {error && <Text style={{ color: 'red', display: 'block', marginTop: 8 }}>{error}</Text>}
+                </DialogContent>
+                <DialogActions>
+                  <DialogTrigger disableButtonEnhancement>
+                    <Button appearance="secondary">Cancel</Button>
+                  </DialogTrigger>
+                  <Button appearance="primary" onClick={() => void handleConfirmed()}>
+                    Abandon
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </>
+      )}
+      {isTerminal && (
         <>
           <Button
             appearance="subtle"
             icon={<DeleteRegular />}
-            disabled={deleting}
+            disabled={acting}
             onClick={() => setConfirmOpen(true)}
             aria-label="Delete run"
           />
@@ -269,12 +299,13 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
                 <DialogTitle>Delete run?</DialogTitle>
                 <DialogContent>
                   This will permanently delete the run and cannot be undone.
+                  {error && <Text style={{ color: 'red', display: 'block', marginTop: 8 }}>{error}</Text>}
                 </DialogContent>
                 <DialogActions>
                   <DialogTrigger disableButtonEnhancement>
                     <Button appearance="secondary">Cancel</Button>
                   </DialogTrigger>
-                  <Button appearance="primary" onClick={() => void handleDeleteConfirmed()}>
+                  <Button appearance="primary" onClick={() => void handleConfirmed()}>
                     Delete
                   </Button>
                 </DialogActions>
