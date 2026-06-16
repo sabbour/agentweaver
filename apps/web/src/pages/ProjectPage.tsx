@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Badge,
@@ -300,7 +300,7 @@ export function ProjectPage() {
               </>
             )}
 
-            <Text className={styles.infoLabel}>Working directory</Text>
+            <Text className={styles.infoLabel}>Repository path</Text>
             <Text className={styles.infoValue}>{project.working_directory}</Text>
 
             <Text className={styles.infoLabel}>Default branch</Text>

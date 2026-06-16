@@ -418,9 +418,9 @@ export function ProjectSettingsPage() {
           <Divider />
 
           <div className={styles.section}>
-            <Title3>Relink working directory</Title3>
-            <Text>Update the local path if the project folder has moved.</Text>
-            <Field label="Working directory">
+            <Title3>Relink repository</Title3>
+            <Text>Update the server-side path if the repository has moved on the Agentweaver server.</Text>
+            <Field label="Repository path">
               <Input value={newDir} onChange={(_, v) => setNewDir(v.value)} />
             </Field>
             <div className={styles.actions}>

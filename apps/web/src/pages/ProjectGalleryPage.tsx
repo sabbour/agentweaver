@@ -149,11 +149,11 @@ function CreateBlankDialog({ onCreated }: { onCreated: (p: Project) => void }) {
                 <Input value={d.name} onChange={(_, v) => d.setName(v.value)} placeholder="My project" />
               </Field>
               <Field
-                label="Local repository path"
+                label="Repository path"
                 required
-                hint="Absolute path to an existing git repository on this machine"
+                hint="Absolute path to a git repository on the machine running the Agentweaver server"
               >
-                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="C:/Users/you/Git/my-repo" />
+                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="/srv/repos/my-repo" />
               </Field>
               {d.error && (
                 <MessageBar intent="error">
@@ -260,11 +260,11 @@ function CreateFromGitHubDialog({ onCreated }: { onCreated: (p: Project) => void
                 </Combobox>
               </Field>
               <Field
-                label="Local repository path"
+                label="Repository path"
                 required
-                hint="Absolute path to an existing git repository on this machine"
+                hint="Absolute path to a git repository on the machine running the Agentweaver server"
               >
-                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="C:/Users/you/Git/my-repo" />
+                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="/srv/repos/my-repo" />
               </Field>
               {d.error && (
                 <MessageBar intent="error">
