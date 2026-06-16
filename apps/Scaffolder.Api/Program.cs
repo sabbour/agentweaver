@@ -3156,7 +3156,19 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
         .Where(s => s.ProjectId == id && s.EndedAt == null)
         .OrderByDescending(s => s.StartedAt)
         .FirstOrDefaultAsync(ct);
-    if (session is null) return Results.NotFound();
+
+    // Auto-create an open session if none exists so agents can always call update_session.
+    if (session is null)
+    {
+        session = new SessionContext
+        {
+            ProjectId = id,
+            SessionId = Guid.NewGuid().ToString("D"),
+            FocusArea = request.FocusArea ?? request.Summary ?? "agent run",
+            StartedAt = DateTimeOffset.UtcNow,
+        };
+        memoryDb.SessionContexts.Add(session);
+    }
 
     if (!string.IsNullOrWhiteSpace(request.FocusArea)) session.FocusArea = request.FocusArea!;
     if (request.ActiveIssues is not null) session.ActiveIssues = request.ActiveIssues;
