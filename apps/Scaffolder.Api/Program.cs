@@ -108,20 +108,54 @@ await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
 using (var scope = app.Services.CreateScope())
 {
     var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-    await memoryDb.Database.EnsureCreatedAsync();
-    // Ensure RunEventRecord table exists for databases created before this migration.
-    await memoryDb.Database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS "RunEventRecord" (
-            "Id" INTEGER NOT NULL CONSTRAINT "PK_RunEventRecord" PRIMARY KEY AUTOINCREMENT,
-            "RunId" TEXT NOT NULL,
-            "Sequence" INTEGER NOT NULL,
-            "EventType" TEXT NOT NULL,
-            "PayloadJson" TEXT NOT NULL,
-            "CreatedAt" TEXT NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEventRecord_RunId_Sequence" ON "RunEventRecord" ("RunId", "Sequence");
-        CREATE INDEX IF NOT EXISTS "IX_RunEventRecord_RunId" ON "RunEventRecord" ("RunId");
-        """);
+
+    // Transition guard: databases created before migrations were introduced
+    // (via EnsureCreated) already have AgentMemory/Decisions/etc. but not RunEvents,
+    // and have no __EFMigrationsHistory table. Detect this case and patch gracefully.
+    // For fresh installs (no tables at all), MigrateAsync handles everything.
+    var rawConn = (Microsoft.Data.Sqlite.SqliteConnection)memoryDb.Database.GetDbConnection();
+    await rawConn.OpenAsync();
+    long historyExists, agentMemoryExists;
+    using (var c1 = rawConn.CreateCommand())
+    {
+        c1.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='__EFMigrationsHistory'";
+        historyExists = (long)(await c1.ExecuteScalarAsync())!;
+    }
+    using (var c2 = rawConn.CreateCommand())
+    {
+        c2.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='AgentMemory'";
+        agentMemoryExists = (long)(await c2.ExecuteScalarAsync())!;
+    }
+    await rawConn.CloseAsync();
+
+    if (historyExists == 0 && agentMemoryExists > 0)
+    {
+        // Pre-migration DB: seed __EFMigrationsHistory so MigrateAsync treats the
+        // initial migration as already applied, then create only RunEvents (missing table).
+        await memoryDb.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE "__EFMigrationsHistory" (
+                "MigrationId" TEXT NOT NULL CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY,
+                "ProductVersion" TEXT NOT NULL
+            );
+            INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+            VALUES ('20260616063937_AddRunEvents', '9.0.0');
+            CREATE TABLE IF NOT EXISTS "RunEvents" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_RunEvents" PRIMARY KEY AUTOINCREMENT,
+                "RunId" TEXT NOT NULL,
+                "Sequence" INTEGER NOT NULL,
+                "EventType" TEXT NOT NULL,
+                "PayloadJson" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS "IX_RunEvents_RunId" ON "RunEvents" ("RunId");
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEvents_RunId_Sequence" ON "RunEvents" ("RunId", "Sequence");
+            """);
+    }
+    else
+    {
+        // Fresh install or already-migrated DB: normal path.
+        await memoryDb.Database.MigrateAsync();
+    }
 }
 await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
 
