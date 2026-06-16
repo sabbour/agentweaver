@@ -175,6 +175,7 @@ public sealed class RunWatchLoopService
                 entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
 
                 _streamStore.Complete(runId);
+                _ = FirePostRunScribeAsync(runId);
                 return true;
             }
 
@@ -212,6 +213,7 @@ public sealed class RunWatchLoopService
             entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
 
             _streamStore.Complete(runId);
+            _ = FirePostRunScribeAsync(runId);
             return true;
         }
 
@@ -246,6 +248,23 @@ public sealed class RunWatchLoopService
         _logger.LogWarning(
             "Unrecognized WorkflowOutputEvent type for run {RunId}; treating as non-terminal", runId);
         return false;
+    }
+
+    private async Task FirePostRunScribeAsync(string runId)
+    {
+        try
+        {
+            var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+            if (run is null) return;
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
+            await service.RunAsync(run).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PostRunScribe fire-and-forget failed for run {RunId}", runId);
+        }
     }
 
     private async Task CleanupWorktreeAsync(RunId parsedRunId, string runId)

@@ -91,6 +91,7 @@ builder.Services.AddDbContext<MemoryDbContext>(opts =>
     opts.UseSqlite($"Data Source={memoryDbPath}");
 });
 builder.Services.AddScoped<MemoryContextCompiler>();
+builder.Services.AddScoped<PostRunScribeService>();
 
 // Checkpoint GC background service (Guardrail 8)
 builder.Services.AddHostedService<CheckpointGcService>();
