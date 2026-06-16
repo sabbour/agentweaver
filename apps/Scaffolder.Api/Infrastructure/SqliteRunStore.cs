@@ -19,10 +19,12 @@ public sealed class SqliteRunStore
             """
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                               submitting_user, status, started_at, ended_at, result,
-                              worktree_path, worktree_branch, project_id, model_id)
+                              worktree_path, worktree_branch, project_id, model_id,
+                              agent_name, agent_charter)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
                     $user, $status, $startedAt, $endedAt, $result,
-                    $worktreePath, $worktreeBranch, $projectId, $modelId);
+                    $worktreePath, $worktreeBranch, $projectId, $modelId,
+                    $agentName, $agentCharter);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -38,6 +40,8 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$worktreeBranch", (object?)run.WorktreeBranch ?? DBNull.Value);
         command.Parameters.AddWithValue("$projectId", (object?)run.ProjectId?.ToString() ?? DBNull.Value);
         command.Parameters.AddWithValue("$modelId", (object?)run.ModelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentName", (object?)run.AgentName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentCharter", (object?)run.AgentCharter ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -372,10 +376,12 @@ public sealed class SqliteRunStore
             """
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                               submitting_user, status, started_at, ended_at, result,
-                              worktree_path, worktree_branch, project_id, model_id)
+                              worktree_path, worktree_branch, project_id, model_id,
+                              agent_name, agent_charter)
             SELECT $runId, $repo, $branch, $modelSource, $task,
                    $user, $status, $startedAt, NULL, NULL,
-                   NULL, NULL, $projectId, $modelId
+                   NULL, NULL, $projectId, $modelId,
+                   $agentName, $agentCharter
             WHERE EXISTS (
                 SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
             );
@@ -390,6 +396,8 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$startedAt", run.StartedAt.ToString("O"));
         command.Parameters.AddWithValue("$projectId", run.ProjectId!.Value.ToString());
         command.Parameters.AddWithValue("$modelId", (object?)run.ModelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentName", (object?)run.AgentName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentCharter", (object?)run.AgentCharter ?? DBNull.Value);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -398,13 +406,13 @@ public sealed class SqliteRunStore
     // Ordinals: 0=run_id 1=repository_path 2=originating_branch 3=model_source 4=task
     //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
     //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
-    //           15=merge_conflicts 16=project_id 17=model_id
+    //           15=merge_conflicts 16=project_id 17=model_id 18=agent_name 19=agent_charter
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
                submitting_user, status, started_at, ended_at, result,
                worktree_path, worktree_branch, tree_hash, step_count, diff,
-               merge_conflicts, project_id, model_id
+               merge_conflicts, project_id, model_id, agent_name, agent_charter
           FROM runs
         """;
 
@@ -428,6 +436,8 @@ public sealed class SqliteRunStore
         MergeConflicts   = r.IsDBNull(15) ? null : r.GetString(15),
         ProjectId        = r.IsDBNull(16) ? null : ProjectId.Parse(r.GetString(16)),
         ModelId          = r.IsDBNull(17) ? null : r.GetString(17),
+        AgentName        = r.IsDBNull(18) ? null : r.GetString(18),
+        AgentCharter     = r.IsDBNull(19) ? null : r.GetString(19),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

@@ -69,7 +69,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
         string runId,
         string? modelId,
         ChannelWriter<RunEvent>? stream,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? systemPromptContext = null)
     {
         var seq = new[] { 0 };
         void Emit(string type, object payload)
@@ -142,7 +143,9 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, SystemPrompt),
+            new(ChatRole.System, string.IsNullOrEmpty(systemPromptContext)
+                ? SystemPrompt
+                : SystemPrompt + "\n\n" + systemPromptContext),
             new(ChatRole.User, task),
         };
 

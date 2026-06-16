@@ -359,6 +359,7 @@ public sealed record CreateProjectRunRequest
     [JsonPropertyName("model_source")] public string? ModelSource { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }
     [JsonPropertyName("base_branch")] public string? BaseBranch { get; init; }
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
 }
 
 // -----------------------------------------------------------------------
@@ -523,4 +524,59 @@ public sealed record SyncCommitRequest
 {
     [JsonPropertyName("expected_change_set_hash")] public string? ExpectedChangeSetHash { get; init; }
     [JsonPropertyName("message")] public string? Message { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// Memory / Decision Inbox
+// -----------------------------------------------------------------------
+
+public sealed record SubmitDecisionInboxRequest
+{
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
+    [JsonPropertyName("slug")] public string? Slug { get; init; }
+    [JsonPropertyName("type")] public string? Type { get; init; }
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("content")] public string? Content { get; init; }
+    [JsonPropertyName("rationale")] public string? Rationale { get; init; }
+}
+
+public sealed record CreateDecisionRequest
+{
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
+    [JsonPropertyName("type")] public string? Type { get; init; }
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("content")] public string? Content { get; init; }
+    [JsonPropertyName("rationale")] public string? Rationale { get; init; }
+    [JsonPropertyName("tags")] public string? Tags { get; init; }
+}
+
+public sealed record UpdateDecisionRequest
+{
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("content")] public string? Content { get; init; }
+    [JsonPropertyName("rationale")] public string? Rationale { get; init; }
+}
+
+public sealed record RecordMemoryRequest
+{
+    [JsonPropertyName("type")] public string? Type { get; init; }
+    [JsonPropertyName("importance")] public string? Importance { get; init; }
+    [JsonPropertyName("content")] public string? Content { get; init; }
+    [JsonPropertyName("tags")] public string? Tags { get; init; }
+}
+
+public sealed record StartSessionRequest
+{
+    [JsonPropertyName("session_id")] public string? SessionId { get; init; }
+    [JsonPropertyName("focus_area")] public string? FocusArea { get; init; }
+    [JsonPropertyName("active_issues")] public string? ActiveIssues { get; init; }
+    [JsonPropertyName("summary")] public string? Summary { get; init; }
+}
+
+public sealed record UpdateSessionRequest
+{
+    [JsonPropertyName("focus_area")] public string? FocusArea { get; init; }
+    [JsonPropertyName("active_issues")] public string? ActiveIssues { get; init; }
+    [JsonPropertyName("summary")] public string? Summary { get; init; }
+    [JsonPropertyName("end")] public bool? End { get; init; }
 }

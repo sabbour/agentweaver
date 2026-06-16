@@ -10,7 +10,8 @@ public sealed record AgentTurnInput(
     string OriginatingBranch,
     string ModelSource,
     string? ModelId,
-    string SubmittingUser);
+    string SubmittingUser,
+    string? SystemPromptContext = null);
 
 /// <summary>Output from the agent turn executor, consumed by conditional edges.</summary>
 public sealed record AgentTurnOutput(

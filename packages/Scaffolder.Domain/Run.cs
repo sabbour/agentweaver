@@ -29,4 +29,6 @@ public sealed record Run
     public string? MergeConflicts { get; init; }
     public ProjectId? ProjectId { get; init; }
     public string? ModelId { get; init; }
+    public string? AgentName { get; init; }
+    public string? AgentCharter { get; init; }
 }

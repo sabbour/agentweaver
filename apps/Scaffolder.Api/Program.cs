@@ -1,5 +1,7 @@
 using System.Text.Encodings.Web;
+using Microsoft.EntityFrameworkCore;
 using Scaffolder.AgentRuntime;
+using Scaffolder.Api.Memory;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Auth;
@@ -79,6 +81,17 @@ builder.Services.AddSingleton<ApiKeyRegistry>();
 // Repository path validation (A2 security fix)
 builder.Services.AddSingleton<RepositoryRootValidator>();
 
+// Memory database (EF Core, separate file from main SQLite DB)
+builder.Services.AddDbContext<MemoryDbContext>(opts =>
+{
+    var basePath = builder.Configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
+        ? Path.GetDirectoryName(Path.GetFullPath(p))!
+        : AppPaths.DataDirectory;
+    var memoryDbPath = Path.Combine(basePath, "memory.db");
+    opts.UseSqlite($"Data Source={memoryDbPath}");
+});
+builder.Services.AddScoped<MemoryContextCompiler>();
+
 // Checkpoint GC background service (Guardrail 8)
 builder.Services.AddHostedService<CheckpointGcService>();
 
@@ -91,6 +104,11 @@ builder.Services.AddSingleton<CastingService>();
 var app = builder.Build();
 
 await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
+using (var scope = app.Services.CreateScope())
+{
+    var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+    await memoryDb.Database.EnsureCreatedAsync();
+}
 await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
 
 app.UseExceptionHandler(err => err.Run(async context =>
@@ -1729,6 +1747,17 @@ app.MapPost("/api/projects/{id}/runs", async (
         ? project.DefaultBranch
         : request.BaseBranch;
 
+    // Load agent charter if agent_name provided
+    string? agentCharter = null;
+    if (!string.IsNullOrWhiteSpace(request.AgentName))
+    {
+        var charterPath = Path.Combine(
+            project.WorkingDirectory, ".squad", "agents",
+            request.AgentName.ToLowerInvariant(), "charter.md");
+        if (File.Exists(charterPath))
+            agentCharter = await File.ReadAllTextAsync(charterPath, ct);
+    }
+
     // Build reserved run (Pending)
     var run = new Run
     {
@@ -1742,6 +1771,8 @@ app.MapPost("/api/projects/{id}/runs", async (
         Status = RunStatus.Pending,
         StartedAt = DateTimeOffset.UtcNow,
         ProjectId = projectId,
+        AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
+        AgentCharter = agentCharter,
     };
 
     // Atomically reserve the run row (Pending) only when project is still Active
@@ -2559,6 +2590,467 @@ app.MapPost("/api/auth/github/sign-out", async (
     var scope = scopeProvider.Resolve(caller.User);
     await authService.SignOutAsync(scope, ct);
     return Results.NoContent();
+});
+
+// -----------------------------------------------------------------------
+// Memory / Decision Inbox endpoints
+// -----------------------------------------------------------------------
+
+// POST /api/projects/{id}/decisions/inbox
+app.MapPost("/api/projects/{id}/decisions/inbox", async (
+    string id,
+    SubmitDecisionInboxRequest request,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(request.AgentName) || string.IsNullOrWhiteSpace(request.Slug)
+        || string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Title)
+        || string.IsNullOrWhiteSpace(request.Content))
+        return Results.BadRequest(new { error = "agent_name, slug, type, title, and content are required." });
+
+    var exists = await memoryDb.DecisionInbox
+        .AnyAsync(e => e.ProjectId == id && e.Slug == request.Slug, ct);
+    if (exists)
+        return Results.Conflict(new { error = "An inbox entry with this slug already exists." });
+
+    var now = DateTimeOffset.UtcNow;
+    var entry = new DecisionInboxEntry
+    {
+        ProjectId = id,
+        AgentName = request.AgentName!,
+        Slug = request.Slug!,
+        Type = request.Type!,
+        Title = request.Title!,
+        Content = request.Content!,
+        Rationale = request.Rationale,
+        Status = "pending",
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+    memoryDb.DecisionInbox.Add(entry);
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Created($"/api/projects/{id}/decisions/inbox/{entry.Id}", new { entry.Id, entry.Slug, entry.Status });
+});
+
+// GET /api/projects/{id}/decisions/inbox
+app.MapGet("/api/projects/{id}/decisions/inbox", async (
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var entries = await memoryDb.DecisionInbox
+        .Where(e => e.ProjectId == id)
+        .OrderByDescending(e => e.CreatedAt)
+        .ToListAsync(ct);
+    return Results.Ok(entries.Select(e => new
+    {
+        e.Id, e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale, e.Status,
+        created_at = e.CreatedAt, updated_at = e.UpdatedAt,
+    }));
+});
+
+// POST /api/projects/{id}/decisions/inbox/{entryId}/merge
+app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
+    string id,
+    int entryId,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    var entry = await memoryDb.DecisionInbox.FindAsync(new object[] { entryId }, ct);
+    if (entry is null || entry.ProjectId != id) return Results.NotFound();
+    if (entry.Status != "pending")
+        return Results.Conflict(new { error = "Entry is not pending." });
+
+    var now = DateTimeOffset.UtcNow;
+    entry.Status = "merged";
+    entry.UpdatedAt = now;
+
+    // Promote to active decision
+    var decision = new Decision
+    {
+        ProjectId = id,
+        AgentName = entry.AgentName,
+        Type = entry.Type,
+        Status = "active",
+        Title = entry.Title,
+        Content = entry.Content,
+        Rationale = entry.Rationale,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+    memoryDb.Decisions.Add(decision);
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new { entry.Id, entry.Status, decisionId = decision.Id });
+});
+
+// POST /api/projects/{id}/decisions/inbox/{entryId}/reject
+app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
+    string id,
+    int entryId,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    var entry = await memoryDb.DecisionInbox.FindAsync(new object[] { entryId }, ct);
+    if (entry is null || entry.ProjectId != id) return Results.NotFound();
+    if (entry.Status != "pending")
+        return Results.Conflict(new { error = "Entry is not pending." });
+
+    entry.Status = "rejected";
+    entry.UpdatedAt = DateTimeOffset.UtcNow;
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new { entry.Id, entry.Status });
+});
+
+// GET /api/projects/{id}/decisions
+app.MapGet("/api/projects/{id}/decisions", async (
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var decisions = await memoryDb.Decisions
+        .Where(d => d.ProjectId == id)
+        .OrderByDescending(d => d.CreatedAt)
+        .ToListAsync(ct);
+    return Results.Ok(decisions.Select(d => new
+    {
+        d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
+        created_at = d.CreatedAt, updated_at = d.UpdatedAt,
+    }));
+});
+
+// POST /api/projects/{id}/decisions
+app.MapPost("/api/projects/{id}/decisions", async (
+    string id,
+    CreateDecisionRequest request,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(request.AgentName) || string.IsNullOrWhiteSpace(request.Type)
+        || string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Content))
+        return Results.BadRequest(new { error = "agent_name, type, title, and content are required." });
+
+    var now = DateTimeOffset.UtcNow;
+    var decision = new Decision
+    {
+        ProjectId = id,
+        AgentName = request.AgentName!,
+        Type = request.Type!,
+        Status = "active",
+        Title = request.Title!,
+        Content = request.Content!,
+        Rationale = request.Rationale,
+        Tags = request.Tags,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+    memoryDb.Decisions.Add(decision);
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
+    {
+        decision.Id, decision.AgentName, decision.Type, decision.Status,
+        decision.Title, decision.Content, decision.Rationale, decision.Tags,
+        created_at = decision.CreatedAt,
+    });
+});
+
+// PUT /api/projects/{id}/decisions/{decisionId}
+app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
+    string id,
+    int decisionId,
+    UpdateDecisionRequest request,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
+    if (decision is null || decision.ProjectId != id) return Results.NotFound();
+
+    if (!string.IsNullOrWhiteSpace(request.Status)) decision.Status = request.Status!;
+    if (!string.IsNullOrWhiteSpace(request.Content)) decision.Content = request.Content!;
+    if (request.Rationale is not null) decision.Rationale = request.Rationale;
+    decision.UpdatedAt = DateTimeOffset.UtcNow;
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new
+    {
+        decision.Id, decision.Status, decision.Content, decision.Rationale,
+        updated_at = decision.UpdatedAt,
+    });
+});
+
+// GET /api/projects/{id}/agents/{name}/memory
+app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
+    string id,
+    string name,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var memories = await memoryDb.AgentMemory
+        .Where(m => m.ProjectId == id && m.AgentName == name)
+        .OrderByDescending(m => m.CreatedAt)
+        .ToListAsync(ct);
+    return Results.Ok(memories.Select(m => new
+    {
+        m.Id, m.AgentName, m.Type, m.Importance, m.Content, m.Tags,
+        created_at = m.CreatedAt, updated_at = m.UpdatedAt,
+    }));
+});
+
+// POST /api/projects/{id}/agents/{name}/memory
+app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
+    string id,
+    string name,
+    RecordMemoryRequest request,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Content))
+        return Results.BadRequest(new { error = "type and content are required." });
+
+    var now = DateTimeOffset.UtcNow;
+    var memory = new AgentMemory
+    {
+        ProjectId = id,
+        AgentName = name,
+        Type = request.Type!,
+        Importance = request.Importance ?? "medium",
+        Content = request.Content!,
+        Tags = request.Tags,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+    memoryDb.AgentMemory.Add(memory);
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Created($"/api/projects/{id}/agents/{name}/memory/{memory.Id}", new
+    {
+        memory.Id, memory.AgentName, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        created_at = memory.CreatedAt,
+    });
+});
+
+// GET /api/projects/{id}/agents/{name}/memory/{memId}
+app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}", async (
+    string id,
+    string name,
+    int memId,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
+    if (memory is null || memory.ProjectId != id || memory.AgentName != name) return Results.NotFound();
+    return Results.Ok(new
+    {
+        memory.Id, memory.AgentName, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
+    });
+});
+
+// GET /api/projects/{id}/sessions/current
+app.MapGet("/api/projects/{id}/sessions/current", async (
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var session = await memoryDb.SessionContexts
+        .Where(s => s.ProjectId == id && s.EndedAt == null)
+        .OrderByDescending(s => s.StartedAt)
+        .FirstOrDefaultAsync(ct);
+    if (session is null) return Results.NotFound();
+    return Results.Ok(new
+    {
+        session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        started_at = session.StartedAt, ended_at = session.EndedAt,
+    });
+});
+
+// POST /api/projects/{id}/sessions
+app.MapPost("/api/projects/{id}/sessions", async (
+    string id,
+    StartSessionRequest request,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(request.FocusArea))
+        return Results.BadRequest(new { error = "focus_area is required." });
+
+    var now = DateTimeOffset.UtcNow;
+    var session = new SessionContext
+    {
+        ProjectId = id,
+        SessionId = request.SessionId ?? Guid.NewGuid().ToString("N"),
+        FocusArea = request.FocusArea!,
+        ActiveIssues = request.ActiveIssues,
+        Summary = request.Summary,
+        StartedAt = now,
+    };
+    memoryDb.SessionContexts.Add(session);
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Created($"/api/projects/{id}/sessions/current", new
+    {
+        session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        started_at = session.StartedAt,
+    });
+});
+
+// PUT /api/projects/{id}/sessions/current
+app.MapPut("/api/projects/{id}/sessions/current", async (
+    string id,
+    UpdateSessionRequest request,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var session = await memoryDb.SessionContexts
+        .Where(s => s.ProjectId == id && s.EndedAt == null)
+        .OrderByDescending(s => s.StartedAt)
+        .FirstOrDefaultAsync(ct);
+    if (session is null) return Results.NotFound();
+
+    if (!string.IsNullOrWhiteSpace(request.FocusArea)) session.FocusArea = request.FocusArea!;
+    if (request.ActiveIssues is not null) session.ActiveIssues = request.ActiveIssues;
+    if (request.Summary is not null) session.Summary = request.Summary;
+    if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new
+    {
+        session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        started_at = session.StartedAt, ended_at = session.EndedAt,
+    });
+});
+
+// POST /api/projects/{id}/memory/export
+app.MapPost("/api/projects/{id}/memory/export", async (
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    var decisions = await memoryDb.Decisions.Where(d => d.ProjectId == id).ToListAsync(ct);
+    var inbox = await memoryDb.DecisionInbox
+        .Where(e => e.ProjectId == id && e.Status == "pending").ToListAsync(ct);
+    var memories = await memoryDb.AgentMemory.Where(m => m.ProjectId == id).ToListAsync(ct);
+    var session = await memoryDb.SessionContexts
+        .Where(s => s.ProjectId == id && s.EndedAt == null)
+        .OrderByDescending(s => s.StartedAt)
+        .FirstOrDefaultAsync(ct);
+
+    var decisionDtos = decisions.Select(d => new Scaffolder.Squad.Memory.DecisionExportDto(
+        d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList();
+    var inboxDtos = inbox.Select(e => new Scaffolder.Squad.Memory.InboxExportDto(
+        e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale)).ToList();
+    var memoryDtos = memories.Select(m => new Scaffolder.Squad.Memory.MemoryExportDto(
+        m.AgentName, m.Type, m.Content, m.CreatedAt)).ToList();
+    var sessionDto = session is null ? null : new Scaffolder.Squad.Memory.SessionExportDto(
+        session.FocusArea, session.ActiveIssues);
+
+    var exporter = new Scaffolder.Squad.Memory.SquadMemoryExporter(project.WorkingDirectory);
+    await exporter.ExportAsync(decisionDtos, inboxDtos, memoryDtos, sessionDto, ct);
+    return Results.Ok(new { exported = true, decisions = decisions.Count, inbox = inbox.Count, memories = memories.Count });
+});
+
+// POST /api/projects/{id}/memory/import
+app.MapPost("/api/projects/{id}/memory/import", async (
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    var importer = new Scaffolder.Squad.Memory.SquadMemoryImporter(project.WorkingDirectory);
+    var parsed = importer.ScanInboxFiles().ToList();
+    int newCount = 0;
+    foreach (var p in parsed)
+    {
+        var exists = await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == p.Slug, ct);
+        if (!exists)
+        {
+            var now = DateTimeOffset.UtcNow;
+            memoryDb.DecisionInbox.Add(new DecisionInboxEntry
+            {
+                ProjectId = id, AgentName = p.AgentName, Slug = p.Slug,
+                Type = p.Type, Title = p.Title, Content = p.Content,
+                Rationale = p.Rationale, Status = "pending",
+                CreatedAt = now, UpdatedAt = now,
+            });
+            newCount++;
+        }
+    }
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new { imported = newCount });
 });
 
 app.Run();

@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Infrastructure;
+using Scaffolder.Api.Memory;
 using Scaffolder.Domain;
 using Scaffolder.Squad.Analysis;
 using Scaffolder.Squad.Catalog;
@@ -23,6 +25,7 @@ public sealed class CastingService
     private readonly IAgentRunner _agentRunner;
     private readonly ProjectSignalScanner _signalScanner;
     private readonly ILogger<CastingService> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public CastingService(
         IProjectStore projectStore,
@@ -30,7 +33,8 @@ public sealed class CastingService
         CastProposalStore proposalStore,
         IAgentRunner agentRunner,
         ProjectSignalScanner signalScanner,
-        ILogger<CastingService> logger)
+        ILogger<CastingService> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _projectStore = projectStore;
         _catalog = catalog;
@@ -38,6 +42,7 @@ public sealed class CastingService
         _agentRunner = agentRunner;
         _signalScanner = signalScanner;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     // -----------------------------------------------------------------------
@@ -897,12 +902,88 @@ public sealed class CastingService
             "Confirmed proposal {ProposalId} for project {ProjectId}, intent {Intent}, {Count} members",
             proposalId, projectId, resolvedIntent, finalMembers.Count);
 
+        // Seed initial core_context memories for each new member
+        await SeedInitialMemoriesAsync(projectId, team, addedNames, chartersByName, now, ct)
+            .ConfigureAwait(false);
+
         return team;
     }
 
     // -----------------------------------------------------------------------
     // Built-in agent provisioning
     // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Seeds initial core_context memories from charter content for newly added agents,
+    /// and starts a project session in the memory DB.
+    /// </summary>
+    private async Task SeedInitialMemoriesAsync(
+        string projectId,
+        Team team,
+        List<string> addedNames,
+        Dictionary<string, string> chartersByName,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+            var builtinNames = new HashSet<string>(
+                new[] { "Scribe", "Ralph", "Rai" }, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var member in team.Members
+                .Where(m => addedNames.Contains(m.Name)
+                         && m.Status == CastMemberStatus.Active
+                         && !builtinNames.Contains(m.Name)))
+            {
+                if (!chartersByName.TryGetValue(member.Name, out var charter)
+                    || string.IsNullOrWhiteSpace(charter))
+                    continue;
+
+                var alreadySeeded = await memoryDb.AgentMemory
+                    .AnyAsync(m => m.ProjectId == projectId
+                               && m.AgentName == member.Name
+                               && m.Type == "core_context", ct)
+                    .ConfigureAwait(false);
+                if (alreadySeeded) continue;
+
+                memoryDb.AgentMemory.Add(new AgentMemory
+                {
+                    ProjectId = projectId,
+                    AgentName = member.Name,
+                    Type = "core_context",
+                    Importance = "high",
+                    Content = charter,
+                    Tags = null,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                });
+            }
+
+            // Start a project session if none is open
+            var sessionOpen = await memoryDb.SessionContexts
+                .AnyAsync(s => s.ProjectId == projectId && s.EndedAt == null, ct)
+                .ConfigureAwait(false);
+            if (!sessionOpen)
+            {
+                memoryDb.SessionContexts.Add(new SessionContext
+                {
+                    ProjectId = projectId,
+                    SessionId = Guid.NewGuid().ToString("N"),
+                    FocusArea = $"Initial setup for {team.ProjectName}",
+                    StartedAt = now,
+                });
+            }
+
+            await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Memory seeding failed for project {ProjectId} — proceeding without", projectId);
+        }
+    }
 
     /// <summary>
     /// Provisions the built-in agents (Scribe, Ralph, Rai). These are system-level agents

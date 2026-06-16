@@ -1,6 +1,7 @@
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Git;
 using Scaffolder.Api.Infrastructure;
+using Scaffolder.Api.Memory;
 using Scaffolder.Domain;
 
 namespace Scaffolder.Api.Runs;
@@ -18,6 +19,8 @@ public sealed class RunOrchestrator
     private readonly RunWorkflowFactory _workflowFactory;
     private readonly RunWorkflowRegistry _registry;
     private readonly RunWatchLoopService _watchLoop;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<RunOrchestrator> _logger;
 
     public RunOrchestrator(
@@ -27,6 +30,8 @@ public sealed class RunOrchestrator
         RunWorkflowFactory workflowFactory,
         RunWorkflowRegistry registry,
         RunWatchLoopService watchLoop,
+        IServiceScopeFactory scopeFactory,
+        IConfiguration configuration,
         ILogger<RunOrchestrator> logger)
     {
         _runStore = runStore;
@@ -35,6 +40,8 @@ public sealed class RunOrchestrator
         _workflowFactory = workflowFactory;
         _registry = registry;
         _watchLoop = watchLoop;
+        _scopeFactory = scopeFactory;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -62,16 +69,19 @@ public sealed class RunOrchestrator
         await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
         var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
+        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(run, ct);
+
         var input = new AgentTurnInput(
             run.Id.ToString(),
-            run.Task,
+            taskWithHarvest,
             worktreeInfo.WorktreePath,
             worktreeInfo.BranchName,
             run.RepositoryPath,
             run.OriginatingBranch,
             run.ModelSource.ToApiString(),
             run.ModelId,
-            run.SubmittingUser);
+            run.SubmittingUser,
+            systemPromptContext);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
@@ -103,16 +113,19 @@ public sealed class RunOrchestrator
 
         var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
+        var (taskWithHarvest2, systemPromptContext2) = await BuildContextAsync(run, ct);
+
         var input = new AgentTurnInput(
             run.Id.ToString(),
-            run.Task,
+            taskWithHarvest2,
             worktreeInfo.WorktreePath,
             worktreeInfo.BranchName,
             run.RepositoryPath,
             run.OriginatingBranch,
             run.ModelSource.ToApiString(),
             run.ModelId,
-            run.SubmittingUser);
+            run.SubmittingUser,
+            systemPromptContext2);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
@@ -166,5 +179,52 @@ public sealed class RunOrchestrator
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, generation, runCt);
+    }
+
+    private async Task<(string TaskWithHarvest, string? SystemPromptContext)> BuildContextAsync(
+        Run run, CancellationToken ct)
+    {
+        // Compile memory context (progressive disclosure — layer 1-4)
+        string? systemPromptContext = null;
+        if (!string.IsNullOrEmpty(run.AgentName) && run.ProjectId.HasValue)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
+                systemPromptContext = await memoryCompiler.CompileAsync(
+                    run.ProjectId.Value.ToString(), run.AgentName, ct);
+                // Prepend charter to system prompt context (charter is highest priority)
+                if (!string.IsNullOrEmpty(run.AgentCharter))
+                {
+                    systemPromptContext = string.IsNullOrEmpty(systemPromptContext)
+                        ? run.AgentCharter
+                        : run.AgentCharter + "\n\n---\n\n" + systemPromptContext;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Memory context compilation failed for run {RunId} — proceeding without", run.Id);
+            }
+        }
+
+        // Build harvest prompt (appended to task for post-run memory harvest)
+        var taskWithHarvest = run.Task;
+        if (!string.IsNullOrEmpty(run.AgentName) && run.ProjectId.HasValue)
+        {
+            var apiBaseUrl = _configuration["Scaffolder:ApiBaseUrl"] ?? "http://localhost:5000";
+            var harvest = "\n\n---\n" +
+                "**Session Harvest** (complete after your main task)\n" +
+                $"Project ID: {run.ProjectId} | Agent: {run.AgentName} | API: {apiBaseUrl}\n\n" +
+                "After completing the task above, please:\n" +
+                $"1. Submit any architectural or scope decisions made to: POST {apiBaseUrl}/api/projects/{run.ProjectId}/decisions/inbox\n" +
+                $"   Body: {{ \"agent_name\": \"{run.AgentName}\", \"slug\": \"kebab-slug\", \"type\": \"architectural|scope|process|pattern\", \"title\": \"...\", \"content\": \"...\" }}\n" +
+                $"2. Record new learnings or patterns at: POST {apiBaseUrl}/api/projects/{run.ProjectId}/agents/{run.AgentName}/memory\n" +
+                "   Body: { \"type\": \"learning|pattern\", \"importance\": \"high|medium|low\", \"content\": \"...\" }\n" +
+                "3. If you encountered any boundary conflicts, flag them as a `process` inbox entry titled \"Boundary conflict: [short description]\".\n";
+            taskWithHarvest = run.Task + harvest;
+        }
+
+        return (taskWithHarvest, systemPromptContext);
     }
 }
