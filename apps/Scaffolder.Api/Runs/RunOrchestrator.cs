@@ -72,7 +72,7 @@ public sealed class RunOrchestrator
         await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
         var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
-        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(run, ct);
+        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
 
         var input = new AgentTurnInput(
             run.Id.ToString(),
@@ -198,6 +198,7 @@ public sealed class RunOrchestrator
 
     /// <summary>
     /// Resolves the agent charter for the given run by reading the .squad/agents/{name}/charter.md file.
+    /// Tries the lowercase name first (Squad convention), then the original case as a fallback.
     /// Returns null if no AgentName is set or the charter file does not exist.
     /// </summary>
     public string? ResolveAgentCharter(Run run)
@@ -205,9 +206,16 @@ public sealed class RunOrchestrator
         if (string.IsNullOrWhiteSpace(run.AgentName) || string.IsNullOrWhiteSpace(run.RepositoryPath))
             return null;
 
-        var squadCharter = Path.Combine(run.RepositoryPath, ".squad", "agents", run.AgentName, "charter.md");
-        if (File.Exists(squadCharter))
-            return File.ReadAllText(squadCharter);
+        // Squad stores agent dirs in lowercase (e.g. .squad/agents/trinity/). Try that first.
+        var lowerPath = Path.Combine(run.RepositoryPath, ".squad", "agents",
+            run.AgentName.ToLowerInvariant(), "charter.md");
+        if (File.Exists(lowerPath))
+            return File.ReadAllText(lowerPath);
+
+        // Fallback: original case (e.g. hand-created dirs on case-insensitive filesystems).
+        var originalPath = Path.Combine(run.RepositoryPath, ".squad", "agents", run.AgentName, "charter.md");
+        if (File.Exists(originalPath))
+            return File.ReadAllText(originalPath);
 
         return null;
     }
@@ -225,17 +233,24 @@ public sealed class RunOrchestrator
                 var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
                 systemPromptContext = await memoryCompiler.CompileAsync(
                     run.ProjectId.Value.ToString(), run.AgentName, ct);
-                // Prepend charter to system prompt context (charter is highest priority)
-                if (!string.IsNullOrEmpty(run.AgentCharter))
-                {
-                    systemPromptContext = string.IsNullOrEmpty(systemPromptContext)
-                        ? run.AgentCharter
-                        : run.AgentCharter + "\n\n---\n\n" + systemPromptContext;
-                }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Memory context compilation failed for run {RunId} — proceeding without", run.Id);
+            }
+
+            // Charter always takes priority regardless of memory compilation success/failure.
+            // Resolve it now if the run doesn't already carry it (defensive: covers code paths
+            // that skip the endpoint-level load, e.g. StartReservedProjectRunAsync called from tests).
+            var charter = !string.IsNullOrEmpty(run.AgentCharter)
+                ? run.AgentCharter
+                : ResolveAgentCharter(run);
+
+            if (!string.IsNullOrEmpty(charter))
+            {
+                systemPromptContext = string.IsNullOrEmpty(systemPromptContext)
+                    ? charter
+                    : charter + "\n\n---\n\n" + systemPromptContext;
             }
         }
 
