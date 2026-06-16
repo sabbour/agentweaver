@@ -149,12 +149,27 @@ When a new agent team is cast for a project, the system automatically creates th
 
 - **FR-023**: Agent spawn templates MUST include a copy-pasteable prompt snippet instructing agents to use the REST API for all memory and decision writes instead of writing directly to `.squad/` files.
 
+**Progressive Memory Disclosure in Runs (Context Compilation Pattern)**
+
+- **FR-024**: When a run is submitted with an `agent_name`, `RunOrchestrator` MUST compile a context block using a `MemoryContextCompiler` and prepend it to the agent's system prompt before the run starts. The compiler MUST assemble the context in strict priority order (each layer overrides the previous when they conflict): (1) active `architectural` and `scope` Decisions — these are non-negotiable boundaries; (2) the agent's `core_context` memories — permanent role/project context; (3) up to 5 `high`-importance `learning` or `pattern` memories ordered by most recent; (4) the current session's `focus_area` and `active_issues`. The task itself is always appended last as the intent.
+- **FR-025**: The compiled context block MUST use a clearly delimited, hierarchically structured markdown format so the agent can distinguish each layer. Required sections: `## Boundaries and Decisions` (from active architectural/scope decisions), `## Memory` (core context + high-importance learnings), `## Current Session` (focus area and active issues). The charter section is prepended separately and is always highest precedence.
+- **FR-026**: After a run completes (reaches any terminal state), the run system MUST emit a structured harvest prompt to the agent requesting it to: (a) submit any new architectural or scope decisions made during the run to the inbox, (b) record new learnings or patterns as memory entries, and (c) flag any boundary violations encountered — cases where the run's constraints conflicted with the task requirements. The harvest prompt MUST include the project API base URL, project ID, and agent name so the agent can call the REST endpoints directly.
+- **FR-027**: Context compilation MUST be a non-blocking best-effort operation. If the memory query fails, the run MUST proceed with the charter-only system prompt. The failure MUST be logged but MUST NOT prevent the run from starting.
+- **FR-029**: The `SquadMemoryExporter` MUST also write a `.agentweaver/context/` directory to the managed repository root containing two compiled artifact files: `boundaries.md` (compiled from all active `architectural` and `scope` Decisions, formatted as a declarative constraints document) and `patterns.md` (compiled from all `pattern`-type AgentMemory entries across agents). These files make the team's accumulated context version-controllable alongside the code.
+- **FR-030**: The `MemoryContextCompiler` MUST scope context to the run's agent. `learning` and `pattern` memories from other agents MUST NOT be injected unless they are tagged with `cross-team`. Decisions are always cross-agent (they are team-wide boundaries).
+
+**MCP Server**
+
+- **FR-028**: The MCP server (`apps/Scaffolder.Mcp`) MUST expose memory and decision operations as MCP tools so that MCP-capable AI clients can record and retrieve memory and decisions without calling the REST API directly. The tools MUST include: `decision_inbox_submit`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_create`, `decision_list`, `memory_record`, `memory_get`, `memory_search`, `session_start`, `session_current`, `session_update`.
+
 ### Key Entities
 
 - **Decision**: A finalized, audit-visible team decision. Belongs to a project; attributed to an agent; has a type (architectural, process, scope, technical), a status (active, superseded, archived), and an optional supersession link to another Decision. Content is markdown.
 - **DecisionInboxEntry**: A draft decision submitted by an agent awaiting promotion. Belongs to a project; identified within a project-agent pair by a kebab-case slug (ensuring idempotency); transitions through pending, merged, and rejected statuses. When merged, it links to the resulting Decision record.
 - **AgentMemory**: An accumulated knowledge record for a specific agent on a project. Typed as core context, learning, update, or pattern; weighted by importance; tagged for cross-agent search. Content is markdown. Optionally linked to a session.
 - **SessionContext**: A record of one agent work session on a project. Tracks focus area, active issues (list), a summary, start time, and optional end time. Session ID is unique within a project.
+- **MemoryContextCompiler**: A deterministic assembler that constructs the system prompt context block for a run from structured database artifacts. Applies a strict priority hierarchy (decisions > core context > high-importance memories > session focus) so that architectural boundaries override learnings, which override session state. Scopes memory to the target agent (cross-team tag overrides scoping). Produces a markdown document with named sections; the charter is always prepended separately and takes the highest precedence.
+- **Context Artifacts (`.agentweaver/context/`)**: Version-controlled files compiled from the memory database and exported to the managed repository root. `boundaries.md` contains all active architectural and scope Decisions in declarative constraint format. `patterns.md` contains all pattern-type memories across agents. These files make the team's accumulated context auditable and diffable in git history alongside the code they govern.
 
 ### SessionContext Schema
 
@@ -201,6 +216,9 @@ CREATE TABLE IF NOT EXISTS session_context (
 - **SC-006**: Project initialization via `ConfirmCastAsync` produces a complete baseline: one session context, one memory record per agent, and one genesis decision, all verifiable immediately after cast confirmation.
 - **SC-007**: Cross-agent memory search correctly narrows results by tag and type filters — no false positives (records that do not match the filter) are returned.
 - **SC-008**: All agent-attributed records (decisions, memory entries, inbox entries) are queryable by agent name, ensuring per-agent accountability across the full audit trail.
+- **SC-009**: When a run with `agent_name` starts, the compiled context block injected into the system prompt contains the Boundaries and Decisions section, the Memory section, and the Current Session section as distinct, non-overlapping markdown sections — verifiable by inspecting the `SystemPrompt` stored on the Run record.
+- **SC-010**: After every export, `.agentweaver/context/boundaries.md` in the managed repository contains a section for every active `architectural` or `scope` Decision — no decisions are silently omitted.
+- **SC-011**: The harvest prompt emitted after run completion explicitly requests submissions to the decision inbox, memory recording, and boundary violation flagging in structured form — the agent has all necessary API coordinates (URL, project ID, agent name) to act on it without querying additional endpoints.
 
 ## Assumptions
 
