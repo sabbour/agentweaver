@@ -81,15 +81,15 @@ public sealed class RunOrchestrator
             run.ModelSource.ToApiString(),
             run.ModelId,
             run.SubmittingUser,
-            systemPromptContext);
+            systemPromptContext,
+            run.ProjectId?.ToString(),
+            run.AgentName,
+            run.StartedAt);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
     }
-
-    /// <summary>
-    /// Starts a workflow for a run that was already atomically reserved via
     /// TryCreateProjectRunAsync (Pending row already in DB). Transitions the row to InProgress
     /// with worktree info, then fires off the workflow. The caller is responsible for
     /// compensating (terminalizing) the Pending row if this method throws.
@@ -125,7 +125,10 @@ public sealed class RunOrchestrator
             run.ModelSource.ToApiString(),
             run.ModelId,
             run.SubmittingUser,
-            systemPromptContext2);
+            systemPromptContext2,
+            run.ProjectId?.ToString(),
+            run.AgentName,
+            run.StartedAt);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);
@@ -178,7 +181,10 @@ public sealed class RunOrchestrator
             run.ModelSource.ToApiString(),
             run.ModelId,
             run.SubmittingUser,
-            systemPromptContext);
+            systemPromptContext,
+            run.ProjectId?.ToString(),
+            run.AgentName,
+            run.StartedAt);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);

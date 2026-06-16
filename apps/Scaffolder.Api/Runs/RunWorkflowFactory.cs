@@ -20,7 +20,6 @@ public sealed class RunWorkflowFactory
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly IServiceScopeFactory _scopeFactory;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
 
@@ -33,7 +32,6 @@ public sealed class RunWorkflowFactory
         IMergeCoordinator mergeCoordinator,
         RunStreamStore streamStore,
         ILoggerFactory loggerFactory,
-        IServiceScopeFactory scopeFactory,
         IConfiguration configuration)
     {
         _agentRunner = agentRunner;
@@ -41,7 +39,6 @@ public sealed class RunWorkflowFactory
         _mergeCoordinator = mergeCoordinator;
         _streamStore = streamStore;
         _loggerFactory = loggerFactory;
-        _scopeFactory = scopeFactory;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -110,7 +107,6 @@ public sealed class RunWorkflowFactory
                     agentOutput.OriginatingBranch);
             });
 
-        // Terminal executors using FunctionExecutor for pass-through outputs.
         ExecutorBinding terminalNoOp = new FunctionExecutor<AgentTurnOutput, NoChangesOutput>(
             "terminal-no-op",
             (input, ctx, ct) => new ValueTask<NoChangesOutput>(new NoChangesOutput(input.RunId)));
@@ -123,28 +119,9 @@ public sealed class RunWorkflowFactory
             "terminal-safety-failed",
             (input, ctx, ct) => new ValueTask<ContentSafetyFailedOutput>(new ContentSafetyFailedOutput(input.RunId)));
 
-        // Terminal merge node: pass-through for merged/failed outputs that should end the workflow.
         ExecutorBinding terminalMerge = new FunctionExecutor<MergeOutput, MergeOutput>(
             "terminal-merge",
             (input, ctx, ct) => new ValueTask<MergeOutput>(input));
-
-        // Scribe steps: best-effort pass-through that runs PostRunScribeService after
-        // successful terminal states (merge and no-changes). Never aborts the workflow.
-        ExecutorBinding scribeMerge = new FunctionExecutor<MergeOutput, MergeOutput>(
-            "scribe-merge",
-            async (output, ctx, ct) =>
-            {
-                await RunScribeAsync(output.RunId, ct).ConfigureAwait(false);
-                return output;
-            });
-
-        ExecutorBinding scribeNoChanges = new FunctionExecutor<NoChangesOutput, NoChangesOutput>(
-            "scribe-no-changes",
-            async (output, ctx, ct) =>
-            {
-                await RunScribeAsync(output.RunId, ct).ConfigureAwait(false);
-                return output;
-            });
 
         // Blocked adapter: on a retriable block, re-enter the review gate via HITL
         // so the workflow stays alive and the user can re-approve once the blocker clears.
@@ -158,19 +135,88 @@ public sealed class RunWorkflowFactory
                     agentOutput!.RunId, agentOutput.TreeHash, agentOutput.Diff, agentOutput.StepCount);
             });
 
+        // Store AgentTurnInput in workflow state at workflow start so Scribe adapters
+        // can read project/agent context after the review-gate checkpoint/resume cycle.
+        ExecutorBinding agentInputStorer = new FunctionExecutor<AgentTurnInput, AgentTurnInput>(
+            "agent-input-storer",
+            async (input, ctx, ct) =>
+            {
+                await ctx.QueueStateUpdateAsync("agent-input", input, "run-context", ct).ConfigureAwait(false);
+                return input;
+            });
+
+        // Two separate ScribeTurnExecutor instances to avoid single-node-multiple-inputs
+        // ambiguity in MAF's graph builder.
+        var scribeMergeExec = new ScribeTurnExecutor(
+            _agentRunner, _loggerFactory.CreateLogger<ScribeTurnExecutor>(), "scribe-turn-merge");
+        var scribeNoChangesExec = new ScribeTurnExecutor(
+            _agentRunner, _loggerFactory.CreateLogger<ScribeTurnExecutor>(), "scribe-turn-no-changes");
+        ExecutorBinding scribeBindingMerge = scribeMergeExec;
+        ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
+
+        // Scribe input adapters: read stored AgentTurnInput, build ScribeTurnInput.
+        ExecutorBinding scribeInputMerge = new FunctionExecutor<MergeOutput, ScribeTurnInput>(
+            "scribe-input-merge",
+            async (output, ctx, ct) =>
+            {
+                var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
+                    .ConfigureAwait(false);
+                return new ScribeTurnInput(
+                    output.RunId,
+                    agentInput?.ProjectId ?? "",
+                    agentInput?.AgentName ?? "",
+                    agentInput?.RunStartedAt ?? DateTimeOffset.UtcNow,
+                    agentInput?.RepositoryPath ?? "",
+                    agentInput?.ModelSource ?? "github-copilot",
+                    agentInput?.ModelId,
+                    TerminalStatus: output.Status,
+                    MergeResult: output.MergeResult,
+                    MergeMode: output.MergeMode);
+            });
+
+        ExecutorBinding scribeInputNoChanges = new FunctionExecutor<NoChangesOutput, ScribeTurnInput>(
+            "scribe-input-no-changes",
+            async (output, ctx, ct) =>
+            {
+                var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
+                    .ConfigureAwait(false);
+                return new ScribeTurnInput(
+                    output.RunId,
+                    agentInput?.ProjectId ?? "",
+                    agentInput?.AgentName ?? "",
+                    agentInput?.RunStartedAt ?? DateTimeOffset.UtcNow,
+                    agentInput?.RepositoryPath ?? "",
+                    agentInput?.ModelSource ?? "github-copilot",
+                    agentInput?.ModelId,
+                    TerminalStatus: "no_changes");
+            });
+
+        // Scribe output adapters: reconstruct terminal output types from pass-through.
+        ExecutorBinding scribeOutputMerge = new FunctionExecutor<ScribeTurnInput, MergeOutput>(
+            "scribe-output-merge",
+            (input, ctx, ct) => new ValueTask<MergeOutput>(
+                new MergeOutput(input.RunId, input.TerminalStatus ?? "merged", input.MergeResult, input.MergeMode)));
+
+        ExecutorBinding scribeOutputNoChanges = new FunctionExecutor<ScribeTurnInput, NoChangesOutput>(
+            "scribe-output-no-changes",
+            (input, ctx, ct) => new ValueTask<NoChangesOutput>(new NoChangesOutput(input.RunId)));
+
         ExecutorBinding agentBinding = agentTurnExecutor;
         ExecutorBinding mergeBinding = mergeExecutor;
         ExecutorBinding reviewBinding = reviewPort;
 
-        var wf = new WorkflowBuilder(agentBinding)
+        var wf = new WorkflowBuilder(agentInputStorer)
+            // storer -> agent turn (unconditional)
+            .AddEdge(agentInputStorer, agentBinding)
             // Content safety flagged -> immediate failure (highest priority, Guardrail 6)
             .AddEdge<AgentTurnOutput>(agentBinding, terminalSafetyFailed,
                 output => output is not null && output.ContentSafetyFlagged)
-            // No changes -> completed/no-op
+            // No changes -> no-op -> scribe path
             .AddEdge<AgentTurnOutput>(agentBinding, terminalNoOp,
                 output => output is not null && !output.ContentSafetyFlagged && string.IsNullOrEmpty(output.Diff))
-            // No-op -> scribe (best-effort memory flywheel close)
-            .AddEdge(terminalNoOp, scribeNoChanges)
+            .AddEdge(terminalNoOp, scribeInputNoChanges)
+            .AddEdge(scribeInputNoChanges, scribeBindingNoChanges)
+            .AddEdge(scribeBindingNoChanges, scribeOutputNoChanges)
             // Has changes -> review adapter (stores merge data, maps to WorkflowReviewRequest)
             .AddEdge<AgentTurnOutput>(agentBinding, reviewAdapter,
                 output => output is not null && !output.ContentSafetyFlagged && !string.IsNullOrEmpty(output.Diff))
@@ -181,11 +227,12 @@ public sealed class RunWorkflowFactory
                 decision => decision is not null && decision.Approved)
             // Merge adapter -> merge executor (unconditional: MergeInput flows in)
             .AddEdge(mergeAdapter, mergeBinding)
-            // Merge succeeded or failed terminally -> terminal merge output
+            // Merge succeeded or failed terminally -> terminal merge -> scribe path
             .AddEdge<MergeOutput>(mergeBinding, terminalMerge,
                 output => output is not null && output.Status != "blocked")
-            // Terminal merge -> scribe (best-effort memory flywheel close)
-            .AddEdge(terminalMerge, scribeMerge)
+            .AddEdge(terminalMerge, scribeInputMerge)
+            .AddEdge(scribeInputMerge, scribeBindingMerge)
+            .AddEdge(scribeBindingMerge, scribeOutputMerge)
             // Merge blocked (retriable) -> re-enter review gate via HITL.
             // idempotent: true permits the cycle back through the review port.
             .AddEdge<MergeOutput>(mergeBinding, blockedAdapter,
@@ -194,29 +241,14 @@ public sealed class RunWorkflowFactory
             // Declined -> terminal
             .AddEdge<WorkflowReviewDecision>(reviewBinding, terminalDeclined,
                 decision => decision is null || !decision.Approved)
-            .WithOutputFrom(scribeMerge)
-            .WithOutputFrom(scribeNoChanges)
+            // Outputs
+            .WithOutputFrom(scribeOutputMerge)
+            .WithOutputFrom(scribeOutputNoChanges)
             .WithOutputFrom(terminalDeclined)
             .WithOutputFrom(terminalSafetyFailed)
             .Build()!;
 
         return wf;
-    }
-
-    private async Task RunScribeAsync(string runId, CancellationToken ct)
-    {
-        try
-        {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var scribe = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
-            await scribe.RunAsync(runId, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // Best-effort: scribe failure must never abort the workflow
-            _loggerFactory.CreateLogger<RunWorkflowFactory>().LogWarning(
-                ex, "Scribe step failed for run {RunId} — workflow proceeds normally", runId);
-        }
     }
 
     /// <summary>

@@ -11,7 +11,10 @@ public sealed record AgentTurnInput(
     string ModelSource,
     string? ModelId,
     string SubmittingUser,
-    string? SystemPromptContext = null);
+    string? SystemPromptContext = null,
+    string? ProjectId = null,
+    string? AgentName = null,
+    DateTimeOffset? RunStartedAt = null);
 
 /// <summary>Output from the agent turn executor, consumed by conditional edges.</summary>
 public sealed record AgentTurnOutput(
@@ -55,3 +58,17 @@ public sealed record DeclinedOutput(string RunId);
 
 /// <summary>Terminal output for content-safety-flagged runs.</summary>
 public sealed record ContentSafetyFailedOutput(string RunId);
+
+/// <summary>Input to the Scribe agent turn, carrying context + terminal output for pass-through.</summary>
+public sealed record ScribeTurnInput(
+    string RunId,
+    string ProjectId,
+    string AgentName,
+    DateTimeOffset RunStartedAt,
+    string RepositoryPath,
+    string ModelSource,
+    string? ModelId,
+    // Terminal output data so output adapters can reconstruct MergeOutput/NoChangesOutput
+    string? TerminalStatus = null,
+    string? MergeResult = null,
+    string? MergeMode = null);
