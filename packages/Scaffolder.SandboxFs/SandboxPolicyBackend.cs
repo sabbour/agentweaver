@@ -15,7 +15,7 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
     private static readonly HashSet<string> KnownFileTools = new(StringComparer.Ordinal)
     {
         "read_file", "write_file", "create_file",
-        "str_replace_editor", "apply_patch",
+        "str_replace_editor", "apply_patch", "list_directory",
     };
 
     /// <summary>Known search-tool names that enumerate the sandbox root.</summary>
