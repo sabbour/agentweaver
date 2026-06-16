@@ -224,9 +224,10 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
 function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; projectId: string; onDeleted: (runId: string) => void }) {
   const styles = useStyles();
   const [deleting, setDeleting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const handleDelete = async () => {
-    if (!confirm('Delete this run? This cannot be undone.')) return;
+  const handleDeleteConfirmed = async () => {
+    setConfirmOpen(false);
     setDeleting(true);
     try {
       await apiClient.deleteRun(run.run_id);
@@ -254,13 +255,33 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
         <Button appearance="secondary">Workflow</Button>
       </Link>
       {isDeletable && (
-        <Button
-          appearance="subtle"
-          icon={<DeleteRegular />}
-          disabled={deleting}
-          onClick={() => void handleDelete()}
-          aria-label="Delete run"
-        />
+        <>
+          <Button
+            appearance="subtle"
+            icon={<DeleteRegular />}
+            disabled={deleting}
+            onClick={() => setConfirmOpen(true)}
+            aria-label="Delete run"
+          />
+          <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Delete run?</DialogTitle>
+                <DialogContent>
+                  This will permanently delete the run and cannot be undone.
+                </DialogContent>
+                <DialogActions>
+                  <DialogTrigger disableButtonEnhancement>
+                    <Button appearance="secondary">Cancel</Button>
+                  </DialogTrigger>
+                  <Button appearance="primary" onClick={() => void handleDeleteConfirmed()}>
+                    Delete
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </>
       )}
     </div>
   );
