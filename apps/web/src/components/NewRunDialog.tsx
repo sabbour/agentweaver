@@ -28,7 +28,7 @@ interface NewRunDialogProps {
 }
 
 export function NewRunDialog({ open, onOpenChange, projectId, members, onRunCreated }: NewRunDialogProps) {
-  const activeMembers = members.filter((m) => m.status === 'active');
+  const activeMembers = members.filter((m) => m.status === 'active' && !m.is_built_in);
 
   const [agentName, setAgentName] = useState(activeMembers[0]?.name ?? '');
   const [task, setTask] = useState('');

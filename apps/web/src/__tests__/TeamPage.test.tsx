@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -80,6 +80,7 @@ describe('TeamPage', () => {
           status: 'active',
           default_model: 'gpt-4o',
           is_named: true,
+          is_built_in: false,
         },
         {
           name: 'Bob',
@@ -88,6 +89,7 @@ describe('TeamPage', () => {
           status: 'retired',
           default_model: 'gpt-4o',
           is_named: true,
+          is_built_in: false,
         },
       ],
     };

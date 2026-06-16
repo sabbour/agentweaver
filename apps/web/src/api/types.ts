@@ -271,6 +271,7 @@ export interface TeamMemberDto {
   status: 'active' | 'retired';
   default_model: string;
   is_named: boolean;
+  is_built_in: boolean;
   charter_created_at?: string | null;
   charter_updated_at?: string | null;
 }

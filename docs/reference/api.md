@@ -62,6 +62,51 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
 | `POST` | `/api/projects/{id}/runs` | Start a run within a project |
 
+### Memory
+
+Memory is scoped to projects. Decisions and memories feed the `MemoryContextCompiler`, which assembles a hierarchical context block injected into every agent run (boundaries → core context → learnings → session). Export writes to `.squad/decisions.md`, `.squad/agents/{name}/history.md`, `.agentweaver/context/boundaries.md`, and `.agentweaver/context/patterns.md`.
+
+#### Decision Inbox
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/projects/{id}/inbox` | Submit a decision or learning to the inbox |
+| `GET` | `/api/projects/{id}/inbox` | List inbox entries (`?agent=`, `?type=`, `?status=`) |
+| `POST` | `/api/projects/{id}/inbox/{entryId}/merge` | Merge a pending entry into decisions |
+| `POST` | `/api/projects/{id}/inbox/{entryId}/reject` | Reject a pending entry |
+
+#### Decisions
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/projects/{id}/decisions` | Create a decision directly |
+| `GET` | `/api/projects/{id}/decisions` | List decisions (`?type=`, `?agent=`) |
+| `PUT` | `/api/projects/{id}/decisions/{decisionId}` | Update decision status/content |
+
+#### Agent Memory
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/projects/{id}/agents/{name}/memory` | Add a memory entry for an agent |
+| `GET` | `/api/projects/{id}/agents/{name}/memory` | List agent memories (`?type=`, `?importance=`) |
+| `GET` | `/api/projects/{id}/agents/{name}/memory/{memId}` | Get a single memory entry |
+| `GET` | `/api/projects/{id}/memory` | Cross-agent memory search (`?type=`, `?tags=`) |
+
+#### Sessions
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/projects/{id}/sessions` | Start a new session (auto-ends existing) |
+| `GET` | `/api/projects/{id}/sessions/current` | Get current open session |
+| `PUT` | `/api/projects/{id}/sessions/current` | Update focus, summary, or end session |
+
+#### Export / Import
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/projects/{id}/memory/export` | Export DB memory → `.squad/` + `.agentweaver/context/` |
+| `POST` | `/api/projects/{id}/memory/import` | Import `.squad/decisions/inbox/*.md` → DB |
+
 ### GitHub authentication
 
 | Method | Path | Purpose |
@@ -91,6 +136,8 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `PATCH` | `/api/projects/{id}/team/members/{name}` | Re-role a team member |
 | `GET` | `/api/projects/{id}/team/sync` | Get pending .squad/ changes and change set hash |
 | `POST` | `/api/projects/{id}/team/sync` | Commit pending .squad/ changes |
+
+Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case-insensitive). Built-in agents cannot be removed, re-roled, or directly run. Attempting to start a run with a built-in agent name returns `400 Bad Request`.
 
 ### POST /api/runs
 

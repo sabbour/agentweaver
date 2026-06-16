@@ -55,9 +55,13 @@ public static class CastingMappings
         Status = member.Status == CastMemberStatus.Retired ? "retired" : "active",
         DefaultModel = member.Role.DefaultModel,
         IsNamed = member.IsNamed,
+        IsBuiltIn = BuiltInAgents.Contains(member.Name),
         CharterCreatedAt = createdAt,
         CharterUpdatedAt = updatedAt,
     };
+
+    private static readonly HashSet<string> BuiltInAgents =
+        new(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai" };
 
     public static TeamDto ToDto(Team team, SquadLayoutInfo layout) => new()
     {

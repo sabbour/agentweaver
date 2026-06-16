@@ -1750,6 +1750,12 @@ app.MapPost("/api/projects/{id}/runs", async (
         ? project.DefaultBranch
         : request.BaseBranch;
 
+    // Block built-in system agents from being run directly
+    if (!string.IsNullOrWhiteSpace(request.AgentName) &&
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai" }
+            .Contains(request.AgentName))
+        return Results.BadRequest(new { error = $"'{request.AgentName}' is a built-in system agent and cannot be run directly." });
+
     // Load agent charter if agent_name provided
     string? agentCharter = null;
     if (!string.IsNullOrWhiteSpace(request.AgentName))

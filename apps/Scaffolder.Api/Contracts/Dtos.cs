@@ -466,6 +466,7 @@ public sealed record TeamMemberDto
     [JsonPropertyName("status")] public required string Status { get; init; }
     [JsonPropertyName("default_model")] public required string DefaultModel { get; init; }
     [JsonPropertyName("is_named")] public required bool IsNamed { get; init; }
+    [JsonPropertyName("is_built_in")] public required bool IsBuiltIn { get; init; }
     [JsonPropertyName("charter_created_at")] public DateTimeOffset? CharterCreatedAt { get; init; }
     [JsonPropertyName("charter_updated_at")] public DateTimeOffset? CharterUpdatedAt { get; init; }
 }

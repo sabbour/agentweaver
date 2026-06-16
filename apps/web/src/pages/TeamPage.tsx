@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Avatar,
   Badge,
   Button,
   Dialog,
@@ -34,6 +33,7 @@ import {
 import { Dismiss24Regular, PersonAddRegular, PlayRegular, ChevronDownRegular, ChevronUpRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { AgentAvatar } from '../components/AgentAvatar';
 import type {
   TeamDto,
   TeamMemberDto,
@@ -587,6 +587,16 @@ function AgentDetailPanel({
           }
         >
           {member.name}
+          {member.is_built_in && (
+            <Badge
+              appearance="tint"
+              color="brand"
+              size="small"
+              style={{ marginLeft: '8px', verticalAlign: 'middle' }}
+            >
+              System
+            </Badge>
+          )}
         </DrawerHeaderTitle>
         <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>{member.role_title}</Text>
       </DrawerHeader>
@@ -686,17 +696,26 @@ function AgentDetailPanel({
 
       <DrawerFooter>
         <div className={styles.drawerFooterRow}>
-          <RemoveMemberDialog
-            projectId={projectId}
-            member={member}
-            onRemoved={() => { onClose(); onRemoved(); }}
-          />
-          <ReroleDialog
-            projectId={projectId}
-            member={member}
-            scenarios={scenarios}
-            onReroled={onReroled}
-          />
+          {!member.is_built_in && (
+            <RemoveMemberDialog
+              projectId={projectId}
+              member={member}
+              onRemoved={() => { onClose(); onRemoved(); }}
+            />
+          )}
+          {!member.is_built_in && (
+            <ReroleDialog
+              projectId={projectId}
+              member={member}
+              scenarios={scenarios}
+              onReroled={onReroled}
+            />
+          )}
+          {member.is_built_in && (
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>
+              Built-in system agents cannot be removed or re-roled.
+            </Text>
+          )}
         </div>
       </DrawerFooter>
     </>
@@ -898,10 +917,11 @@ export function TeamPage() {
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedMember(member); }}
               >
                 <div className={styles.cardHeader}>
-                  <Avatar
+                  <AgentAvatar
                     name={member.name}
-                    color={member.status === 'active' ? 'brand' : 'neutral'}
                     size={40}
+                    isBuiltIn={member.is_built_in}
+                    isRetired={member.status === 'retired'}
                   />
                   <div className={styles.cardInfo}>
                     <Text className={styles.cardName}>{member.name}</Text>
@@ -920,9 +940,15 @@ export function TeamPage() {
                       backgroundColor: member.status === 'active' ? '#107c10' : '#8a8886',
                     }}
                   />
-                  <Badge appearance="tint" color="informative" size="small">
-                    Project agent
-                  </Badge>
+                  {member.is_built_in ? (
+                    <Badge appearance="tint" color="brand" size="small">
+                      System agent
+                    </Badge>
+                  ) : (
+                    <Badge appearance="tint" color="informative" size="small">
+                      Project agent
+                    </Badge>
+                  )}
                 </div>
               </div>
             ))}

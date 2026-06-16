@@ -349,3 +349,241 @@ List all available casting scenario templates.
 **Parameters**: none
 
 **Returns**: Array of scenario templates with `id`, `name`, `description`, and team shape.
+
+---
+
+## Memory
+
+Memory is scoped to projects. Agents use the inbox to submit learnings; the coordinator merges them into decisions. `memory_export` writes the live DB state to `.squad/` and `.agentweaver/context/` files for Squad CLI interoperability.
+
+### `inbox_submit`
+
+Submit a decision or learning to the agent inbox.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `agent_name` | string | yes | Agent submitting the entry |
+| `slug` | string | yes | Unique slug for idempotency (e.g. `prefer-async`) |
+| `type` | string | yes | `learning` \| `pattern` \| `update` \| `architectural` \| `scope` \| `process` \| `technical` |
+| `title` | string | yes | Short title |
+| `content` | string | yes | Full content |
+| `rationale` | string | no | Optional rationale |
+
+**Returns**: Created inbox entry with `id` and `status: "pending"`.
+
+---
+
+### `inbox_list`
+
+List inbox entries for a project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `agent` | string | no | Filter by agent name |
+| `type` | string | no | Filter by entry type |
+| `status` | string | no | `pending` (default) \| `merged` \| `rejected` |
+
+**Returns**: Array of inbox entries.
+
+---
+
+### `inbox_merge`
+
+Merge a pending inbox entry into team decisions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `entry_id` | string | yes | Inbox entry ID |
+
+**Returns**: Resulting decision object.
+
+---
+
+### `inbox_reject`
+
+Reject a pending inbox entry.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `entry_id` | string | yes | Inbox entry ID |
+
+**Returns**: `"rejected"`.
+
+---
+
+### `decision_create`
+
+Create a team decision directly (coordinator / Scribe path).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `agent_name` | string | yes | Agent recording the decision |
+| `type` | string | yes | `architectural` \| `process` \| `scope` \| `technical` |
+| `title` | string | yes | Short title |
+| `content` | string | yes | Full content |
+| `rationale` | string | no | Optional rationale |
+
+**Returns**: Created decision object.
+
+---
+
+### `decision_list`
+
+List team decisions for a project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `type` | string | no | Filter by type |
+| `agent` | string | no | Filter by agent name |
+
+**Returns**: Array of decision objects.
+
+---
+
+### `decision_update`
+
+Update a decision's status or content.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `decision_id` | string | yes | Decision ID |
+| `status` | string | no | `active` \| `superseded` \| `archived` |
+| `content` | string | no | New content |
+| `superseded_by_id` | string | no | ID of the superseding decision |
+
+**Returns**: Updated decision object.
+
+---
+
+### `memory_add`
+
+Add a memory entry for an agent.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `agent_name` | string | yes | Agent name |
+| `type` | string | yes | `learning` \| `pattern` \| `core_context` \| `update` |
+| `content` | string | yes | Content |
+| `importance` | string | no | `low` \| `medium` (default) \| `high` |
+| `tags` | string | no | Comma-separated tags |
+
+**Returns**: Created memory entry.
+
+---
+
+### `memory_list`
+
+List memory entries for a specific agent.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `agent_name` | string | yes | Agent name |
+| `type` | string | no | Filter by type |
+| `importance` | string | no | Filter by importance |
+
+**Returns**: Array of memory entries.
+
+---
+
+### `memory_get`
+
+Get a single memory entry.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `agent_name` | string | yes | Agent name |
+| `memory_id` | string | yes | Memory entry ID |
+
+**Returns**: Memory entry object.
+
+---
+
+### `memory_search`
+
+Cross-agent memory search across the whole project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `type` | string | no | Filter by type |
+| `tags` | string | no | Comma-separated tags (OR semantics) |
+
+**Returns**: Array of memory entries from all agents.
+
+---
+
+### `session_start`
+
+Start a new work session. Auto-ends any existing open session.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `session_id` | string | yes | Unique session ID |
+| `focus_area` | string | yes | Current focus description |
+| `active_issues` | string | no | Active issues being worked |
+
+**Returns**: Created session object.
+
+---
+
+### `session_current`
+
+Get the current open session for a project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: Current session object or `null`.
+
+---
+
+### `session_update`
+
+Update focus, summary, or end the current session.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `focus_area` | string | no | New focus area |
+| `active_issues` | string | no | Active issues |
+| `summary` | string | no | Text to append to the session summary |
+| `end` | boolean | no | `true` to close the session |
+
+**Returns**: `"updated"`.
+
+---
+
+### `memory_export`
+
+Export project memory to `.squad/` and `.agentweaver/context/` files for Squad CLI interoperability.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: `"exported"`.
+
+---
+
+### `memory_import`
+
+Import `.squad/decisions/inbox/*.md` files from disk into the project memory database.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: `"imported"`.
+
