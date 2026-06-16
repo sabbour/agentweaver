@@ -14,7 +14,6 @@ import type {
   AgentMessageItem,
   ToolCallItem,
   ApprovalRequestItem,
-  WorkflowStepItem,
 } from './types';
 
 /** Maximum characters stored per content field (Y-1: prevent unbounded DOM growth). */
@@ -395,19 +394,16 @@ function processEvent(
       return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
     }
 
+    // Workflow-orchestration events: consumed by WorkflowRunPage, not the Watch page.
     case 'review.requested':
     case 'review.approved':
     case 'review.declined':
     case 'review.changes_requested':
     case 'revision.started':
-      return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
-
     case 'merge.completed':
-    case 'merge.failed': {
-      // Defensive close — a no-op when the turn is already closed via agent.turn.end.
-      const s = closeOpenTurn(state);
-      return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
-    }
+    case 'merge.failed':
+    case 'workflow.step':
+      return state;
 
     case 'tool.output':
     case 'tool.exec_result':
@@ -448,34 +444,6 @@ function processEvent(
       }
       // Fallback: no open turn → lifecycle
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
-    }
-
-    case 'workflow.step': {
-      const step = String(event.payload['step'] ?? '');
-      const status = String(event.payload['status'] ?? 'started') as WorkflowStepItem['status'];
-      const label = String(event.payload['label'] ?? '');
-      const agentName = event.payload['agent_name'] != null ? String(event.payload['agent_name']) : undefined;
-
-      if (status === 'started') {
-        const item: WorkflowStepItem = { kind: 'workflow_step', step, status, label, agentName, timestamp: Date.now() };
-        return { ...state, items: [...state.items, item] };
-      }
-
-      // completed / skipped / failed — find the last workflow_step with matching step and update it
-      const lastIdx = [...state.items].map((it, i) => ({ it, i }))
-        .filter(({ it }) => it.kind === 'workflow_step' && (it as WorkflowStepItem).step === step)
-        .at(-1)?.i;
-
-      if (lastIdx !== undefined) {
-        const existing = state.items[lastIdx] as WorkflowStepItem;
-        const updated: WorkflowStepItem = { ...existing, status, agentName: agentName ?? existing.agentName };
-        const items = [...state.items.slice(0, lastIdx), updated, ...state.items.slice(lastIdx + 1)];
-        return { ...state, items };
-      }
-
-      // No prior started item — add a new settled one
-      const item: WorkflowStepItem = { kind: 'workflow_step', step, status, label, agentName, timestamp: Date.now() };
-      return { ...state, items: [...state.items, item] };
     }
 
     default:
