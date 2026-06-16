@@ -207,7 +207,7 @@ export interface GitHubAuthStatusResponse {
 }
 
 export interface GitHubRepo {
-  full_name: string;
+  full_name: string | null;
   description?: string | null;
   private: boolean;
   default_branch: string;
