@@ -33,6 +33,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
     private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
     private readonly Action<string>? _completeSubStream;
+    private readonly string? _apiBaseUrl;
+    private readonly string? _apiKey;
 
     public ScribeTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -45,7 +47,9 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null,
         string name = "scribe-turn",
         Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
-        Action<string>? completeSubStream = null)
+        Action<string>? completeSubStream = null,
+        string? apiBaseUrl = null,
+        string? apiKey = null)
         : base(name)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -59,6 +63,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         _getRecordingWriter = getRecordingWriter ?? (_ => null);
         _createSubStream = createSubStream;
         _completeSubStream = completeSubStream;
+        _apiBaseUrl = apiBaseUrl;
+        _apiKey = apiKey;
     }
 
     public override async ValueTask<ScribeTurnInput> HandleAsync(
@@ -118,6 +124,10 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 modelId: input.ModelId,
                 systemPromptContext: charter,
                 streamWriter: subWriter,
+                projectId: input.ProjectId,
+                agentName: input.AgentName,
+                apiBaseUrl: _apiBaseUrl,
+                apiKey: _apiKey,
                 ct).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);

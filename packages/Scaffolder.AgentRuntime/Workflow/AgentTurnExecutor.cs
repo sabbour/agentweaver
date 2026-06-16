@@ -17,18 +17,24 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     private readonly IWorktreeOperations _worktreeOps;
     private readonly ILogger<AgentTurnExecutor> _logger;
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
+    private readonly string? _apiBaseUrl;
+    private readonly string? _apiKey;
 
     public AgentTurnExecutor(
         CopilotAIAgent agent,
         IWorktreeOperations worktreeOps,
         Func<string, ChannelWriter<RunEvent>?> getRecordingWriter,
-        ILogger<AgentTurnExecutor> logger)
+        ILogger<AgentTurnExecutor> logger,
+        string? apiBaseUrl = null,
+        string? apiKey = null)
         : base("agent-turn")
     {
         _agent = agent;
         _worktreeOps = worktreeOps;
         _getRecordingWriter = getRecordingWriter;
         _logger = logger;
+        _apiBaseUrl = apiBaseUrl;
+        _apiKey = apiKey;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -49,6 +55,10 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 input.ModelId,
                 input.SystemPromptContext,
                 writer,
+                input.ProjectId,
+                input.AgentName,
+                _apiBaseUrl,
+                _apiKey,
                 ct).ConfigureAwait(false);
 
             var session = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);

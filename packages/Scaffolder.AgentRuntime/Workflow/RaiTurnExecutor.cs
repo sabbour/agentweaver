@@ -121,6 +121,10 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 modelId: null,
                 systemPromptContext: charter,
                 streamWriter: subWriter,
+                projectId: null,
+                agentName: null,
+                apiBaseUrl: null,
+                apiKey: null,
                 ct).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);

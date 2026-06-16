@@ -263,23 +263,6 @@ public sealed class RunOrchestrator
             }
         }
 
-        // Build harvest prompt (appended to task for post-run memory harvest)
-        var taskWithHarvest = run.Task;
-        if (!string.IsNullOrEmpty(run.AgentName) && run.ProjectId.HasValue)
-        {
-            var apiBaseUrl = _configuration["Scaffolder:ApiBaseUrl"] ?? "http://localhost:5000";
-            var harvest = "\n\n---\n" +
-                "**Session Harvest** (complete after your main task)\n" +
-                $"Project ID: {run.ProjectId} | Agent: {run.AgentName} | API: {apiBaseUrl}\n\n" +
-                "After completing the task above, please:\n" +
-                $"1. Submit any architectural or scope decisions made to: POST {apiBaseUrl}/api/projects/{run.ProjectId}/decisions/inbox\n" +
-                $"   Body: {{ \"agent_name\": \"{run.AgentName}\", \"slug\": \"kebab-slug\", \"type\": \"architectural|scope|process|pattern\", \"title\": \"...\", \"content\": \"...\" }}\n" +
-                $"2. Record new learnings or patterns at: POST {apiBaseUrl}/api/projects/{run.ProjectId}/agents/{run.AgentName}/memory\n" +
-                "   Body: { \"type\": \"learning|pattern\", \"importance\": \"high|medium|low\", \"content\": \"...\" }\n" +
-                "3. If you encountered any boundary conflicts, flag them as a `process` inbox entry titled \"Boundary conflict: [short description]\".\n";
-            taskWithHarvest = run.Task + harvest;
-        }
-
-        return (taskWithHarvest, systemPromptContext);
+        return (run.Task, systemPromptContext);
     }
 }

@@ -30,6 +30,8 @@ public sealed class RunWorkflowFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
+    private readonly string? _apiBaseUrl;
+    private readonly string? _apiKey;
 
     public CheckpointManager CheckpointManager => _checkpointManager;
     public string CheckpointDirectory => _checkpointDir;
@@ -67,6 +69,9 @@ public sealed class RunWorkflowFactory
         _checkpointDir = configuration["Checkpoints:Path"]
             ?? Path.Combine(AppPaths.DataDirectory, "checkpoints");
         Directory.CreateDirectory(_checkpointDir);
+
+        _apiBaseUrl = configuration["Scaffolder:ApiBaseUrl"] ?? "http://localhost:5000";
+        _apiKey = configuration["Auth:ApiKey"];
 
         var store = new FileSystemJsonCheckpointStore(new DirectoryInfo(_checkpointDir));
         _checkpointManager = CheckpointManager.CreateJson(store);
@@ -122,7 +127,9 @@ public sealed class RunWorkflowFactory
             copilotAgent,
             _worktreeOps,
             GetRecordingWriter,
-            _loggerFactory.CreateLogger<AgentTurnExecutor>());
+            _loggerFactory.CreateLogger<AgentTurnExecutor>(),
+            apiBaseUrl: _apiBaseUrl,
+            apiKey: _apiKey);
 
         var mergeExecutor = new MergeExecutor(
             _mergeCoordinator,
@@ -202,11 +209,13 @@ public sealed class RunWorkflowFactory
         var scribeMergeExec = new ScribeTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
-            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream);
+            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey);
         var scribeNoChangesExec = new ScribeTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes",
-            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream);
+            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey);
         ExecutorBinding scribeBindingMerge = scribeMergeExec;
         ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
 

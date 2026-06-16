@@ -57,6 +57,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         - achieved: true if the task was fully completed, false if any critical step failed or was blocked
         - reason: one-sentence explanation
         Call this as your final tool call before writing any summary.
+
+        If Scaffolder API tools (submit_decision, record_memory, update_session, submit_inbox_entry) are available:
+        - Use submit_decision for any significant architectural, scope, or process choice you make.
+        - Use record_memory for important learnings or patterns discovered during the task.
+        - Use update_session once after completing your work with a brief summary of what was accomplished.
+        - Use submit_inbox_entry to flag boundary conflicts as type 'process' titled 'Boundary conflict: [description]'.
+        Call these after completing the main task, before report_outcome.
         """;
 
     /// <summary>
@@ -82,6 +89,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
     protected string _runId = "";
     protected string? _modelId;
     protected string? _systemPromptContext;
+    protected string? _projectId;
+    protected string? _agentName;
+    protected string? _apiBaseUrl;
+    protected string? _apiKey;
 
     /// <summary>The run-event channel writer for the current run (null when no stream attached).</summary>
     public ChannelWriter<RunEvent>? StreamWriter { get; private set; }
@@ -135,6 +146,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         string? modelId,
         string? systemPromptContext,
         ChannelWriter<RunEvent>? streamWriter,
+        string? projectId,
+        string? agentName,
+        string? apiBaseUrl,
+        string? apiKey,
         CancellationToken ct)
     {
         _workingDirectory = workingDirectory;
@@ -143,6 +158,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         _modelId = modelId;
         _systemPromptContext = systemPromptContext;
         StreamWriter = streamWriter;
+        _projectId = projectId;
+        _agentName = agentName;
+        _apiBaseUrl = apiBaseUrl;
+        _apiKey = apiKey;
 
         // Reset per-run emission state so a reused instance never leaks events across runs.
         _sb = new StringBuilder();
@@ -211,7 +230,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
             // Deterministic session ID enables history replay via ResumeSessionAsync.
             // Format: "scaffolder-run-{runId}" — unique per run, stable across restarts.
             SessionId = $"scaffolder-run-{runId}",
-            Tools = BuildSessionConfigTools(toolContext),
+            Tools = BuildSessionConfigTools(toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey),
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
@@ -601,6 +620,26 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                         });
                     }
 
+                    // Scaffolder API tools: auto-approve without sandbox governance.
+                    // The actual HTTP call executes in the function body after approval;
+                    // the streaming lifecycle emits tool.result when the function returns.
+                    if (toolName is "submit_decision" or "record_memory" or "update_session" or "submit_inbox_entry")
+                    {
+                        var apiArgs = new Dictionary<string, object>();
+                        if (customTool.Args is System.Text.Json.JsonElement apiArgsEl &&
+                            apiArgsEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            foreach (var prop in apiArgsEl.EnumerateObject())
+                                apiArgs[prop.Name] = prop.Value;
+                        }
+                        if (realCustomCallId is not null)
+                            emitToolCallOnce(customCallId, toolName, apiArgs);
+                        return Task.FromResult(new PermissionRequestResult
+                        {
+                            Kind = PermissionRequestResultKind.Approved,
+                        });
+                    }
+
                     // Deserialize the JSON args blob. Stamp tool_name first so it cannot be
                     // overridden by a model-supplied key (Seraph hardening).
                     var args = new Dictionary<string, object>();
@@ -791,15 +830,33 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
 
     /// <summary>
     /// Builds the tool list for <see cref="SessionConfig.Tools"/>:
-    /// only <c>report_intent</c> and <c>report_outcome</c>, wrapped as native overrides so
-    /// the SDK accepts them.
+    /// <c>report_intent</c> and <c>report_outcome</c> (wrapped as native overrides so the SDK accepts them),
+    /// plus Scaffolder API tools when <paramref name="projectId"/> and <paramref name="agentName"/> are set.
     /// </summary>
-    internal static IList<AIFunction> BuildSessionConfigTools(SandboxToolContext context)
+    internal static IList<AIFunction> BuildSessionConfigTools(
+        SandboxToolContext context,
+        string? projectId = null,
+        string? agentName = null,
+        string? apiBaseUrl = null,
+        string? apiKey = null)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
         var outcomeFn = all.First(f => string.Equals(f.Name, "report_outcome", StringComparison.Ordinal));
-        return [new CopilotOverrideAIFunction(intentFn), new CopilotOverrideAIFunction(outcomeFn)];
+
+        var tools = new List<AIFunction>
+        {
+            new CopilotOverrideAIFunction(intentFn),
+            new CopilotOverrideAIFunction(outcomeFn),
+        };
+
+        if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
+        {
+            var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
+            tools.AddRange(ScaffolderApiTools.Build(projectId, agentName, effectiveBaseUrl, apiKey));
+        }
+
+        return tools;
     }
 
     /// <summary>
