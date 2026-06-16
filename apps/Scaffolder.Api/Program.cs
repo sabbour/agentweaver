@@ -1556,6 +1556,12 @@ app.MapPost("/api/projects", async (
     }
 });
 
+// GET /api/server/info — public server metadata (no auth required)
+app.MapGet("/api/server/info", () => Results.Ok(new
+{
+    data_directory = AppPaths.DataDirectory,
+})).AllowAnonymous();
+
 // GET /api/projects — list all projects
 app.MapGet("/api/projects", async (
     ProjectService projectService,

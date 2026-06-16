@@ -131,7 +131,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
   };
 }
 
-function CreateBlankDialog({ onCreated }: { onCreated: (p: Project) => void }) {
+function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('blank', onCreated);
 
@@ -151,9 +151,11 @@ function CreateBlankDialog({ onCreated }: { onCreated: (p: Project) => void }) {
               <Field
                 label="Repository path"
                 required
-                hint="Absolute path to a git repository on the machine running the Agentweaver server"
+                hint={dataDir
+                  ? `Path to a git repository accessible from the server's data folder: ${dataDir}`
+                  : 'Absolute path to a git repository on the machine running the Agentweaver server'}
               >
-                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="/srv/repos/my-repo" />
+                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder={dataDir ?? '/srv/repos/my-repo'} />
               </Field>
               {d.error && (
                 <MessageBar intent="error">
@@ -206,7 +208,7 @@ function useGitHubRepos(open: boolean) {
   return { repos, loading: open && !fetched };
 }
 
-function CreateFromGitHubDialog({ onCreated }: { onCreated: (p: Project) => void }) {
+function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('github', onCreated);
   const { repos, loading: reposLoading } = useGitHubRepos(d.open);
@@ -262,9 +264,11 @@ function CreateFromGitHubDialog({ onCreated }: { onCreated: (p: Project) => void
               <Field
                 label="Repository path"
                 required
-                hint="Absolute path to a git repository on the machine running the Agentweaver server"
+                hint={dataDir
+                  ? `Path to a git repository accessible from the server's data folder: ${dataDir}`
+                  : 'Absolute path to a git repository on the machine running the Agentweaver server'}
               >
-                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder="/srv/repos/my-repo" />
+                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder={dataDir ?? '/srv/repos/my-repo'} />
               </Field>
               {d.error && (
                 <MessageBar intent="error">
@@ -326,6 +330,15 @@ export function ProjectGalleryPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dataDir, setDataDir] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.getServerInfo()
+      .then((info) => { if (!cancelled) setDataDir(info.data_directory); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -362,8 +375,8 @@ export function ProjectGalleryPage() {
         <div className={styles.emptyState}>
           <Text>No projects yet. Create one to get started.</Text>
           <div className={styles.toolbar}>
-            <CreateBlankDialog onCreated={handleCreated} />
-            <CreateFromGitHubDialog onCreated={handleCreated} />
+            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} />
+            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} />
           </div>
         </div>
       )}
@@ -371,8 +384,8 @@ export function ProjectGalleryPage() {
       {!loading && projects.length > 0 && (
         <>
           <div className={styles.toolbar}>
-            <CreateBlankDialog onCreated={handleCreated} />
-            <CreateFromGitHubDialog onCreated={handleCreated} />
+            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} />
+            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} />
           </div>
           <div className={styles.grid}>
             {projects.map((p) => (

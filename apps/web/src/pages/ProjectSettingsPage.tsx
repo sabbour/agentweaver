@@ -104,6 +104,7 @@ export function ProjectSettingsPage() {
   const [savingRelink, setSavingRelink] = useState(false);
   const [relinkError, setRelinkError] = useState<string | null>(null);
   const [relinkSuccess, setRelinkSuccess] = useState(false);
+  const [dataDir, setDataDir] = useState<string | null>(null);
 
   // Delete
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
@@ -122,6 +123,9 @@ export function ProjectSettingsPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
+    apiClient.getServerInfo()
+      .then((info) => { if (!cancelled) setDataDir(info.data_directory); })
+      .catch(() => {});
     apiClient.getProject(projectId)
       .then((p) => {
         if (!cancelled) {
@@ -420,7 +424,12 @@ export function ProjectSettingsPage() {
           <div className={styles.section}>
             <Title3>Relink repository</Title3>
             <Text>Update the server-side path if the repository has moved on the Agentweaver server.</Text>
-            <Field label="Repository path">
+            <Field
+              label="Repository path"
+              hint={dataDir
+                ? `Path to a git repository accessible from the server's data folder: ${dataDir}`
+                : 'Absolute path to a git repository on the machine running the Agentweaver server'}
+            >
               <Input value={newDir} onChange={(_, v) => setNewDir(v.value)} />
             </Field>
             <div className={styles.actions}>

@@ -1,5 +1,9 @@
 export type ModelSource = 'github-copilot' | 'microsoft-foundry';
 
+export interface ServerInfo {
+  data_directory: string;
+}
+
 export type RunStatus =
   | 'pending'
   | 'in_progress'
