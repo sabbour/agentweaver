@@ -126,6 +126,37 @@ const useStyles = makeStyles({
     height: '1px',
     backgroundColor: tokens.colorNeutralStroke2,
   },
+  // Feedback connector: wraps the forward connector + a return path row below it
+  feedbackConnectorWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+    flexShrink: 0,
+    width: '72px',
+  },
+  returnPath: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '3px',
+    paddingLeft: '2px',
+  },
+  returnArrow: {
+    display: 'flex',
+    color: tokens.colorPaletteYellowForeground1,
+    flexShrink: 0,
+  },
+  returnLine: {
+    flex: 1,
+    height: '1px',
+    backgroundColor: tokens.colorPaletteYellowBorder1,
+    borderTop: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
+  },
+  returnLabel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorPaletteYellowForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+    whiteSpace: 'nowrap',
+  },
   // Executor card
   executorCard: {
     display: 'flex',
@@ -210,35 +241,6 @@ const useStyles = makeStyles({
   },
   cardActions: {
     marginTop: tokens.spacingVerticalXS,
-  },
-  // Feedback loop arc — shown below pipeline when Rai or Review triggers rework
-  feedbackRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    marginTop: tokens.spacingVerticalS,
-    paddingBlock: tokens.spacingVerticalXS,
-    paddingInline: tokens.spacingHorizontalM,
-    borderTop: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
-    borderLeft: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
-    borderBottom: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
-    borderRadius: '0 0 0 6px',
-    backgroundColor: tokens.colorPaletteYellowBackground1,
-  },
-  feedbackIcon: {
-    display: 'flex',
-    color: tokens.colorPaletteYellowForeground1,
-    flexShrink: 0,
-  },
-  feedbackLabel: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorPaletteYellowForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  feedbackSublabel: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    marginLeft: tokens.spacingHorizontalXS,
   },
 });
 
@@ -356,24 +358,25 @@ function ExecutorCard({ def, state, agentName, runId, projectId }: ExecutorCardP
 }
 
 // ---------------------------------------------------------------------------
-// Feedback Arc — shown when Rai or Review blocks and sends work back to agent
+// Feedback Connector — on the arrow connecting Rai/Review back to Agent
 // ---------------------------------------------------------------------------
 
-interface FeedbackArcProps {
-  source: 'rai' | 'review';
-}
-
-function FeedbackArc({ source }: FeedbackArcProps) {
+function FeedbackConnector({ label }: { label: string }) {
   const styles = useStyles();
-  const label = source === 'rai' ? 'RAI rejected' : 'Changes requested';
-  const sublabel = '— revision sent back to agent';
   return (
-    <div className={styles.feedbackRow} role="status" aria-label={`${label} ${sublabel}`}>
-      <span className={styles.feedbackIcon} aria-hidden="true">
-        <ArrowLeftRegular fontSize={14} />
-      </span>
-      <span className={styles.feedbackLabel}>{label}</span>
-      <span className={styles.feedbackSublabel}>{sublabel}</span>
+    <div className={styles.feedbackConnectorWrap} aria-label={`Feedback: ${label}`}>
+      {/* Forward path */}
+      <div className={styles.connector} aria-hidden="true">
+        <div className={styles.connectorDot} />
+        <div className={styles.connectorLine} />
+        <div className={styles.connectorDot} />
+      </div>
+      {/* Return path — arrow left + dashed line + label */}
+      <div className={styles.returnPath} aria-hidden="true">
+        <span className={styles.returnArrow}><ArrowLeftRegular fontSize={10} /></span>
+        <div className={styles.returnLine} />
+        <span className={styles.returnLabel}>{label}</span>
+      </div>
     </div>
   );
 }
@@ -512,34 +515,35 @@ export function WorkflowRunPage() {
           />
         </div>
 
-        {/* Parallel group: Rai (top) + Review (bottom) — each with own connectors */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
-          <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
-            <div className={styles.parallelRow}>
-              <PipeConnector />
-              <ExecutorCard
-                def={raiDef}
-                state={getState('rai')}
-                agentName={undefined}
-                runId={runId}
-                projectId={projectId}
-              />
-              <PipeConnector />
-            </div>
-            <div className={styles.parallelRow}>
-              <PipeConnector />
-              <ExecutorCard
-                def={reviewDef}
-                state={getState('review')}
-                agentName={undefined}
-                runId={runId}
-                projectId={projectId}
-              />
-              <PipeConnector />
-            </div>
+        {/* Parallel group: Rai (top) + Review (bottom) — each with own connectors.
+            Left connector becomes a FeedbackConnector when that path rejected. */}
+        <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
+          <div className={styles.parallelRow}>
+            {raiRejected
+              ? <FeedbackConnector label="Rejected" />
+              : <PipeConnector />}
+            <ExecutorCard
+              def={raiDef}
+              state={getState('rai')}
+              agentName={undefined}
+              runId={runId}
+              projectId={projectId}
+            />
+            <PipeConnector />
           </div>
-          {raiRejected && <FeedbackArc source="rai" />}
-          {!raiRejected && reviewDeclined && <FeedbackArc source="review" />}
+          <div className={styles.parallelRow}>
+            {reviewDeclined
+              ? <FeedbackConnector label="Changes requested" />
+              : <PipeConnector />}
+            <ExecutorCard
+              def={reviewDef}
+              state={getState('review')}
+              agentName={undefined}
+              runId={runId}
+              projectId={projectId}
+            />
+            <PipeConnector />
+          </div>
         </div>
 
         {/* Merge */}
