@@ -16,6 +16,7 @@ import {
 } from '@fluentui/react-components';
 import type { FluentIcon } from '@fluentui/react-icons';
 import {
+  AlertRegular,
   ArrowSyncRegular,
   BotRegular,
   CheckmarkCircleRegular,
@@ -56,7 +57,7 @@ const ExecutionModalContext = createContext<((executionId: string) => void) | un
 // Types
 // ---------------------------------------------------------------------------
 
-type StepStatus = 'pending' | 'started' | 'completed' | 'skipped' | 'failed';
+type StepStatus = 'pending' | 'started' | 'completed' | 'skipped' | 'failed' | 'revise';
 type ExecutorKey = 'agent' | 'rai' | 'review' | 'merge' | 'scribe';
 
 interface ExecutorState {
@@ -91,6 +92,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   state: ExecutorState;
   agentName?: string;
   agentRoleTitle?: string;   // actual team role title for the agent executor
+  modelId?: string;          // model used for the agent executor
   runId: string;
   executionId: string;
   projectId: string;
@@ -182,10 +184,11 @@ const useNodeStyles = makeStyles({
   },
   badgePending:   { backgroundColor: tokens.colorNeutralBackground4,              color: tokens.colorNeutralForeground3  },
   badgeStarted:   { backgroundColor: tokens.colorBrandBackground2,                color: tokens.colorBrandForeground1    },
-  badgeAwaiting:  { backgroundColor: tokens.colorPaletteMarigoldBackground2,      color: tokens.colorPaletteMarigoldForeground1 },
+  badgeAwaiting:  { backgroundColor: tokens.colorPaletteMarigoldBorderActive,     color: tokens.colorNeutralForegroundInverted },
   badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2,         color: tokens.colorPaletteGreenForeground1 },
   badgeSkipped:   { backgroundColor: tokens.colorNeutralBackground3,              color: tokens.colorNeutralForeground4  },
   badgeFailed:    { backgroundColor: tokens.colorPaletteRedBackground2,           color: tokens.colorPaletteRedForeground1 },
+  badgeRevise:    { backgroundColor: tokens.colorStatusWarningBackground2,        color: tokens.colorStatusWarningForeground1 },
   cardMain: {
     display: 'flex',
     alignItems: 'center',
@@ -225,6 +228,15 @@ const useNodeStyles = makeStyles({
     fontVariantNumeric: 'tabular-nums',
     marginTop: '1px',
   },
+  cardModel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground4,
+    fontFamily: tokens.fontFamilyMonospace,
+    marginTop: '2px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   cardActions: {
     marginTop: tokens.spacingVerticalXS,
     display: 'flex',
@@ -249,6 +261,7 @@ function statusLabel(s: StepStatus) {
   if (s === 'completed') return 'Complete';
   if (s === 'skipped')   return 'Skipped';
   if (s === 'failed')    return 'Failed';
+  if (s === 'revise')    return 'Revise';
   return s;
 }
 
@@ -268,6 +281,7 @@ function StatusBadge({ status, isAwaiting }: { status: StepStatus; isAwaiting?: 
     completed: s.badgeCompleted,
     skipped:   s.badgeSkipped,
     failed:    s.badgeFailed,
+    revise:    s.badgeRevise,
   }[status];
   const Icon = {
     pending:   CircleRegular,
@@ -275,6 +289,7 @@ function StatusBadge({ status, isAwaiting }: { status: StepStatus; isAwaiting?: 
     completed: CheckmarkCircleRegular,
     skipped:   SubtractCircleRegular,
     failed:    DismissCircleRegular,
+    revise:    AlertRegular,
   }[status];
   return (
     <span className={`${s.statusBadge} ${badgeClass}`}>
@@ -294,6 +309,7 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
   if (key === 'rai') {
     if (status === 'started')   return 'Reviewing safety...';
     if (status === 'completed') return 'Passed';
+    if (status === 'revise')    return 'Revision requested';
     if (status === 'failed')    return 'Flagged';
   }
   if (key === 'review') {
@@ -353,7 +369,7 @@ function ElapsedTimer({ startedAt, completedAt }: { startedAt?: number; complete
 
 function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
-  const { def, state, agentName, agentRoleTitle, runId, executionId, projectId, reviewedBy } = data as WorkflowNodeData;
+  const { def, state, agentName, agentRoleTitle, modelId, executionId, projectId, reviewedBy } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent } = state;
 
@@ -394,6 +410,7 @@ function WorkflowNode({ data }: NodeProps) {
           <span className={s.cardTitle}>{label}</span>
           <span className={s.cardRole}>{roleText}</span>
           {agentName && <span className={s.cardSubText}>{agentName as string}</span>}
+          {modelId && key === 'agent' && <span className={s.cardModel}>{modelId as string}</span>}
           {subText && <span className={s.cardSubText}>{subText}</span>}
           {startedAt !== undefined && (
             <span className={s.cardTimer}>
@@ -411,7 +428,7 @@ function WorkflowNode({ data }: NodeProps) {
           </Button>
         </div>
       )}
-      {key === 'rai' && (status === 'started' || status === 'completed' || status === 'failed') && (
+      {key === 'rai' && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>
             View execution
@@ -432,9 +449,9 @@ function WorkflowNode({ data }: NodeProps) {
       )}
       {key === 'review' && status === 'started' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}`} style={{ textDecoration: 'none' }}>
-            <Button appearance="primary" size="medium">Review now</Button>
-          </Link>
+          <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>
+            Review now
+          </Button>
         </div>
       )}
       {key === 'review' && status === 'completed' && reviewedBy && (
@@ -674,6 +691,7 @@ export function WorkflowRunPage() {
 
   const [agentName,      setAgentName]      = useState<string | undefined>(undefined);
   const [agentRoleTitle, setAgentRoleTitle] = useState<string | undefined>(undefined);
+  const [modelId,        setModelId]        = useState<string | undefined>(undefined);
   const [runStatus,      setRunStatus]      = useState<string | undefined>(undefined);
   const [reviewedBy,     setReviewedBy]     = useState<string | undefined>(undefined);
   const [executionId,    setExecutionId]    = useState<string | undefined>(undefined);
@@ -697,6 +715,7 @@ export function WorkflowRunPage() {
         setRunStatus(run?.status       ?? undefined);
         setReviewedBy(run?.reviewed_by ?? undefined);
         setExecutionId(run?.execution_id ?? undefined);
+        setModelId(run?.model_id ?? undefined);
 
         // Look up the team member by cast name to get their role title
         if (name) {
@@ -815,6 +834,7 @@ export function WorkflowRunPage() {
         state:           executorStates[def.key] ?? { status: 'pending' },
         agentName:       def.key === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
         agentRoleTitle:  def.key === 'agent' ? agentRoleTitle : undefined,
+        modelId:         def.key === 'agent' ? modelId : undefined,
         runId:           runId      ?? '',
         executionId:     executionId ?? '',
         projectId:       projectId  ?? '',
@@ -823,7 +843,7 @@ export function WorkflowRunPage() {
       position: { x: 0, y: 0 },
     }));
     return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
-  }, [executorStates, agentName, agentRoleTitle, reviewedBy, executionId, runId, projectId]);
+  }, [executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -891,8 +911,8 @@ export function WorkflowRunPage() {
             >
               Execution {modalExecId ? modalExecId.slice(0, 8) : ''}
             </DialogTitle>
-            <DialogContent style={{ flex: 1, overflowY: 'auto' }}>
-              {modalExecId && <RunWatcher key={modalExecId} runId={modalExecId} />}
+            <DialogContent style={{ flex: 1, overflow: 'hidden', padding: 0, display: 'flex', flexDirection: 'column' }}>
+              {modalExecId && <RunWatcher key={modalExecId} runId={modalExecId} style={{ height: '100%' }} />}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setModalExecId(undefined)}>Close</Button>

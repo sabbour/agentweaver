@@ -109,6 +109,7 @@ public static class WorkflowStepEvents
         {
             "started"   => Yellow($"{label} …"),
             "completed" => Green($"{label} ✓"),
+            "revise"    => Yellow($"{label} ↩"),
             "skipped"   => Dim($"{label} —"),
             "failed"    => Red($"{label} ✗"),
             _           => Dim(label),          // pending — not yet reached

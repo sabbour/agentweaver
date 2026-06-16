@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Badge, Divider, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
@@ -37,9 +37,9 @@ function resolvedBadgeColor(
   return 'danger';
 }
 
-interface RunWatcherProps { runId: string; }
+interface RunWatcherProps { runId: string; style?: React.CSSProperties; }
 
-export function RunWatcher({ runId }: RunWatcherProps) {
+export function RunWatcher({ runId, style }: RunWatcherProps) {
   const styles = useStyles();
   const { events, status, error, reconnect } = useRunStream(runId, API_KEY, API_URL);
   const { items, runOutcome } = useTimelineItems(events, runId);
@@ -109,7 +109,7 @@ export function RunWatcher({ runId }: RunWatcherProps) {
   );
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} style={style}>
       <RunHeader runId={runId} streamStatus={status} error={error ?? undefined} />
       <RunLayout
         runId={runId}
@@ -119,6 +119,7 @@ export function RunWatcher({ runId }: RunWatcherProps) {
         onCenterScroll={handleCenterScroll}
         onRequestChangesSuccess={reconnect}
         onCommitSuccess={reconnect}
+        style={style ? { height: 'calc(100% - 56px)' } : undefined}
       />
     </div>
   );

@@ -145,7 +145,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             {
                 _logger.LogInformation("Rai issued a REVISE verdict for run {RunId} — requesting agent revision", input.RunId);
                 subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "revise", runId = input.RunId }));
-                WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
+                WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "revise", "RAI review");
                 _completeSubStream?.Invoke(subRunId);
                 return input with { RaiRevisionRequired = true, RaiFeedback = ExtractFeedback(response) };
             }

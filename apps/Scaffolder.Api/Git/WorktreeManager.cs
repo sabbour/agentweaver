@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using Scaffolder.Api.Contracts;
@@ -18,6 +19,15 @@ public sealed class WorktreeManager
     private readonly string _basePath;
     private readonly Signature _signature;
     private readonly ILogger<WorktreeManager> _logger;
+
+    // Short-lived cache for committed diff results (5 s TTL).
+    // Committed changes only vary when the agent pushes a new commit, so caching
+    // eliminates redundant LibGit2Sharp Patch comparisons during the 3-second poll.
+    private readonly ConcurrentDictionary<string, (DateTime ExpiresAt,
+        IReadOnlyList<WorkspaceFileEntry> Entries,
+        IReadOnlyDictionary<string, (int Added, int Removed)> LineCounts)> _committedCache = new();
+
+    private static readonly TimeSpan CommittedCacheTtl = TimeSpan.FromSeconds(5);
 
     public WorktreeManager(IConfiguration configuration, ILogger<WorktreeManager> logger)
     {
@@ -106,11 +116,15 @@ public sealed class WorktreeManager
 
     /// <summary>
     /// Returns files that differ between the originating branch tip and the worktree branch tip
-    /// (committed changes in this run).
+    /// (committed changes in this run). Results are cached for <see cref="CommittedCacheTtl"/>.
     /// </summary>
     public IReadOnlyList<WorkspaceFileEntry> GetCommittedFileEntries(
         string repositoryPath, string originatingBranch, string worktreeBranch)
     {
+        var cacheKey = $"{repositoryPath}|{originatingBranch}|{worktreeBranch}";
+        if (_committedCache.TryGetValue(cacheKey, out var cached) && cached.ExpiresAt > DateTime.UtcNow)
+            return cached.Entries;
+
         using var repo = new Repository(repositoryPath);
 
         var origin = repo.Branches[originatingBranch]
@@ -132,7 +146,11 @@ public sealed class WorktreeManager
             });
         }
 
-        return entries;
+        var result = (IReadOnlyList<WorkspaceFileEntry>)entries;
+        // Store with empty line counts placeholder so GetFileDiffLineCounts can update the same entry.
+        _committedCache[cacheKey] = (DateTime.UtcNow.Add(CommittedCacheTtl), result,
+            new Dictionary<string, (int, int)>(StringComparer.Ordinal));
+        return result;
     }
 
     /// <summary>
@@ -283,6 +301,13 @@ public sealed class WorktreeManager
     public IReadOnlyDictionary<string, (int Added, int Removed)> GetFileDiffLineCounts(
         string repositoryPath, string originatingBranch, string worktreeBranch)
     {
+        // Check cache — the committed entries and line counts share the same TTL bucket.
+        var cacheKey = $"{repositoryPath}|{originatingBranch}|{worktreeBranch}";
+        if (_committedCache.TryGetValue(cacheKey, out var cached)
+            && cached.ExpiresAt > DateTime.UtcNow
+            && cached.LineCounts.Count > 0)
+            return cached.LineCounts;
+
         try
         {
             using var repo = new Repository(repositoryPath);
@@ -295,6 +320,11 @@ public sealed class WorktreeManager
             var counts = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
             foreach (var entry in patch)
                 counts[NormalizePathSeparators(entry.Path)] = (entry.LinesAdded, entry.LinesDeleted);
+
+            // Update the cache entry with the computed line counts, resetting TTL.
+            var entries = _committedCache.TryGetValue(cacheKey, out var prev) ? prev.Entries
+                : (IReadOnlyList<WorkspaceFileEntry>)Array.Empty<WorkspaceFileEntry>();
+            _committedCache[cacheKey] = (DateTime.UtcNow.Add(CommittedCacheTtl), entries, counts);
             return counts;
         }
         catch

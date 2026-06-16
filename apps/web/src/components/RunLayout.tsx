@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import React, { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ChevronLeftRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
@@ -80,9 +80,10 @@ interface RunLayoutProps {
   onCenterScroll?: () => void;
   onRequestChangesSuccess?: () => void;
   onCommitSuccess?: () => void;
+  style?: React.CSSProperties;
 }
 
-export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess }: RunLayoutProps) {
+export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, style }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
   // Sub-runs (Rai, Scribe) have no workspace of their own — skip the artifact browser.
@@ -102,7 +103,7 @@ export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, on
   }, [runStatus]);
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} style={style}>
       {/* Left panel — file tree, no strip */}
       <div
         className={mergeClasses(
