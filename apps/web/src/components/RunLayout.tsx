@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ChevronLeftRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
@@ -66,6 +66,12 @@ const useStyles = makeStyles({
   },
 });
 
+const SUB_RUN_SUFFIXES = ['-rai', '-scribe'];
+
+function isSubRunId(id: string): boolean {
+  return SUB_RUN_SUFFIXES.some((s) => id.endsWith(s));
+}
+
 interface RunLayoutProps {
   runId: string;
   runStatus: string;
@@ -79,7 +85,9 @@ interface RunLayoutProps {
 export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
-  const artifactState = useArtifactBrowser(runId, runStatus, onRequestChangesSuccess, onCommitSuccess);
+  // Sub-runs (Rai, Scribe) have no workspace of their own — skip the artifact browser.
+  const effectiveRunId = isSubRunId(runId) ? null : runId;
+  const artifactState = useArtifactBrowser(effectiveRunId ?? '', runStatus, onRequestChangesSuccess, onCommitSuccess);
   const internalRef = useRef<HTMLDivElement>(null);
   const scrollRef = centerScrollRef ?? internalRef;
 

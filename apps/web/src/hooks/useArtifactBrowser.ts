@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CommitResponse, RequestChangesResponse, ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
@@ -127,6 +127,10 @@ export function useArtifactBrowser(
   // Fetch file list whenever filter or runId changes.
   // Loading/error state is reset in event handlers to avoid synchronous setState in effect body.
   useEffect(() => {
+    if (!runId) {
+      setFilesLoading(false);
+      return;
+    }
     let active = true;
     // eslint-disable-next-line prefer-const
     let intervalId: ReturnType<typeof setInterval> | undefined;
