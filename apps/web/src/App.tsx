@@ -14,6 +14,7 @@ import { WatchPage } from './pages/WatchPage';
 import { WorkflowRunPage } from './pages/WorkflowRunPage';
 import { TeamPage } from './pages/TeamPage';
 import { CastingWizardPage } from './pages/CastingWizardPage';
+import { MemoriesPage } from './pages/MemoriesPage';
 import { GitHubSignIn } from './components/GitHubSignIn';
 import { SignInPage } from './pages/SignInPage';
 import { apiClient } from './api/apiClient';
@@ -85,6 +86,7 @@ function Shell() {
           <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
           <Route path="/projects/:projectId/team" element={<TeamPage />} />
           <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
+          <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
           <Route path="/watch/:runId" element={<WatchPage />} />
           <Route path="/projects/:projectId/runs/:runId/workflow" element={<WorkflowRunPage />} />
         </Routes>

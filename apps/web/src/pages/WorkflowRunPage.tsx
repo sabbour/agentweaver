@@ -355,7 +355,7 @@ function WorkflowNode({ data }: NodeProps) {
               <Button appearance="outline" size="small">View execution</Button>
             </Link>
           )}
-          <Link to={`/projects/${projectId}/team`} style={{ textDecoration: 'none' }}>
+          <Link to={`/projects/${projectId}/memories`} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View memories</Button>
           </Link>
         </div>
@@ -386,16 +386,21 @@ const nodeTypes = { workflow: WorkflowNode };
 // ---------------------------------------------------------------------------
 // Custom loopback edge — topology-agnostic, heuristic orthogonal routing.
 //
-// Shape: angled orthogonal path exiting/entering the TOP or BOTTOM CENTER of
-// each card (not the sides).  Three right-angle segments:
-//   M sx,sy  → L sx,apexY  → L tx,apexY  → L tx,ty
-// where sx/sy and tx/ty are the top/bottom centers of source and target nodes,
-// computed from node positions (props sourceX/Y are ignored — they come from
-// the L/R side handles which we do not want here).
+// Coordinate derivation (all from guaranteed React Flow props):
+//   sourceX  = right-handle X  = node.position.x + NODE_W
+//   sourceY  = center Y        = node.position.y + actualHeight/2
+//   targetX  = left-handle X   = node.position.x
+//   targetY  = center Y        = node.position.y + actualHeight/2
+//
+// We derive TOP/BOTTOM CENTER from these reliable props + measured height:
+//   src center-X = sourceX - NODE_W/2
+//   tgt center-X = targetX + NODE_W/2
+//   src top      = sourceY - srcHalf   (above arc start/end point)
+//   src bottom   = sourceY + srcHalf   (below arc start/end point)
 //
 // Heuristics:
 // 1. SIDE — Sort siblings by source X, even=above, odd=below.
-// 2. CLEARANCE — apexY clears all intermediate node tops/bottoms + ARC_GAP.
+// 2. CLEARANCE — apexY clears all intermediate node edges + ARC_GAP.
 // 3. STAGGER — Each same-side sibling adds STAGGER px so rails don't overlap.
 // ---------------------------------------------------------------------------
 
@@ -404,11 +409,10 @@ const LOOPBACK_TEXT_COLOR  = 'var(--colorNeutralForeground2)';
 const ARC_GAP = 12; // clearance above/below card edge
 const STAGGER = 28; // extra rail separation per same-side sibling
 
-function LoopbackEdge({ id, label, data }: EdgeProps) {
+function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
   const allEdges = useEdges();
   const allNodes = useNodes();
 
-  // --- Look up own edge to get source/target node ids safely ---
   const myEdge   = allEdges.find(e => e.id === id);
   const sourceId = myEdge?.source ?? '';
   const targetId = myEdge?.target ?? '';
@@ -416,39 +420,44 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
   const sourceNode = allNodes.find(n => n.id === sourceId);
   const targetNode = allNodes.find(n => n.id === targetId);
 
-  // Use measured heights when React Flow has measured the nodes (variable-height cards)
-  const srcH = sourceNode?.measured?.height ?? NODE_H;
-  const tgtH = targetNode?.measured?.height ?? NODE_H;
+  // Half-heights for top/bottom offset: use measured when available, else NODE_H
+  const srcHalf = (sourceNode?.measured?.height ?? NODE_H) / 2;
+  const tgtHalf = (targetNode?.measured?.height ?? NODE_H) / 2;
 
-  // --- Heuristic 1: side ---
+  // --- Heuristic 1: side (derived from source node X via position, not handles) ---
   const siblings = allEdges
     .filter(e => e.type === 'loopback' && e.target === targetId)
     .sort((a, b) => {
-      const ax = allNodes.find(n => n.id === a.source)?.position.x ?? 0;
-      const bx = allNodes.find(n => n.id === b.source)?.position.x ?? 0;
-      return ax - bx; // nearest source first
+      // sourceX is right-handle so sourceX - NODE_W gives position.x; center = sourceX - NODE_W/2
+      const aNode = allNodes.find(n => n.id === a.source);
+      const bNode = allNodes.find(n => n.id === b.source);
+      const ax = (aNode?.position.x ?? 0);
+      const bx = (bNode?.position.x ?? 0);
+      return ax - bx; // nearest source to target first
     });
 
   const myIndex   = siblings.findIndex(e => e.id === id);
   const autoAbove = myIndex % 2 === 0;
   const above     = data?.above !== undefined ? Boolean(data.above) : autoAbove;
 
-  // --- Compute connection points at top/bottom CENTER of each card ---
-  const sx = (sourceNode?.position.x ?? 0) + NODE_W / 2;
-  const tx = (targetNode?.position.x ?? 0) + NODE_W / 2;
-  const sy = above
-    ? (sourceNode?.position.y ?? 0)           // top-center of source
-    : (sourceNode?.position.y ?? 0) + srcH;   // bottom-center of source
-  const ty = above
-    ? (targetNode?.position.y ?? 0)           // top-center of target
-    : (targetNode?.position.y ?? 0) + tgtH;   // bottom-center of target
+  // --- Derive TOP/BOTTOM CENTER connection points from props ---
+  // Props give us the L/R handle positions; we compute center-X and top/bottom-Y from them.
+  // sourceX = right-handle → center-X of source = sourceX - NODE_W/2
+  // targetX = left-handle  → center-X of target = targetX + NODE_W/2
+  // sourceY = center-Y of source (handle is at vertical center)
+  const sx = sourceX - NODE_W / 2;
+  const tx = targetX + NODE_W / 2;
+  const sy = above ? sourceY - srcHalf : sourceY + srcHalf;
+  const ty = above ? targetY - tgtHalf : targetY + tgtHalf;
 
-  // --- Heuristic 2: clearance against intermediate nodes (using actual measured heights) ---
+  // --- Heuristic 2: clearance against intermediate nodes ---
+  // Exclude source and target themselves; only intermediate cards matter.
   const minX = Math.min(sx, tx);
   const maxX = Math.max(sx, tx);
 
   const overlapping = allNodes.filter(n => {
-    const nl = n.position.x ?? 0;
+    if (n.id === sourceId || n.id === targetId) return false;
+    const nl = n.position.x;
     const nr = nl + NODE_W;
     return nr > minX && nl < maxX;
   });
@@ -456,13 +465,13 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
   let apexY: number;
   if (above) {
     const minTop = overlapping.length > 0
-      ? Math.min(...overlapping.map(n => n.position.y ?? 0))
-      : sy - (srcH / 2);
+      ? Math.min(...overlapping.map(n => n.position.y))
+      : sourceY - srcHalf;
     apexY = minTop - ARC_GAP;
   } else {
     const maxBottom = overlapping.length > 0
-      ? Math.max(...overlapping.map(n => (n.position.y ?? 0) + (n.measured?.height ?? NODE_H)))
-      : sy + (srcH / 2);
+      ? Math.max(...overlapping.map(n => n.position.y + (n.measured?.height ?? NODE_H)))
+      : sourceY + srcHalf;
     apexY = maxBottom + ARC_GAP;
   }
 
@@ -474,7 +483,7 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
 
   apexY += (above ? -1 : 1) * sameSideBefore * STAGGER;
 
-  // --- Orthogonal path: top/bottom center → straight up/down → horizontal rail → back down/up ---
+  // --- Orthogonal path: top/bottom center → up/down → horizontal rail → down/up into target ---
   const d = `M ${sx},${sy} L ${sx},${apexY} L ${tx},${apexY} L ${tx},${ty}`;
 
   const midX    = (sx + tx) / 2;
