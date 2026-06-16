@@ -3,6 +3,7 @@ import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { AgentMessageBubble } from './AgentMessageBubble';
 import { ToolCallCard } from './ToolCallCard';
+import { IntentCard } from './IntentCard';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import type { TurnGroupItem, TurnStep, ToolCallItem, ApprovalRequestItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
@@ -166,18 +167,26 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
               />
             );
           }
-          // report_intent — show ⚠ if the immediately following tool cluster has failures
-          const nextCluster = clusters[i + 1];
-          const hasFollowingErrors =
-            (step as ToolCallItem).toolName === 'report_intent' &&
-            nextCluster?.kind === 'cluster' &&
-            nextCluster.steps.some(s => s.error != null);
+          // report_intent — render as a compact system annotation, not a tool call row
+          if ((step as ToolCallItem).toolName === 'report_intent') {
+            const nextCluster = clusters[i + 1];
+            const hasFollowingErrors =
+              nextCluster?.kind === 'cluster' &&
+              nextCluster.steps.some(s => s.error != null);
+            return (
+              <IntentCard
+                key={(step as ToolCallItem).callId != null ? String((step as ToolCallItem).callId) : "ri-" + i}
+                item={step as ToolCallItem}
+                hasFollowingErrors={hasFollowingErrors}
+              />
+            );
+          }
+          // Fallback for any other inline tool-call step
           return (
             <ToolCallCard
               key={(step as ToolCallItem).callId != null ? String((step as ToolCallItem).callId) : "ri-" + i}
               item={step as ToolCallItem}
               streamStatus={streamStatus}
-              hasFollowingErrors={hasFollowingErrors}
             />
           );
         }
