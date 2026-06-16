@@ -1,7 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useState, createContext } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   Spinner,
   Text,
   Title2,
@@ -15,6 +21,7 @@ import {
   CheckmarkCircleRegular,
   CircleRegular,
   DismissCircleRegular,
+  DismissRegular,
   MergeRegular,
   NotebookRegular,
   PersonRegular,
@@ -39,6 +46,11 @@ import { useRunStream } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H } from '../utils/dagLayout';
+import { RunWatcher } from '../components/RunWatcher';
+
+// Context lets WorkflowNode (defined outside WorkflowRunPage) open the execution modal
+// without needing to pass callbacks through React Flow node data.
+const ExecutionModalContext = createContext<((executionId: string) => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -345,6 +357,8 @@ function WorkflowNode({ data }: NodeProps) {
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent } = state;
 
+  const openModal = useContext(ExecutionModalContext);
+
   const isActive         = status === 'started' && key !== 'review';
   const isHumanWaiting   = key === 'review' && status === 'started';
   const cardClass = [
@@ -392,24 +406,24 @@ function WorkflowNode({ data }: NodeProps) {
       {/* Action buttons — nopan/nodrag prevents React Flow from swallowing clicks */}
       {key === 'agent' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}`} style={{ textDecoration: 'none' }}>
-            <Button appearance="outline" size="small">View execution</Button>
-          </Link>
+          <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>
+            View execution
+          </Button>
         </div>
       )}
       {key === 'rai' && (status === 'started' || status === 'completed' || status === 'failed') && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}-rai`} style={{ textDecoration: 'none' }}>
-            <Button appearance="outline" size="small">View execution</Button>
-          </Link>
+          <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>
+            View execution
+          </Button>
         </div>
       )}
       {key === 'scribe' && (
         <div className={`${s.cardActions} nopan nodrag`}>
           {(status === 'started' || status === 'completed' || status === 'failed') && (
-            <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}-scribe`} style={{ textDecoration: 'none' }}>
-              <Button appearance="outline" size="small">View execution</Button>
-            </Link>
+            <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-scribe`)}>
+              View execution
+            </Button>
           )}
           <Link to={`/projects/${projectId}/memories`} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View memories</Button>
@@ -664,6 +678,9 @@ export function WorkflowRunPage() {
   const [reviewedBy,     setReviewedBy]     = useState<string | undefined>(undefined);
   const [executionId,    setExecutionId]    = useState<string | undefined>(undefined);
   const [loading,        setLoading]        = useState(true);
+  const [modalExecId,    setModalExecId]    = useState<string | undefined>(undefined);
+
+  const openExecutionModal = useCallback((id: string) => setModalExecId(id), []);
 
   useEffect(() => {
     if (!projectId || !runId) return;
@@ -833,32 +850,56 @@ export function WorkflowRunPage() {
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
 
-      {/* React Flow diagram
-          - fitView only fits to nodes (loop-back SVG arcs don't affect bounds)
-          - elementsSelectable omitted (default true) so pointer events flow to buttons
-          - nodesDraggable=false / nodesConnectable=false for read-only mode
-      */}
-      <div className={styles.dagContainer}>
-        <ReactFlow
-          nodes={rfNodes}
-          edges={ALL_EDGES}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }}
-          minZoom={0.5}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          nodesFocusable={false}
-          edgesFocusable={false}
-          panOnScroll={false}
-          zoomOnScroll={false}
-          zoomOnPinch={false}
-          zoomOnDoubleClick={false}
-          panOnDrag={false}
-          proOptions={{ hideAttribution: true }}
-        />
-      </div>
+      {/* React Flow diagram wrapped in ExecutionModalContext so WorkflowNode can open the modal */}
+      <ExecutionModalContext.Provider value={openExecutionModal}>
+        <div className={styles.dagContainer}>
+          <ReactFlow
+            nodes={rfNodes}
+            edges={ALL_EDGES}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            fitView
+            fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }}
+            minZoom={0.5}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            nodesFocusable={false}
+            edgesFocusable={false}
+            panOnScroll={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            zoomOnDoubleClick={false}
+            panOnDrag={false}
+            proOptions={{ hideAttribution: true }}
+          />
+        </div>
+      </ExecutionModalContext.Provider>
+
+      {/* Execution detail modal */}
+      <Dialog open={!!modalExecId} onOpenChange={(_, d) => { if (!d.open) setModalExecId(undefined); }}>
+        <DialogSurface style={{ maxWidth: '90vw', width: '900px', maxHeight: '90vh' }}>
+          <DialogBody style={{ height: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <DialogTitle
+              action={
+                <Button
+                  appearance="subtle"
+                  aria-label="Close"
+                  icon={<DismissRegular />}
+                  onClick={() => setModalExecId(undefined)}
+                />
+              }
+            >
+              Execution {modalExecId ? modalExecId.slice(0, 8) : ''}
+            </DialogTitle>
+            <DialogContent style={{ flex: 1, overflowY: 'auto' }}>
+              {modalExecId && <RunWatcher key={modalExecId} runId={modalExecId} />}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setModalExecId(undefined)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }
