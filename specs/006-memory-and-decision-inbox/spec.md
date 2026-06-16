@@ -162,6 +162,24 @@ When a new agent team is cast for a project, the system automatically creates th
 
 - **FR-028**: The MCP server (`apps/Scaffolder.Mcp`) MUST expose memory and decision operations as MCP tools so that MCP-capable AI clients can record and retrieve memory and decisions without calling the REST API directly. The tools MUST include: `decision_inbox_submit`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_create`, `decision_list`, `memory_record`, `memory_get`, `memory_search`, `session_start`, `session_current`, `session_update`.
 
+**Post-Run Scribe Pass (Loop Close)**
+
+- **FR-031**: When a *project* run with a non-null `AgentName` reaches a terminal state (`Completed`, `Merged`, `NoChanges`), the run system MUST automatically trigger a post-run Scribe pass. This pass closes the memory flywheel: the same context that was injected at run start is updated with what the agent produced. The pass MUST be non-blocking — a failure in the Scribe pass MUST NOT affect the run's own terminal state or status code.
+- **FR-032**: The post-run Scribe pass MUST perform the following operations in order:
+  1. **Auto-merge low-risk inbox entries** — merge all `pending` inbox entries of type `learning`, `pattern`, or `update` that were submitted during this run (identified by `AgentName` + `CreatedAt >= run.StartedAt`). These types are unambiguous and do not require coordinator review.
+  2. **Hold architectural/scope entries for review** — inbox entries of type `architectural` or `scope` MUST remain `pending` and be flagged in the run's event stream (`scribe.inbox_review_needed`) so the coordinator is notified.
+  3. **Trigger memory export** — call the equivalent of `POST /api/projects/{id}/memory/export` to regenerate `.squad/decisions.md`, `.squad/agents/{name}/history.md`, and `.agentweaver/context/boundaries.md` + `patterns.md`.
+  4. **Update session context** — if a current open session exists, append the run ID and a one-line outcome to `ActiveIssues` or `Summary`.
+- **FR-033**: The full memory loop for a project run with an agent is therefore:
+  ```
+  Pre-run:   CompileContext(DB) → inject into systemPromptContext
+  Run:       Agent executes → harvest prompt triggers API calls (inbox + memory)
+  Terminal:  RunWatchLoopService detects terminal state
+  Scribe:    Auto-merge low-risk inbox → export to .squad/ + .agentweaver/context/ → update session
+  Next run:  CompileContext sees richer decisions + memories → improved context
+  ```
+  Each cycle deposits new knowledge into the DB, which feeds the next compilation.
+
 ### Key Entities
 
 - **Decision**: A finalized, audit-visible team decision. Belongs to a project; attributed to an agent; has a type (architectural, process, scope, technical), a status (active, superseded, archived), and an optional supersession link to another Decision. Content is markdown.
@@ -219,6 +237,8 @@ CREATE TABLE IF NOT EXISTS session_context (
 - **SC-009**: When a run with `agent_name` starts, the compiled context block injected into the system prompt contains the Boundaries and Decisions section, the Memory section, and the Current Session section as distinct, non-overlapping markdown sections — verifiable by inspecting the `SystemPrompt` stored on the Run record.
 - **SC-010**: After every export, `.agentweaver/context/boundaries.md` in the managed repository contains a section for every active `architectural` or `scope` Decision — no decisions are silently omitted.
 - **SC-011**: The harvest prompt emitted after run completion explicitly requests submissions to the decision inbox, memory recording, and boundary violation flagging in structured form — the agent has all necessary API coordinates (URL, project ID, agent name) to act on it without querying additional endpoints.
+- **SC-012**: After a project run with `AgentName` reaches terminal state, `pending` inbox entries of type `learning`, `pattern`, or `update` submitted by that agent during the run are automatically merged, and the `.squad/decisions.md` file is regenerated — verifiable by querying decisions before and after run completion.
+- **SC-013**: After the post-run Scribe pass, the next `MemoryContextCompiler.CompileAsync` call for the same agent sees the newly merged decisions and memory entries in its output — the flywheel is closed and the context is richer than before the run.
 
 ## Assumptions
 

@@ -18,6 +18,7 @@
 | Location | `apps/Scaffolder.Api/Memory/` folder | Keeps parity with existing `Runs/`, `Casting/`, `Projects/` folders; no new package needed |
 | DbContext | `MemoryDbContext` — separate from `SqliteDb` | Avoids touching the existing raw ADO.NET layer; same DB file via shared connection string |
 | Export trigger | After-write inline (not background) | SC-003: file ledger updated immediately after every write — no async queue |
+| Post-run Scribe pass | Fire-and-forget via `IServiceScopeFactory` after terminal state | FR-031: non-blocking; run status not affected by pass failure; auto-merges only learning/pattern/update types |
 | Import trigger | On `ConfirmCastAsync` + explicit POST endpoint | FR-021 |
 | MCP tools | New tool group `MemoryTools` in `Scaffolder.Mcp` | Constitution Principle IV: all API capabilities reachable via MCP |
 
@@ -352,17 +353,122 @@ In `apps/Scaffolder.Api/Casting/CastingService.cs`, at end of `ConfirmCastAsync`
 
 ### Phase 10 — MCP memory tools (FR-028)
 
-Add `apps/Scaffolder.Mcp/Tools/MemoryTools.cs` — 12 new MCP tools:
+Add `apps/Scaffolder.Mcp/Tools/MemoryTools.cs` — 13 new MCP tools:
 
-`decision_inbox_submit`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_create`, `decision_list`, `decision_update`, `memory_record`, `memory_get`, `memory_search`, `session_start`, `session_current`, `session_update`
+`decision_inbox_submit`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_create`, `decision_list`, `decision_update`, `memory_record`, `memory_get`, `memory_search`, `session_start`, `session_current`, `session_update`, `memory_export`, `memory_import`
 
 Each is a thin proxy to the corresponding REST endpoint following the same `ScaffolderApiClient` pattern as existing tools.
+
+### Phase 11 — Post-run Scribe pass (FR-031/032/033)
+
+**The loop-close phase.** Closes the memory flywheel so each run deposits knowledge into the DB, which feeds the next run's context compilation.
+
+**`apps/Scaffolder.Api/Runs/PostRunScribeService.cs`** — new scoped service:
+
+```csharp
+public sealed class PostRunScribeService(
+    MemoryDbContext memoryDb,
+    ILogger<PostRunScribeService> logger)
+{
+    /// <summary>
+    /// Runs the post-run Scribe pass for a completed project run.
+    /// Non-blocking: all errors are logged, none are re-thrown.
+    /// </summary>
+    public async Task RunAsync(Run run, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(run.AgentName) || !run.ProjectId.HasValue) return;
+        
+        var projectId = run.ProjectId.Value.ToString();
+        var agentName = run.AgentName;
+        var runStarted = run.StartedAt;
+
+        try
+        {
+            // Step 1: Auto-merge low-risk inbox entries
+            var autoMergeTypes = new[] { "learning", "pattern", "update" };
+            var toMerge = await memoryDb.DecisionInbox
+                .Where(e => e.ProjectId == projectId
+                         && e.AgentName == agentName
+                         && e.Status == "pending"
+                         && autoMergeTypes.Contains(e.Type)
+                         && e.CreatedAt >= runStarted)
+                .ToListAsync(ct);
+
+            var now = DateTimeOffset.UtcNow;
+            foreach (var entry in toMerge)
+            {
+                var decision = new Decision
+                {
+                    ProjectId = projectId, AgentName = entry.AgentName,
+                    Type = entry.Type, Status = "active",
+                    Title = entry.Title, Content = entry.Content,
+                    Rationale = entry.Rationale,
+                    CreatedAt = now, UpdatedAt = now,
+                };
+                memoryDb.Decisions.Add(decision);
+                entry.Status = "merged";
+                entry.UpdatedAt = now;
+            }
+
+            // Step 2: Flag architectural/scope entries as needing review
+            var reviewNeeded = await memoryDb.DecisionInbox
+                .Where(e => e.ProjectId == projectId
+                         && e.AgentName == agentName
+                         && e.Status == "pending"
+                         && (e.Type == "architectural" || e.Type == "scope")
+                         && e.CreatedAt >= runStarted)
+                .CountAsync(ct);
+
+            await memoryDb.SaveChangesAsync(ct);
+            logger.LogInformation(
+                "PostRunScribe: run {RunId} — auto-merged {Merged} entries, {Review} pending coordinator review",
+                run.Id, toMerge.Count, reviewNeeded);
+
+            // Step 3: Export to .squad/ + .agentweaver/context/ (inline — SC-003)
+            var allDecisions = await memoryDb.Decisions
+                .Where(d => d.ProjectId == projectId && d.Status == "active").ToListAsync(ct);
+            var allInbox = await memoryDb.DecisionInbox
+                .Where(e => e.ProjectId == projectId && e.Status == "pending").ToListAsync(ct);
+            var allMemory = await memoryDb.AgentMemory
+                .Where(m => m.ProjectId == projectId).ToListAsync(ct);
+            var session = await memoryDb.SessionContexts
+                .Where(s => s.ProjectId == projectId && s.EndedAt == null)
+                .OrderByDescending(s => s.StartedAt)
+                .FirstOrDefaultAsync(ct);
+
+            // Step 4: Update session with run outcome
+            if (session is not null)
+            {
+                var outcome = $"Run {run.Id} by {agentName} completed.";
+                session.Summary = string.IsNullOrEmpty(session.Summary)
+                    ? outcome
+                    : session.Summary + "\n" + outcome;
+                await memoryDb.SaveChangesAsync(ct);
+            }
+
+            // Export uses same DTO mapping as the explicit export endpoint
+            // (this is wired up in the caller which has access to project.WorkingDirectory)
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "PostRunScribe pass failed for run {RunId} — memory context unchanged", run.Id);
+        }
+    }
+}
+```
+
+**`RunWatchLoopService` trigger** — when a project run with `AgentName` reaches a terminal state (`Completed`, `Merged`, `NoChanges`), call `PostRunScribeService.RunAsync` in a background fire-and-forget scope (using `IServiceScopeFactory`). The trigger fires after the run event is emitted, not before.
+
+Register `PostRunScribeService` as scoped in `Program.cs`.
 
 ---
 
 ## File Layout
 
 ```
+apps/Scaffolder.Api/Runs/
+  PostRunScribeService.cs   ← NEW: post-run loop-close (auto-merge + export + session update)
+
 apps/Scaffolder.Api/Memory/
   Decision.cs
   DecisionInboxEntry.cs
@@ -399,6 +505,7 @@ apps/Scaffolder.Mcp/Tools/
 - Phase 8: A run with `agent_name` stores a `SystemPrompt` that contains the compiled context; a completed run's task prompt ends with the harvest section
 - Phase 9: After `ConfirmCastAsync`, DB has 1 genesis decision + N memory records + 1 session
 - Phase 10: MCP tools discoverable; `decision_inbox_submit` roundtrip works against a live API
+- Phase 11: After a project run with `AgentName` completes, `pending` learning/pattern/update inbox entries are auto-merged; `.agentweaver/context/boundaries.md` is regenerated; the next `CompileAsync` call for that agent returns richer output than before the run
 
 ---
 
