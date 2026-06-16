@@ -8,8 +8,8 @@
                           (picks up the bwrap sandbox executor automatically)
       - Web UI          — runs on Windows via Vite dev server
 
-    The API listens on http://localhost:5000 (CORS allows localhost:5173).
-    The Web UI listens on http://localhost:5173.
+    The API listens on http://localhost:5000 (CORS allows localhost:8080).
+    The Web UI listens on http://localhost:8080.
 
 .PARAMETER SkipBuild
     Skip `dotnet build` before launching the API.
@@ -33,7 +33,7 @@ $repoRoot   = $PSScriptRoot
 $apiProject = "apps/Scaffolder.Api"
 $webDir     = Join-Path $repoRoot "apps\web"
 $apiUrl     = "http://localhost:5000"
-$webUrl     = "http://localhost:5173"
+$webUrl     = "http://localhost:8080"
 
 # Convert Windows repo root to WSL path (C:\... -> /mnt/c/...)
 $wslRepoRoot = ($repoRoot -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
@@ -142,7 +142,7 @@ while ($viteWait -lt 20) {
     Start-Sleep -Seconds 1
     $viteWait++
     $log = Receive-Job $webJob 2>&1
-    if ($log -match "localhost:5173") { $viteReady = $true; break }
+    if ($log -match "localhost:8080") { $viteReady = $true; break }
 }
 
 if ($viteReady) {
@@ -187,7 +187,7 @@ $repoRoot   = $PSScriptRoot
 $apiProject = "apps/Scaffolder.Api"
 $webDir     = Join-Path $repoRoot "apps\web"
 $apiUrl     = "http://localhost:5000"
-$webUrl     = "http://localhost:5173"
+$webUrl     = "http://localhost:8080"
 
 # Convert Windows repo root to WSL path (C:\... -> /mnt/c/...)
 $wslRepoRoot = ($repoRoot -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
@@ -214,7 +214,7 @@ if (-not $SkipBuild) {
 # We launch a new Windows Terminal tab (if available) or a plain PowerShell
 # window, running `wsl` which drops into WSL2 and starts the API there.
 # ASPNETCORE_ENVIRONMENT=Development loads appsettings.Development.json
-# (dev API key, CORS for localhost:5173, debug logging).
+# (dev API key, CORS for localhost:8080, debug logging).
 #
 $wslCmd = "cd '$wslRepoRoot' && ASPNETCORE_ENVIRONMENT=Development dotnet run --project $apiProject --configuration Release --urls $apiUrl --no-build 2>&1; echo 'API process exited'; read -p 'Press Enter to close'"
 $wslArgs = @("bash", "-l", "-c", $wslCmd)
@@ -278,7 +278,7 @@ while ($viteWait -lt 20) {
     Start-Sleep -Seconds 1
     $viteWait++
     $log = Receive-Job $webJob 2>&1
-    if ($log -match "localhost:5173") {
+    if ($log -match "localhost:8080") {
         $viteReady = $true
         break
     }

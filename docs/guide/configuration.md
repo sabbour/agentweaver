@@ -29,7 +29,7 @@ The API reads standard ASP.NET Core configuration sources. In local development,
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Cors:AllowedOrigins` | `[]` | Array of origins the browser is allowed to call from (e.g. `http://localhost:5173` for the web UI in development) |
+| `Cors:AllowedOrigins` | `[]` | Array of origins the browser is allowed to call from (e.g. `http://localhost:8080` for the web UI in development) |
 
 ### Provider settings
 
