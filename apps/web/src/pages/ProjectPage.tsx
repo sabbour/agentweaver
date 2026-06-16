@@ -14,6 +14,7 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
+  Select,
   Spinner,
   Text,
   Textarea,
@@ -24,7 +25,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CreateProjectRunRequest, Project, ProjectRunSummary } from '../api/types';
+import type { CreateRunRequest, Project, ProjectRunSummary, TeamMemberDto } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -101,15 +102,34 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
   const styles = useStyles();
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState('');
-  const [modelId, setModelId] = useState('');
-  const [baseBranch, setBaseBranch] = useState('');
+  const [agentName, setAgentName] = useState('');
+  const [branch, setBranch] = useState('main');
+  const [members, setMembers] = useState<TeamMemberDto[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    apiClient.getTeam(projectId)
+      .then((t) => {
+        if (!cancelled) {
+          const active = (t?.members ?? []).filter((m) => m.status === 'active' && !m.is_built_in);
+          setMembers(active);
+          if (active.length > 0 && !agentName) setAgentName(active[0].name);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  // agentName intentionally excluded — only reset on open
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, projectId]);
+
   const reset = () => {
     setTask('');
-    setModelId('');
-    setBaseBranch('');
+    setAgentName('');
+    setBranch('main');
+    setMembers([]);
     setError(null);
     setSaving(false);
   };
@@ -119,11 +139,12 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
     setSaving(true);
     setError(null);
     try {
-      const req: CreateProjectRunRequest = { task: task.trim() };
-      req.model_source = 'github-copilot';
-      if (modelId.trim()) req.model_id = modelId.trim();
-      if (baseBranch.trim()) req.base_branch = baseBranch.trim();
-      const result = await apiClient.startProjectRun(projectId, req);
+      const req: CreateRunRequest = {
+        originating_branch: branch.trim() || 'main',
+        task: task.trim(),
+        agent_name: agentName || undefined,
+      };
+      const result = await apiClient.createProjectRun(projectId, req);
       setOpen(false);
       reset();
       onStarted(result.run_id);
@@ -150,6 +171,18 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
           <DialogTitle>Start a run</DialogTitle>
           <DialogContent>
             <div className={styles.dialogFields}>
+              <Field label="Agent" required>
+                <Select
+                  value={agentName}
+                  onChange={(_, v) => setAgentName(v.value)}
+                  disabled={members.length === 0}
+                >
+                  {members.length === 0 && <option value="">No active agents</option>}
+                  {members.map((m) => (
+                    <option key={m.name} value={m.name}>{m.name} — {m.role_title}</option>
+                  ))}
+                </Select>
+              </Field>
               <Field label="Task" required>
                 <Textarea
                   value={task}
@@ -158,11 +191,8 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
                   rows={4}
                 />
               </Field>
-              <Field label="Model ID (optional)">
-                <Input value={modelId} onChange={(_, v) => setModelId(v.value)} placeholder="e.g. gpt-4o" />
-              </Field>
-              <Field label="Base branch (optional)">
-                <Input value={baseBranch} onChange={(_, v) => setBaseBranch(v.value)} placeholder="e.g. main" />
+              <Field label="Branch">
+                <Input value={branch} onChange={(_, v) => setBranch(v.value)} placeholder="main" />
               </Field>
               {error && (
                 <MessageBar intent="error">
@@ -177,7 +207,7 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
             </DialogTrigger>
             <Button
               appearance="primary"
-              disabled={!task.trim() || saving}
+              disabled={!task.trim() || members.length === 0 || saving}
               onClick={() => void handleSubmit()}
             >
               {saving ? 'Starting' : 'Start'}

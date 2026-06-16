@@ -134,9 +134,15 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
 function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('blank', onCreated);
+  const [folderName, setFolderName] = useState('');
+
+  const handleFolderChange = (value: string) => {
+    setFolderName(value);
+    d.setWorkingDirectory(dataDir ? `${dataDir}/${value}` : value);
+  };
 
   return (
-    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) d.reset(); }}>
+    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setFolderName(''); } }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="primary">Create blank project</Button>
       </DialogTrigger>
@@ -149,13 +155,16 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
                 <Input value={d.name} onChange={(_, v) => d.setName(v.value)} placeholder="My project" />
               </Field>
               <Field
-                label="Repository path"
+                label="Repository folder"
                 required
-                hint={dataDir
-                  ? `Path to a git repository accessible from the server's data folder: ${dataDir}`
-                  : 'Absolute path to a git repository on the machine running the Agentweaver server'}
+                hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
               >
-                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder={dataDir ?? '/srv/repos/my-repo'} />
+                <Input
+                  contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+                  value={folderName}
+                  onChange={(_, v) => handleFolderChange(v.value)}
+                  placeholder="my-repo"
+                />
               </Field>
               {d.error && (
                 <MessageBar intent="error">
@@ -170,7 +179,7 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
             </DialogTrigger>
             <Button
               appearance="primary"
-              disabled={!d.name.trim() || !d.workingDirectory.trim() || d.saving}
+              disabled={!d.name.trim() || !folderName.trim() || d.saving}
               onClick={() => void d.handleSubmit()}
             >
               {d.saving ? 'Creating' : 'Create'}
@@ -213,13 +222,19 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
   const d = useCreateProjectDialog('github', onCreated);
   const { repos, loading: reposLoading } = useGitHubRepos(d.open);
   const [repoFilter, setRepoFilter] = useState('');
+  const [folderName, setFolderName] = useState('');
+
+  const handleFolderChange = (value: string) => {
+    setFolderName(value);
+    d.setWorkingDirectory(dataDir ? `${dataDir}/${value}` : value);
+  };
 
   const filteredRepos = repos.filter(r =>
     r.full_name?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false
   );
 
   return (
-    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setRepoFilter(''); } }}>
+    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setRepoFilter(''); setFolderName(''); } }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="secondary">Create from GitHub</Button>
       </DialogTrigger>
@@ -262,13 +277,16 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                 </Combobox>
               </Field>
               <Field
-                label="Repository path"
+                label="Repository folder"
                 required
-                hint={dataDir
-                  ? `Path to a git repository accessible from the server's data folder: ${dataDir}`
-                  : 'Absolute path to a git repository on the machine running the Agentweaver server'}
+                hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
               >
-                <Input value={d.workingDirectory} onChange={(_, v) => d.setWorkingDirectory(v.value)} placeholder={dataDir ?? '/srv/repos/my-repo'} />
+                <Input
+                  contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+                  value={folderName}
+                  onChange={(_, v) => handleFolderChange(v.value)}
+                  placeholder="my-repo"
+                />
               </Field>
               {d.error && (
                 <MessageBar intent="error">
@@ -283,7 +301,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
             </DialogTrigger>
             <Button
               appearance="primary"
-              disabled={!d.name.trim() || !d.workingDirectory.trim() || !d.sourceRepository.trim() || d.saving}
+              disabled={!d.name.trim() || !folderName.trim() || !d.sourceRepository.trim() || d.saving}
               onClick={() => void d.handleSubmit()}
             >
               {d.saving ? 'Creating' : 'Create'}
