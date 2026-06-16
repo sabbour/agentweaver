@@ -363,40 +363,34 @@ const nodeTypes = { workflow: WorkflowNode };
 // ---------------------------------------------------------------------------
 // Custom loopback edge — topology-agnostic, heuristic orthogonal routing.
 //
-// Shape: angled orthogonal path (right angles, no curves):
-//   source-right → go up/down to apexY → go left to target column → target-left
-//   i.e.  M sx,sy  L sx,apexY  L tx,apexY  L tx,ty
-// This guarantees the horizontal rail at apexY fully clears intermediate cards.
+// Shape: angled orthogonal path exiting/entering the TOP or BOTTOM CENTER of
+// each card (not the sides).  Three right-angle segments:
+//   M sx,sy  → L sx,apexY  → L tx,apexY  → L tx,ty
+// where sx/sy and tx/ty are the top/bottom centers of source and target nodes,
+// computed from node positions (props sourceX/Y are ignored — they come from
+// the L/R side handles which we do not want here).
 //
 // Heuristics:
-//
-// 1. SIDE — `target` is read from the live edges list (avoids React Flow
-//    potentially not forwarding the prop). Siblings = all loopback edges going
-//    to the same target, sorted by source X ascending (nearest first).
-//    Even index → above, odd → below.  data.above overrides if supplied.
-//
-// 2. CLEARANCE — Scan nodes whose X extent overlaps the arc span and push
-//    apexY outside their bounding box + ARC_GAP.
-//
-// 3. STAGGER — Each additional same-side sibling adds STAGGER px so arcs
-//    never sit on top of each other.
-//
-// 4. ARROW — marker on the last segment (vertical, entering target).
+// 1. SIDE — Sort siblings by source X, even=above, odd=below.
+// 2. CLEARANCE — apexY clears all intermediate node tops/bottoms + ARC_GAP.
+// 3. STAGGER — Each same-side sibling adds STAGGER px so rails don't overlap.
 // ---------------------------------------------------------------------------
 
 const LOOPBACK_STROKE = 'var(--colorNeutralStroke1)';
 const ARC_GAP = 12; // clearance above/below card edge
 const STAGGER = 28; // extra rail separation per same-side sibling
 
-function LoopbackEdge({
-  id, sourceX, sourceY, targetX, targetY, label, data,
-}: EdgeProps) {
+function LoopbackEdge({ id, label, data }: EdgeProps) {
   const allEdges = useEdges();
   const allNodes = useNodes();
 
-  // --- Look up own edge to get target node id safely ---
-  const myEdge    = allEdges.find(e => e.id === id);
-  const targetId  = myEdge?.target ?? '';
+  // --- Look up own edge to get source/target node ids safely ---
+  const myEdge   = allEdges.find(e => e.id === id);
+  const sourceId = myEdge?.source ?? '';
+  const targetId = myEdge?.target ?? '';
+
+  const sourceNode = allNodes.find(n => n.id === sourceId);
+  const targetNode = allNodes.find(n => n.id === targetId);
 
   // --- Heuristic 1: side ---
   const siblings = allEdges
@@ -411,9 +405,20 @@ function LoopbackEdge({
   const autoAbove = myIndex % 2 === 0;
   const above     = data?.above !== undefined ? Boolean(data.above) : autoAbove;
 
+  // --- Compute connection points at top/bottom CENTER of each card ---
+  // (ignoring the L/R handle positions React Flow provides, which would give side connections)
+  const sx = (sourceNode?.position.x ?? 0) + NODE_W / 2;
+  const tx = (targetNode?.position.x ?? 0) + NODE_W / 2;
+  const sy = above
+    ? (sourceNode?.position.y ?? 0)            // top-center of source
+    : (sourceNode?.position.y ?? 0) + NODE_H;  // bottom-center of source
+  const ty = above
+    ? (targetNode?.position.y ?? 0)            // top-center of target
+    : (targetNode?.position.y ?? 0) + NODE_H;  // bottom-center of target
+
   // --- Heuristic 2: clearance against intermediate nodes ---
-  const minX = Math.min(sourceX, targetX);
-  const maxX = Math.max(sourceX, targetX);
+  const minX = Math.min(sx, tx);
+  const maxX = Math.max(sx, tx);
 
   const overlapping = allNodes.filter(n => {
     const nl = n.position.x ?? 0;
@@ -425,12 +430,12 @@ function LoopbackEdge({
   if (above) {
     const minTop = overlapping.length > 0
       ? Math.min(...overlapping.map(n => n.position.y ?? 0))
-      : sourceY - NODE_H / 2;
+      : sy - NODE_H / 2;
     apexY = minTop - ARC_GAP;
   } else {
     const maxBottom = overlapping.length > 0
       ? Math.max(...overlapping.map(n => (n.position.y ?? 0) + NODE_H))
-      : sourceY + NODE_H / 2;
+      : sy + NODE_H / 2;
     apexY = maxBottom + ARC_GAP;
   }
 
@@ -442,13 +447,10 @@ function LoopbackEdge({
 
   apexY += (above ? -1 : 1) * sameSideBefore * STAGGER;
 
-  // --- Orthogonal path: 3 segments, all right angles ---
-  //  1. source right-center → straight up/down to apexY
-  //  2. horizontal rail at apexY from sourceX to targetX
-  //  3. straight down/up into target left-center
-  const d = `M ${sourceX},${sourceY} L ${sourceX},${apexY} L ${targetX},${apexY} L ${targetX},${targetY}`;
+  // --- Orthogonal path: top/bottom center → straight up/down → horizontal rail → back down/up ---
+  const d = `M ${sx},${sy} L ${sx},${apexY} L ${tx},${apexY} L ${tx},${ty}`;
 
-  const midX    = (sourceX + targetX) / 2;
+  const midX    = (sx + tx) / 2;
   const labelY  = above ? apexY - 5 : apexY + 12;
   const markerId = `lb-arrow-${id}`;
 
