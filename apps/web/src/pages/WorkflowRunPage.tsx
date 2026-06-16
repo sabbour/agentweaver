@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Button,
@@ -125,29 +125,19 @@ const useStyles = makeStyles({
     height: '1px',
     backgroundColor: tokens.colorNeutralStroke2,
   },
-  // SVG-based return connector (always visible — structural feedback arc)
-  returnConnectorSvg: {
-    flexShrink: 0,
+  // Arc above the pipeline — wraps pipeline in relative container with top padding
+  pipelineArcWrap: {
+    position: 'relative',
+    paddingTop: '48px',
+  },
+  arcSvg: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '48px',
+    pointerEvents: 'none',
     overflow: 'visible',
-  },
-  connectorSvgDot: {
-    stroke: tokens.colorNeutralStroke2,
-    fill: 'none',
-    strokeWidth: '1',
-  },
-  connectorSvgLine: {
-    stroke: tokens.colorNeutralStroke2,
-    strokeWidth: '1',
-  },
-  returnSvgLine: {
-    stroke: tokens.colorPaletteYellowForeground1,
-    strokeWidth: '1',
-    strokeDasharray: '3 2',
-  },
-  returnSvgArrow: {
-    stroke: tokens.colorPaletteYellowForeground1,
-    fill: 'none',
-    strokeWidth: '1',
   },
   // Executor card
   executorCard: {
@@ -349,34 +339,6 @@ function PipeConnector() {
   );
 }
 
-/**
- * ReturnConnector — always-visible angled feedback arc.
- * Shows the standard forward path (○────○) plus a dashed diagonal arrow
- * angling back left toward Agent, indicating this step can loop back.
- */
-function ReturnConnector() {
-  const styles = useStyles();
-  return (
-    <svg
-      width="72"
-      height="48"
-      viewBox="0 0 72 48"
-      fill="none"
-      aria-hidden="true"
-      className={styles.returnConnectorSvg}
-    >
-      {/* Forward path */}
-      <circle cx="6" cy="18" r="3" className={styles.connectorSvgDot} />
-      <line x1="9" y1="18" x2="63" y2="18" className={styles.connectorSvgLine} />
-      <circle cx="66" cy="18" r="3" className={styles.connectorSvgDot} />
-      {/* Angled return — dashed diagonal from right back toward Agent (left) */}
-      <line x1="63" y1="24" x2="11" y2="42" className={styles.returnSvgLine} />
-      {/* Arrowhead at bottom-left */}
-      <polyline points="15,38 11,42 15,46" className={styles.returnSvgArrow} />
-    </svg>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -390,6 +352,29 @@ export function WorkflowRunPage() {
   const [loading, setLoading] = useState(true);
 
   // Fetch the run list to get agent_name and status
+  // Refs for measuring the Agent and Rai card positions to draw the feedback arc above.
+  const pipelineWrapRef = useRef<HTMLDivElement>(null);
+  const agentCardRef    = useRef<HTMLDivElement>(null);
+  const raiCardRef      = useRef<HTMLDivElement>(null);
+  const [arcGeom, setArcGeom] = useState<{ fromX: number; toX: number } | null>(null);
+
+  useLayoutEffect(() => {
+    function measure() {
+      if (!pipelineWrapRef.current || !agentCardRef.current || !raiCardRef.current) return;
+      const wrapRect  = pipelineWrapRef.current.getBoundingClientRect();
+      const agentRect = agentCardRef.current.getBoundingClientRect();
+      const raiRect   = raiCardRef.current.getBoundingClientRect();
+      setArcGeom({
+        fromX: raiRect.left   + raiRect.width   / 2 - wrapRect.left,
+        toX:   agentRect.left + agentRect.width  / 2 - wrapRect.left,
+      });
+    }
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (pipelineWrapRef.current) ro.observe(pipelineWrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
   useEffect(() => {
     if (!projectId || !runId) return;
     let cancelled = false;
@@ -467,6 +452,10 @@ export function WorkflowRunPage() {
     return executorStates[key] ?? { status: 'pending' };
   }
 
+  // SVG arc color — use the Fluent red token so it respects theming.
+  const arcColor = tokens.colorPaletteRedForeground1;
+  const arcId    = 'rai-arc-arrow';
+
   return (
     <div className={styles.root}>
       {/* Breadcrumb */}
@@ -489,72 +478,95 @@ export function WorkflowRunPage() {
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
 
-      {/* Executor pipeline
+      {/* Executor pipeline — wrapped in relative container so the arc SVG can sit above.
           Layout: [Agent] ──○ ○── [Rai]    ──○ ○── [Merge] ──○ ○── [Scribe]
                                   [Review] ──○ /
+          Red arc above: Rai center ──┐ top ──┐ ↓ Agent center
       */}
-      <div className={styles.pipeline} role="list" aria-label="Workflow executor pipeline">
-        {/* Agent */}
-        <div role="listitem">
-          <ExecutorCard
-            def={agentDef}
-            state={getState('agent')}
-            agentName={getState('agent').agentName ?? agentName}
-            runId={runId}
-            projectId={projectId}
-          />
-        </div>
+      <div ref={pipelineWrapRef} className={styles.pipelineArcWrap}>
+        {/* Feedback arc SVG — rendered above the pipeline row */}
+        {arcGeom && (
+          <svg aria-hidden="true" className={styles.arcSvg}>
+            <defs>
+              <marker id={arcId} markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto-start-reverse">
+                <path d="M 0 0 L 8 4 L 0 8 z" fill={arcColor} />
+              </marker>
+            </defs>
+            {/* L-shaped path: up from Rai, across top, down to Agent with arrowhead */}
+            <path
+              d={`M ${arcGeom.fromX},48 L ${arcGeom.fromX},8 L ${arcGeom.toX},8 L ${arcGeom.toX},48`}
+              stroke={arcColor}
+              strokeWidth="1.5"
+              fill="none"
+              markerEnd={`url(#${arcId})`}
+            />
+          </svg>
+        )}
 
-        {/* Parallel group: Rai (top) + Review (bottom) — each with own connectors.
-            Rai's left connector is a ReturnConnector showing the feedback arc back to Agent. */}
-        <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
-          <div className={styles.parallelRow}>
-            <ReturnConnector />
+        <div className={styles.pipeline} role="list" aria-label="Workflow executor pipeline">
+          {/* Agent */}
+          <div ref={agentCardRef} role="listitem">
             <ExecutorCard
-              def={raiDef}
-              state={getState('rai')}
+              def={agentDef}
+              state={getState('agent')}
+              agentName={getState('agent').agentName ?? agentName}
+              runId={runId}
+              projectId={projectId}
+            />
+          </div>
+
+          {/* Parallel group: Rai (top) + Review (bottom) */}
+          <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
+            <div className={styles.parallelRow}>
+              <PipeConnector />
+              <div ref={raiCardRef}>
+                <ExecutorCard
+                  def={raiDef}
+                  state={getState('rai')}
+                  agentName={undefined}
+                  runId={runId}
+                  projectId={projectId}
+                />
+              </div>
+              <PipeConnector />
+            </div>
+            <div className={styles.parallelRow}>
+              <PipeConnector />
+              <ExecutorCard
+                def={reviewDef}
+                state={getState('review')}
+                agentName={undefined}
+                runId={runId}
+                projectId={projectId}
+              />
+              <PipeConnector />
+            </div>
+          </div>
+
+          {/* Merge */}
+          <div role="listitem">
+            <ExecutorCard
+              def={mergeDef}
+              state={getState('merge')}
               agentName={undefined}
               runId={runId}
               projectId={projectId}
             />
-            <PipeConnector />
           </div>
-          <div className={styles.parallelRow}>
-            <PipeConnector />
+
+          {/* Connector to Scribe */}
+          <PipeConnector />
+
+          {/* Scribe */}
+          <div role="listitem">
             <ExecutorCard
-              def={reviewDef}
-              state={getState('review')}
+              def={scribeDef}
+              state={getState('scribe')}
               agentName={undefined}
               runId={runId}
               projectId={projectId}
             />
-            <PipeConnector />
           </div>
-        </div>
-
-        {/* Merge */}
-        <div role="listitem">
-          <ExecutorCard
-            def={mergeDef}
-            state={getState('merge')}
-            agentName={undefined}
-            runId={runId}
-            projectId={projectId}
-          />
-        </div>
-
-        {/* Connector to Scribe */}
-        <PipeConnector />
-
-        {/* Scribe */}
-        <div role="listitem">
-          <ExecutorCard
-            def={scribeDef}
-            state={getState('scribe')}
-            agentName={undefined}
-            runId={runId}
-            projectId={projectId}
-          />
         </div>
       </div>
     </div>
