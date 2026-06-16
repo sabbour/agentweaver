@@ -14,7 +14,11 @@ public sealed record AgentTurnInput(
     string? SystemPromptContext = null,
     string? ProjectId = null,
     string? AgentName = null,
-    DateTimeOffset? RunStartedAt = null);
+    DateTimeOffset? RunStartedAt = null,
+    /// <summary>Revision loop counter. Incremented each time Rai or a reviewer sends work back.</summary>
+    int Iteration = 0,
+    /// <summary>Set by revision adapters when the iteration cap is reached; routes to terminal.</summary>
+    bool MaxIterationsReached = false);
 
 /// <summary>Output from the agent turn executor, consumed by conditional edges.</summary>
 public sealed record AgentTurnOutput(
@@ -26,17 +30,30 @@ public sealed record AgentTurnOutput(
     string WorktreeBranch,
     string RepositoryPath,
     string OriginatingBranch,
-    bool ContentSafetyFlagged);
+    bool ContentSafetyFlagged,
+    /// <summary>Rai issued a REVISE verdict: agent should retry with <see cref="RaiFeedback"/>.</summary>
+    bool RaiRevisionRequired = false,
+    /// <summary>Rai's feedback text when <see cref="RaiRevisionRequired"/> is true.</summary>
+    string? RaiFeedback = null,
+    /// <summary>Carried through from <see cref="AgentTurnInput.Iteration"/> for edge conditions.</summary>
+    int Iteration = 0);
 
 /// <summary>Data surfaced to the external caller via the review request port.</summary>
 public sealed record WorkflowReviewRequest(
     string RunId,
     string TreeHash,
     string Diff,
-    int StepCount);
+    int StepCount,
+    /// <summary>True when Rai flagged a safety concern; the reviewer sees this as advisory context.</summary>
+    bool RaiSafetyFlagged = false);
 
 /// <summary>Response provided by the human reviewer through the request port.</summary>
-public sealed record WorkflowReviewDecision(bool Approved);
+public sealed record WorkflowReviewDecision(
+    bool Approved,
+    /// <summary>True when the reviewer wants the agent to revise rather than hard-declining.</summary>
+    bool RequestChanges = false,
+    /// <summary>Reviewer's feedback text sent back to the agent for the next iteration.</summary>
+    string? Feedback = null);
 
 /// <summary>Input to the merge executor.</summary>
 public sealed record MergeInput(

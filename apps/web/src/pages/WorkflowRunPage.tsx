@@ -128,14 +128,14 @@ const useStyles = makeStyles({
   // Arc above the pipeline — wraps pipeline in relative container with top padding
   pipelineArcWrap: {
     position: 'relative',
-    paddingTop: '32px',
+    paddingTop: '44px',
   },
   arcSvg: {
     position: 'absolute',
     top: 0,
     left: 0,
     width: '100%',
-    height: '32px',
+    height: '44px',
     pointerEvents: 'none',
     overflow: 'visible',
   },
@@ -351,27 +351,31 @@ export function WorkflowRunPage() {
   const [runStatus, setRunStatus] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
-  // Fetch the run list to get agent_name and status
-  // Refs for measuring the Agent and Rai card positions to draw the feedback arc above.
+  // Refs for measuring card positions to draw feedback arcs above the pipeline.
   const pipelineWrapRef = useRef<HTMLDivElement>(null);
   const agentCardRef    = useRef<HTMLDivElement>(null);
   const raiCardRef      = useRef<HTMLDivElement>(null);
+  const reviewCardRef   = useRef<HTMLDivElement>(null);
   const [arcGeom, setArcGeom] = useState<{
-    fromX: number; fromTop: number;
-    toX:   number; toTop:   number;
+    raiFromX: number; raiFromTop: number;
+    revFromX: number; revFromTop: number;
+    toX:      number; toTop:      number;
   } | null>(null);
 
   useLayoutEffect(() => {
     function measure() {
-      if (!pipelineWrapRef.current || !agentCardRef.current || !raiCardRef.current) return;
-      const wrapRect  = pipelineWrapRef.current.getBoundingClientRect();
-      const agentRect = agentCardRef.current.getBoundingClientRect();
-      const raiRect   = raiCardRef.current.getBoundingClientRect();
+      if (!pipelineWrapRef.current || !agentCardRef.current || !raiCardRef.current || !reviewCardRef.current) return;
+      const wrapRect   = pipelineWrapRef.current.getBoundingClientRect();
+      const agentRect  = agentCardRef.current.getBoundingClientRect();
+      const raiRect    = raiCardRef.current.getBoundingClientRect();
+      const reviewRect = reviewCardRef.current.getBoundingClientRect();
       setArcGeom({
-        fromX:   raiRect.left   + raiRect.width   / 2 - wrapRect.left,
-        fromTop: raiRect.top                           - wrapRect.top,
-        toX:     agentRect.left + agentRect.width  / 2 - wrapRect.left,
-        toTop:   agentRect.top                         - wrapRect.top,
+        raiFromX:   raiRect.left    + raiRect.width    / 2 - wrapRect.left,
+        raiFromTop: raiRect.top                             - wrapRect.top,
+        revFromX:   reviewRect.left + reviewRect.width  / 2 - wrapRect.left,
+        revFromTop: reviewRect.top                          - wrapRect.top,
+        toX:        agentRect.left  + agentRect.width   / 2 - wrapRect.left,
+        toTop:      agentRect.top                           - wrapRect.top,
       });
     }
     measure();
@@ -459,7 +463,6 @@ export function WorkflowRunPage() {
 
   // SVG arc — neutral connector style, matches PipeConnector color.
   const arcColor = tokens.colorNeutralStroke2;
-  const arcId    = 'rai-arc-arrow';
 
   return (
     <div className={styles.root}>
@@ -483,32 +486,40 @@ export function WorkflowRunPage() {
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
 
-      {/* Executor pipeline — wrapped in relative container so the arc SVG can sit above.
-          Layout: [Agent] ──○ ○── [Rai]    ──○ ○── [Merge] ──○ ○── [Scribe]
+      {/* Executor pipeline — wrapped in relative container so arc SVGs can sit above.
+          Layout: [Agent] ──○ ○── [Rai   ] ──○ ○── [Merge] ──○ ○── [Scribe]
                                   [Review] ──○ /
-          Arc above: Rai top ─╮ 8px gap ╭─ Agent top (arrowhead enters Agent card)
+          Arcs above (Rai at y=10, Review at y=22): both loop back to Agent top.
       */}
       <div ref={pipelineWrapRef} className={styles.pipelineArcWrap}>
-        {/* Feedback arc SVG — connector-style L-path above the pipeline */}
+        {/* Feedback arc SVGs — two L-paths above the pipeline */}
         {arcGeom && (
           <svg aria-hidden="true" className={styles.arcSvg}>
             <defs>
-              <marker id={arcId} markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse">
+              <marker id="rai-arc-arrow" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse">
+                <path d="M 0 0 L 6 3 L 0 6 z" fill={arcColor} />
+              </marker>
+              <marker id="review-arc-arrow" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse">
                 <path d="M 0 0 L 6 3 L 0 6 z" fill={arcColor} />
               </marker>
             </defs>
-            {/* Dot at Rai end */}
-            <circle cx={arcGeom.fromX} cy={arcGeom.fromTop} r="3"
+            {/* Rai → Agent arc (upper, y=10) */}
+            <circle cx={arcGeom.raiFromX} cy={arcGeom.raiFromTop} r="3"
               stroke={arcColor} strokeWidth="1" fill="none" />
-            {/* L-path: up from Rai top, across at 8px, down to Agent top */}
             <path
-              d={`M ${arcGeom.fromX},${arcGeom.fromTop - 3} L ${arcGeom.fromX},8 L ${arcGeom.toX},8 L ${arcGeom.toX},${arcGeom.toTop}`}
-              stroke={arcColor}
-              strokeWidth="1"
-              fill="none"
-              markerEnd={`url(#${arcId})`}
+              d={`M ${arcGeom.raiFromX},${arcGeom.raiFromTop - 3} L ${arcGeom.raiFromX},10 L ${arcGeom.toX},10 L ${arcGeom.toX},${arcGeom.toTop}`}
+              stroke={arcColor} strokeWidth="1" fill="none"
+              markerEnd="url(#rai-arc-arrow)"
             />
-            {/* Dot at Agent end — sits on top of the card */}
+            {/* Review → Agent arc (lower, y=24) */}
+            <circle cx={arcGeom.revFromX} cy={arcGeom.revFromTop} r="3"
+              stroke={arcColor} strokeWidth="1" fill="none" />
+            <path
+              d={`M ${arcGeom.revFromX},${arcGeom.revFromTop - 3} L ${arcGeom.revFromX},24 L ${arcGeom.toX},24 L ${arcGeom.toX},${arcGeom.toTop}`}
+              stroke={arcColor} strokeWidth="1" fill="none"
+              markerEnd="url(#review-arc-arrow)"
+            />
+            {/* Shared dot at Agent end */}
             <circle cx={arcGeom.toX} cy={arcGeom.toTop} r="3"
               stroke={arcColor} strokeWidth="1" fill="none" />
           </svg>
@@ -543,13 +554,15 @@ export function WorkflowRunPage() {
             </div>
             <div className={styles.parallelRow}>
               <PipeConnector />
-              <ExecutorCard
-                def={reviewDef}
-                state={getState('review')}
-                agentName={undefined}
-                runId={runId}
-                projectId={projectId}
-              />
+              <div ref={reviewCardRef}>
+                <ExecutorCard
+                  def={reviewDef}
+                  state={getState('review')}
+                  agentName={undefined}
+                  runId={runId}
+                  projectId={projectId}
+                />
+              </div>
               <PipeConnector />
             </div>
           </div>

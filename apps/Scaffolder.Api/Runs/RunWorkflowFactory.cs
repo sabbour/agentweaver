@@ -204,13 +204,16 @@ public sealed class RunWorkflowFactory
 
         // Adapter: maps AgentTurnOutput -> WorkflowReviewRequest and stores merge
         // data in workflow state so it survives the checkpoint/resume cycle.
+        // RaiSafetyFlagged is passed through so the reviewer sees Rai's verdict as context.
         ExecutorBinding reviewAdapter = new FunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
             "review-adapter",
             async (input, ctx, ct) =>
             {
                 await ctx.QueueStateUpdateAsync(MergeDataKey, input, MergeDataScope, ct)
                     .ConfigureAwait(false);
-                return new WorkflowReviewRequest(input.RunId, input.TreeHash, input.Diff, input.StepCount);
+                return new WorkflowReviewRequest(
+                    input.RunId, input.TreeHash, input.Diff, input.StepCount,
+                    RaiSafetyFlagged: input.ContentSafetyFlagged);
             });
 
         // Adapter: maps WorkflowReviewDecision -> MergeInput by reading the stored
@@ -265,7 +268,8 @@ public sealed class RunWorkflowFactory
                 var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
                     .ConfigureAwait(false);
                 return new WorkflowReviewRequest(
-                    agentOutput!.RunId, agentOutput.TreeHash, agentOutput.Diff, agentOutput.StepCount);
+                    agentOutput!.RunId, agentOutput.TreeHash, agentOutput.Diff, agentOutput.StepCount,
+                    RaiSafetyFlagged: agentOutput.ContentSafetyFlagged);
             });
 
         // Store AgentTurnInput in workflow state at workflow start so Scribe adapters
@@ -380,7 +384,7 @@ public sealed class RunWorkflowFactory
             });
 
         // Review RequestChanges adapter: reads stored agent-input, appends review feedback,
-        // increments Iteration, sets MaxIterationsReached when cap is hit.
+        // increments Iteration. No cap — reviewers can request as many changes as needed.
         ExecutorBinding reviewChangesAdapter = new FunctionExecutor<WorkflowReviewDecision, AgentTurnInput>(
             "review-changes-adapter",
             async (decision, ctx, ct) =>
@@ -399,7 +403,7 @@ public sealed class RunWorkflowFactory
                 {
                     Task = revisedTask,
                     Iteration = nextIteration,
-                    MaxIterationsReached = nextIteration >= MaxIterations,
+                    MaxIterationsReached = false,
                 };
                 await ctx.QueueStateUpdateAsync("agent-input", revised, "run-context", ct).ConfigureAwait(false);
                 return revised;
@@ -408,59 +412,49 @@ public sealed class RunWorkflowFactory
         var wf = new WorkflowBuilder(agentInputStorer)
             // storer -> agent turn (unconditional)
             .AddEdge(agentInputStorer, agentBinding)
-            // agent turn -> Rai RAI gate (unconditional: AgentTurnOutput flows in)
+            // agent turn -> Rai RAI gate (unconditional)
             .AddEdge(agentBinding, raiBinding)
-            // Content safety flagged (Rai RED) OR Rai REVISE iteration cap -> immediate failure
-            .AddEdge<AgentTurnOutput>(raiBinding, terminalSafetyFailed,
-                output => output is not null
-                    && (output.ContentSafetyFlagged
-                        || (output.RaiRevisionRequired && output.Iteration >= MaxIterations)))
             // Rai REVISE (iteration < cap) -> revision adapter -> loop back to agent
             .AddEdge<AgentTurnOutput>(raiBinding, raiRevisionAdapter,
                 output => output is not null && output.RaiRevisionRequired && output.Iteration < MaxIterations)
             .AddEdge(raiRevisionAdapter, agentBinding, idempotent: true)
             // No changes -> no-op -> scribe path
             .AddEdge<AgentTurnOutput>(raiBinding, terminalNoOp,
-                output => output is not null && !output.ContentSafetyFlagged && !output.RaiRevisionRequired && string.IsNullOrEmpty(output.Diff))
+                output => output is not null && !output.RaiRevisionRequired && string.IsNullOrEmpty(output.Diff))
             .AddEdge(terminalNoOp, scribeInputNoChanges)
             .AddEdge(scribeInputNoChanges, scribeBindingNoChanges)
             .AddEdge(scribeBindingNoChanges, scribeOutputNoChanges)
-            // Has changes -> review adapter (stores merge data, maps to WorkflowReviewRequest)
+            // Everything else (OK, RED, REVISE cap) -> review adapter -> human review gate.
+            // RaiSafetyFlagged is set so the reviewer can see Rai's verdict as advisory context.
             .AddEdge<AgentTurnOutput>(raiBinding, reviewAdapter,
-                output => output is not null && !output.ContentSafetyFlagged && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff))
-            // Review adapter -> review gate (unconditional: WorkflowReviewRequest flows in)
+                output => output is not null && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff))
+            // Review adapter -> review gate
             .AddEdge(reviewAdapter, reviewBinding)
-            // Approved -> merge adapter (reads stored merge data, builds MergeInput)
+            // Approved -> merge adapter -> merge executor
             .AddEdge<WorkflowReviewDecision>(reviewBinding, mergeAdapter,
                 decision => decision is not null && decision.Approved)
-            // Merge adapter -> merge executor (unconditional: MergeInput flows in)
             .AddEdge(mergeAdapter, mergeBinding)
-            // Merge succeeded or failed terminally -> terminal merge -> scribe path
+            // Merge succeeded or failed terminally -> scribe path
             .AddEdge<MergeOutput>(mergeBinding, terminalMerge,
                 output => output is not null && output.Status != "blocked")
             .AddEdge(terminalMerge, scribeInputMerge)
             .AddEdge(scribeInputMerge, scribeBindingMerge)
             .AddEdge(scribeBindingMerge, scribeOutputMerge)
-            // Merge blocked (retriable) -> re-enter review gate via HITL.
+            // Merge blocked -> re-enter review gate via HITL
             .AddEdge<MergeOutput>(mergeBinding, blockedAdapter,
                 output => output is not null && output.Status == "blocked")
             .AddEdge(blockedAdapter, reviewBinding, idempotent: true)
-            // Review RequestChanges -> revision adapter -> loop back to agent (or cap)
+            // Review RequestChanges -> revision adapter -> loop back to agent (no cap)
             .AddEdge<WorkflowReviewDecision>(reviewBinding, reviewChangesAdapter,
                 decision => decision is not null && !decision.Approved && decision.RequestChanges)
-            .AddEdge<AgentTurnInput>(reviewChangesAdapter, agentBinding,
-                input => input is not null && !input.MaxIterationsReached, idempotent: true)
-            .AddEdge<AgentTurnInput>(reviewChangesAdapter, terminalIterationCapped,
-                input => input is not null && input.MaxIterationsReached)
-            // Hard-declined (not approved, not requesting changes) -> terminal
+            .AddEdge(reviewChangesAdapter, agentBinding, idempotent: true)
+            // Hard-declined -> terminal
             .AddEdge<WorkflowReviewDecision>(reviewBinding, terminalDeclined,
                 decision => decision is null || (!decision.Approved && !decision.RequestChanges))
             // Outputs
             .WithOutputFrom(scribeOutputMerge)
             .WithOutputFrom(scribeOutputNoChanges)
             .WithOutputFrom(terminalDeclined)
-            .WithOutputFrom(terminalIterationCapped)
-            .WithOutputFrom(terminalSafetyFailed)
             .Build()!;
 
         return wf;
