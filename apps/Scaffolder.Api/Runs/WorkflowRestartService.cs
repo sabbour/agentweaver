@@ -182,8 +182,11 @@ public sealed class WorkflowRestartService
 
             try
             {
-                var streamingRun = await _factory.ResumeAsync(checkpointInfo, ct).ConfigureAwait(false);
-                var runCt = _registry.Register(runIdStr, streamingRun);
+                // Create the per-run CTS before resuming so the same token reaches both
+                // the agent execution and the registry's Abandon path.
+                var runCts = new CancellationTokenSource();
+                var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
+                var runCt = _registry.Register(runIdStr, streamingRun, runCts);
 
                 // Re-populate PendingRequestStore from the resumed run's status.
                 var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);

@@ -11,9 +11,13 @@ public sealed class RunWorkflowRegistry
 {
     private readonly ConcurrentDictionary<string, (StreamingRun Run, CancellationTokenSource Cts)> _runs = new();
 
-    public CancellationToken Register(string runId, StreamingRun run)
+    /// <summary>
+    /// Registers an active run using a pre-created <see cref="CancellationTokenSource"/> that
+    /// was already passed into the workflow execution so that <see cref="Abandon"/> can cancel it.
+    /// The registry takes ownership of <paramref name="cts"/> and disposes it on removal.
+    /// </summary>
+    public CancellationToken Register(string runId, StreamingRun run, CancellationTokenSource cts)
     {
-        var cts = new CancellationTokenSource();
         (StreamingRun Run, CancellationTokenSource Cts)? replaced = null;
         _runs.AddOrUpdate(
             runId,

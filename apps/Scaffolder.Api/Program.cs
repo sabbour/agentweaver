@@ -376,6 +376,10 @@ app.MapDelete("/api/runs/{id}", async (
     if (isNonTerminal)
     {
         registry.Abandon(id);
+        // Give the running agent a brief window to observe the cancellation signal before
+        // the worktree is torn down. Without this, a tool call in-flight may try to write
+        // to a path that is already deleted.
+        await Task.Delay(TimeSpan.FromMilliseconds(250), CancellationToken.None);
         if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
         {
             try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch ?? string.Empty); }
@@ -2003,36 +2007,42 @@ app.MapPost("/api/projects/{id}/runs", async (
     if (!reserved)
         return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
 
-    // Start the workflow. On any failure, terminalize the reserved run so it never sticks as Pending.
-    try
+    // Fire-and-forget: start the workflow in the background so the HTTP response is immediate.
+    // The run is already reserved as Pending; startup transitions it to InProgress.
+    // On any failure, compensate by terminalizing the run so it never sticks as Pending.
+    // CancellationToken.None is intentional — the HTTP request's ct will be cancelled once
+    // the response is sent, but the workflow must keep running after that.
+    _ = Task.Run(async () =>
     {
-        await orchestrator.StartReservedProjectRunAsync(run, ct);
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to start project run {RunId} for project {ProjectId}", run.Id, projectId);
         try
         {
-            await runStore.TrySetTerminalStatusAsync(
-                run.Id, RunStatus.Failed, DateTimeOffset.UtcNow,
-                "run_start_failed", CancellationToken.None).ConfigureAwait(false);
-            var streamEntry = streamStore.Get(run.Id.ToString());
-            if (streamEntry is not null)
+            await orchestrator.StartReservedProjectRunAsync(run, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to start project run {RunId} for project {ProjectId}", run.Id, projectId);
+            try
             {
-                streamEntry.RecordNext(EventTypes.RunFailed, new { reason = "run_start_failed" });
-                streamStore.Complete(run.Id.ToString());
+                await runStore.TrySetTerminalStatusAsync(
+                    run.Id, RunStatus.Failed, DateTimeOffset.UtcNow,
+                    "run_start_failed", CancellationToken.None).ConfigureAwait(false);
+                var streamEntry = streamStore.Get(run.Id.ToString());
+                if (streamEntry is not null)
+                {
+                    streamEntry.RecordNext(EventTypes.RunFailed, new { reason = "run_start_failed" });
+                    streamStore.Complete(run.Id.ToString());
+                }
+            }
+            catch (Exception compensationEx)
+            {
+                logger.LogError(compensationEx, "Compensation failed for reserved run {RunId}", run.Id);
             }
         }
-        catch (Exception compensationEx)
-        {
-            logger.LogError(compensationEx, "Compensation failed for reserved run {RunId}", run.Id);
-        }
-        return Results.Problem("Failed to start the run.", statusCode: 500);
-    }
+    });
 
     return Results.Accepted(
         $"/api/runs/{run.Id}",
-        new CreateRunResponse { RunId = run.Id.ToString(), WorkflowRunId = workflowRunId, Status = "in_progress" });
+        new CreateRunResponse { RunId = run.Id.ToString(), WorkflowRunId = workflowRunId, Status = "pending" });
 });
 
 // -----------------------------------------------------------------------

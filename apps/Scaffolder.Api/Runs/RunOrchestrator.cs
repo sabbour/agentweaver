@@ -89,8 +89,12 @@ public sealed class RunOrchestrator
             run.AgentName,
             run.StartedAt);
 
-        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
-        var runCt = _registry.Register(run.Id.ToString(), streamingRun);
+        // Create the per-run CTS before starting the workflow so the same token reaches both
+        // the agent execution and the registry's Abandon path. Using CancellationToken.None as
+        // the base avoids cancellation when the HTTP request ends.
+        var runCts = new CancellationTokenSource();
+        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token).ConfigureAwait(false);
+        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
     }
 
@@ -135,8 +139,11 @@ public sealed class RunOrchestrator
             run.AgentName,
             run.StartedAt);
 
-        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
-        var runCt = _registry.Register(run.Id.ToString(), streamingRun);
+        // Create the per-run CTS before starting the workflow so the same token reaches both
+        // the agent execution and the registry's Abandon path.
+        var runCts = new CancellationTokenSource();
+        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token).ConfigureAwait(false);
+        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
     }
 
@@ -191,8 +198,11 @@ public sealed class RunOrchestrator
             run.AgentName,
             run.StartedAt);
 
-        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
-        var runCt = _registry.Register(run.Id.ToString(), streamingRun);
+        // Create the per-run CTS before starting the workflow so the same token reaches both
+        // the agent execution and the registry's Abandon path.
+        var runCts = new CancellationTokenSource();
+        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token).ConfigureAwait(false);
+        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, generation, runCt);
     }
 
