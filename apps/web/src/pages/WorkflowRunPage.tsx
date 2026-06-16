@@ -26,9 +26,12 @@ import {
   MarkerType,
   Position,
   Handle,
+  useEdges,
+  useNodes,
   type Node,
   type Edge,
   type NodeProps,
+  type EdgeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useRunStream } from '../api/sse';
@@ -42,7 +45,6 @@ import { layoutDag, NODE_W, NODE_H } from '../utils/dagLayout';
 
 type StepStatus = 'pending' | 'started' | 'completed' | 'skipped' | 'failed';
 type ExecutorKey = 'agent' | 'rai' | 'review' | 'merge' | 'scribe';
-type ExecutorType = 'STAGE' | 'ACTION';
 
 interface ExecutorState {
   status: StepStatus;
@@ -53,15 +55,14 @@ interface ExecutorDef {
   key: ExecutorKey;
   label: string;
   Icon: FluentIcon;
-  type: ExecutorType;
 }
 
 const EXECUTORS: ExecutorDef[] = [
-  { key: 'agent',  label: 'Agent',  Icon: BotRegular,      type: 'STAGE'  },
-  { key: 'rai',    label: 'Rai',    Icon: ShieldRegular,   type: 'ACTION' },
-  { key: 'review', label: 'Review', Icon: PersonRegular,   type: 'ACTION' },
-  { key: 'merge',  label: 'Merge',  Icon: MergeRegular,    type: 'STAGE'  },
-  { key: 'scribe', label: 'Scribe', Icon: NotebookRegular, type: 'ACTION' },
+  { key: 'agent',  label: 'Agent',  Icon: BotRegular      },
+  { key: 'rai',    label: 'Rai',    Icon: ShieldRegular   },
+  { key: 'review', label: 'Review', Icon: PersonRegular   },
+  { key: 'merge',  label: 'Merge',  Icon: MergeRegular    },
+  { key: 'scribe', label: 'Scribe', Icon: NotebookRegular },
 ];
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   agentName?: string;
   runId: string;
   projectId: string;
+  reviewedBy?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +87,6 @@ const usePageStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-    maxWidth: '1100px',
   },
   breadcrumb: {
     display: 'flex',
@@ -110,11 +111,10 @@ const usePageStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   dagContainer: {
-    height: '340px',
+    height: '300px',
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    // Override React Flow's default background so it matches the page.
     '& .react-flow__renderer': {
       borderRadius: '8px',
     },
@@ -132,22 +132,26 @@ const useNodeStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     padding: '14px',
     width: `${NODE_W}px`,
-    minHeight: `${NODE_H}px`,
+    height: `${NODE_H}px`,        // fixed height — all nodes same size → handles at same Y
     boxSizing: 'border-box',
+    overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '8px',
+    cursor: 'default',
+  },
+  cardActive: {
+    borderLeft: `3px solid ${tokens.colorBrandForeground1}`,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  cardActionRequired: {
+    border: `2px solid ${tokens.colorBrandForeground1}`,
+    backgroundColor: tokens.colorBrandBackground2,
   },
   cardHeader: {
     display: 'flex',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
-  },
-  cardTypeLabel: {
-    fontSize: tokens.fontSizeBase100,
-    color: tokens.colorNeutralForeground4,
-    letterSpacing: '0.5px',
-    fontWeight: tokens.fontWeightSemibold,
   },
   statusBadge: {
     display: 'inline-flex',
@@ -168,7 +172,6 @@ const useNodeStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
-    marginTop: tokens.spacingVerticalXS,
   },
   cardIcon: {
     display: 'flex',
@@ -178,6 +181,7 @@ const useNodeStyles = makeStyles({
   cardTitleGroup: {
     display: 'flex',
     flexDirection: 'column',
+    overflow: 'hidden',
   },
   cardTitle: {
     fontWeight: tokens.fontWeightSemibold,
@@ -188,14 +192,23 @@ const useNodeStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     marginTop: '2px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   cardActions: {
+    marginTop: tokens.spacingVerticalXS,
+  },
+  reviewerRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
     marginTop: tokens.spacingVerticalXS,
   },
 });
 
 // ---------------------------------------------------------------------------
-// Status badge component
+// Status badge + description helpers
 // ---------------------------------------------------------------------------
 
 function statusLabel(s: StepStatus) {
@@ -231,40 +244,69 @@ function StatusBadge({ status }: { status: StepStatus }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Custom React Flow node — matches existing ExecutorCard design
-// Handles:
-//   Left  = standard LR target (for forward edges coming in)
-//   Right = standard LR source (for forward edges going out)
-//   Top   = retrigger source (rai, review) / target (agent) for loop-back arcs
-// ---------------------------------------------------------------------------
+function statusDescription(key: ExecutorKey, status: StepStatus): string | null {
+  if (status === 'pending') return null;
+  if (key === 'agent') {
+    if (status === 'started')   return 'Working on task...';
+    if (status === 'completed') return 'Finished';
+    if (status === 'failed')    return 'Failed';
+  }
+  if (key === 'rai') {
+    if (status === 'started')   return 'Reviewing safety...';
+    if (status === 'completed') return 'Passed';
+    if (status === 'failed')    return 'Flagged';
+  }
+  if (key === 'review') {
+    if (status === 'started')   return 'Awaiting your review';
+    if (status === 'completed') return 'Reviewed';
+    if (status === 'skipped')   return 'Skipped';
+  }
+  if (key === 'merge') {
+    if (status === 'started')   return 'Merging...';
+    if (status === 'completed') return 'Merged';
+    if (status === 'failed')    return 'Merge failed';
+    if (status === 'skipped')   return 'Skipped';
+  }
+  if (key === 'scribe') {
+    if (status === 'started')   return 'Logging session...';
+    if (status === 'completed') return 'Done';
+  }
+  return null;
+}
 
-const LOOP_SOURCES = new Set<ExecutorKey>(['rai', 'review']);
-const LOOP_TARGET: ExecutorKey = 'agent';
+// ---------------------------------------------------------------------------
+// Custom React Flow node
+// Only left (target) and right (source) handles — no hardcoded top/bottom.
+// Loop-back arcs are drawn by the LoopbackEdge custom edge component.
+// Interactive elements carry the "nopan nodrag" classes so React Flow does
+// not swallow click events on buttons / links inside the card.
+// ---------------------------------------------------------------------------
 
 function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
-  const { def, state, agentName, runId, projectId } = data as WorkflowNodeData;
-  const { key, label, Icon, type } = def;
+  const { def, state, agentName, runId, projectId, reviewedBy } = data as WorkflowNodeData;
+  const { key, label, Icon } = def;
   const { status } = state;
 
+  const isActive         = status === 'started' && key !== 'review';
+  const isActionRequired = key === 'review' && status === 'started';
+  const cardClass = [
+    s.card,
+    isActive         ? s.cardActive         : '',
+    isActionRequired ? s.cardActionRequired : '',
+  ].filter(Boolean).join(' ');
+
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
+  const subText = statusDescription(key as ExecutorKey, status);
 
   return (
-    <div className={s.card} role="article" aria-label={`${label}: ${statusLabel(status)}`}>
-      {/* React Flow handles — invisible, only for edge routing */}
-      <Handle type="target" position={Position.Left} style={handleStyle} />
+    <div className={cardClass} role="article" aria-label={`${label}: ${statusLabel(status)}`}>
+      {/* Standard LR handles — no Top/Bottom, positions are generic */}
+      <Handle type="target" position={Position.Left}  style={handleStyle} />
       <Handle type="source" position={Position.Right} style={handleStyle} />
-      {LOOP_SOURCES.has(key as ExecutorKey) && (
-        <Handle type="source" id="retrigger" position={Position.Top} style={handleStyle} />
-      )}
-      {key === LOOP_TARGET && (
-        <Handle type="target" id="retrigger" position={Position.Top} style={handleStyle} />
-      )}
 
-      {/* Card header: type label + status badge */}
+      {/* Status badge */}
       <div className={s.cardHeader}>
-        <span className={s.cardTypeLabel}>{type}</span>
         <StatusBadge status={status} />
       </div>
 
@@ -276,29 +318,40 @@ function WorkflowNode({ data }: NodeProps) {
         <div className={s.cardTitleGroup}>
           <span className={s.cardTitle}>{label}</span>
           {agentName && <span className={s.cardSubText}>{agentName}</span>}
+          {subText && <span className={s.cardSubText}>{subText}</span>}
         </div>
       </div>
 
-      {/* Action buttons */}
+      {/* Action buttons — nopan/nodrag prevents React Flow from swallowing clicks */}
       {key === 'agent' && (
-        <div className={s.cardActions}>
+        <div className={`${s.cardActions} nopan nodrag`}>
           <Link to={`/watch/${runId}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View run</Button>
           </Link>
         </div>
       )}
       {(key === 'rai' || key === 'scribe') && (status === 'started' || status === 'completed' || status === 'failed') && (
-        <div className={s.cardActions}>
+        <div className={`${s.cardActions} nopan nodrag`}>
           <Link to={`/watch/${runId}-${key}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
       )}
       {key === 'review' && status === 'started' && (
-        <div className={s.cardActions}>
+        <div className={`${s.cardActions} nopan nodrag`}>
           <Link to={`/watch/${runId}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
-            <Button appearance="primary" size="small">Awaiting review</Button>
+            <Button appearance="primary" size="medium">Review now</Button>
           </Link>
+        </div>
+      )}
+      {key === 'review' && status === 'completed' && reviewedBy && (
+        <div className={`${s.reviewerRow} nopan nodrag`}>
+          <img
+            src={`https://github.com/${reviewedBy}.png?size=28`}
+            style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${tokens.colorBrandForeground1}` }}
+            alt={reviewedBy}
+          />
+          <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>{reviewedBy}</Text>
         </div>
       )}
     </div>
@@ -308,18 +361,150 @@ function WorkflowNode({ data }: NodeProps) {
 const nodeTypes = { workflow: WorkflowNode };
 
 // ---------------------------------------------------------------------------
+// Custom loopback edge — topology-agnostic, heuristic orthogonal routing.
+//
+// Shape: angled orthogonal path (right angles, no curves):
+//   source-right → go up/down to apexY → go left to target column → target-left
+//   i.e.  M sx,sy  L sx,apexY  L tx,apexY  L tx,ty
+// This guarantees the horizontal rail at apexY fully clears intermediate cards.
+//
+// Heuristics:
+//
+// 1. SIDE — `target` is read from the live edges list (avoids React Flow
+//    potentially not forwarding the prop). Siblings = all loopback edges going
+//    to the same target, sorted by source X ascending (nearest first).
+//    Even index → above, odd → below.  data.above overrides if supplied.
+//
+// 2. CLEARANCE — Scan nodes whose X extent overlaps the arc span and push
+//    apexY outside their bounding box + ARC_GAP.
+//
+// 3. STAGGER — Each additional same-side sibling adds STAGGER px so arcs
+//    never sit on top of each other.
+//
+// 4. ARROW — marker on the last segment (vertical, entering target).
+// ---------------------------------------------------------------------------
+
+const LOOPBACK_STROKE = 'var(--colorNeutralStroke1)';
+const ARC_GAP = 12; // clearance above/below card edge
+const STAGGER = 28; // extra rail separation per same-side sibling
+
+function LoopbackEdge({
+  id, sourceX, sourceY, targetX, targetY, label, data,
+}: EdgeProps) {
+  const allEdges = useEdges();
+  const allNodes = useNodes();
+
+  // --- Look up own edge to get target node id safely ---
+  const myEdge    = allEdges.find(e => e.id === id);
+  const targetId  = myEdge?.target ?? '';
+
+  // --- Heuristic 1: side ---
+  const siblings = allEdges
+    .filter(e => e.type === 'loopback' && e.target === targetId)
+    .sort((a, b) => {
+      const ax = allNodes.find(n => n.id === a.source)?.position.x ?? 0;
+      const bx = allNodes.find(n => n.id === b.source)?.position.x ?? 0;
+      return ax - bx; // nearest source first
+    });
+
+  const myIndex   = siblings.findIndex(e => e.id === id);
+  const autoAbove = myIndex % 2 === 0;
+  const above     = data?.above !== undefined ? Boolean(data.above) : autoAbove;
+
+  // --- Heuristic 2: clearance against intermediate nodes ---
+  const minX = Math.min(sourceX, targetX);
+  const maxX = Math.max(sourceX, targetX);
+
+  const overlapping = allNodes.filter(n => {
+    const nl = n.position.x ?? 0;
+    const nr = nl + NODE_W;
+    return nr > minX && nl < maxX;
+  });
+
+  let apexY: number;
+  if (above) {
+    const minTop = overlapping.length > 0
+      ? Math.min(...overlapping.map(n => n.position.y ?? 0))
+      : sourceY - NODE_H / 2;
+    apexY = minTop - ARC_GAP;
+  } else {
+    const maxBottom = overlapping.length > 0
+      ? Math.max(...overlapping.map(n => (n.position.y ?? 0) + NODE_H))
+      : sourceY + NODE_H / 2;
+    apexY = maxBottom + ARC_GAP;
+  }
+
+  // --- Heuristic 3: stagger same-side siblings ---
+  const sameSideBefore = siblings.slice(0, myIndex).filter((e, i) => {
+    const sAbove = e.data?.above !== undefined ? Boolean(e.data.above) : i % 2 === 0;
+    return sAbove === above;
+  }).length;
+
+  apexY += (above ? -1 : 1) * sameSideBefore * STAGGER;
+
+  // --- Orthogonal path: 3 segments, all right angles ---
+  //  1. source right-center → straight up/down to apexY
+  //  2. horizontal rail at apexY from sourceX to targetX
+  //  3. straight down/up into target left-center
+  const d = `M ${sourceX},${sourceY} L ${sourceX},${apexY} L ${targetX},${apexY} L ${targetX},${targetY}`;
+
+  const midX    = (sourceX + targetX) / 2;
+  const labelY  = above ? apexY - 5 : apexY + 12;
+  const markerId = `lb-arrow-${id}`;
+
+  return (
+    <>
+      <defs>
+        <marker
+          id={markerId}
+          markerWidth="8"
+          markerHeight="6"
+          refX="6"
+          refY="3"
+          orient="auto"
+        >
+          <path d="M 0 0 L 6 3 L 0 6 Z" fill={LOOPBACK_STROKE} />
+        </marker>
+      </defs>
+      <path
+        d={d}
+        fill="none"
+        stroke={LOOPBACK_STROKE}
+        strokeWidth={1.5}
+        strokeDasharray="5 3"
+        markerEnd={`url(#${markerId})`}
+      />
+      {label != null && (
+        <text
+          x={midX}
+          y={labelY}
+          textAnchor="middle"
+          fontSize={10}
+          fill={LOOPBACK_STROKE}
+          fontWeight={600}
+          style={{ userSelect: 'none', pointerEvents: 'none' }}
+        >
+          {label as string}
+        </text>
+      )}
+    </>
+  );
+}
+
+const edgeTypes = { loopback: LoopbackEdge };
+
+// ---------------------------------------------------------------------------
 // Edge helpers
 // ---------------------------------------------------------------------------
 
-const STROKE = `var(--colorNeutralStroke1)`;
-const STROKE_MUTED = `var(--colorNeutralStroke2)`;
+const STROKE_MUTED = 'var(--colorNeutralStroke2)';
 
 function forwardEdge(id: string, source: string, target: string, animated = false): Edge {
   return {
     id,
     source,
     target,
-    type: 'smoothstep',
+    type: 'default',
     animated,
     style: { stroke: STROKE_MUTED, strokeWidth: 1.5 },
     markerEnd: { type: MarkerType.ArrowClosed, color: STROKE_MUTED, width: 12, height: 12 },
@@ -331,29 +516,22 @@ function loopbackEdge(id: string, source: string, target: string, label: string)
     id,
     source,
     target,
-    sourceHandle: 'retrigger',
-    targetHandle: 'retrigger',
-    type: 'smoothstep',
+    type: 'loopback',
     label,
-    labelStyle: { fill: STROKE, fontSize: 10, fontWeight: 600 },
-    labelBgStyle: { fill: `var(--colorNeutralBackground1)`, fillOpacity: 0.9 },
-    labelBgPadding: [4, 6] as [number, number],
-    labelBgBorderRadius: 4,
-    style: { stroke: STROKE, strokeWidth: 1, strokeDasharray: '5 3' },
-    markerEnd: { type: MarkerType.ArrowClosed, color: STROKE, width: 10, height: 10 },
+    // No data.above/offset — heuristics in LoopbackEdge compute everything automatically.
   };
 }
 
-// Forward edges only — fed to dagre for layout. Loop-backs excluded so dagre
-// doesn't try to invert cycles and corrupt the LR rank assignment.
+// Forward edges only — fed to dagre. Loop-backs are excluded so dagre doesn't
+// invert cycles and corrupt LR rank assignment.
 const FORWARD_EDGES: Edge[] = [
-  forwardEdge('agent-rai',     'agent',  'rai'),
-  forwardEdge('rai-review',    'rai',    'review'),
-  forwardEdge('review-merge',  'review', 'merge'),
-  forwardEdge('merge-scribe',  'merge',  'scribe'),
+  forwardEdge('agent-rai',    'agent',  'rai'),
+  forwardEdge('rai-review',   'rai',    'review'),
+  forwardEdge('review-merge', 'review', 'merge'),
+  forwardEdge('merge-scribe', 'merge',  'scribe'),
 ];
 
-// Loop-back edges rendered by React Flow but excluded from dagre.
+// Loop-back edges — sides and heights computed automatically by LoopbackEdge.
 const LOOPBACK_EDGES: Edge[] = [
   loopbackEdge('rai-agent-revise',    'rai',    'agent', 'Revise'),
   loopbackEdge('review-agent-change', 'review', 'agent', 'Request changes'),
@@ -369,9 +547,10 @@ export function WorkflowRunPage() {
   const styles = usePageStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
 
-  const [agentName, setAgentName] = useState<string | undefined>(undefined);
-  const [runStatus, setRunStatus] = useState<string | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
+  const [agentName,   setAgentName]   = useState<string | undefined>(undefined);
+  const [runStatus,   setRunStatus]   = useState<string | undefined>(undefined);
+  const [reviewedBy,  setReviewedBy]  = useState<string | undefined>(undefined);
+  const [loading,     setLoading]     = useState(true);
 
   useEffect(() => {
     if (!projectId || !runId) return;
@@ -380,8 +559,9 @@ export function WorkflowRunPage() {
       .then((runs) => {
         if (cancelled) return;
         const run = runs.find((r) => r.run_id === runId);
-        setAgentName(run?.agent_name ?? undefined);
-        setRunStatus(run?.status ?? undefined);
+        setAgentName(run?.agent_name   ?? undefined);
+        setRunStatus(run?.status       ?? undefined);
+        setReviewedBy(run?.reviewed_by ?? undefined);
       })
       .catch(() => { /* non-fatal */ })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -395,16 +575,16 @@ export function WorkflowRunPage() {
     const map: Record<string, ExecutorState> = {};
     for (const evt of events) {
       if (evt.type !== 'workflow.step') continue;
-      const step = String(evt.payload['step'] ?? '');
+      const step     = String(evt.payload['step'] ?? '');
       const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
-      const evtAgent = evt.payload['agent_name'] != null ? String(evt.payload['agent_name']) : undefined;
+      const evtAgent  = evt.payload['agent_name'] != null ? String(evt.payload['agent_name']) : undefined;
       const prev = map[step];
       map[step] = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
     }
 
     // Fallback: stream done but no step events — infer from terminal run status.
     const hasStepEvents = Object.keys(map).length > 0;
-    const streamDone = streamStatus === 'done' || streamStatus === 'error';
+    const streamDone    = streamStatus === 'done' || streamStatus === 'error';
     if (!hasStepEvents && streamDone && runStatus) {
       const isTerminal = ['merged', 'declined', 'merge_failed', 'failed', 'completed'].includes(runStatus);
       if (isTerminal) {
@@ -433,31 +613,29 @@ export function WorkflowRunPage() {
     return map;
   }, [events, streamStatus, runStatus, agentName]);
 
-  // Build React Flow nodes from executor definitions + live states.
-  // Run dagre on the forward edges only to compute stable LR positions.
+  // Build React Flow nodes; run dagre on forward edges only for LR layout.
   const rfNodes: Node[] = useMemo(() => {
     const raw: Node[] = EXECUTORS.map((def) => ({
       id: def.key,
       type: 'workflow',
       data: {
         def,
-        state: executorStates[def.key] ?? { status: 'pending' },
-        agentName: def.key === 'agent'
-          ? (executorStates['agent']?.agentName ?? agentName)
-          : undefined,
-        runId: runId ?? '',
-        projectId: projectId ?? '',
+        state:      executorStates[def.key] ?? { status: 'pending' },
+        agentName:  def.key === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
+        runId:      runId      ?? '',
+        projectId:  projectId  ?? '',
+        reviewedBy: def.key === 'review' ? reviewedBy : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
-    return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 72, nodeSep: 32 });
-  }, [executorStates, agentName, runId, projectId]);
+    return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
+  }, [executorStates, agentName, reviewedBy, runId, projectId]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
   }
 
-  const shortId = runId.length > 8 ? runId.slice(0, 8) : runId;
+  const shortId      = runId.length > 8 ? runId.slice(0, 8) : runId;
   const isConnecting = streamStatus === 'connecting';
 
   return (
@@ -482,17 +660,24 @@ export function WorkflowRunPage() {
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
 
-      {/* React Flow diagram */}
+      {/* React Flow diagram
+          - fitView only fits to nodes (loop-back SVG arcs don't affect bounds)
+          - elementsSelectable omitted (default true) so pointer events flow to buttons
+          - nodesDraggable=false / nodesConnectable=false for read-only mode
+      */}
       <div className={styles.dagContainer}>
         <ReactFlow
           nodes={rfNodes}
           edges={ALL_EDGES}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
-          fitViewOptions={{ padding: 0.25 }}
+          fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }}
+          minZoom={0.5}
           nodesDraggable={false}
           nodesConnectable={false}
-          elementsSelectable={false}
+          nodesFocusable={false}
+          edgesFocusable={false}
           panOnScroll={false}
           zoomOnScroll={false}
           zoomOnPinch={false}
