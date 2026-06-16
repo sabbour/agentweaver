@@ -22,6 +22,26 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         "You only manage memory: merge, archive, and export. " +
         "Act systematically. Complete every step. Never skip the export.";
 
+    /// <summary>
+    /// Appended to every Scribe charter (including imported repos whose charter predates this
+    /// feature) so Scribe always knows which native tools are available for the memory pass.
+    /// </summary>
+    private const string MemoryToolsRuntimeNote =
+        """
+
+        ## Runtime Memory Tools
+
+        The following native tools are available for the post-run memory pass:
+        - list_inbox(forAgent?) — list pending inbox entries (returns JSON)
+        - merge_inbox_entry(entryId) — merge a learning/pattern/update entry by its numeric id
+        - update_session(summary) — record a one-sentence summary of what the agent accomplished
+        - export_memory() — write the updated state to .squad/ and .agentweaver/context/
+
+        Only merge entries of type: learning, pattern, update.
+        Leave architectural and scope entries for coordinator review.
+        """;
+
+
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _sandboxExecutor;
@@ -105,7 +125,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 Be systematic and concise. Do not write code or read project files.
                 """;
 
-            var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "scribe") ?? FallbackCharter;
+            var charter = (BuiltInCharterResolver.Resolve(input.RepositoryPath, "scribe") ?? FallbackCharter)
+                          + MemoryToolsRuntimeNote;
 
             agent = new ScribeAIAgent(
                 _copilotClientFactory,
