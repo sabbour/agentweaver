@@ -18,7 +18,6 @@ namespace Scaffolder.Api.Runs;
 /// </summary>
 public sealed class RunWorkflowFactory
 {
-    private readonly IAgentRunner _agentRunner;
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _sandboxExecutor;
@@ -49,7 +48,7 @@ public sealed class RunWorkflowFactory
         ILoggerFactory loggerFactory,
         IConfiguration configuration)
     {
-        _agentRunner = agentRunner;
+        _ = agentRunner; // retained for DI/test compatibility; Scribe now uses ScribeAIAgent
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
@@ -179,13 +178,23 @@ public sealed class RunWorkflowFactory
             });
 
         // Two separate ScribeTurnExecutor instances to avoid single-node-multiple-inputs
-        // ambiguity in MAF's graph builder.
+        // ambiguity in MAF's graph builder. Each creates its own ephemeral ScribeAIAgent.
         var scribeMergeExec = new ScribeTurnExecutor(
-            _agentRunner, _loggerFactory.CreateLogger<ScribeTurnExecutor>(), "scribe-turn-merge");
+            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _approvalStore, _toolApprovalGate, _loggerFactory, "scribe-turn-merge");
         var scribeNoChangesExec = new ScribeTurnExecutor(
-            _agentRunner, _loggerFactory.CreateLogger<ScribeTurnExecutor>(), "scribe-turn-no-changes");
+            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _approvalStore, _toolApprovalGate, _loggerFactory, "scribe-turn-no-changes");
         ExecutorBinding scribeBindingMerge = scribeMergeExec;
         ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
+
+        // Rai RAI gate: runs after the agent turn, before the content-safety/no-op/review
+        // fork. A RED verdict flips ContentSafetyFlagged so the workflow routes to the
+        // safety terminal. Ephemeral RaiAIAgent per execution.
+        var raiTurnExec = new RaiTurnExecutor(
+            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _approvalStore, _toolApprovalGate, _loggerFactory, "rai-turn");
+        ExecutorBinding raiBinding = raiTurnExec;
 
         // Scribe input adapters: read stored AgentTurnInput, build ScribeTurnInput.
         ExecutorBinding scribeInputMerge = new FunctionExecutor<MergeOutput, ScribeTurnInput>(
@@ -241,17 +250,19 @@ public sealed class RunWorkflowFactory
         var wf = new WorkflowBuilder(agentInputStorer)
             // storer -> agent turn (unconditional)
             .AddEdge(agentInputStorer, agentBinding)
-            // Content safety flagged -> immediate failure (highest priority, Guardrail 6)
-            .AddEdge<AgentTurnOutput>(agentBinding, terminalSafetyFailed,
+            // agent turn -> Rai RAI gate (unconditional: AgentTurnOutput flows in)
+            .AddEdge(agentBinding, raiBinding)
+            // Content safety flagged (incl. Rai RED) -> immediate failure (highest priority, Guardrail 6)
+            .AddEdge<AgentTurnOutput>(raiBinding, terminalSafetyFailed,
                 output => output is not null && output.ContentSafetyFlagged)
             // No changes -> no-op -> scribe path
-            .AddEdge<AgentTurnOutput>(agentBinding, terminalNoOp,
+            .AddEdge<AgentTurnOutput>(raiBinding, terminalNoOp,
                 output => output is not null && !output.ContentSafetyFlagged && string.IsNullOrEmpty(output.Diff))
             .AddEdge(terminalNoOp, scribeInputNoChanges)
             .AddEdge(scribeInputNoChanges, scribeBindingNoChanges)
             .AddEdge(scribeBindingNoChanges, scribeOutputNoChanges)
             // Has changes -> review adapter (stores merge data, maps to WorkflowReviewRequest)
-            .AddEdge<AgentTurnOutput>(agentBinding, reviewAdapter,
+            .AddEdge<AgentTurnOutput>(raiBinding, reviewAdapter,
                 output => output is not null && !output.ContentSafetyFlagged && !string.IsNullOrEmpty(output.Diff))
             // Review adapter -> review gate (unconditional: WorkflowReviewRequest flows in)
             .AddEdge(reviewAdapter, reviewBinding)

@@ -72,3 +72,14 @@ public sealed record ScribeTurnInput(
     string? TerminalStatus = null,
     string? MergeResult = null,
     string? MergeMode = null);
+
+/// <summary>Input to the Rai RAI-review agent turn.</summary>
+public sealed record RaiTurnInput(
+    string RunId,
+    string ProjectId,
+    string AgentName,
+    DateTimeOffset RunStartedAt,
+    string RepositoryPath,
+    string ModelSource,
+    string? ModelId,
+    string? Diff);

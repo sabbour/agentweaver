@@ -1,6 +1,8 @@
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
+using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
 
 namespace Scaffolder.AgentRuntime.Workflow;
 
@@ -8,21 +10,45 @@ namespace Scaffolder.AgentRuntime.Workflow;
 /// Runs Scribe as a real agent turn after a project run completes.
 /// Scribe receives a structured task and uses memory API tools to review
 /// the inbox, merge learnings, and export to .squad/.
+/// Its charter is read dynamically from <c>.squad/agents/scribe/charter.md</c>.
 /// Best-effort: exceptions never abort the workflow.
 /// </summary>
 public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInput>
 {
-    private readonly IAgentRunner _agentRunner;
+    private const string FallbackCharter =
+        "You are Scribe — the silent memory keeper for this agent team. " +
+        "You do not write code or make design decisions. " +
+        "You only manage memory: merge, archive, and export. " +
+        "Act systematically. Complete every step. Never skip the export.";
+
+    private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly IGitHubTokenScopeProvider _scopeProvider;
+    private readonly ISandboxExecutor _sandboxExecutor;
+    private readonly ISandboxPolicyStore _sandboxPolicyStore;
+    private readonly IShellApprovalStore _approvalStore;
+    private readonly IToolApprovalGate _toolApprovalGate;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ScribeTurnExecutor> _logger;
 
     public ScribeTurnExecutor(
-        IAgentRunner agentRunner,
-        ILogger<ScribeTurnExecutor> logger,
+        GitHubCopilotClientFactory copilotClientFactory,
+        IGitHubTokenScopeProvider scopeProvider,
+        ISandboxExecutor sandboxExecutor,
+        ISandboxPolicyStore sandboxPolicyStore,
+        IShellApprovalStore approvalStore,
+        IToolApprovalGate toolApprovalGate,
+        ILoggerFactory loggerFactory,
         string name = "scribe-turn")
         : base(name)
     {
-        _agentRunner = agentRunner;
-        _logger = logger;
+        _copilotClientFactory = copilotClientFactory;
+        _scopeProvider = scopeProvider;
+        _sandboxExecutor = sandboxExecutor;
+        _sandboxPolicyStore = sandboxPolicyStore;
+        _approvalStore = approvalStore;
+        _toolApprovalGate = toolApprovalGate;
+        _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<ScribeTurnExecutor>();
     }
 
     public override async ValueTask<ScribeTurnInput> HandleAsync(
@@ -34,6 +60,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
             return input;
         }
 
+        ScribeAIAgent? agent = null;
         try
         {
             var task = $$"""
@@ -56,28 +83,38 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 Complete this post-run Scribe pass now. Be systematic and concise.
                 """;
 
-            var charter = """
-                You are Scribe — the silent memory keeper for this agent team.
-                You do not write code or make design decisions.
-                You only manage memory: merge, archive, and export.
-                Act systematically. Complete every step. Never skip the export.
-                """;
+            var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "scribe") ?? FallbackCharter;
 
-            await _agentRunner.ExecuteAsync(
-                task,
+            agent = new ScribeAIAgent(
+                _copilotClientFactory,
+                _scopeProvider,
+                _sandboxExecutor,
+                _sandboxPolicyStore,
+                _approvalStore,
+                _toolApprovalGate,
+                _loggerFactory.CreateLogger<CopilotAIAgent>());
+
+            await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
                 repositoryPath: input.RepositoryPath,
-                ModelSourceExtensions.FromApiString(input.ModelSource),
                 runId: input.RunId + "-scribe",
                 modelId: input.ModelId,
-                stream: null,
-                ct,
-                systemPromptContext: charter).ConfigureAwait(false);
+                systemPromptContext: charter,
+                streamWriter: null,
+                ct).ConfigureAwait(false);
+
+            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
+            await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
                 "Scribe agent turn failed for run {RunId} — workflow proceeds normally", input.RunId);
+        }
+        finally
+        {
+            if (agent is not null)
+                await agent.DisposeAsync().ConfigureAwait(false);
         }
 
         return input;

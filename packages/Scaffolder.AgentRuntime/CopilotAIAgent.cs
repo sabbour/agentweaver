@@ -36,7 +36,7 @@ namespace Scaffolder.AgentRuntime;
 /// disposes them via <see cref="DisposeAsync"/>.
 /// </para>
 /// </summary>
-public sealed class CopilotAIAgent : AIAgent, IAsyncDisposable
+public class CopilotAIAgent : AIAgent, IAsyncDisposable
 {
     /// <summary>
     /// System prompt appended as a system message via AsAIAgent(instructions:...).
@@ -74,14 +74,14 @@ public sealed class CopilotAIAgent : AIAgent, IAsyncDisposable
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
-    private readonly ILogger<CopilotAIAgent> _logger;
+    protected readonly ILogger<CopilotAIAgent> _logger;
 
     // --- Per-run config — set by the workflow executor before CreateSessionAsync ---
-    private string _workingDirectory = "";
-    private string _repositoryPath = "";
-    private string _runId = "";
-    private string? _modelId;
-    private string? _systemPromptContext;
+    protected string _workingDirectory = "";
+    protected string _repositoryPath = "";
+    protected string _runId = "";
+    protected string? _modelId;
+    protected string? _systemPromptContext;
 
     /// <summary>The run-event channel writer for the current run (null when no stream attached).</summary>
     public ChannelWriter<RunEvent>? StreamWriter { get; private set; }
