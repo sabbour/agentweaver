@@ -333,15 +333,41 @@ export function ProjectPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
+
+    const TERMINAL = ['completed', 'merged', 'failed', 'merge_failed', 'declined'];
+
+    const fetchRuns = async () => {
+      try {
+        const runList = await apiClient.listProjectRuns(projectId);
+        if (!cancelled) setRuns([...runList].reverse());
+        return runList;
+      } catch {
+        return null;
+      }
+    };
+
     Promise.all([
       apiClient.getProject(projectId),
-      apiClient.listProjectRuns(projectId),
+      fetchRuns(),
     ])
       .then(([proj, runList]) => {
         if (!cancelled) {
           setProject(proj);
-          setRuns([...runList].reverse());
         }
+        // Kick off polling while any run is non-terminal
+        if (!runList) return;
+        const hasLive = runList.some(r => !TERMINAL.includes(r.status));
+        if (!hasLive) return;
+        const iv = setInterval(() => {
+          if (cancelled) { clearInterval(iv); return; }
+          void fetchRuns().then(latest => {
+            if (latest && latest.every(r => TERMINAL.includes(r.status))) {
+              clearInterval(iv);
+            }
+          });
+        }, 5000);
+        // Store interval id via closure — cleaned up when cancelled
+        return () => clearInterval(iv);
       })
       .catch((err) => {
         if (!cancelled) setError(
@@ -351,6 +377,7 @@ export function ProjectPage() {
         );
       })
       .finally(() => { if (!cancelled) setLoading(false); });
+
     return () => { cancelled = true; };
   }, [projectId]);
 

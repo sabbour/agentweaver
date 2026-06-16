@@ -726,14 +726,29 @@ app.MapPost("/api/runs/{id}/review", async (
         request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
         id, run.SubmittingUser, caller.User);
 
-    // Emit merge.started before handing the approval to the workflow so the SSE stream
-    // bridges the gap between the approve and the eventual merge.completed/merge.failed.
-    if (request.Approved)
+    // Emit review-outcome and merge.started events immediately so the SSE clients update
+    // without waiting for the workflow to complete the merge or loop back.
+    var liveEntry = streamStore.Get(id);
+    if (liveEntry is not null)
     {
-        var liveEntry = streamStore.Get(id);
-        if (liveEntry is not null)
+        var reviewTs = DateTimeOffset.UtcNow.ToString("O");
+        if (request.Approved)
         {
+            // Review card flips to completed right away; merge.started bridges the gap until merge.completed.
+            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs });
             liveEntry.RecordNext(EventTypes.MergeStarted, new { tree_hash = run.TreeHash });
+        }
+        else if (request.RequestChanges)
+        {
+            // Review card flips to completed; revision.started signals the loop-back.
+            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs });
+            liveEntry.RecordNext(EventTypes.ReviewChangesRequested, new { });
+            liveEntry.RecordNext(EventTypes.RevisionStarted, new { });
+        }
+        else
+        {
+            // Declined
+            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs });
         }
     }
 

@@ -53,6 +53,9 @@ import { RunWatcher } from '../components/RunWatcher';
 // without needing to pass callbacks through React Flow node data.
 const ExecutionModalContext = createContext<((executionId: string) => void) | undefined>(undefined);
 
+// Context to highlight the loopback arc that caused the current active retrigger.
+const ActiveEdgeContext = createContext<string | undefined>(undefined);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -242,6 +245,7 @@ const useNodeStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    '& button': { width: '100%' },
   },
   reviewerRow: {
     display: 'flex',
@@ -437,7 +441,7 @@ function WorkflowNode({ data }: NodeProps) {
       )}
       {key === 'scribe' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          {(status === 'started' || status === 'completed' || status === 'failed') && (
+          {(status === 'started' || status === 'completed' || status === 'failed') && startedAt !== undefined && (
             <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-scribe`)}>
               View execution
             </Button>
@@ -490,8 +494,9 @@ const nodeTypes = { workflow: WorkflowNode };
 // 3. STAGGER — Each same-side sibling adds STAGGER px so rails don't overlap.
 // ---------------------------------------------------------------------------
 
-const LOOPBACK_STROKE      = 'var(--colorNeutralStroke1)';
-const LOOPBACK_TEXT_COLOR  = 'var(--colorNeutralForeground2)';
+const LOOPBACK_STROKE        = 'var(--colorNeutralStroke1)';
+const LOOPBACK_STROKE_ACTIVE = 'var(--colorBrandForeground1)';
+const LOOPBACK_TEXT_COLOR    = 'var(--colorNeutralForeground2)';
 const ARC_GAP    = 40; // clearance above/below the tallest card in the arc span
 const STAGGER    = 36; // extra rail separation per same-side sibling
 const CORNER_R   = 10; // radius for corner rounding
@@ -525,6 +530,7 @@ function loopbackPath(sx: number, sy: number, tx: number, ty: number, apexY: num
 function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
   const allEdges = useEdges();
   const allNodes = useNodes();
+  const activeEdgeId = useContext(ActiveEdgeContext);
 
   const myEdge   = allEdges.find(e => e.id === id);
   const sourceId = myEdge?.source ?? '';
@@ -593,6 +599,8 @@ function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: E
   const midX    = (sx + tx) / 2;
   const labelY  = above ? apexY - 6 : apexY + 14;
   const markerId = `lb-arrow-${id}`;
+  const isActive = id === activeEdgeId;
+  const stroke   = isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_STROKE;
 
   return (
     <>
@@ -605,15 +613,15 @@ function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: E
           refY="3"
           orient="auto"
         >
-          <path d="M 0 0 L 6 3 L 0 6 Z" fill={LOOPBACK_STROKE} />
+          <path d="M 0 0 L 6 3 L 0 6 Z" fill={stroke} />
         </marker>
       </defs>
       <path
         d={d}
         fill="none"
-        stroke={LOOPBACK_STROKE}
-        strokeWidth={1.5}
-        strokeDasharray="5 3"
+        stroke={stroke}
+        strokeWidth={isActive ? 2 : 1.5}
+        strokeDasharray={isActive ? undefined : "5 3"}
         markerEnd={`url(#${markerId})`}
       />
       {label != null && (
@@ -622,7 +630,7 @@ function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: E
           y={labelY}
           textAnchor="middle"
           fontSize={12}
-          fill={LOOPBACK_TEXT_COLOR}
+          fill={isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_TEXT_COLOR}
           fontWeight={600}
           style={{ userSelect: 'none', pointerEvents: 'none' }}
         >
@@ -755,15 +763,15 @@ export function WorkflowRunPage() {
         // Belt-and-suspenders: backend now emits workflow.step for review, but handle the
         // semantic event too so older in-flight runs update correctly.
         if (!map['review'] || map['review'].status === 'started') {
-          map['review'] = { ...map['review'], status: 'completed' };
+          map['review'] = { ...map['review'], status: 'completed', completedAt: Date.now() };
         }
       } else if (evt.type === 'review.approved') {
         if (!map['review'] || map['review'].status === 'started') {
-          map['review'] = { ...map['review'], status: 'completed' };
+          map['review'] = { ...map['review'], status: 'completed', completedAt: Date.now() };
         }
       } else if (evt.type === 'review.declined') {
         if (!map['review'] || map['review'].status === 'started') {
-          map['review'] = { ...map['review'], status: 'completed' };
+          map['review'] = { ...map['review'], status: 'completed', completedAt: Date.now() };
         }
         if (!map['merge']) {
           map['merge'] = { status: 'skipped' };
@@ -824,6 +832,21 @@ export function WorkflowRunPage() {
     return map;
   }, [events, streamStatus, runStatus, agentName]);
 
+  // Determine which loopback arc is "active" (lit in blue) based on executor states.
+  // rai→agent: active when Rai requested a revision and agent is now running again.
+  // review→agent: active when review completed via request-changes and agent is running.
+  const activeLoopbackId = useMemo<string | undefined>(() => {
+    const raiStatus    = executorStates['rai']?.status;
+    const agentStatus  = executorStates['agent']?.status;
+    const mergeStatus  = executorStates['merge']?.status;
+    if (raiStatus === 'revise' && agentStatus === 'started') return 'rai-agent-revise';
+    // review→agent: review completed but no merge started → must be a request-changes loop
+    if (agentStatus === 'started' && !mergeStatus && executorStates['review']?.status === 'completed') {
+      return 'review-agent-change';
+    }
+    return undefined;
+  }, [executorStates]);
+
   // Build React Flow nodes; run dagre on forward edges only for LR layout.
   const rfNodes: Node[] = useMemo(() => {
     const raw: Node[] = EXECUTORS.map((def) => ({
@@ -870,8 +893,9 @@ export function WorkflowRunPage() {
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
 
-      {/* React Flow diagram wrapped in ExecutionModalContext so WorkflowNode can open the modal */}
+      {/* React Flow diagram wrapped in contexts so WorkflowNode can open the modal and arc highlighting works */}
       <ExecutionModalContext.Provider value={openExecutionModal}>
+      <ActiveEdgeContext.Provider value={activeLoopbackId}>
         <div className={styles.dagContainer}>
           <ReactFlow
             nodes={rfNodes}
@@ -893,6 +917,7 @@ export function WorkflowRunPage() {
             proOptions={{ hideAttribution: true }}
           />
         </div>
+      </ActiveEdgeContext.Provider>
       </ExecutionModalContext.Provider>
 
       {/* Execution detail modal */}
