@@ -334,20 +334,18 @@ app.MapDelete("/api/runs/{id}", async (
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     var terminalStatuses = new[] { RunStatus.Merged, RunStatus.Declined, RunStatus.MergeFailed, RunStatus.Failed, RunStatus.Completed };
-    var isAwaitingReview = run.Status == RunStatus.AwaitingReview;
-    if (!terminalStatuses.Contains(run.Status) && !isAwaitingReview)
-        return Results.Conflict(new { error = "Cannot delete an in-progress run." });
+    var isNonTerminal = !terminalStatuses.Contains(run.Status);
 
-    // For AwaitingReview runs: abandon the live workflow and clean up the worktree first.
-    if (isAwaitingReview)
+    // For any non-terminal run: cancel the workflow, clean up worktree, force to Failed.
+    if (isNonTerminal)
     {
         registry.Abandon(id);
         if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
         {
-            try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch!); }
+            try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch ?? string.Empty); }
             catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for deleted run {RunId}", id); }
         }
-        await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Declined, DateTimeOffset.UtcNow, "force_deleted", ct);
+        await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned", ct);
         streamStore.Complete(id);
     }
 

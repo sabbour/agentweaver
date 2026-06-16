@@ -227,8 +227,8 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isAwaitingReview = run.status === 'awaiting_review';
   const isTerminal = ['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status);
+  const isAbandonable = !isTerminal;
 
   const handleConfirmed = async () => {
     setConfirmOpen(false);
@@ -258,7 +258,7 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
       <Link to={`/projects/${projectId}/runs/${run.run_id}/workflow`} style={{ textDecoration: 'none' }}>
         <Button appearance="secondary">Workflow</Button>
       </Link>
-      {isAwaitingReview && (
+      {isAbandonable && (
         <>
           <Button appearance="subtle" icon={<DismissCircleRegular />} disabled={acting} onClick={() => setConfirmOpen(true)} aria-label="Abandon run">
             Abandon
