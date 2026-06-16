@@ -133,6 +133,9 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
       setEvents([]);
     }
 
+    // Don't attempt to connect if runId is not yet resolved.
+    if (!runId) return;
+
     setStatus('connecting'); // eslint-disable-line react-hooks/set-state-in-effect
     setError(null);
 

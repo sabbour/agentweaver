@@ -2376,8 +2376,8 @@ app.MapGet("/api/projects/{id}/team/members/{name}/history", async (
     try
     {
         var content = await castingService.GetHistoryAsync(id, name, ct);
-        if (content is null) return Results.NotFound();
-        return Results.Ok(new HistoryDto { MemberName = name, Content = content });
+        // Return empty content when history hasn't been written yet (no 404 — the member exists)
+        return Results.Ok(new HistoryDto { MemberName = name, Content = content ?? "" });
     }
     catch (ProjectNotFoundException)
     {
