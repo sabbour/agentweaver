@@ -1065,6 +1065,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     }
 
     // f. Emit audit events on the stream.
+    streamEntry?.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review" });
     streamEntry?.RecordNext(EventTypes.ReviewChangesRequested, new { revision = revisionNumber });
     streamEntry?.RecordNext(EventTypes.RevisionStarted, new { revision = revisionNumber });
 

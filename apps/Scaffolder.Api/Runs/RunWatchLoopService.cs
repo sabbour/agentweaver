@@ -171,6 +171,7 @@ public sealed class RunWatchLoopService
                 await _runStore.TrySetTerminalStatusAsync(
                     parsedRunId, RunStatus.Merged, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
+                entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review" });
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
                 entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
 
@@ -195,6 +196,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review" });
             entry.RecordNext(EventTypes.ReviewApproved, new { });
             entry.RecordNext(EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult });
 
@@ -225,6 +227,8 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None).ConfigureAwait(false);
 
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review" });
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "merge", status = "skipped", label = "Merge" });
             entry.RecordNext(EventTypes.ReviewDeclined, new { });
 
             _streamStore.Complete(runId);

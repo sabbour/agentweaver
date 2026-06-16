@@ -18,6 +18,7 @@ import {
   MergeRegular,
   NotebookRegular,
   PersonRegular,
+  PersonClockRegular,
   ShieldRegular,
   SubtractCircleRegular,
 } from '@fluentui/react-icons';
@@ -146,8 +147,8 @@ const useNodeStyles = makeStyles({
     backgroundColor: tokens.colorBrandBackground2,
   },
   cardActionRequired: {
-    border: `2px solid ${tokens.colorBrandForeground1}`,
-    backgroundColor: tokens.colorBrandBackground2,
+    border: `2px solid ${tokens.colorPaletteMarigoldBorderActive}`,
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
   },
   cardHeader: {
     display: 'flex',
@@ -164,11 +165,12 @@ const useNodeStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     whiteSpace: 'nowrap',
   },
-  badgePending:   { backgroundColor: tokens.colorNeutralBackground4,        color: tokens.colorNeutralForeground3  },
-  badgeStarted:   { backgroundColor: tokens.colorBrandBackground2,           color: tokens.colorBrandForeground1    },
-  badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2,    color: tokens.colorPaletteGreenForeground1 },
-  badgeSkipped:   { backgroundColor: tokens.colorNeutralBackground3,         color: tokens.colorNeutralForeground4  },
-  badgeFailed:    { backgroundColor: tokens.colorPaletteRedBackground2,      color: tokens.colorPaletteRedForeground1 },
+  badgePending:   { backgroundColor: tokens.colorNeutralBackground4,              color: tokens.colorNeutralForeground3  },
+  badgeStarted:   { backgroundColor: tokens.colorBrandBackground2,                color: tokens.colorBrandForeground1    },
+  badgeAwaiting:  { backgroundColor: tokens.colorPaletteMarigoldBackground2,      color: tokens.colorPaletteMarigoldForeground1 },
+  badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2,         color: tokens.colorPaletteGreenForeground1 },
+  badgeSkipped:   { backgroundColor: tokens.colorNeutralBackground3,              color: tokens.colorNeutralForeground4  },
+  badgeFailed:    { backgroundColor: tokens.colorPaletteRedBackground2,           color: tokens.colorPaletteRedForeground1 },
   cardMain: {
     display: 'flex',
     alignItems: 'center',
@@ -229,8 +231,16 @@ function statusLabel(s: StepStatus) {
   return s;
 }
 
-function StatusBadge({ status }: { status: StepStatus }) {
+function StatusBadge({ status, isAwaiting }: { status: StepStatus; isAwaiting?: boolean }) {
   const s = useNodeStyles();
+  if (isAwaiting) {
+    return (
+      <span className={`${s.statusBadge} ${s.badgeAwaiting}`}>
+        <PersonClockRegular fontSize={10} aria-hidden="true" />
+        Awaiting
+      </span>
+    );
+  }
   const badgeClass = {
     pending:   s.badgePending,
     started:   s.badgeStarted,
@@ -298,11 +308,11 @@ function WorkflowNode({ data }: NodeProps) {
   const { status } = state;
 
   const isActive         = status === 'started' && key !== 'review';
-  const isActionRequired = key === 'review' && status === 'started';
+  const isHumanWaiting   = key === 'review' && status === 'started';
   const cardClass = [
     s.card,
-    isActive         ? s.cardActive         : '',
-    isActionRequired ? s.cardActionRequired : '',
+    isActive        ? s.cardActive         : '',
+    isHumanWaiting  ? s.cardActionRequired : '',
   ].filter(Boolean).join(' ');
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
@@ -318,7 +328,7 @@ function WorkflowNode({ data }: NodeProps) {
 
       {/* Status badge */}
       <div className={s.cardHeader}>
-        <StatusBadge status={status} />
+        <StatusBadge status={status} isAwaiting={isHumanWaiting} />
       </div>
 
       {/* Icon + title */}
@@ -344,7 +354,7 @@ function WorkflowNode({ data }: NodeProps) {
       )}
       {key === 'rai' && (status === 'started' || status === 'completed' || status === 'failed') && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${executionId}-rai`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}-rai`} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
@@ -352,7 +362,7 @@ function WorkflowNode({ data }: NodeProps) {
       {key === 'scribe' && (
         <div className={`${s.cardActions} nopan nodrag`}>
           {(status === 'started' || status === 'completed' || status === 'failed') && (
-            <Link to={`/watch/${executionId}-scribe`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+            <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}-scribe`} style={{ textDecoration: 'none' }}>
               <Button appearance="outline" size="small">View execution</Button>
             </Link>
           )}
@@ -363,7 +373,7 @@ function WorkflowNode({ data }: NodeProps) {
       )}
       {key === 'review' && status === 'started' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${executionId}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}`} style={{ textDecoration: 'none' }}>
             <Button appearance="primary" size="medium">Review now</Button>
           </Link>
         </div>
@@ -641,21 +651,54 @@ export function WorkflowRunPage() {
 
   const { events, status: streamStatus } = useRunStream(executionId ?? '', API_KEY, API_URL);
 
-  // Derive executor states from SSE workflow.step events.
+  // Derive executor states from SSE workflow.step events plus semantic review/merge events.
   const executorStates = useMemo<Record<string, ExecutorState>>(() => {
     const map: Record<string, ExecutorState> = {};
     for (const evt of events) {
-      if (evt.type !== 'workflow.step') continue;
-      const step     = String(evt.payload['step'] ?? '');
-      const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
-      const evtAgent  = evt.payload['agent_name'] != null ? String(evt.payload['agent_name']) : undefined;
-      const prev = map[step];
-      map[step] = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
+      if (evt.type === 'workflow.step') {
+        const step      = String(evt.payload['step'] ?? '');
+        const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
+        const evtAgent  = evt.payload['agent_name'] != null ? String(evt.payload['agent_name']) : undefined;
+        const prev = map[step];
+        map[step] = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
+      } else if (evt.type === 'review.changes_requested') {
+        // Belt-and-suspenders: backend now emits workflow.step for review, but handle the
+        // semantic event too so older in-flight runs update correctly.
+        if (!map['review'] || map['review'].status === 'started') {
+          map['review'] = { ...map['review'], status: 'completed' };
+        }
+      } else if (evt.type === 'review.approved') {
+        if (!map['review'] || map['review'].status === 'started') {
+          map['review'] = { ...map['review'], status: 'completed' };
+        }
+      } else if (evt.type === 'review.declined') {
+        if (!map['review'] || map['review'].status === 'started') {
+          map['review'] = { ...map['review'], status: 'completed' };
+        }
+        if (!map['merge']) {
+          map['merge'] = { status: 'skipped' };
+        }
+      } else if (evt.type === 'merge.completed') {
+        if (!map['merge'] || map['merge'].status === 'started') {
+          map['merge'] = { ...map['merge'], status: 'completed' };
+        }
+      } else if (evt.type === 'merge.failed') {
+        if (!map['merge'] || map['merge'].status === 'started') {
+          map['merge'] = { ...map['merge'], status: 'failed' };
+        }
+      }
+    }
+
+    // Optimistic: if merge completed and stream is done, show Scribe as completed.
+    // Scribe events go to a sub-stream ({runId}-scribe) that this page doesn't subscribe to,
+    // so we infer completion from the merge outcome.
+    const streamDone = streamStatus === 'done' || streamStatus === 'error';
+    if (streamDone && map['merge']?.status === 'completed' && !map['scribe']) {
+      map['scribe'] = { status: 'completed' };
     }
 
     // Fallback: stream done but no step events — infer from terminal run status.
     const hasStepEvents = Object.keys(map).length > 0;
-    const streamDone    = streamStatus === 'done' || streamStatus === 'error';
     if (!hasStepEvents && streamDone && runStatus) {
       const isTerminal = ['merged', 'declined', 'merge_failed', 'failed', 'completed'].includes(runStatus);
       if (isTerminal) {

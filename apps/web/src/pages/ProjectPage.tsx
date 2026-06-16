@@ -254,7 +254,7 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
       </Badge>
       <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
-      <Link to={`/projects/${projectId}/runs/${run.workflow_run_id}/workflow`} style={{ textDecoration: 'none' }}>
+      <Link to={`/projects/${projectId}/runs/${run.workflow_run_id ?? run.execution_id}/workflow`} style={{ textDecoration: 'none' }}>
         <Button appearance="secondary">Workflow</Button>
       </Link>
       {isAbandonable && (
