@@ -236,7 +236,7 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
     }
   };
 
-  const isTerminal = ['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status);
+  const isDeletable = ['completed', 'merged', 'failed', 'merge_failed', 'declined', 'awaiting_review'].includes(run.status);
 
   return (
     <div className={styles.runRow}>
@@ -253,7 +253,7 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
       <Link to={`/projects/${projectId}/runs/${run.run_id}/workflow`} style={{ textDecoration: 'none' }}>
         <Button appearance="secondary">Workflow</Button>
       </Link>
-      {isTerminal && (
+      {isDeletable && (
         <Button
           appearance="subtle"
           icon={<DeleteRegular />}
