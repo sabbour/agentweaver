@@ -10,7 +10,6 @@ import {
 } from '@fluentui/react-components';
 import type { FluentIcon } from '@fluentui/react-icons';
 import {
-  ArrowLeftRegular,
   ArrowSyncRegular,
   BotRegular,
   CheckmarkCircleRegular,
@@ -126,36 +125,29 @@ const useStyles = makeStyles({
     height: '1px',
     backgroundColor: tokens.colorNeutralStroke2,
   },
-  // Feedback connector: wraps the forward connector + a return path row below it
-  feedbackConnectorWrap: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '3px',
+  // SVG-based return connector (always visible — structural feedback arc)
+  returnConnectorSvg: {
     flexShrink: 0,
-    width: '72px',
+    overflow: 'visible',
   },
-  returnPath: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '3px',
-    paddingLeft: '2px',
+  connectorSvgDot: {
+    stroke: tokens.colorNeutralStroke2,
+    fill: 'none',
+    strokeWidth: '1',
   },
-  returnArrow: {
-    display: 'flex',
-    color: tokens.colorPaletteYellowForeground1,
-    flexShrink: 0,
+  connectorSvgLine: {
+    stroke: tokens.colorNeutralStroke2,
+    strokeWidth: '1',
   },
-  returnLine: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: tokens.colorPaletteYellowBorder1,
-    borderTop: `1px dashed ${tokens.colorPaletteYellowBorder1}`,
+  returnSvgLine: {
+    stroke: tokens.colorPaletteYellowForeground1,
+    strokeWidth: '1',
+    strokeDasharray: '3 2',
   },
-  returnLabel: {
-    fontSize: tokens.fontSizeBase100,
-    color: tokens.colorPaletteYellowForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-    whiteSpace: 'nowrap',
+  returnSvgArrow: {
+    stroke: tokens.colorPaletteYellowForeground1,
+    fill: 'none',
+    strokeWidth: '1',
   },
   // Executor card
   executorCard: {
@@ -257,21 +249,6 @@ function statusLabel(s: StepStatus): string {
   return s;
 }
 
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-function PipeConnector() {
-  const styles = useStyles();
-  return (
-    <div className={styles.connector} aria-hidden="true">
-      <div className={styles.connectorDot} />
-      <div className={styles.connectorLine} />
-      <div className={styles.connectorDot} />
-    </div>
-  );
-}
-
 function StatusBadge({ status }: { status: StepStatus }) {
   const styles = useStyles();
   const badgeClass = {
@@ -358,26 +335,45 @@ function ExecutorCard({ def, state, agentName, runId, projectId }: ExecutorCardP
 }
 
 // ---------------------------------------------------------------------------
-// Feedback Connector — on the arrow connecting Rai/Review back to Agent
+// Connectors
 // ---------------------------------------------------------------------------
 
-function FeedbackConnector({ label }: { label: string }) {
+function PipeConnector() {
   const styles = useStyles();
   return (
-    <div className={styles.feedbackConnectorWrap} aria-label={`Feedback: ${label}`}>
-      {/* Forward path */}
-      <div className={styles.connector} aria-hidden="true">
-        <div className={styles.connectorDot} />
-        <div className={styles.connectorLine} />
-        <div className={styles.connectorDot} />
-      </div>
-      {/* Return path — arrow left + dashed line + label */}
-      <div className={styles.returnPath} aria-hidden="true">
-        <span className={styles.returnArrow}><ArrowLeftRegular fontSize={10} /></span>
-        <div className={styles.returnLine} />
-        <span className={styles.returnLabel}>{label}</span>
-      </div>
+    <div className={styles.connector} aria-hidden="true">
+      <div className={styles.connectorDot} />
+      <div className={styles.connectorLine} />
+      <div className={styles.connectorDot} />
     </div>
+  );
+}
+
+/**
+ * ReturnConnector — always-visible angled feedback arc.
+ * Shows the standard forward path (○────○) plus a dashed diagonal arrow
+ * angling back left toward Agent, indicating this step can loop back.
+ */
+function ReturnConnector() {
+  const styles = useStyles();
+  return (
+    <svg
+      width="72"
+      height="48"
+      viewBox="0 0 72 48"
+      fill="none"
+      aria-hidden="true"
+      className={styles.returnConnectorSvg}
+    >
+      {/* Forward path */}
+      <circle cx="6" cy="18" r="3" className={styles.connectorSvgDot} />
+      <line x1="9" y1="18" x2="63" y2="18" className={styles.connectorSvgLine} />
+      <circle cx="66" cy="18" r="3" className={styles.connectorSvgDot} />
+      {/* Angled return — dashed diagonal from right back toward Agent (left) */}
+      <line x1="63" y1="24" x2="11" y2="42" className={styles.returnSvgLine} />
+      {/* Arrowhead at bottom-left */}
+      <polyline points="15,38 11,42 15,46" className={styles.returnSvgArrow} />
+    </svg>
   );
 }
 
@@ -471,12 +467,6 @@ export function WorkflowRunPage() {
     return executorStates[key] ?? { status: 'pending' };
   }
 
-  const raiStatus = getState('rai').status;
-  const reviewStatus = getState('review').status;
-  const raiRejected = raiStatus === 'failed';
-  // Review declined: step failed, OR run ended in 'declined' terminal status
-  const reviewDeclined = reviewStatus === 'failed' || runStatus === 'declined';
-
   return (
     <div className={styles.root}>
       {/* Breadcrumb */}
@@ -516,12 +506,10 @@ export function WorkflowRunPage() {
         </div>
 
         {/* Parallel group: Rai (top) + Review (bottom) — each with own connectors.
-            Left connector becomes a FeedbackConnector when that path rejected. */}
+            Rai's left connector is a ReturnConnector showing the feedback arc back to Agent. */}
         <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
           <div className={styles.parallelRow}>
-            {raiRejected
-              ? <FeedbackConnector label="Rejected" />
-              : <PipeConnector />}
+            <ReturnConnector />
             <ExecutorCard
               def={raiDef}
               state={getState('rai')}
@@ -532,9 +520,7 @@ export function WorkflowRunPage() {
             <PipeConnector />
           </div>
           <div className={styles.parallelRow}>
-            {reviewDeclined
-              ? <FeedbackConnector label="Changes requested" />
-              : <PipeConnector />}
+            <PipeConnector />
             <ExecutorCard
               def={reviewDef}
               state={getState('review')}
