@@ -100,9 +100,11 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 Issue exactly one verdict on its own line:
                 - GREEN  — no issues, safe to ship
                 - YELLOW — minor concerns, ship with caution
-                - RED    — critical violation that must block shipping
+                - REVISE — fixable issues found; the agent should revise before shipping (provide specific feedback)
+                - RED    — critical violation that must block shipping entirely (e.g. credentials, PII, harmful content)
 
-                Respond with your verdict and a one-sentence justification.
+                Respond with your verdict and a clear explanation.
+                If your verdict is REVISE, provide actionable feedback the agent can act on.
                 """;
 
             agent = new RaiAIAgent(
@@ -133,11 +135,19 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             if (IsRedVerdict(response))
             {
                 _logger.LogWarning("Rai issued a RED verdict for run {RunId} — flagging content safety", input.RunId);
-                // Emit verdict to sub-stream before completing it
                 subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "red", runId = input.RunId }));
                 WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
                 _completeSubStream?.Invoke(subRunId);
                 return input with { ContentSafetyFlagged = true };
+            }
+
+            if (IsReviseVerdict(response))
+            {
+                _logger.LogInformation("Rai issued a REVISE verdict for run {RunId} — requesting agent revision", input.RunId);
+                subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "revise", runId = input.RunId }));
+                WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
+                _completeSubStream?.Invoke(subRunId);
+                return input with { RaiRevisionRequired = true, RaiFeedback = ExtractFeedback(response) };
             }
 
             var verdictLabel = DetermineVerdict(response);
@@ -165,13 +175,39 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         if (string.IsNullOrEmpty(response)) return false;
         return response.Contains("🔴", StringComparison.Ordinal)
             || response.Contains("red verdict", StringComparison.OrdinalIgnoreCase)
-            || response.Contains("RED", StringComparison.OrdinalIgnoreCase);
+            || (response.Contains("RED", StringComparison.Ordinal)
+                && !response.Contains("REVISE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsReviseVerdict(string? response)
+    {
+        if (string.IsNullOrEmpty(response)) return false;
+        return response.Contains("REVISE", StringComparison.OrdinalIgnoreCase)
+            || response.Contains("revise verdict", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Extracts feedback text from a REVISE response. Returns the full response if no
+    /// structured feedback block is found — the agent will receive the entire Rai response.
+    /// </summary>
+    private static string ExtractFeedback(string? response)
+    {
+        if (string.IsNullOrEmpty(response)) return string.Empty;
+        // Strip leading verdict line if present, return the rest as feedback.
+        var lines = response.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var feedbackLines = lines
+            .SkipWhile(l => l.TrimStart().StartsWith("REVISE", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return feedbackLines.Length > 0
+            ? string.Join('\n', feedbackLines).Trim()
+            : response.Trim();
     }
 
     private static string DetermineVerdict(string? response)
     {
         if (string.IsNullOrEmpty(response)) return "unknown";
         if (IsRedVerdict(response)) return "red";
+        if (IsReviseVerdict(response)) return "revise";
         if (response.Contains("🟡", StringComparison.Ordinal)
             || response.Contains("yellow", StringComparison.OrdinalIgnoreCase)
             || response.Contains("YELLOW", StringComparison.OrdinalIgnoreCase))

@@ -672,6 +672,13 @@ app.MapPost("/api/runs/{id}/review", async (
         if (!startedMerging)
             return Results.StatusCode(StatusCodes.Status409Conflict);
     }
+    else if (request.RequestChanges)
+    {
+        // RequestChanges: transition run back to in-progress so the agent can revise.
+        var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
+        if (!transitioned)
+            return Results.StatusCode(StatusCodes.Status409Conflict);
+    }
     else
     {
         var declined = await runStore.TryTransitionReviewAsync(runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, ct);
@@ -714,7 +721,8 @@ app.MapPost("/api/runs/{id}/review", async (
     // S3: Structured operational record for the review decision.
     logger.LogInformation(
         "Review decision: {Decision}. RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
-        request.Approved ? "approved" : "declined", id, run.SubmittingUser, caller.User);
+        request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+        id, run.SubmittingUser, caller.User);
 
     // Emit merge.started before handing the approval to the workflow so the SSE stream
     // bridges the gap between the approve and the eventual merge.completed/merge.failed.
@@ -728,7 +736,10 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Create the response and send it to the workflow to resume.
-    var decision = new WorkflowReviewDecision(request.Approved);
+    var decision = new WorkflowReviewDecision(
+        Approved: request.Approved,
+        RequestChanges: request.RequestChanges,
+        Feedback: request.Feedback);
     var externalResponse = pendingEntry.Request.CreateResponse(decision);
     try
     {

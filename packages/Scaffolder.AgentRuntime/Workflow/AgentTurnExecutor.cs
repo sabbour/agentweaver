@@ -88,7 +88,8 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 input.WorktreeBranch,
                 input.RepositoryPath,
                 input.OriginatingBranch,
-                ContentSafetyFlagged: true);
+                ContentSafetyFlagged: true,
+                Iteration: input.Iteration);
         }
 
         string treeHash = _worktreeOps.CommitChanges(input.WorktreePath, input.RunId);
@@ -107,7 +108,8 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             input.WorktreeBranch,
             input.RepositoryPath,
             input.OriginatingBranch,
-            ContentSafetyFlagged: false);
+            ContentSafetyFlagged: false,
+            Iteration: input.Iteration);
     }
 
     private static bool IsContentSafetyViolation(Exception ex)

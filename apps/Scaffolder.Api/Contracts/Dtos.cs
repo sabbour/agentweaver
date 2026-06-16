@@ -184,6 +184,17 @@ public sealed record ReviewRequest
 {
     [JsonPropertyName("approved")]
     public required bool Approved { get; init; }
+
+    /// <summary>
+    /// When true the reviewer wants the agent to revise rather than hard-declining.
+    /// Mutually exclusive with <see cref="Approved"/> = true.
+    /// </summary>
+    [JsonPropertyName("request_changes")]
+    public bool RequestChanges { get; init; }
+
+    /// <summary>Feedback text sent back to the agent for its next iteration.</summary>
+    [JsonPropertyName("feedback")]
+    public string? Feedback { get; init; }
 }
 
 /// <summary>Response body for POST /api/runs/{id}/review.</summary>
