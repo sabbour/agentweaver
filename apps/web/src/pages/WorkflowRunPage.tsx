@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Button,
-  Card,
   Spinner,
   Text,
   Title2,
@@ -11,7 +10,6 @@ import {
 } from '@fluentui/react-components';
 import type { FluentIcon } from '@fluentui/react-icons';
 import {
-  ArrowRightRegular,
   ArrowSyncRegular,
   BotRegular,
   CheckmarkCircleRegular,
@@ -33,6 +31,7 @@ import { API_KEY, API_URL } from '../config';
 
 type StepStatus = 'pending' | 'started' | 'completed' | 'skipped' | 'failed';
 type ExecutorKey = 'agent' | 'rai' | 'review' | 'merge' | 'scribe';
+type ExecutorType = 'STAGE' | 'ACTION';
 
 interface ExecutorState {
   status: StepStatus;
@@ -47,14 +46,15 @@ interface ExecutorDef {
   key: ExecutorKey;
   label: string;
   Icon: FluentIcon;
+  type: ExecutorType;
 }
 
 const EXECUTORS: ExecutorDef[] = [
-  { key: 'agent', label: 'Agent', Icon: BotRegular },
-  { key: 'rai', label: 'Rai', Icon: ShieldRegular },
-  { key: 'review', label: 'Review', Icon: PersonRegular },
-  { key: 'merge', label: 'Merge', Icon: MergeRegular },
-  { key: 'scribe', label: 'Scribe', Icon: NotebookRegular },
+  { key: 'agent',  label: 'Agent',  Icon: BotRegular,      type: 'STAGE'  },
+  { key: 'rai',    label: 'Rai',    Icon: ShieldRegular,   type: 'ACTION' },
+  { key: 'review', label: 'Review', Icon: PersonRegular,   type: 'ACTION' },
+  { key: 'merge',  label: 'Merge',  Icon: MergeRegular,    type: 'STAGE'  },
+  { key: 'scribe', label: 'Scribe', Icon: NotebookRegular, type: 'ACTION' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -90,82 +90,180 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
+  // Pipeline layout
   pipeline: {
     display: 'flex',
+    alignItems: 'center',
     flexWrap: 'wrap',
-    alignItems: 'stretch',
-    gap: tokens.spacingHorizontalS,
   },
+  parallelGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  parallelRow: {
+    display: 'flex',
+    alignItems: 'center',
+  },
+  // Connector: 40px wide, hollow circles at each end with a 1px line
   connector: {
     display: 'flex',
     alignItems: 'center',
-    color: tokens.colorNeutralForeground4,
+    width: '40px',
     flexShrink: 0,
   },
+  connectorDot: {
+    width: '6px',
+    height: '6px',
+    borderRadius: '50%',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: 'transparent',
+    flexShrink: 0,
+  },
+  connectorLine: {
+    flex: 1,
+    height: '1px',
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+  // Executor card
   executorCard: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
-    minWidth: '148px',
-    maxWidth: '190px',
+    padding: '16px',
+    minWidth: '160px',
+    maxWidth: '220px',
     flex: '0 0 auto',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '8px',
+    boxSizing: 'border-box',
   },
-  cardTop: {
+  cardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardTypeLabel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground4,
+    letterSpacing: '0.5px',
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  // Status badge (pill)
+  statusBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px',
+    padding: '2px 8px',
+    borderRadius: '999px',
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    whiteSpace: 'nowrap',
+  },
+  badgePending: {
+    backgroundColor: tokens.colorNeutralBackground4,
+    color: tokens.colorNeutralForeground3,
+  },
+  badgeStarted: {
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+  },
+  badgeCompleted: {
+    backgroundColor: tokens.colorPaletteGreenBackground2,
+    color: tokens.colorPaletteGreenForeground1,
+  },
+  badgeSkipped: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground4,
+  },
+  badgeFailed: {
+    backgroundColor: tokens.colorPaletteRedBackground2,
+    color: tokens.colorPaletteRedForeground1,
+  },
+  // Card main content
+  cardMain: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalXS,
   },
-  cardIconBase: {
+  cardIcon: {
     display: 'flex',
     color: tokens.colorNeutralForeground2,
+    flexShrink: 0,
   },
-  cardLabel: {
+  cardTitleGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  cardTitle: {
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground1,
   },
-  cardSubLabel: {
+  cardSubText: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
-    marginTop: '1px',
+    marginTop: '2px',
   },
-  cardStatus: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '4px',
-    fontSize: tokens.fontSizeBase200,
-  },
-  iconPending: { display: 'flex', color: tokens.colorNeutralForeground4 },
-  iconStarted: { display: 'flex', color: tokens.colorBrandForeground1 },
-  iconCompleted: { display: 'flex', color: tokens.colorPaletteGreenForeground1 },
-  iconSkipped: { display: 'flex', color: tokens.colorNeutralForeground4 },
-  iconFailed: { display: 'flex', color: tokens.colorPaletteRedForeground1 },
   cardActions: {
     marginTop: tokens.spacingVerticalXS,
   },
 });
 
 // ---------------------------------------------------------------------------
-// Sub-components
+// Helpers
 // ---------------------------------------------------------------------------
-
-function StatusIcon({ status }: { status: StepStatus }) {
-  switch (status) {
-    case 'started': return <ArrowSyncRegular fontSize={14} />;
-    case 'completed': return <CheckmarkCircleRegular fontSize={14} />;
-    case 'skipped': return <SubtractCircleRegular fontSize={14} />;
-    case 'failed': return <DismissCircleRegular fontSize={14} />;
-    default: return <CircleRegular fontSize={14} />;
-  }
-}
 
 function statusLabel(s: StepStatus): string {
   if (s === 'pending') return 'Pending';
-  if (s === 'started') return 'In progress';
-  if (s === 'completed') return 'Completed';
+  if (s === 'started') return 'In Progress';
+  if (s === 'completed') return 'Complete';
   if (s === 'skipped') return 'Skipped';
   if (s === 'failed') return 'Failed';
   return s;
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function PipeConnector() {
+  const styles = useStyles();
+  return (
+    <div className={styles.connector} aria-hidden="true">
+      <div className={styles.connectorDot} />
+      <div className={styles.connectorLine} />
+      <div className={styles.connectorDot} />
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: StepStatus }) {
+  const styles = useStyles();
+  const badgeClass = {
+    pending:   styles.badgePending,
+    started:   styles.badgeStarted,
+    completed: styles.badgeCompleted,
+    skipped:   styles.badgeSkipped,
+    failed:    styles.badgeFailed,
+  }[status];
+
+  const Icon = {
+    pending:   CircleRegular,
+    started:   ArrowSyncRegular,
+    completed: CheckmarkCircleRegular,
+    skipped:   SubtractCircleRegular,
+    failed:    DismissCircleRegular,
+  }[status];
+
+  return (
+    <span className={`${styles.statusBadge} ${badgeClass}`}>
+      <Icon fontSize={10} aria-hidden="true" />
+      {statusLabel(status)}
+    </span>
+  );
 }
 
 interface ExecutorCardProps {
@@ -178,34 +276,26 @@ interface ExecutorCardProps {
 
 function ExecutorCard({ def, state, agentName, runId, projectId }: ExecutorCardProps) {
   const styles = useStyles();
-  const { key, label, Icon } = def;
+  const { key, label, Icon, type } = def;
   const { status } = state;
 
-  const iconClass = {
-    pending: styles.iconPending,
-    started: styles.iconStarted,
-    completed: styles.iconCompleted,
-    skipped: styles.iconSkipped,
-    failed: styles.iconFailed,
-  }[status];
-
   return (
-    <Card className={styles.executorCard}>
-      <div className={styles.cardTop}>
-        <span className={styles.cardIconBase} aria-hidden="true">
-          <Icon fontSize={22} />
-        </span>
-        <div>
-          <div className={styles.cardLabel}>{label}</div>
-          {agentName && <div className={styles.cardSubLabel}>{agentName}</div>}
-        </div>
+    <div className={styles.executorCard} role="article" aria-label={`${label}: ${statusLabel(status)}`}>
+      {/* Type label (top-left) + status badge (top-right) */}
+      <div className={styles.cardHeader}>
+        <span className={styles.cardTypeLabel}>{type}</span>
+        <StatusBadge status={status} />
       </div>
 
-      <div className={styles.cardStatus} aria-label={`${label}: ${statusLabel(status)}`}>
-        <span className={iconClass} aria-hidden="true">
-          <StatusIcon status={status} />
+      {/* Icon + title + optional sub-text */}
+      <div className={styles.cardMain}>
+        <span className={styles.cardIcon} aria-hidden="true">
+          <Icon fontSize={22} />
         </span>
-        <Text size={100}>{statusLabel(status)}</Text>
+        <div className={styles.cardTitleGroup}>
+          <span className={styles.cardTitle}>{label}</span>
+          {agentName && <span className={styles.cardSubText}>{agentName}</span>}
+        </div>
       </div>
 
       {key === 'agent' && (
@@ -231,7 +321,7 @@ function ExecutorCard({ def, state, agentName, runId, projectId }: ExecutorCardP
           </Link>
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
@@ -319,6 +409,12 @@ export function WorkflowRunPage() {
   const shortId = runId.length > 8 ? runId.slice(0, 8) : runId;
   const isConnecting = streamStatus === 'connecting';
 
+  const [agentDef, raiDef, reviewDef, mergeDef, scribeDef] = EXECUTORS;
+
+  function getState(key: ExecutorKey): ExecutorState {
+    return executorStates[key] ?? { status: 'pending' };
+  }
+
   return (
     <div className={styles.root}>
       {/* Breadcrumb */}
@@ -341,36 +437,72 @@ export function WorkflowRunPage() {
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
 
-      {/* Executor pipeline */}
+      {/* Executor pipeline
+          Layout: [Agent] ──○ ○── [Rai]    ──○ ○── [Merge] ──○ ○── [Scribe]
+                                  [Review] ──○ /
+      */}
       <div className={styles.pipeline} role="list" aria-label="Workflow executor pipeline">
-        {EXECUTORS.flatMap((exec, idx) => {
-          const state: ExecutorState = executorStates[exec.key] ?? { status: 'pending' };
-          const resolvedAgentName =
-            exec.key === 'agent' ? (state.agentName ?? agentName) : undefined;
-          const isLast = idx === EXECUTORS.length - 1;
+        {/* Agent */}
+        <div role="listitem">
+          <ExecutorCard
+            def={agentDef}
+            state={getState('agent')}
+            agentName={getState('agent').agentName ?? agentName}
+            runId={runId}
+            projectId={projectId}
+          />
+        </div>
 
-          const elements = [
-            <div key={exec.key} role="listitem">
-              <ExecutorCard
-                def={exec}
-                state={state}
-                agentName={resolvedAgentName}
-                runId={runId}
-                projectId={projectId}
-              />
-            </div>,
-          ];
+        {/* Parallel group: Rai (top) + Review (bottom) — each with own connectors */}
+        <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
+          <div className={styles.parallelRow}>
+            <PipeConnector />
+            <ExecutorCard
+              def={raiDef}
+              state={getState('rai')}
+              agentName={undefined}
+              runId={runId}
+              projectId={projectId}
+            />
+            <PipeConnector />
+          </div>
+          <div className={styles.parallelRow}>
+            <PipeConnector />
+            <ExecutorCard
+              def={reviewDef}
+              state={getState('review')}
+              agentName={undefined}
+              runId={runId}
+              projectId={projectId}
+            />
+            <PipeConnector />
+          </div>
+        </div>
 
-          if (!isLast) {
-            elements.push(
-              <div key={`arrow-${idx}`} className={styles.connector} aria-hidden="true">
-                <ArrowRightRegular fontSize={20} />
-              </div>,
-            );
-          }
+        {/* Merge */}
+        <div role="listitem">
+          <ExecutorCard
+            def={mergeDef}
+            state={getState('merge')}
+            agentName={undefined}
+            runId={runId}
+            projectId={projectId}
+          />
+        </div>
 
-          return elements;
-        })}
+        {/* Connector to Scribe */}
+        <PipeConnector />
+
+        {/* Scribe */}
+        <div role="listitem">
+          <ExecutorCard
+            def={scribeDef}
+            state={getState('scribe')}
+            agentName={undefined}
+            runId={runId}
+            projectId={projectId}
+          />
+        </div>
       </div>
     </div>
   );
