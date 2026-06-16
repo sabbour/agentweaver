@@ -244,9 +244,10 @@ export function WorkflowRunPage() {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
 
   const [agentName, setAgentName] = useState<string | undefined>(undefined);
+  const [runStatus, setRunStatus] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
-  // Fetch the run list to get agent_name
+  // Fetch the run list to get agent_name and status
   useEffect(() => {
     if (!projectId || !runId) return;
     let cancelled = false;
@@ -255,8 +256,9 @@ export function WorkflowRunPage() {
         if (cancelled) return;
         const run = runs.find((r) => r.run_id === runId);
         setAgentName(run?.agent_name ?? undefined);
+        setRunStatus(run?.status ?? undefined);
       })
-      .catch(() => { /* non-fatal — agent name is optional */ })
+      .catch(() => { /* non-fatal */ })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [projectId, runId]);
@@ -264,7 +266,9 @@ export function WorkflowRunPage() {
   // Subscribe to SSE stream for live workflow.step events
   const { events, status: streamStatus } = useRunStream(runId ?? '', API_KEY, API_URL);
 
-  // Derive executor states from received workflow.step events
+  // Derive executor states from received workflow.step events.
+  // When the stream closes with no step events (historical run predating RunEvents persistence),
+  // infer completed/skipped states from the run's terminal status.
   const executorStates = useMemo<Record<string, ExecutorState>>(() => {
     const map: Record<string, ExecutorState> = {};
     for (const evt of events) {
@@ -275,8 +279,38 @@ export function WorkflowRunPage() {
       const prev = map[step];
       map[step] = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
     }
+
+    // Fallback: stream finished but no step events — infer from terminal run status
+    const hasStepEvents = Object.keys(map).length > 0;
+    const streamDone = streamStatus === 'done' || streamStatus === 'error';
+    if (!hasStepEvents && streamDone && runStatus) {
+      const isTerminal = ['merged', 'declined', 'merge_failed', 'failed', 'completed'].includes(runStatus);
+      if (isTerminal) {
+        const agentState: StepStatus = runStatus === 'failed' ? 'failed' : 'completed';
+        map['agent'] = { status: agentState, agentName };
+        if (runStatus !== 'failed') {
+          map['rai']    = { status: 'completed' };
+          map['scribe'] = { status: 'completed' };
+        }
+        if (runStatus === 'merged') {
+          map['review'] = { status: 'completed' };
+          map['merge']  = { status: 'completed' };
+        } else if (runStatus === 'declined') {
+          map['review'] = { status: 'completed' };
+          map['merge']  = { status: 'skipped' };
+        } else if (runStatus === 'merge_failed') {
+          map['review'] = { status: 'completed' };
+          map['merge']  = { status: 'failed' };
+        } else if (runStatus === 'completed') {
+          // Legacy "completed" = no-changes path; review/merge skipped
+          map['review'] = { status: 'skipped' };
+          map['merge']  = { status: 'skipped' };
+        }
+      }
+    }
+
     return map;
-  }, [events]);
+  }, [events, streamStatus, runStatus, agentName]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;

@@ -1108,7 +1108,7 @@ app.MapGet("/api/runs/{id}/workspace", async (
     if (!IsOwner(httpContext, run)) return Results.NotFound();
 
     // Worktree is gone for terminal statuses that remove or abandon it.
-    if (run.Status is RunStatus.Failed or RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed)
+    if (run.Status is RunStatus.Failed or RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed)
         return Results.NotFound();
 
     // Pending runs have no worktree yet.
@@ -1399,7 +1399,7 @@ app.MapGet("/api/runs/{id}/files", async (
     if (run.Status is RunStatus.Pending or RunStatus.Failed)
         return Results.Json(Array.Empty<WorkspaceFileEntry>());
 
-    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed;
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed;
 
     if (isTerminal)
     {
@@ -1565,7 +1565,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     }
 
     // --- Diff endpoint branch ---
-    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed;
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed;
 
     IReadOnlyList<WorkspaceFileEntry> allEntries;
 
