@@ -56,6 +56,8 @@ export interface WorkflowStepItem {
   step: string;
   status: 'started' | 'completed' | 'skipped' | 'failed';
   label: string;
+  /** Agent name for the "agent" step — e.g. "Trinity" */
+  agentName?: string;
   timestamp: number;
 }
 

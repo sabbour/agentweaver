@@ -454,9 +454,10 @@ function processEvent(
       const step = String(event.payload['step'] ?? '');
       const status = String(event.payload['status'] ?? 'started') as WorkflowStepItem['status'];
       const label = String(event.payload['label'] ?? '');
+      const agentName = event.payload['agent_name'] != null ? String(event.payload['agent_name']) : undefined;
 
       if (status === 'started') {
-        const item: WorkflowStepItem = { kind: 'workflow_step', step, status, label, timestamp: Date.now() };
+        const item: WorkflowStepItem = { kind: 'workflow_step', step, status, label, agentName, timestamp: Date.now() };
         return { ...state, items: [...state.items, item] };
       }
 
@@ -467,13 +468,13 @@ function processEvent(
 
       if (lastIdx !== undefined) {
         const existing = state.items[lastIdx] as WorkflowStepItem;
-        const updated: WorkflowStepItem = { ...existing, status };
+        const updated: WorkflowStepItem = { ...existing, status, agentName: agentName ?? existing.agentName };
         const items = [...state.items.slice(0, lastIdx), updated, ...state.items.slice(lastIdx + 1)];
         return { ...state, items };
       }
 
       // No prior started item — add a new settled one
-      const item: WorkflowStepItem = { kind: 'workflow_step', step, status, label, timestamp: Date.now() };
+      const item: WorkflowStepItem = { kind: 'workflow_step', step, status, label, agentName, timestamp: Date.now() };
       return { ...state, items: [...state.items, item] };
     }
 

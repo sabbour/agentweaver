@@ -39,21 +39,28 @@ public static class WorkflowStepEvents
         string step,
         string status,
         string label,
-        int sequence = 0)
+        int sequence = 0,
+        string? agentName = null)
     {
         // Update per-run state.
         var runState = _runStates.GetOrAdd(runId, _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
         runState[step] = status;
 
         // Write pipeline bar directly to stdout (bypasses logger prefixes for clean viz).
-        var bar = BuildPipelineBar(runId, runState);
+        var bar = BuildPipelineBar(runId, runState, agentName);
         Console.WriteLine(bar);
 
         // Structured log for log aggregators / file sinks.
-        logger.LogInformation("[workflow:{RunId}] {Step} → {Status}", runId[..8], step, status);
+        if (agentName is not null)
+            logger.LogInformation("[workflow:{RunId}] {Step}({Agent}) → {Status}", runId[..8], step, agentName, status);
+        else
+            logger.LogInformation("[workflow:{RunId}] {Step} → {Status}", runId[..8], step, status);
 
         // Emit to the run stream for the web UI.
-        stream?.TryWrite(new RunEvent(sequence, EventTypes.WorkflowStep, new { step, status, label }));
+        object payload = agentName is not null
+            ? new { step, status, label, agent_name = agentName }
+            : new { step, status, label };
+        stream?.TryWrite(new RunEvent(sequence, EventTypes.WorkflowStep, payload));
 
         // Clean up completed runs so the dictionary doesn't grow unbounded.
         if (status is "completed" or "failed" or "skipped" && step == "scribe")
@@ -62,10 +69,15 @@ public static class WorkflowStepEvents
 
     // ── Rendering ────────────────────────────────────────────────────────────
 
-    private static string BuildPipelineBar(string runId, ConcurrentDictionary<string, string> state)
+    private static string BuildPipelineBar(string runId, ConcurrentDictionary<string, string> state, string? agentName)
     {
         var sb = new StringBuilder();
         sb.Append(Bold($"[{runId[..8]}]"));
+        if (agentName is not null)
+        {
+            sb.Append(' ');
+            sb.Append(Dim($"({agentName})"));
+        }
         sb.Append(' ');
 
         for (var i = 0; i < StageOrder.Length; i++)

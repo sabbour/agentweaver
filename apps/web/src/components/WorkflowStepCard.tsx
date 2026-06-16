@@ -88,7 +88,9 @@ export function WorkflowStepCard({ item }: WorkflowStepCardProps) {
       <span className={mergeClasses(iconClass)} aria-hidden="true">
         {icon}
       </span>
-      <span className={labelClass}>{item.label}</span>
+      <span className={labelClass}>
+        {item.agentName != null ? `${item.agentName} (${item.label})` : item.label}
+      </span>
     </div>
   );
 }

@@ -252,6 +252,15 @@ public sealed class RunOrchestrator
                     ? charter
                     : charter + "\n\n---\n\n" + systemPromptContext;
             }
+            else
+            {
+                _logger.LogWarning(
+                    "No charter found for agent '{AgentName}' in run {RunId} — agent will use vanilla prompt. " +
+                    "Expected: {ExpectedPath}",
+                    run.AgentName, run.Id,
+                    Path.Combine(run.RepositoryPath ?? "(null)", ".squad", "agents",
+                        (run.AgentName ?? "").ToLowerInvariant(), "charter.md"));
+            }
         }
 
         // Build harvest prompt (appended to task for post-run memory harvest)

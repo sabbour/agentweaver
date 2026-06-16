@@ -37,7 +37,8 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         var writer = _getRecordingWriter(input.RunId);
         bool safetyFlagged = false;
 
-        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "started", "Agent turn");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "started", "Agent turn",
+            agentName: input.AgentName);
 
         try
         {
@@ -84,7 +85,8 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         string diff = _worktreeOps.GetDiff(input.RepositoryPath, input.OriginatingBranch, input.WorktreeBranch);
         int stepCount = _worktreeOps.GetStepCount(input.RunId);
 
-        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "completed", "Agent turn");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "completed", "Agent turn",
+            agentName: input.AgentName);
 
         return new AgentTurnOutput(
             input.RunId,
