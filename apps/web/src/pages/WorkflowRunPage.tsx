@@ -50,6 +50,8 @@ type ExecutorKey = 'agent' | 'rai' | 'review' | 'merge' | 'scribe';
 interface ExecutorState {
   status: StepStatus;
   agentName?: string;
+  startedAt?: number;   // ms epoch — from timestamp_utc in workflow.step event
+  completedAt?: number; // ms epoch — from timestamp_utc of first terminal event
 }
 
 interface ExecutorDef {
@@ -204,6 +206,12 @@ const useNodeStyles = makeStyles({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  cardTimer: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    fontVariantNumeric: 'tabular-nums',
+    marginTop: '1px',
+  },
   cardActions: {
     marginTop: tokens.spacingVerticalXS,
     display: 'flex',
@@ -294,6 +302,35 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
 }
 
 // ---------------------------------------------------------------------------
+// Elapsed timer helpers
+// ---------------------------------------------------------------------------
+
+function formatDuration(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (mins < 60) return `${mins}m ${s}s`;
+  const hrs = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${hrs}h ${m}m`;
+}
+
+function ElapsedTimer({ startedAt, completedAt }: { startedAt?: number; completedAt?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!startedAt || completedAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [startedAt, completedAt]);
+
+  if (!startedAt) return null;
+  const elapsed = Math.max(0, (completedAt ?? now) - startedAt);
+  return <>{formatDuration(elapsed)}</>;
+}
+
+// ---------------------------------------------------------------------------
 // Custom React Flow node
 // Only left (target) and right (source) handles — no hardcoded top/bottom.
 // Loop-back arcs are drawn by the LoopbackEdge custom edge component.
@@ -305,7 +342,7 @@ function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
   const { def, state, agentName, agentRoleTitle, runId, executionId, projectId, reviewedBy } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
-  const { status } = state;
+  const { status, startedAt, completedAt } = state;
 
   const isActive         = status === 'started' && key !== 'review';
   const isHumanWaiting   = key === 'review' && status === 'started';
@@ -341,6 +378,11 @@ function WorkflowNode({ data }: NodeProps) {
           <span className={s.cardRole}>{roleText}</span>
           {agentName && <span className={s.cardSubText}>{agentName as string}</span>}
           {subText && <span className={s.cardSubText}>{subText}</span>}
+          {startedAt !== undefined && (
+            <span className={s.cardTimer}>
+              <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
+            </span>
+          )}
         </div>
       </div>
 
@@ -659,8 +701,17 @@ export function WorkflowRunPage() {
         const step      = String(evt.payload['step'] ?? '');
         const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
         const evtAgent  = evt.payload['agent_name'] != null ? String(evt.payload['agent_name']) : undefined;
+        const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
+        const tsMs = tsStr ? new Date(tsStr).getTime() : NaN;
         const prev = map[step];
-        map[step] = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
+        const newState: ExecutorState = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
+        if (evtStatus === 'started') {
+          newState.startedAt = !isNaN(tsMs) ? tsMs : undefined;
+        } else {
+          newState.startedAt = prev?.startedAt;
+          if (!isNaN(tsMs)) newState.completedAt = tsMs;
+        }
+        map[step] = newState;
       } else if (evt.type === 'review.changes_requested') {
         // Belt-and-suspenders: backend now emits workflow.step for review, but handle the
         // semantic event too so older in-flight runs update correctly.

@@ -57,9 +57,10 @@ public static class WorkflowStepEvents
             logger.LogInformation("[workflow:{RunId}] {Step} → {Status}", runId[..8], step, status);
 
         // Emit to the run stream for the web UI.
+        var timestampUtc = DateTimeOffset.UtcNow.ToString("O");
         object payload = agentName is not null
-            ? new { step, status, label, agent_name = agentName }
-            : new { step, status, label };
+            ? new { step, status, label, agent_name = agentName, timestamp_utc = timestampUtc }
+            : new { step, status, label, timestamp_utc = timestampUtc };
         stream?.TryWrite(new RunEvent(sequence, EventTypes.WorkflowStep, payload));
 
         // Clean up completed runs so the dictionary doesn't grow unbounded.
