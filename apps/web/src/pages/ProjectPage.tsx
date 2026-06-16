@@ -23,6 +23,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { DeleteRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CreateRunRequest, Project, ProjectRunSummary, TeamMemberDto } from '../api/types';
@@ -220,8 +221,23 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
   );
 }
 
-function RunRow({ run, projectId }: { run: ProjectRunSummary; projectId: string }) {
+function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; projectId: string; onDeleted: (runId: string) => void }) {
   const styles = useStyles();
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!confirm('Delete this run? This cannot be undone.')) return;
+    setDeleting(true);
+    try {
+      await apiClient.deleteRun(run.run_id);
+      onDeleted(run.run_id);
+    } catch {
+      setDeleting(false);
+    }
+  };
+
+  const isTerminal = ['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status);
+
   return (
     <div className={styles.runRow}>
       <Badge appearance="tint" color={
@@ -234,12 +250,18 @@ function RunRow({ run, projectId }: { run: ProjectRunSummary; projectId: string 
       <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
       <Text className={styles.runMeta}>{run.model_source}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
-      <Link to={`/watch/${run.run_id}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
-        <Button appearance="secondary">Watch</Button>
-      </Link>
       <Link to={`/projects/${projectId}/runs/${run.run_id}/workflow`} style={{ textDecoration: 'none' }}>
-        <Button appearance="subtle">Workflow</Button>
+        <Button appearance="secondary">Workflow</Button>
       </Link>
+      {isTerminal && (
+        <Button
+          appearance="subtle"
+          icon={<DeleteRegular />}
+          disabled={deleting}
+          onClick={() => void handleDelete()}
+          aria-label="Delete run"
+        />
+      )}
     </div>
   );
 }
@@ -252,6 +274,10 @@ export function ProjectPage() {
   const [runs, setRuns] = useState<ProjectRunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const handleRunDeleted = (runId: string) => {
+    setRuns((prev) => prev.filter((r) => r.run_id !== runId));
+  };
 
   useEffect(() => {
     if (!projectId) return;
@@ -317,7 +343,7 @@ export function ProjectPage() {
               </Link>
               <StartRunDialog
                 projectId={projectId}
-                onStarted={(runId) => navigate(`/watch/${runId}`, { state: { projectId } })}
+                onStarted={(runId) => navigate(`/projects/${projectId}/runs/${runId}/workflow`)}
               />
             </div>
           </div>
@@ -352,7 +378,7 @@ export function ProjectPage() {
             <Text>No runs yet. Start one above.</Text>
           ) : (
             <div className={styles.runList}>
-              {runs.map((r) => <RunRow key={r.run_id} run={r} projectId={projectId} />)}
+              {runs.map((r) => <RunRow key={r.run_id} run={r} projectId={projectId} onDeleted={handleRunDeleted} />)}
             </div>
           )}
         </>

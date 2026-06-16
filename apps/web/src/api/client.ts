@@ -122,6 +122,10 @@ export class ScaffolderApiClient {
     return this.request<RunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
   }
 
+  deleteRun(runId: string): Promise<void> {
+    return this.request<void>('DELETE', `/api/runs/${encodeURIComponent(runId)}`);
+  }
+
   // GitHub auth
   getServerInfo(): Promise<ServerInfo> {
     return this.request<ServerInfo>('GET', '/api/server/info');
