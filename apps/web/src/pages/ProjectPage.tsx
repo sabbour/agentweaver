@@ -23,7 +23,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { DeleteRegular } from '@fluentui/react-icons';
+import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CreateRunRequest, Project, ProjectRunSummary, TeamMemberDto } from '../api/types';
@@ -260,7 +260,7 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
       </Link>
       {isAwaitingReview && (
         <>
-          <Button appearance="subtle" disabled={acting} onClick={() => setConfirmOpen(true)}>
+          <Button appearance="subtle" icon={<DismissCircleRegular />} disabled={acting} onClick={() => setConfirmOpen(true)} aria-label="Abandon run">
             Abandon
           </Button>
           <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
