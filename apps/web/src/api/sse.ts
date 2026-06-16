@@ -64,6 +64,7 @@ export type EventType =
   | 'agent.message.delta'
   | 'agent.message'
   | 'agent.system_prompt'
+  | 'agent.task'
   | 'agent.tools'
   | 'agent.intent'
   | 'tool.call'

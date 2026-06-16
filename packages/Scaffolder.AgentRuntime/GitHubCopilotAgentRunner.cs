@@ -218,6 +218,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         // Emit configuration snapshot for debuggability.
         Emit("agent.system_prompt", new { provider = "copilot", prompt = AgentBasePrompt.Base, memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext) });
+        Emit("agent.task", new { task });
         Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {

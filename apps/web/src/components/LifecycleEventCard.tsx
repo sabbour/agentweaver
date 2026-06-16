@@ -13,6 +13,7 @@ import {
   CopyRegular,
   CheckmarkRegular,
   ShieldLockRegular,
+  TaskListRegular,
 } from '@fluentui/react-icons';
 import type { RunStreamEvent } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
@@ -695,6 +696,34 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
         {expanded && prompt && (
           <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
             {prompt}
+          </Text>
+        )}
+      </div>
+    );
+  }
+
+  // --- agent.task: expandable task prompt card ---
+  if (event.type === 'agent.task') {
+    const taskText = event.payload['task'] ? String(event.payload['task']) : null;
+    const preview = taskText
+      ? taskText.slice(0, 120).replace(/\n/g, ' ') + (taskText.length > 120 ? `… (${taskText.length} chars)` : '')
+      : '';
+    return (
+      <div className={styles.card} style={{ flexDirection: 'column', alignItems: 'flex-start', cursor: taskText ? 'pointer' : undefined }}
+        onClick={taskText ? () => setExpanded(e => !e) : undefined}
+        role={taskText ? 'button' : undefined}
+        aria-expanded={taskText ? expanded : undefined}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%' }}>
+          {taskText && (expanded
+            ? <ChevronDownRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />
+            : <ChevronRightRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />)}
+          <TaskListRegular className={styles.subtleIcon} aria-hidden="true" />
+          <Badge className={styles.badge} color="informative" shape="rounded" size="small">task</Badge>
+          <Text className={styles.summary}>{preview}</Text>
+        </div>
+        {expanded && taskText && (
+          <Text as="pre" style={{ margin: `${tokens.spacingVerticalS} 0 0 24px`, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: tokens.colorNeutralForeground2 }}>
+            {taskText}
           </Text>
         )}
       </div>

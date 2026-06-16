@@ -411,6 +411,7 @@ function processEvent(
     case 'sandbox.selected':
     case 'sandbox.warning':
     case 'agent.system_prompt':
+    case 'agent.task':
     case 'agent.tools':
     case 'agent.intent':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };

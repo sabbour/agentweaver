@@ -34,13 +34,17 @@ public sealed class PostRunScribeService(
             var now = DateTimeOffset.UtcNow;
 
             // Step 1: Auto-merge low-risk inbox entries created during this run.
-            var toMerge = await memoryDb.DecisionInbox
+            // ToListAsync first — EF Core / SQLite cannot translate array.Contains in WHERE.
+            var candidates = await memoryDb.DecisionInbox
                 .Where(e => e.ProjectId == projectId
                          && e.AgentName == agentName
                          && e.Status == "pending"
-                         && AutoMergeTypes.Contains(e.Type)
                          && e.CreatedAt >= runStarted)
                 .ToListAsync(ct).ConfigureAwait(false);
+
+            var toMerge = candidates
+                .Where(e => AutoMergeTypes.Contains(e.Type))
+                .ToList();
 
             foreach (var entry in toMerge)
             {

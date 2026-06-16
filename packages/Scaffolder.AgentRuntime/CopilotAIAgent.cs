@@ -38,6 +38,16 @@ namespace Scaffolder.AgentRuntime;
 /// </summary>
 public class CopilotAIAgent : AIAgent, IAsyncDisposable
 {
+    /// <summary>
+    /// Scaffolder API tool names that are auto-approved without sandbox governance.
+    /// The HTTP call executes in the function body after approval.
+    /// </summary>
+    private static readonly HashSet<string> ScaffolderApiToolNames = new(StringComparer.Ordinal)
+    {
+        "submit_decision", "record_memory", "update_session", "submit_inbox_entry",
+        "list_inbox", "merge_inbox_entry", "export_memory",
+    };
+
     // Universal runtime contract. Agent identity and tool-usage guidance live in the charter.
 
     /// <summary>
@@ -302,6 +312,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
             ? AgentBasePrompt.Base
             : AgentBasePrompt.Base + "\n\n" + _systemPromptContext;
         Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext) });
+        Emit("agent.task", new { task });
         Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {
@@ -600,7 +611,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                     // Scaffolder API tools: auto-approve without sandbox governance.
                     // The actual HTTP call executes in the function body after approval;
                     // the streaming lifecycle emits tool.result when the function returns.
-                    if (toolName is "submit_decision" or "record_memory" or "update_session" or "submit_inbox_entry")
+                    if (ScaffolderApiToolNames.Contains(toolName))
                     {
                         var apiArgs = new Dictionary<string, object>();
                         if (customTool.Args is System.Text.Json.JsonElement apiArgsEl &&
