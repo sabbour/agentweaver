@@ -2142,6 +2142,9 @@ app.MapPut("/api/projects/{id}/team/members/{name}/charter", async (
     if (string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "content is required." });
 
+    if (new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai" }.Contains(name))
+        return Results.BadRequest(new { error = $"'{name}' is a built-in system agent. Its charter cannot be modified." });
+
     if (request.Content.Length > 50_000)
         return Results.BadRequest(new { error = "Charter content must be 50,000 characters or fewer." });
 

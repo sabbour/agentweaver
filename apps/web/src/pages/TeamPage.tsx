@@ -654,17 +654,23 @@ function AgentDetailPanel({
                   <MessageBarBody>{charterError}</MessageBarBody>
                 </MessageBar>
               )}
+              {!charterLoading && member.is_built_in && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>Built-in system agent charters are read-only.</MessageBarBody>
+                </MessageBar>
+              )}
               {!charterLoading && (
                 <Field label="Charter content">
                   <Textarea
                     value={editContent}
-                    onChange={(_, v) => { setEditContent(v.value); }}
+                    onChange={(_, v) => { if (!member.is_built_in) setEditContent(v.value); }}
+                    readOnly={member.is_built_in}
                     rows={20}
                     style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}
                   />
                 </Field>
               )}
-              {!charterLoading && (
+              {!charterLoading && !member.is_built_in && (
                 <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
                   <Button
                     appearance="primary"
