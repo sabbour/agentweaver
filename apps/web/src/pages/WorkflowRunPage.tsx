@@ -48,6 +48,7 @@ import { apiClient } from '../api/apiClient';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
+import { AgentAvatar } from '../components/AgentAvatar';
 
 // Context lets WorkflowNode (defined outside WorkflowRunPage) open the execution modal
 // without needing to pass callbacks through React Flow node data.
@@ -408,7 +409,9 @@ function WorkflowNode({ data }: NodeProps) {
       {/* Icon + title */}
       <div className={s.cardMain}>
         <span className={s.cardIcon} aria-hidden="true">
-          <Icon fontSize={22} />
+          {key === 'agent' && agentName
+            ? <AgentAvatar name={agentName as string} size={28} />
+            : <Icon fontSize={22} />}
         </span>
         <div className={s.cardTitleGroup}>
           <span className={s.cardTitle}>{label}</span>
