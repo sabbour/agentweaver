@@ -30,6 +30,7 @@ public sealed class RunWorkflowFactory
     private readonly IWorktreeOperations _worktreeOps;
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
+    private readonly SqliteRunStore _runStore;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CheckpointManager _checkpointManager;
@@ -51,6 +52,7 @@ public sealed class RunWorkflowFactory
         IWorktreeOperations worktreeOps,
         IMergeCoordinator mergeCoordinator,
         RunStreamStore streamStore,
+        SqliteRunStore runStore,
         ILoggerFactory loggerFactory,
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration)
@@ -65,6 +67,7 @@ public sealed class RunWorkflowFactory
         _worktreeOps = worktreeOps;
         _mergeCoordinator = mergeCoordinator;
         _streamStore = streamStore;
+        _runStore = runStore;
         _loggerFactory = loggerFactory;
         _scopeFactory = scopeFactory;
 
@@ -306,21 +309,24 @@ public sealed class RunWorkflowFactory
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream);
         ExecutorBinding raiBinding = raiTurnExec;
 
-        // Scribe input adapters: read stored AgentTurnInput, build ScribeTurnInput.
+        // Scribe input adapters: read run context from DB (reliable) to build ScribeTurnInput.
+        // Previously used ctx.ReadStateAsync("agent-input", "run-context") but QueueStateUpdateAsync
+        // is a deferred/queued write that may not be visible across checkpoint boundaries.
         ExecutorBinding scribeInputMerge = new FunctionExecutor<MergeOutput, ScribeTurnInput>(
             "scribe-input-merge",
             async (output, ctx, ct) =>
             {
-                var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
-                    .ConfigureAwait(false);
+                var run = RunId.TryParse(output.RunId, out var rid)
+                    ? await _runStore.GetAsync(rid, ct).ConfigureAwait(false)
+                    : null;
                 return new ScribeTurnInput(
                     output.RunId,
-                    agentInput?.ProjectId ?? "",
-                    agentInput?.AgentName ?? "",
-                    agentInput?.RunStartedAt ?? DateTimeOffset.UtcNow,
-                    agentInput?.RepositoryPath ?? "",
-                    agentInput?.ModelSource ?? "github-copilot",
-                    agentInput?.ModelId,
+                    run?.ProjectId?.ToString() ?? "",
+                    run?.AgentName ?? "",
+                    run?.StartedAt ?? DateTimeOffset.UtcNow,
+                    run?.RepositoryPath ?? "",
+                    run?.ModelSource.ToApiString() ?? "github-copilot",
+                    run?.ModelId,
                     TerminalStatus: output.Status,
                     MergeResult: output.MergeResult,
                     MergeMode: output.MergeMode);
@@ -330,16 +336,17 @@ public sealed class RunWorkflowFactory
             "scribe-input-no-changes",
             async (output, ctx, ct) =>
             {
-                var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
-                    .ConfigureAwait(false);
+                var run = RunId.TryParse(output.RunId, out var rid)
+                    ? await _runStore.GetAsync(rid, ct).ConfigureAwait(false)
+                    : null;
                 return new ScribeTurnInput(
                     output.RunId,
-                    agentInput?.ProjectId ?? "",
-                    agentInput?.AgentName ?? "",
-                    agentInput?.RunStartedAt ?? DateTimeOffset.UtcNow,
-                    agentInput?.RepositoryPath ?? "",
-                    agentInput?.ModelSource ?? "github-copilot",
-                    agentInput?.ModelId,
+                    run?.ProjectId?.ToString() ?? "",
+                    run?.AgentName ?? "",
+                    run?.StartedAt ?? DateTimeOffset.UtcNow,
+                    run?.RepositoryPath ?? "",
+                    run?.ModelSource.ToApiString() ?? "github-copilot",
+                    run?.ModelId,
                     TerminalStatus: "no_changes");
             });
 

@@ -797,12 +797,11 @@ export function WorkflowRunPage() {
       }
     }
 
-    // Optimistic: if merge completed and stream is done, show Scribe as completed.
-    // Scribe events go to a sub-stream ({runId}-scribe) that this page doesn't subscribe to,
-    // so we infer completion from the merge outcome.
+    // Optimistic: if stream is done and merge completed but no scribe events arrived,
+    // treat as skipped (scribe was skipped due to missing project/agent context, not completed).
     const streamDone = streamStatus === 'done' || streamStatus === 'error';
     if (streamDone && map['merge']?.status === 'completed' && !map['scribe']) {
-      map['scribe'] = { status: 'completed' };
+      map['scribe'] = { status: 'skipped' };
     }
 
     // Fallback: stream done but no step events — infer from terminal run status.
