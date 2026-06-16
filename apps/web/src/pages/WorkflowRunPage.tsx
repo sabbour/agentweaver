@@ -74,6 +74,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   def: ExecutorDef;
   state: ExecutorState;
   agentName?: string;
+  agentRoleTitle?: string;   // actual team role title for the agent executor
   runId: string;
   projectId: string;
   reviewedBy?: string;
@@ -133,9 +134,7 @@ const useNodeStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     padding: '14px',
     width: `${NODE_W}px`,
-    height: `${NODE_H}px`,        // fixed height — all nodes same size → handles at same Y
     boxSizing: 'border-box',
-    overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '8px',
@@ -204,6 +203,9 @@ const useNodeStyles = makeStyles({
   },
   cardActions: {
     marginTop: tokens.spacingVerticalXS,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
   },
   reviewerRow: {
     display: 'flex',
@@ -290,7 +292,7 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
 
 function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
-  const { def, state, agentName, runId, projectId, reviewedBy } = data as WorkflowNodeData;
+  const { def, state, agentName, agentRoleTitle, runId, projectId, reviewedBy } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status } = state;
 
@@ -303,7 +305,9 @@ function WorkflowNode({ data }: NodeProps) {
   ].filter(Boolean).join(' ');
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
-  const subText = statusDescription(key as ExecutorKey, status);
+  const subText    = statusDescription(key as ExecutorKey, status);
+  // For the agent card use the actual team role title; otherwise the executor's static description.
+  const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
 
   return (
     <div className={cardClass} role="article" aria-label={`${label}: ${statusLabel(status)}`}>
@@ -323,8 +327,8 @@ function WorkflowNode({ data }: NodeProps) {
         </span>
         <div className={s.cardTitleGroup}>
           <span className={s.cardTitle}>{label}</span>
-          <span className={s.cardRole}>{def.roleDescription}</span>
-          {agentName && <span className={s.cardSubText}>{agentName}</span>}
+          <span className={s.cardRole}>{roleText}</span>
+          {agentName && <span className={s.cardSubText}>{agentName as string}</span>}
           {subText && <span className={s.cardSubText}>{subText}</span>}
         </div>
       </div>
@@ -337,10 +341,22 @@ function WorkflowNode({ data }: NodeProps) {
           </Link>
         </div>
       )}
-      {(key === 'rai' || key === 'scribe') && (status === 'started' || status === 'completed' || status === 'failed') && (
+      {key === 'rai' && (status === 'started' || status === 'completed' || status === 'failed') && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${runId}-${key}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/watch/${runId}-rai`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
+          </Link>
+        </div>
+      )}
+      {key === 'scribe' && (
+        <div className={`${s.cardActions} nopan nodrag`}>
+          {(status === 'started' || status === 'completed' || status === 'failed') && (
+            <Link to={`/watch/${runId}-scribe`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+              <Button appearance="outline" size="small">View execution</Button>
+            </Link>
+          )}
+          <Link to={`/projects/${projectId}/team`} style={{ textDecoration: 'none' }}>
+            <Button appearance="outline" size="small">View memories</Button>
           </Link>
         </div>
       )}
@@ -356,9 +372,9 @@ function WorkflowNode({ data }: NodeProps) {
           <img
             src={`https://github.com/${reviewedBy}.png?size=28`}
             style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${tokens.colorBrandForeground1}` }}
-            alt={reviewedBy}
+            alt={reviewedBy as string}
           />
-          <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>{reviewedBy}</Text>
+          <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>{reviewedBy as string}</Text>
         </div>
       )}
     </div>
@@ -383,7 +399,8 @@ const nodeTypes = { workflow: WorkflowNode };
 // 3. STAGGER — Each same-side sibling adds STAGGER px so rails don't overlap.
 // ---------------------------------------------------------------------------
 
-const LOOPBACK_STROKE = 'var(--colorNeutralStroke1)';
+const LOOPBACK_STROKE      = 'var(--colorNeutralStroke1)';
+const LOOPBACK_TEXT_COLOR  = 'var(--colorNeutralForeground2)';
 const ARC_GAP = 12; // clearance above/below card edge
 const STAGGER = 28; // extra rail separation per same-side sibling
 
@@ -399,6 +416,10 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
   const sourceNode = allNodes.find(n => n.id === sourceId);
   const targetNode = allNodes.find(n => n.id === targetId);
 
+  // Use measured heights when React Flow has measured the nodes (variable-height cards)
+  const srcH = sourceNode?.measured?.height ?? NODE_H;
+  const tgtH = targetNode?.measured?.height ?? NODE_H;
+
   // --- Heuristic 1: side ---
   const siblings = allEdges
     .filter(e => e.type === 'loopback' && e.target === targetId)
@@ -413,17 +434,16 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
   const above     = data?.above !== undefined ? Boolean(data.above) : autoAbove;
 
   // --- Compute connection points at top/bottom CENTER of each card ---
-  // (ignoring the L/R handle positions React Flow provides, which would give side connections)
   const sx = (sourceNode?.position.x ?? 0) + NODE_W / 2;
   const tx = (targetNode?.position.x ?? 0) + NODE_W / 2;
   const sy = above
-    ? (sourceNode?.position.y ?? 0)            // top-center of source
-    : (sourceNode?.position.y ?? 0) + NODE_H;  // bottom-center of source
+    ? (sourceNode?.position.y ?? 0)           // top-center of source
+    : (sourceNode?.position.y ?? 0) + srcH;   // bottom-center of source
   const ty = above
-    ? (targetNode?.position.y ?? 0)            // top-center of target
-    : (targetNode?.position.y ?? 0) + NODE_H;  // bottom-center of target
+    ? (targetNode?.position.y ?? 0)           // top-center of target
+    : (targetNode?.position.y ?? 0) + tgtH;   // bottom-center of target
 
-  // --- Heuristic 2: clearance against intermediate nodes ---
+  // --- Heuristic 2: clearance against intermediate nodes (using actual measured heights) ---
   const minX = Math.min(sx, tx);
   const maxX = Math.max(sx, tx);
 
@@ -437,12 +457,12 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
   if (above) {
     const minTop = overlapping.length > 0
       ? Math.min(...overlapping.map(n => n.position.y ?? 0))
-      : sy - NODE_H / 2;
+      : sy - (srcH / 2);
     apexY = minTop - ARC_GAP;
   } else {
     const maxBottom = overlapping.length > 0
-      ? Math.max(...overlapping.map(n => (n.position.y ?? 0) + NODE_H))
-      : sy + NODE_H / 2;
+      ? Math.max(...overlapping.map(n => (n.position.y ?? 0) + (n.measured?.height ?? NODE_H)))
+      : sy + (srcH / 2);
     apexY = maxBottom + ARC_GAP;
   }
 
@@ -458,7 +478,7 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
   const d = `M ${sx},${sy} L ${sx},${apexY} L ${tx},${apexY} L ${tx},${ty}`;
 
   const midX    = (sx + tx) / 2;
-  const labelY  = above ? apexY - 5 : apexY + 12;
+  const labelY  = above ? apexY - 6 : apexY + 14;
   const markerId = `lb-arrow-${id}`;
 
   return (
@@ -488,8 +508,8 @@ function LoopbackEdge({ id, label, data }: EdgeProps) {
           x={midX}
           y={labelY}
           textAnchor="middle"
-          fontSize={10}
-          fill={LOOPBACK_STROKE}
+          fontSize={12}
+          fill={LOOPBACK_TEXT_COLOR}
           fontWeight={600}
           style={{ userSelect: 'none', pointerEvents: 'none' }}
         >
@@ -556,21 +576,34 @@ export function WorkflowRunPage() {
   const styles = usePageStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
 
-  const [agentName,   setAgentName]   = useState<string | undefined>(undefined);
-  const [runStatus,   setRunStatus]   = useState<string | undefined>(undefined);
-  const [reviewedBy,  setReviewedBy]  = useState<string | undefined>(undefined);
-  const [loading,     setLoading]     = useState(true);
+  const [agentName,      setAgentName]      = useState<string | undefined>(undefined);
+  const [agentRoleTitle, setAgentRoleTitle] = useState<string | undefined>(undefined);
+  const [runStatus,      setRunStatus]      = useState<string | undefined>(undefined);
+  const [reviewedBy,     setReviewedBy]     = useState<string | undefined>(undefined);
+  const [loading,        setLoading]        = useState(true);
 
   useEffect(() => {
     if (!projectId || !runId) return;
     let cancelled = false;
-    apiClient.getProjectRuns(projectId)
-      .then((runs) => {
+
+    Promise.all([
+      apiClient.getProjectRuns(projectId),
+      apiClient.getTeam(projectId),
+    ]).then(([runs, team]) => {
         if (cancelled) return;
         const run = runs.find((r) => r.run_id === runId);
-        setAgentName(run?.agent_name   ?? undefined);
+        const name = run?.agent_name ?? undefined;
+        setAgentName(name);
         setRunStatus(run?.status       ?? undefined);
         setReviewedBy(run?.reviewed_by ?? undefined);
+
+        // Look up the team member by cast name to get their role title
+        if (name) {
+          const member = team.members.find(
+            m => m.name.toLowerCase() === name.toLowerCase()
+          );
+          if (member) setAgentRoleTitle(member.role_title);
+        }
       })
       .catch(() => { /* non-fatal */ })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -629,16 +662,17 @@ export function WorkflowRunPage() {
       type: 'workflow',
       data: {
         def,
-        state:      executorStates[def.key] ?? { status: 'pending' },
-        agentName:  def.key === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
-        runId:      runId      ?? '',
-        projectId:  projectId  ?? '',
-        reviewedBy: def.key === 'review' ? reviewedBy : undefined,
+        state:           executorStates[def.key] ?? { status: 'pending' },
+        agentName:       def.key === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
+        agentRoleTitle:  def.key === 'agent' ? agentRoleTitle : undefined,
+        runId:           runId      ?? '',
+        projectId:       projectId  ?? '',
+        reviewedBy:      def.key === 'review' ? reviewedBy : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
     return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
-  }, [executorStates, agentName, reviewedBy, runId, projectId]);
+  }, [executorStates, agentName, agentRoleTitle, reviewedBy, runId, projectId]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
