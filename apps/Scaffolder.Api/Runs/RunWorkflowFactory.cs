@@ -79,6 +79,25 @@ public sealed class RunWorkflowFactory
     }
 
     /// <summary>
+    /// Creates a sub-stream entry for a built-in agent (Rai/Scribe) keyed as
+    /// <c>{runId}-{suffix}</c> and returns its <see cref="ChannelWriter{T}"/>.
+    /// The parent run's owner is inherited so authorization works for sub-stream SSE requests.
+    /// </summary>
+    public ChannelWriter<RunEvent> CreateSubStreamWriter(string subRunId, string suffix)
+    {
+        // Derive owner from the parent run entry (suffix is e.g. "rai"/"scribe").
+        var parentRunId = subRunId.EndsWith($"-{suffix}", StringComparison.Ordinal)
+            ? subRunId[..^(suffix.Length + 1)]
+            : subRunId;
+        var parentEntry = _streamStore.Get(parentRunId);
+        var owner = parentEntry?.Owner ?? "system";
+        var entry = _streamStore.Create(subRunId, owner);
+        return new RecordingChannelWriter(entry);
+    }
+
+    public void CompleteSubStream(string subRunId) => _streamStore.Complete(subRunId);
+
+    /// <summary>
     /// Shared workflow state scope used to carry AgentTurnOutput data across the
     /// review-gate pause so the merge adapter can construct MergeInput.
     /// </summary>
@@ -182,10 +201,12 @@ public sealed class RunWorkflowFactory
         // ambiguity in MAF's graph builder. Each creates its own ephemeral ScribeAIAgent.
         var scribeMergeExec = new ScribeTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge");
+            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
+            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream);
         var scribeNoChangesExec = new ScribeTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes");
+            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes",
+            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream);
         ExecutorBinding scribeBindingMerge = scribeMergeExec;
         ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
 
@@ -194,7 +215,8 @@ public sealed class RunWorkflowFactory
         // safety terminal. Ephemeral RaiAIAgent per execution.
         var raiTurnExec = new RaiTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "rai-turn");
+            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "rai-turn",
+            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream);
         ExecutorBinding raiBinding = raiTurnExec;
 
         // Scribe input adapters: read stored AgentTurnInput, build ScribeTurnInput.

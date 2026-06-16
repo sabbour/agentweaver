@@ -55,4 +55,11 @@ public static class EventTypes
     /// Payload: { step: string, status: "started"|"completed"|"skipped"|"failed", label: string }
     /// </summary>
     public const string WorkflowStep = "workflow.step";
+
+    /// <summary>
+    /// Emitted by <see cref="RaiTurnExecutor"/> with the verdict issued by the RAI reviewer.
+    /// Payload: { verdict: "green"|"yellow"|"red", runId: string }
+    /// Written to the Rai sub-stream ({runId}-rai).
+    /// </summary>
+    public const string RaiVerdict = "rai.verdict";
 }

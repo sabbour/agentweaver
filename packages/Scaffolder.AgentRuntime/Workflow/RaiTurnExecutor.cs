@@ -30,6 +30,8 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RaiTurnExecutor> _logger;
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
+    private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
+    private readonly Action<string>? _completeSubStream;
 
     public RaiTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -40,7 +42,9 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         IToolApprovalGate toolApprovalGate,
         ILoggerFactory loggerFactory,
         Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null,
-        string name = "rai-turn")
+        string name = "rai-turn",
+        Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
+        Action<string>? completeSubStream = null)
         : base(name)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -52,6 +56,8 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<RaiTurnExecutor>();
         _getRecordingWriter = getRecordingWriter ?? (_ => null);
+        _createSubStream = createSubStream;
+        _completeSubStream = completeSubStream;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -67,6 +73,9 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
 
         var writer = _getRecordingWriter(input.RunId);
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "started", "RAI review");
+
+        var subRunId = input.RunId + "-rai";
+        var subWriter = _createSubStream?.Invoke(subRunId, "rai");
 
         RaiAIAgent? agent = null;
         try
@@ -108,10 +117,10 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             await agent.SetupAsync(
                 workingDirectory: reviewPath,
                 repositoryPath: input.RepositoryPath,
-                runId: input.RunId + "-rai",
+                runId: subRunId,
                 modelId: null,
                 systemPromptContext: charter,
-                streamWriter: null,
+                streamWriter: subWriter,
                 ct).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
@@ -120,9 +129,15 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             if (IsRedVerdict(response))
             {
                 _logger.LogWarning("Rai issued a RED verdict for run {RunId} — flagging content safety", input.RunId);
+                // Emit verdict to sub-stream before completing it
+                subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "red", runId = input.RunId }));
                 WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
+                _completeSubStream?.Invoke(subRunId);
                 return input with { ContentSafetyFlagged = true };
             }
+
+            var verdictLabel = DetermineVerdict(response);
+            subWriter?.TryWrite(new RunEvent(2, EventTypes.RaiVerdict, new { verdict = verdictLabel, runId = input.RunId }));
         }
         catch (Exception ex)
         {
@@ -134,6 +149,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         {
             if (agent is not null)
                 await agent.DisposeAsync().ConfigureAwait(false);
+            _completeSubStream?.Invoke(subRunId);
         }
 
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "completed", "RAI review");
@@ -146,5 +162,16 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         return response.Contains("🔴", StringComparison.Ordinal)
             || response.Contains("red verdict", StringComparison.OrdinalIgnoreCase)
             || response.Contains("RED", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string DetermineVerdict(string? response)
+    {
+        if (string.IsNullOrEmpty(response)) return "unknown";
+        if (IsRedVerdict(response)) return "red";
+        if (response.Contains("🟡", StringComparison.Ordinal)
+            || response.Contains("yellow", StringComparison.OrdinalIgnoreCase)
+            || response.Contains("YELLOW", StringComparison.OrdinalIgnoreCase))
+            return "yellow";
+        return "green";
     }
 }

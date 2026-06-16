@@ -237,6 +237,9 @@ function RunRow({ run, projectId }: { run: ProjectRunSummary; projectId: string 
       <Link to={`/watch/${run.run_id}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
         <Button appearance="secondary">Watch</Button>
       </Link>
+      <Link to={`/projects/${projectId}/runs/${run.run_id}/workflow`} style={{ textDecoration: 'none' }}>
+        <Button appearance="subtle">Workflow</Button>
+      </Link>
     </div>
   );
 }

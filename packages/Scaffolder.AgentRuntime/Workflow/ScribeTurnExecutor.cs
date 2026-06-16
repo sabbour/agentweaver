@@ -31,6 +31,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ScribeTurnExecutor> _logger;
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
+    private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
+    private readonly Action<string>? _completeSubStream;
 
     public ScribeTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -41,7 +43,9 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         IToolApprovalGate toolApprovalGate,
         ILoggerFactory loggerFactory,
         Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null,
-        string name = "scribe-turn")
+        string name = "scribe-turn",
+        Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
+        Action<string>? completeSubStream = null)
         : base(name)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -53,6 +57,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ScribeTurnExecutor>();
         _getRecordingWriter = getRecordingWriter ?? (_ => null);
+        _createSubStream = createSubStream;
+        _completeSubStream = completeSubStream;
     }
 
     public override async ValueTask<ScribeTurnInput> HandleAsync(
@@ -67,6 +73,9 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
 
         var writer = _getRecordingWriter(input.RunId);
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "started", "Scribe pass");
+
+        var subRunId = input.RunId + "-scribe";
+        var subWriter = _createSubStream?.Invoke(subRunId, "scribe");
 
         ScribeAIAgent? agent = null;
         try
@@ -105,10 +114,10 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
                 repositoryPath: input.RepositoryPath,
-                runId: input.RunId + "-scribe",
+                runId: subRunId,
                 modelId: input.ModelId,
                 systemPromptContext: charter,
-                streamWriter: null,
+                streamWriter: subWriter,
                 ct).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
@@ -124,6 +133,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         {
             if (agent is not null)
                 await agent.DisposeAsync().ConfigureAwait(false);
+            _completeSubStream?.Invoke(subRunId);
         }
 
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "completed", "Scribe pass");
