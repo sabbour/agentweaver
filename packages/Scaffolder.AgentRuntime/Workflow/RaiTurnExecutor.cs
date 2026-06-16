@@ -61,12 +61,12 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         if (input is null || input.ContentSafetyFlagged || string.IsNullOrEmpty(input.Diff))
         {
             if (input is not null)
-                WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, "rai", "skipped", "RAI review");
+                WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, input.RunId, "rai", "skipped", "RAI review");
             return input!;
         }
 
         var writer = _getRecordingWriter(input.RunId);
-        WorkflowStepEvents.Emit(writer, _logger, "rai", "started", "RAI review");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "started", "RAI review");
 
         RaiAIAgent? agent = null;
         try
@@ -120,7 +120,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             if (IsRedVerdict(response))
             {
                 _logger.LogWarning("Rai issued a RED verdict for run {RunId} — flagging content safety", input.RunId);
-                WorkflowStepEvents.Emit(writer, _logger, "rai", "failed", "RAI review");
+                WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
                 return input with { ContentSafetyFlagged = true };
             }
         }
@@ -128,7 +128,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         {
             _logger.LogWarning(ex,
                 "Rai RAI review failed for run {RunId} — workflow proceeds normally", input.RunId);
-            WorkflowStepEvents.Emit(writer, _logger, "rai", "failed", "RAI review");
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
         }
         finally
         {
@@ -136,7 +136,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 await agent.DisposeAsync().ConfigureAwait(false);
         }
 
-        WorkflowStepEvents.Emit(writer, _logger, "rai", "completed", "RAI review");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "completed", "RAI review");
         return input;
     }
 

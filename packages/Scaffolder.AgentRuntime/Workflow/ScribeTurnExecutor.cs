@@ -61,12 +61,12 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         if (string.IsNullOrEmpty(input.ProjectId) || string.IsNullOrEmpty(input.AgentName))
         {
             _logger.LogDebug("Scribe skipped for run {RunId} — no project/agent context", input.RunId);
-            WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, "scribe", "skipped", "Scribe pass");
+            WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, input.RunId, "scribe", "skipped", "Scribe pass");
             return input;
         }
 
         var writer = _getRecordingWriter(input.RunId);
-        WorkflowStepEvents.Emit(writer, _logger, "scribe", "started", "Scribe pass");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "started", "Scribe pass");
 
         ScribeAIAgent? agent = null;
         try
@@ -118,7 +118,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         {
             _logger.LogWarning(ex,
                 "Scribe agent turn failed for run {RunId} — workflow proceeds normally", input.RunId);
-            WorkflowStepEvents.Emit(writer, _logger, "scribe", "failed", "Scribe pass");
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "failed", "Scribe pass");
         }
         finally
         {
@@ -126,7 +126,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 await agent.DisposeAsync().ConfigureAwait(false);
         }
 
-        WorkflowStepEvents.Emit(writer, _logger, "scribe", "completed", "Scribe pass");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "completed", "Scribe pass");
         return input;
     }
 }

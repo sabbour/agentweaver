@@ -30,7 +30,7 @@ public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>
         MergeInput input, IWorkflowContext context, CancellationToken ct)
     {
         var writer = _getRecordingWriter(input.RunId);
-        WorkflowStepEvents.Emit(writer, _logger, "merge", "started", "Merging changes");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "merge", "started", "Merging changes");
 
         var result = await _mergeCoordinator.ExecuteMergeAsync(input, ct).ConfigureAwait(false);
 
@@ -55,7 +55,7 @@ public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>
         };
 
         var mergeStatus = output.Status == "merged" ? "completed" : "failed";
-        WorkflowStepEvents.Emit(writer, _logger, "merge", mergeStatus, "Merging changes");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "merge", mergeStatus, "Merging changes");
 
         return output;
     }
