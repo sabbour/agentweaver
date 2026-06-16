@@ -113,7 +113,7 @@ const usePageStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   dagContainer: {
-    height: '300px',
+    minHeight: '500px',
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -405,9 +405,11 @@ const nodeTypes = { workflow: WorkflowNode };
 
 const LOOPBACK_STROKE      = 'var(--colorNeutralStroke1)';
 const LOOPBACK_TEXT_COLOR  = 'var(--colorNeutralForeground2)';
-const ARC_GAP    = 16; // clearance above/below card edge
-const STAGGER    = 28; // extra rail separation per same-side sibling
+const ARC_GAP    = 40; // clearance above/below the tallest card in the arc span
+const STAGGER    = 36; // extra rail separation per same-side sibling
 const CORNER_R   = 10; // radius for corner rounding
+// Fallback card height when React Flow hasn't measured yet (should be >= actual max card height)
+const CARD_H_FALLBACK = NODE_H * 1.4;
 
 function loopbackPath(sx: number, sy: number, tx: number, ty: number, apexY: number, above: boolean): string {
   // Clamp radius so corners never exceed half the shorter dimension
@@ -466,26 +468,30 @@ function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: E
   const sy = above ? sourceY - srcHalf : sourceY + srcHalf;
   const ty = above ? targetY - tgtHalf : targetY + tgtHalf;
 
-  // --- Heuristic 2: clearance (intermediate nodes only, not source/target) ---
+  // --- Heuristic 2: clearance — ALL nodes whose X range overlaps the arc span ---
+  // Include source and target: if source is the tallest card, its bottom IS the constraint.
   const minX = Math.min(sx, tx);
   const maxX = Math.max(sx, tx);
-  const overlapping = allNodes.filter(n => {
-    if (n.id === sourceId || n.id === targetId) return false;
+  const spannedNodes = allNodes.filter(n => {
     const nl = n.position.x;
     const nr = nl + NODE_W;
     return nr > minX && nl < maxX;
   });
 
+  // Fallback when spannedNodes is empty (source/target adjacent with zero gap)
+  const fallbackTop    = sourceY - srcHalf;
+  const fallbackBottom = sourceY + srcHalf;
+
   let apexY: number;
   if (above) {
-    const minTop = overlapping.length > 0
-      ? Math.min(...overlapping.map(n => n.position.y))
-      : sourceY - srcHalf;
+    const minTop = spannedNodes.length > 0
+      ? Math.min(...spannedNodes.map(n => n.position.y))
+      : fallbackTop;
     apexY = minTop - ARC_GAP;
   } else {
-    const maxBottom = overlapping.length > 0
-      ? Math.max(...overlapping.map(n => n.position.y + (n.measured?.height ?? NODE_H)))
-      : sourceY + srcHalf;
+    const maxBottom = spannedNodes.length > 0
+      ? Math.max(...spannedNodes.map(n => n.position.y + (n.measured?.height ?? CARD_H_FALLBACK)))
+      : fallbackBottom;
     apexY = maxBottom + ARC_GAP;
   }
 
