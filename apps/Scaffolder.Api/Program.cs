@@ -744,8 +744,8 @@ app.MapPost("/api/runs/{id}/review", async (
         }
         else if (request.RequestChanges)
         {
-            // Review card flips to completed; revision.started signals the loop-back.
-            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs, reviewer = caller.User });
+            // Review card flips to revise; revision.started signals the loop-back.
+            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "revise", label = "Review", timestamp_utc = reviewTs, reviewer = caller.User });
             liveEntry.RecordNext(EventTypes.ReviewChangesRequested, new { });
             liveEntry.RecordNext(EventTypes.RevisionStarted, new { });
         }
@@ -1084,7 +1084,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     }
 
     // f. Emit audit events on the stream.
-    streamEntry?.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review" });
+    streamEntry?.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "revise", label = "Review" });
     streamEntry?.RecordNext(EventTypes.ReviewChangesRequested, new { revision = revisionNumber });
     streamEntry?.RecordNext(EventTypes.RevisionStarted, new { revision = revisionNumber });
 

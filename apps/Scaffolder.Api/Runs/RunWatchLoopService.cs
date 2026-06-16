@@ -227,7 +227,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None).ConfigureAwait(false);
 
-            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "merge", status = "skipped", label = "Merge", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
             entry.RecordNext(EventTypes.ReviewDeclined, new { });
 
