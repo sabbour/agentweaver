@@ -1,5 +1,7 @@
+using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
+using Scaffolder.Domain;
 
 namespace Scaffolder.AgentRuntime.Workflow;
 
@@ -11,22 +13,28 @@ public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>
 {
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly ILogger<MergeExecutor> _logger;
+    private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
 
     public MergeExecutor(
         IMergeCoordinator mergeCoordinator,
-        ILogger<MergeExecutor> logger)
+        ILogger<MergeExecutor> logger,
+        Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null)
         : base("merge")
     {
         _mergeCoordinator = mergeCoordinator;
         _logger = logger;
+        _getRecordingWriter = getRecordingWriter ?? (_ => null);
     }
 
     public override async ValueTask<MergeOutput> HandleAsync(
         MergeInput input, IWorkflowContext context, CancellationToken ct)
     {
+        var writer = _getRecordingWriter(input.RunId);
+        WorkflowStepEvents.Emit(writer, _logger, "merge", "started", "Merging changes");
+
         var result = await _mergeCoordinator.ExecuteMergeAsync(input, ct).ConfigureAwait(false);
 
-        return result.Outcome switch
+        MergeOutput output = result.Outcome switch
         {
             MergeExecutionOutcome.Merged =>
                 new MergeOutput(input.RunId, "merged", result.MergeResult, result.MergeMode),
@@ -45,5 +53,10 @@ public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>
 
             _ => throw new InvalidOperationException($"Unexpected merge execution outcome: {result.Outcome}")
         };
+
+        var mergeStatus = output.Status == "merged" ? "completed" : "failed";
+        WorkflowStepEvents.Emit(writer, _logger, "merge", mergeStatus, "Merging changes");
+
+        return output;
     }
 }

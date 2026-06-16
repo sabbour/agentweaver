@@ -107,7 +107,8 @@ public sealed class RunWorkflowFactory
 
         var mergeExecutor = new MergeExecutor(
             _mergeCoordinator,
-            _loggerFactory.CreateLogger<MergeExecutor>());
+            _loggerFactory.CreateLogger<MergeExecutor>(),
+            GetRecordingWriter);
 
         var reviewPort = RequestPort.Create<WorkflowReviewRequest, WorkflowReviewDecision>("review-gate");
 
@@ -181,10 +182,10 @@ public sealed class RunWorkflowFactory
         // ambiguity in MAF's graph builder. Each creates its own ephemeral ScribeAIAgent.
         var scribeMergeExec = new ScribeTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-            _approvalStore, _toolApprovalGate, _loggerFactory, "scribe-turn-merge");
+            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge");
         var scribeNoChangesExec = new ScribeTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-            _approvalStore, _toolApprovalGate, _loggerFactory, "scribe-turn-no-changes");
+            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes");
         ExecutorBinding scribeBindingMerge = scribeMergeExec;
         ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
 
@@ -193,7 +194,7 @@ public sealed class RunWorkflowFactory
         // safety terminal. Ephemeral RaiAIAgent per execution.
         var raiTurnExec = new RaiTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-            _approvalStore, _toolApprovalGate, _loggerFactory, "rai-turn");
+            _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "rai-turn");
         ExecutorBinding raiBinding = raiTurnExec;
 
         // Scribe input adapters: read stored AgentTurnInput, build ScribeTurnInput.

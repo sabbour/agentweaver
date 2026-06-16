@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Providers;
@@ -28,6 +29,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RaiTurnExecutor> _logger;
+    private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
 
     public RaiTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -37,6 +39,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
         ILoggerFactory loggerFactory,
+        Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null,
         string name = "rai-turn")
         : base(name)
     {
@@ -48,6 +51,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         _toolApprovalGate = toolApprovalGate;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<RaiTurnExecutor>();
+        _getRecordingWriter = getRecordingWriter ?? (_ => null);
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -56,8 +60,13 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         // Already flagged upstream, or nothing to review — pass through untouched.
         if (input is null || input.ContentSafetyFlagged || string.IsNullOrEmpty(input.Diff))
         {
+            if (input is not null)
+                WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, "rai", "skipped", "RAI review");
             return input!;
         }
+
+        var writer = _getRecordingWriter(input.RunId);
+        WorkflowStepEvents.Emit(writer, _logger, "rai", "started", "RAI review");
 
         RaiAIAgent? agent = null;
         try
@@ -111,6 +120,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             if (IsRedVerdict(response))
             {
                 _logger.LogWarning("Rai issued a RED verdict for run {RunId} — flagging content safety", input.RunId);
+                WorkflowStepEvents.Emit(writer, _logger, "rai", "failed", "RAI review");
                 return input with { ContentSafetyFlagged = true };
             }
         }
@@ -118,6 +128,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         {
             _logger.LogWarning(ex,
                 "Rai RAI review failed for run {RunId} — workflow proceeds normally", input.RunId);
+            WorkflowStepEvents.Emit(writer, _logger, "rai", "failed", "RAI review");
         }
         finally
         {
@@ -125,6 +136,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 await agent.DisposeAsync().ConfigureAwait(false);
         }
 
+        WorkflowStepEvents.Emit(writer, _logger, "rai", "completed", "RAI review");
         return input;
     }
 

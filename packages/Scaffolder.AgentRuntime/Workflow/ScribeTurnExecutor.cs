@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime.Providers;
@@ -29,6 +30,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ScribeTurnExecutor> _logger;
+    private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
 
     public ScribeTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -38,6 +40,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
         ILoggerFactory loggerFactory,
+        Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null,
         string name = "scribe-turn")
         : base(name)
     {
@@ -49,6 +52,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         _toolApprovalGate = toolApprovalGate;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ScribeTurnExecutor>();
+        _getRecordingWriter = getRecordingWriter ?? (_ => null);
     }
 
     public override async ValueTask<ScribeTurnInput> HandleAsync(
@@ -57,8 +61,12 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         if (string.IsNullOrEmpty(input.ProjectId) || string.IsNullOrEmpty(input.AgentName))
         {
             _logger.LogDebug("Scribe skipped for run {RunId} — no project/agent context", input.RunId);
+            WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, "scribe", "skipped", "Scribe pass");
             return input;
         }
+
+        var writer = _getRecordingWriter(input.RunId);
+        WorkflowStepEvents.Emit(writer, _logger, "scribe", "started", "Scribe pass");
 
         ScribeAIAgent? agent = null;
         try
@@ -110,6 +118,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         {
             _logger.LogWarning(ex,
                 "Scribe agent turn failed for run {RunId} — workflow proceeds normally", input.RunId);
+            WorkflowStepEvents.Emit(writer, _logger, "scribe", "failed", "Scribe pass");
         }
         finally
         {
@@ -117,6 +126,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 await agent.DisposeAsync().ConfigureAwait(false);
         }
 
+        WorkflowStepEvents.Emit(writer, _logger, "scribe", "completed", "Scribe pass");
         return input;
     }
 }

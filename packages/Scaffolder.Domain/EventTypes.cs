@@ -49,4 +49,10 @@ public static class EventTypes
     public const string ReviewChangesRequested = "review.changes_requested";
     public const string RevisionStarted        = "revision.started";
     public const string RunCancelled           = "run.cancelled";
+
+    /// <summary>
+    /// Emitted at each major MAF workflow executor transition.
+    /// Payload: { step: string, status: "started"|"completed"|"skipped"|"failed", label: string }
+    /// </summary>
+    public const string WorkflowStep = "workflow.step";
 }

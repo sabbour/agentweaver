@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
 import { ScaffolderApiClient } from './client';
 
@@ -87,6 +87,7 @@ export type EventType =
   | 'merge.started'
   | 'merge.completed'
   | 'merge.failed'
+  | 'workflow.step'
   | 'done'
   | 'error';
 

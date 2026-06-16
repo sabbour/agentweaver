@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { TurnGroup } from './TurnGroup';
 import { LifecycleEventCard } from './LifecycleEventCard';
+import { WorkflowStepCard } from './WorkflowStepCard';
 import type { TimelineItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
 
@@ -49,6 +50,14 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
               isLiveRun={isLiveRun}
               streamStatus={streamStatus}
               runId={runId}
+            />
+          );
+        }
+        if (item.kind === 'workflow_step') {
+          return (
+            <WorkflowStepCard
+              key={`ws-${item.step}-${i}`}
+              item={item}
             />
           );
         }

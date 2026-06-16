@@ -1,7 +1,7 @@
 import type { RunStreamEvent } from '../api/sse';
 
 /** Discriminated union output of the grouping reducer. */
-export type TimelineItem = TurnGroupItem | LifecycleItem;
+export type TimelineItem = TurnGroupItem | LifecycleItem | WorkflowStepItem;
 
 export interface TurnGroupItem {
   kind: 'turn-group';
@@ -48,6 +48,15 @@ export interface ToolCallItem {
 export interface LifecycleItem {
   kind: 'lifecycle';
   event: RunStreamEvent;
+}
+
+export interface WorkflowStepItem {
+  kind: 'workflow_step';
+  /** "agent" | "rai" | "review" | "merge" | "scribe" */
+  step: string;
+  status: 'started' | 'completed' | 'skipped' | 'failed';
+  label: string;
+  timestamp: number;
 }
 
 export interface TimelineReducerState {
