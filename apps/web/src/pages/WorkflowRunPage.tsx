@@ -113,7 +113,7 @@ const usePageStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   dagContainer: {
-    minHeight: '500px',
+    height: '520px',
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -336,7 +336,7 @@ function WorkflowNode({ data }: NodeProps) {
       {/* Action buttons — nopan/nodrag prevents React Flow from swallowing clicks */}
       {key === 'agent' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${runId}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/projects/${projectId}/runs/${runId}/execution/${runId}`} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
