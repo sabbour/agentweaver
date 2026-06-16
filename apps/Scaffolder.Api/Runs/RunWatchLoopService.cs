@@ -21,7 +21,6 @@ public sealed class RunWatchLoopService
     private readonly PendingRequestStore _pendingStore;
     private readonly RunWorkflowFactory _factory;
     private readonly IWorktreeOperations _worktreeOps;
-    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<RunWatchLoopService> _logger;
     private readonly CancellationToken _appStopping;
 
@@ -32,7 +31,6 @@ public sealed class RunWatchLoopService
         PendingRequestStore pendingStore,
         RunWorkflowFactory factory,
         IWorktreeOperations worktreeOps,
-        IServiceScopeFactory scopeFactory,
         IHostApplicationLifetime lifetime,
         ILogger<RunWatchLoopService> logger)
     {
@@ -42,7 +40,6 @@ public sealed class RunWatchLoopService
         _pendingStore = pendingStore;
         _factory = factory;
         _worktreeOps = worktreeOps;
-        _scopeFactory = scopeFactory;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
     }
@@ -166,7 +163,6 @@ public sealed class RunWatchLoopService
             if (mergeOutput.Status == "merged")
             {
                 // Guardrail 3: conditional update — skip if already terminal.
-                var run = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
                 await _runStore.TrySetTerminalStatusAsync(
                     parsedRunId, RunStatus.Merged, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
@@ -174,7 +170,6 @@ public sealed class RunWatchLoopService
                 entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
 
                 _streamStore.Complete(runId);
-                FirePostRunScribe(run);
                 return true;
             }
 
@@ -206,14 +201,12 @@ public sealed class RunWatchLoopService
             // Cleanup before status update ensures pollers see a clean directory.
             await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
-            var noChangesRun = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, "no_changes", CancellationToken.None).ConfigureAwait(false);
 
             entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
 
             _streamStore.Complete(runId);
-            FirePostRunScribe(noChangesRun);
             return true;
         }
 
@@ -284,23 +277,5 @@ public sealed class RunWatchLoopService
         {
             _registry.Abandon(runId);
         }
-    }
-
-    private void FirePostRunScribe(Scaffolder.Domain.Run? run)
-    {
-        if (run is null || string.IsNullOrEmpty(run.AgentName) || !run.ProjectId.HasValue)
-            return;
-
-        var runId = run.Id.ToString();
-        var agentName = run.AgentName;
-        var projectId = run.ProjectId.Value.ToString();
-        var startedAt = run.StartedAt;
-
-        _ = Task.Run(async () =>
-        {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var scribe = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
-            await scribe.RunAsync(projectId, agentName, runId, startedAt, CancellationToken.None);
-        });
     }
 }

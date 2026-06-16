@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Scaffolder.Api.Infrastructure;
 using Scaffolder.Api.Memory;
 using Scaffolder.Domain;
 using Scaffolder.Squad.Memory;
@@ -11,12 +12,23 @@ namespace Scaffolder.Api.Runs;
 /// exports to .squad/ and .agentweaver/context/, and updates the current session.
 /// </summary>
 public sealed class PostRunScribeService(
+    SqliteRunStore runStore,
     MemoryDbContext memoryDb,
     IProjectStore projectStore,
     ILogger<PostRunScribeService> logger)
 {
-    public async Task RunAsync(string projectId, string agentName, string runId, DateTimeOffset runStarted, CancellationToken ct = default)
+    public async Task RunAsync(string runId, CancellationToken ct = default)
     {
+        var run = await runStore.GetAsync(RunId.Parse(runId), ct);
+        if (run is null || string.IsNullOrEmpty(run.AgentName) || !run.ProjectId.HasValue)
+        {
+            logger.LogDebug("PostRunScribe skipped for run {RunId} — no agent name or project", runId);
+            return;
+        }
+        var projectId = run.ProjectId.Value.ToString();
+        var agentName = run.AgentName;
+        var runStarted = run.StartedAt;
+
         try
         {
             // Step 1: Auto-merge low-risk inbox entries submitted during this run

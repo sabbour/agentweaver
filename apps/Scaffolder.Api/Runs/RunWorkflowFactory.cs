@@ -20,6 +20,7 @@ public sealed class RunWorkflowFactory
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
 
@@ -32,6 +33,7 @@ public sealed class RunWorkflowFactory
         IMergeCoordinator mergeCoordinator,
         RunStreamStore streamStore,
         ILoggerFactory loggerFactory,
+        IServiceScopeFactory scopeFactory,
         IConfiguration configuration)
     {
         _agentRunner = agentRunner;
@@ -39,6 +41,7 @@ public sealed class RunWorkflowFactory
         _mergeCoordinator = mergeCoordinator;
         _streamStore = streamStore;
         _loggerFactory = loggerFactory;
+        _scopeFactory = scopeFactory;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -125,6 +128,24 @@ public sealed class RunWorkflowFactory
             "terminal-merge",
             (input, ctx, ct) => new ValueTask<MergeOutput>(input));
 
+        // Scribe steps: best-effort pass-through that runs PostRunScribeService after
+        // successful terminal states (merge and no-changes). Never aborts the workflow.
+        ExecutorBinding scribeMerge = new FunctionExecutor<MergeOutput, MergeOutput>(
+            "scribe-merge",
+            async (output, ctx, ct) =>
+            {
+                await RunScribeAsync(output.RunId, ct).ConfigureAwait(false);
+                return output;
+            });
+
+        ExecutorBinding scribeNoChanges = new FunctionExecutor<NoChangesOutput, NoChangesOutput>(
+            "scribe-no-changes",
+            async (output, ctx, ct) =>
+            {
+                await RunScribeAsync(output.RunId, ct).ConfigureAwait(false);
+                return output;
+            });
+
         // Blocked adapter: on a retriable block, re-enter the review gate via HITL
         // so the workflow stays alive and the user can re-approve once the blocker clears.
         ExecutorBinding blockedAdapter = new FunctionExecutor<MergeOutput, WorkflowReviewRequest>(
@@ -148,6 +169,8 @@ public sealed class RunWorkflowFactory
             // No changes -> completed/no-op
             .AddEdge<AgentTurnOutput>(agentBinding, terminalNoOp,
                 output => output is not null && !output.ContentSafetyFlagged && string.IsNullOrEmpty(output.Diff))
+            // No-op -> scribe (best-effort memory flywheel close)
+            .AddEdge(terminalNoOp, scribeNoChanges)
             // Has changes -> review adapter (stores merge data, maps to WorkflowReviewRequest)
             .AddEdge<AgentTurnOutput>(agentBinding, reviewAdapter,
                 output => output is not null && !output.ContentSafetyFlagged && !string.IsNullOrEmpty(output.Diff))
@@ -161,6 +184,8 @@ public sealed class RunWorkflowFactory
             // Merge succeeded or failed terminally -> terminal merge output
             .AddEdge<MergeOutput>(mergeBinding, terminalMerge,
                 output => output is not null && output.Status != "blocked")
+            // Terminal merge -> scribe (best-effort memory flywheel close)
+            .AddEdge(terminalMerge, scribeMerge)
             // Merge blocked (retriable) -> re-enter review gate via HITL.
             // idempotent: true permits the cycle back through the review port.
             .AddEdge<MergeOutput>(mergeBinding, blockedAdapter,
@@ -169,13 +194,29 @@ public sealed class RunWorkflowFactory
             // Declined -> terminal
             .AddEdge<WorkflowReviewDecision>(reviewBinding, terminalDeclined,
                 decision => decision is null || !decision.Approved)
-            .WithOutputFrom(terminalMerge)
-            .WithOutputFrom(terminalNoOp)
+            .WithOutputFrom(scribeMerge)
+            .WithOutputFrom(scribeNoChanges)
             .WithOutputFrom(terminalDeclined)
             .WithOutputFrom(terminalSafetyFailed)
             .Build()!;
 
         return wf;
+    }
+
+    private async Task RunScribeAsync(string runId, CancellationToken ct)
+    {
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var scribe = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
+            await scribe.RunAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: scribe failure must never abort the workflow
+            _loggerFactory.CreateLogger<RunWorkflowFactory>().LogWarning(
+                ex, "Scribe step failed for run {RunId} — workflow proceeds normally", runId);
+        }
     }
 
     /// <summary>

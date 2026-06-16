@@ -262,6 +262,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new ThrowingMergeCoordinator(),
             streamStore,
             loggerFactory,
+            new NullScopeFactory(),
             config);
 
         var watchLoop = new RunWatchLoopService(
@@ -271,7 +272,6 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             pendingStore,
             factory,
             worktreeOps,
-            new NullScopeFactory(),
             new TestHostApplicationLifetime(),
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
