@@ -6,25 +6,26 @@ using Scaffolder.Domain;
 namespace Scaffolder.AgentRuntime.Workflow;
 
 /// <summary>
-/// Executor that runs the agent turn: invokes IAgentRunner, commits the worktree,
-/// computes the diff, and returns AgentTurnOutput. Token deltas stream through the
-/// existing side-channel (RecordingChannelWriter) and are invisible to MAF.
+/// Executor that runs the agent turn: drives a <see cref="CopilotAIAgent"/> (which the MAF
+/// checkpoint manager can serialize), commits the worktree, computes the diff, and returns
+/// AgentTurnOutput. Token deltas stream through the existing side-channel
+/// (RecordingChannelWriter) and are invisible to MAF.
 /// </summary>
 public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput>
 {
-    private readonly IAgentRunner _agentRunner;
+    private readonly CopilotAIAgent _agent;
     private readonly IWorktreeOperations _worktreeOps;
     private readonly ILogger<AgentTurnExecutor> _logger;
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
 
     public AgentTurnExecutor(
-        IAgentRunner agentRunner,
+        CopilotAIAgent agent,
         IWorktreeOperations worktreeOps,
         Func<string, ChannelWriter<RunEvent>?> getRecordingWriter,
         ILogger<AgentTurnExecutor> logger)
         : base("agent-turn")
     {
-        _agentRunner = agentRunner;
+        _agent = agent;
         _worktreeOps = worktreeOps;
         _getRecordingWriter = getRecordingWriter;
         _logger = logger;
@@ -38,16 +39,18 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
 
         try
         {
-            await _agentRunner.ExecuteAsync(
-                input.Task,
+            await _agent.SetupAsync(
                 input.WorktreePath,
                 input.RepositoryPath,
-                ModelSourceExtensions.FromApiString(input.ModelSource),
                 input.RunId,
                 input.ModelId,
+                input.SystemPromptContext,
                 writer,
-                ct,
-                input.SystemPromptContext).ConfigureAwait(false);
+                ct).ConfigureAwait(false);
+
+            var session = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+
+            await _agent.ExecuteStreamingLoopAsync(input.Task, session, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsContentSafetyViolation(ex))
         {

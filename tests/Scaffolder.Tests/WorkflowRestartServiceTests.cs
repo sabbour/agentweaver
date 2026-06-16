@@ -256,8 +256,16 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
 
         var registry = new RunWorkflowRegistry();
         var pendingStore = new PendingRequestStore();
+        var copilotClientFactory = new Scaffolder.AgentRuntime.Providers.GitHubCopilotClientFactory(
+            config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
         var factory = new RunWorkflowFactory(
             new TestFileEditAgentRunner(),
+            copilotClientFactory,
+            new FixedInstallationScopeStub(),
+            new Scaffolder.SandboxExec.PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new Scaffolder.AgentRuntime.InMemoryShellApprovalStore(),
+            new Scaffolder.AgentRuntime.InMemoryToolApprovalGate(),
             worktreeOps,
             new ThrowingMergeCoordinator(),
             streamStore,

@@ -3,9 +3,12 @@ using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Scaffolder.AgentRuntime;
+using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Infrastructure;
 using Scaffolder.Domain;
+using Scaffolder.SandboxExec;
 
 namespace Scaffolder.Api.Runs;
 
@@ -16,6 +19,12 @@ namespace Scaffolder.Api.Runs;
 public sealed class RunWorkflowFactory
 {
     private readonly IAgentRunner _agentRunner;
+    private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly IGitHubTokenScopeProvider _scopeProvider;
+    private readonly ISandboxExecutor _sandboxExecutor;
+    private readonly ISandboxPolicyStore _sandboxPolicyStore;
+    private readonly IShellApprovalStore _approvalStore;
+    private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IWorktreeOperations _worktreeOps;
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
@@ -28,6 +37,12 @@ public sealed class RunWorkflowFactory
 
     public RunWorkflowFactory(
         IAgentRunner agentRunner,
+        GitHubCopilotClientFactory copilotClientFactory,
+        IGitHubTokenScopeProvider scopeProvider,
+        ISandboxExecutor sandboxExecutor,
+        ISandboxPolicyStore sandboxPolicyStore,
+        IShellApprovalStore approvalStore,
+        IToolApprovalGate toolApprovalGate,
         IWorktreeOperations worktreeOps,
         IMergeCoordinator mergeCoordinator,
         RunStreamStore streamStore,
@@ -35,6 +50,12 @@ public sealed class RunWorkflowFactory
         IConfiguration configuration)
     {
         _agentRunner = agentRunner;
+        _copilotClientFactory = copilotClientFactory;
+        _scopeProvider = scopeProvider;
+        _sandboxExecutor = sandboxExecutor;
+        _sandboxPolicyStore = sandboxPolicyStore;
+        _approvalStore = approvalStore;
+        _toolApprovalGate = toolApprovalGate;
         _worktreeOps = worktreeOps;
         _mergeCoordinator = mergeCoordinator;
         _streamStore = streamStore;
@@ -67,8 +88,20 @@ public sealed class RunWorkflowFactory
 
     private Workflow BuildWorkflow()
     {
+        // A fresh CopilotAIAgent per workflow build (per run). It is an AIAgent the MAF
+        // checkpoint manager can serialize, so the Copilot SDK session is persisted into the
+        // FileSystem checkpoint alongside the workflow state.
+        var copilotAgent = new CopilotAIAgent(
+            _copilotClientFactory,
+            _scopeProvider,
+            _sandboxExecutor,
+            _sandboxPolicyStore,
+            _approvalStore,
+            _toolApprovalGate,
+            _loggerFactory.CreateLogger<CopilotAIAgent>());
+
         var agentTurnExecutor = new AgentTurnExecutor(
-            _agentRunner,
+            copilotAgent,
             _worktreeOps,
             GetRecordingWriter,
             _loggerFactory.CreateLogger<AgentTurnExecutor>());
