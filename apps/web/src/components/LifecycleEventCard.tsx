@@ -1,4 +1,4 @@
-﻿import { memo, useState } from 'react';
+import { memo, useState } from 'react';
 import { Badge, Button, Text, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
@@ -13,7 +13,7 @@ import {
   CopyRegular,
   CheckmarkRegular,
   ShieldLockRegular,
-  TaskListRegular,
+  TaskListSquareLtrRegular,
 } from '@fluentui/react-icons';
 import type { RunStreamEvent } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
@@ -717,7 +717,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
           {taskText && (expanded
             ? <ChevronDownRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />
             : <ChevronRightRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />)}
-          <TaskListRegular className={styles.subtleIcon} aria-hidden="true" />
+          <TaskListSquareLtrRegular className={styles.subtleIcon} aria-hidden="true" />
           <Badge className={styles.badge} color="informative" shape="rounded" size="small">task</Badge>
           <Text className={styles.summary}>{preview}</Text>
         </div>
