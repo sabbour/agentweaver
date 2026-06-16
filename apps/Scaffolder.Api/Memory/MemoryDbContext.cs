@@ -14,9 +14,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.AgentName });
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Status });
-        model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Slug }).IsUnique();
+        model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.AgentName, e.Slug }).IsUnique();
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.AgentName });
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.Type });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.EndedAt });
+        model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
     }
 }

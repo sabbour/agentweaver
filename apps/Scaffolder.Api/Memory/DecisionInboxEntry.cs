@@ -15,4 +15,5 @@ public sealed class DecisionInboxEntry
     public required string Status { get; set; }      // pending | merged | rejected
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+    public DateTimeOffset? MergedAt { get; set; }
 }

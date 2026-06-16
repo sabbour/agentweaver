@@ -38,7 +38,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db)
         var learnings = await db.AgentMemory
             .Where(m => m.ProjectId == projectId
                      && m.Importance == "high"
-                     && (m.AgentName == agentName || (m.Tags != null && m.Tags.Contains("cross-team")))
+                     && (m.AgentName == agentName || (m.Tags != null && m.Tags.Contains(",cross-team,")))
                      && (m.Type == "learning" || m.Type == "pattern"))
             .OrderByDescending(m => m.CreatedAt)
             .Take(5)

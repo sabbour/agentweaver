@@ -165,16 +165,20 @@ public sealed class RunOrchestrator
             generation = entry.BumpGeneration();
         }
 
+        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
+            run with { Task = revisedTask }, ct);
+
         var input = new AgentTurnInput(
             run.Id.ToString(),
-            revisedTask,
+            taskWithHarvest,
             run.WorktreePath,
             run.WorktreeBranch,
             run.RepositoryPath,
             run.OriginatingBranch,
             run.ModelSource.ToApiString(),
             run.ModelId,
-            run.SubmittingUser);
+            run.SubmittingUser,
+            systemPromptContext);
 
         var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), ct).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun);

@@ -16,8 +16,11 @@
 |---|---|---|
 | ORM | EF Core with `Microsoft.EntityFrameworkCore.Sqlite` | Spec explicitly approves EF Core for new features (existing ADO.NET stores not migrated) |
 | Location | `apps/Scaffolder.Api/Memory/` folder | Keeps parity with existing `Runs/`, `Casting/`, `Projects/` folders; no new package needed |
-| DbContext | `MemoryDbContext` — separate from `SqliteDb` | Avoids touching the existing raw ADO.NET layer; same DB file via shared connection string |
-| Export trigger | After-write inline (not background) | SC-003: file ledger updated immediately after every write — no async queue |
+| DbContext | `MemoryDbContext` — **separate `memory.db` file** alongside `scaffolder.db` | Avoids touching the existing raw ADO.NET layer; separate file prevents schema conflicts and allows independent EnsureCreated |
+| Tags storage | Comma-separated string (e.g. `"cross-team,database"`) | Simpler than JSON for SQLite LIKE queries; `cross-team` tag is the only system-significant value |
+| Inbox rejection verb | `POST .../reject` (not DELETE) | State transition, not resource deletion — inbox entry is retained as audit evidence with `status=rejected` |
+| Export trigger | After-write inline on every mutation (Phases 2–5) | SC-003: file ledger updated immediately after every write — no async queue |
+| Scribe-pass export | Also exports at end of run (Phase 11) | Additive to inline export; Phase 11 export ensures the post-auto-merge state is reflected even if inline export ran before auto-merge |
 | Post-run Scribe pass | Fire-and-forget via `IServiceScopeFactory` after terminal state | FR-031: non-blocking; run status not affected by pass failure; auto-merges only learning/pattern/update types |
 | Import trigger | On `ConfirmCastAsync` + explicit POST endpoint | FR-021 |
 | MCP tools | New tool group `MemoryTools` in `Scaffolder.Mcp` | Constitution Principle IV: all API capabilities reachable via MCP |
@@ -48,11 +51,11 @@ UpdatedAt         DateTimeOffset
 Id                int       PK, AUTOINCREMENT
 ProjectId         string    NOT NULL
 AgentName         string    NOT NULL
-Slug              string    NOT NULL  -- UNIQUE(project_id, agent_name, slug)
+Slug              string    NOT NULL  -- UNIQUE(project_id, slug)
 Title             string    NOT NULL
 Content           string    NOT NULL
 Rationale         string?
-DecisionType      string    NOT NULL
+Type              string    NOT NULL  -- architectural | scope | process | pattern | learning | update
 Status            string    NOT NULL  -- pending | merged | rejected
 MergedAt          DateTimeOffset?
 DecisionId        int?      FK → Decision.Id (set on merge)
@@ -68,7 +71,7 @@ AgentName         string    NOT NULL
 Type              string    NOT NULL  -- core_context | learning | update | pattern
 Importance        string    NOT NULL  -- low | medium | high
 Content           string    NOT NULL  -- markdown
-Tags              string?   -- JSON array
+Tags              string?   -- comma-separated (e.g. "cross-team,database"); "cross-team" enables cross-agent injection
 SessionId         string?
 CreatedAt         DateTimeOffset
 UpdatedAt         DateTimeOffset
@@ -95,30 +98,31 @@ EndedAt           DateTimeOffset?
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/projects/{id}/decisions/inbox` | Submit draft decision |
-| `GET` | `/api/projects/{id}/decisions/inbox` | List inbox entries (`?agent=&type=`) |
+| `GET` | `/api/projects/{id}/decisions/inbox` | List inbox entries (`?agent=&type=&status=`) |
 | `POST` | `/api/projects/{id}/decisions/inbox/{entryId}/merge` | Atomically merge → Decision |
-| `DELETE` | `/api/projects/{id}/decisions/inbox/{entryId}` | Reject entry |
+| `POST` | `/api/projects/{id}/decisions/inbox/{entryId}/reject` | Reject entry (audit-safe; entry retained with `status=rejected`) |
 
 ### Decisions (3)
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/projects/{id}/decisions` | Create decision directly |
 | `GET` | `/api/projects/{id}/decisions` | List active decisions (`?type=&agent=`) |
-| `PATCH` | `/api/projects/{id}/decisions/{decisionId}` | Update status / set superseded |
+| `PUT` | `/api/projects/{id}/decisions/{decisionId}` | Update status / set superseded |
 
-### Agent memory (3)
+### Agent memory (4)
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/projects/{id}/agents/{name}/memory` | Record memory entry |
 | `GET` | `/api/projects/{id}/agents/{name}/memory` | Get agent memory (`?type=&importance=`) |
+| `GET` | `/api/projects/{id}/agents/{name}/memory/{memId}` | Get single memory record |
 | `GET` | `/api/projects/{id}/memory` | Cross-agent search (`?tags=&type=`) |
 
 ### Session context (3)
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/projects/{id}/sessions` | Start session |
+| `POST` | `/api/projects/{id}/sessions` | Start session (ends any current open session first) |
 | `GET` | `/api/projects/{id}/sessions/current` | Get most recent active session |
-| `PATCH` | `/api/projects/{id}/sessions/{sessionId}` | Update session / mark ended |
+| `PUT` | `/api/projects/{id}/sessions/current` | Update current session / mark ended |
 
 ### File interop (2)
 | Method | Path | Description |
@@ -132,55 +136,78 @@ EndedAt           DateTimeOffset?
 
 ### Phase 1 — EF Core data layer
 
-1. Add `Microsoft.EntityFrameworkCore.Sqlite` to `Scaffolder.Api.csproj`
+1. Add `Microsoft.EntityFrameworkCore.Sqlite` (v9.x) to `Scaffolder.Api.csproj`
 2. Create `apps/Scaffolder.Api/Memory/` folder
 3. Create 4 entity classes: `Decision.cs`, `DecisionInboxEntry.cs`, `AgentMemory.cs`, `SessionContext.cs`
 4. Create `MemoryDbContext.cs`:
-   - Reads connection string from `SqliteDb` (same DB file — inject `IConfiguration`)
+   - Connection string: derives `memory.db` path from `Database:Path` config (same directory as `scaffolder.db`)
    - Configures all 4 DbSets with table names matching spec DDL
-   - Unique index on `(project_id, agent_name, slug)` for inbox entries
+   - Unique index on `(project_id, slug)` for inbox entries
    - Unique index on `(project_id, session_id)` for sessions
-5. Register `MemoryDbContext` in `Program.cs` via `AddDbContext<MemoryDbContext>`
-6. Call `db.Database.EnsureCreatedAsync()` at startup (alongside existing `SqliteDb.EnsureCreatedAsync()`)
+5. Register `AddDbContext<MemoryDbContext>` as **scoped** in `Program.cs`
+6. Call `memoryDb.Database.EnsureCreatedAsync()` at startup (in a temporary scope, alongside `SqliteDb.EnsureCreatedAsync()`)
 7. `dotnet build` — verify clean before proceeding
 
-### Phase 2 — Decision inbox endpoints
+### Phase 2 — Domain: AgentName + AgentCharter on Run + runner interface
 
-Create `apps/Scaffolder.Api/Memory/DecisionInboxEndpoints.cs` (or register in `Program.cs`):
+This phase touches the domain model and the agent runner abstraction — required before any run integration can compile.
 
-- **POST inbox**: Validate request, upsert by `(project_id, agent_name, slug)` (FR-006 idempotency), return `201 Created` with entry ID
-- **GET inbox**: Query with optional `agent` and `type` filters, return list
-- **POST inbox/{id}/merge**: 
-  - Verify entry is `pending` — return 409 if already merged/rejected (FR-004)
-  - Begin EF transaction
-  - Create `Decision` record
-  - Update `DecisionInboxEntry`: `Status=merged`, `MergedAt=now`, `DecisionId=new.Id`
-  - Commit
-  - Call `SquadMemoryExporter.ExportAsync` (FR-018)
-  - Return `201 Created` with decision ID
-- **DELETE inbox/{id}**: Mark `rejected`, return `204 No Content`
+1. **`packages/Scaffolder.Domain/Run.cs`** — add two nullable fields:
+   ```csharp
+   public string? AgentName { get; init; }
+   public string? AgentCharter { get; init; }
+   ```
+2. **`apps/Scaffolder.Api/Infrastructure/SqliteDb.cs`** — add two `TryAlterAsync` migration calls:
+   ```csharp
+   await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_name TEXT;", ct);
+   await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_charter TEXT;", ct);
+   ```
+3. **`apps/Scaffolder.Api/Infrastructure/SqliteRunStore.cs`** — update `InsertAsync`, `TryCreateProjectRunAsync` (both INSERT statements), `SelectSql` (add columns 18/19), and `Map` (read positions 18/19)
+4. **`apps/Scaffolder.Api/Contracts/Dtos.cs`** — add `agent_name` to `CreateProjectRunRequest`
+5. **`packages/Scaffolder.Domain/IAgentRunner.cs`** — add optional `systemPromptContext` parameter at end of `ExecuteAsync` signature:
+   ```csharp
+   Task<string> ExecuteAsync(..., CancellationToken ct, string? systemPromptContext = null);
+   ```
+6. **`packages/Scaffolder.AgentRuntime/Workflow/WorkflowMessages.cs`** — add `string? SystemPromptContext = null` to `AgentTurnInput` record
+7. **`packages/Scaffolder.AgentRuntime/Workflow/AgentTurnExecutor.cs`** — pass `input.SystemPromptContext` to `_agentRunner.ExecuteAsync`
+8. **`packages/Scaffolder.AgentRuntime/GitHubCopilotAgentRunner.cs`** — add `systemPromptContext` param; append to `SystemMessage.Content` when non-null
+9. **`packages/Scaffolder.AgentRuntime/FoundryAgentRunner.cs`** — same; append to existing system prompt const
+10. **`packages/Scaffolder.AgentRuntime/AgentRunnerDispatcher.cs`** — add param, pass through to both runners
+11. `dotnet build` — verify clean
 
-### Phase 3 — Decision endpoints
+### Phase 3 — Decision inbox endpoints
 
-- **POST decisions**: Create `Decision` directly; call exporter; return `201`
-- **GET decisions**: Query with optional `type` and `agent` filters; return list
-- **PATCH decisions/{id}**: Update `Status` and/or set `SupersededById`; validate referenced decision exists if setting superseded; call exporter
+All endpoints registered inline in `Program.cs` following the existing pattern.
 
-### Phase 4 — Agent memory endpoints
+- **POST inbox**: Validate required fields (`agent_name`, `slug`, `type`, `title`, `content`); upsert by `(project_id, slug)` — idempotent by slug (FR-006); return `201 Created` with entry ID
+- **GET inbox**: Optional `?agent=`, `?type=`, `?status=` filters; default returns `pending` entries
+- **POST inbox/{id}/merge**:
+  - Verify entry is `pending` — return `409` if already merged/rejected
+  - EF transaction: create `Decision`, set `entry.Status=merged`, `entry.MergedAt=now`, `entry.DecisionId=new.Id`
+  - Inline `SquadMemoryExporter.ExportAsync` (SC-003)
+  - Return `201` with decision ID
+- **POST inbox/{id}/reject**: Set `Status=rejected`, retain entry; return `200`
 
-- **POST agents/{name}/memory**: Create `AgentMemory`; serialize `tags` array as JSON; call exporter; return `201`
-- **GET agents/{name}/memory**: Query by project + agent name; optional `?type=` and `?importance=` filters
-- **GET memory**: Cross-agent search; optional `?type=` filter; `?tags=` uses OR semantics (any tag match)
+### Phase 4 — Decision endpoints
 
-For tags: store as JSON string in DB; for tag filtering use `LIKE` on the JSON column (sufficient for SQLite without extensions).
+- **POST decisions**: Create `Decision` directly (coordinator path); inline export; return `201`
+- **GET decisions**: Optional `?type=`, `?agent=`; default returns `status=active`
+- **PUT decisions/{id}**: Update `Status`, `Content`, `Rationale`; if `supersededById` provided, validate target exists; inline export
 
-### Phase 5 — Session context endpoints
+### Phase 5 — Agent memory endpoints
 
-- **POST sessions**: Create `SessionContext`; enforce unique `(project_id, session_id)` — return 409 on conflict (FR-015); return `201`
-- **GET sessions/current**: Query `WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`; return 404 if none
-- **PATCH sessions/{sessionId}**: Update `FocusArea`, `ActiveIssues`, `Summary`, `SerializedState`, `EndedAt`; call exporter (for `identity/now.md` update)
+- **POST agents/{name}/memory**: Create `AgentMemory`; `tags` stored as comma-separated string; inline export; return `201`
+- **GET agents/{name}/memory**: Optional `?type=`, `?importance=`
+- **GET agents/{name}/memory/{memId}**: Single record
+- **GET memory**: Cross-agent search; `?tags=` OR semantics per tag using `LIKE '%{tag}%'`; `?type=` filter
 
-### Phase 6 — Squad file exporter + importer + context artifacts + endpoints
+### Phase 6 — Session context endpoints
+
+- **POST sessions**: Auto-end any open session first; create new `SessionContext`; enforce unique `(project_id, session_id)` — return `409` on conflict; inline export (updates `identity/now.md`); return `201`
+- **GET sessions/current**: `WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`; return `404` if none
+- **PUT sessions/current**: Update `FocusArea`, `ActiveIssues`, `Summary`, `SerializedState`; set `EndedAt` when `end=true`; inline export
+
+### Phase 7 — Squad file exporter + importer + context artifacts
 
 **`SquadMemoryExporter`** in `packages/Scaffolder.Squad/Memory/SquadMemoryExporter.cs`:
 
@@ -219,7 +246,7 @@ ExportAsync(projectRoot, decisions, inboxEntries, agentMemories, currentSession)
 
 **Endpoints** — unchanged from prior plan.
 
-### Phase 7 — MemoryContextCompiler (FR-024/025/027/030)
+### Phase 8 — MemoryContextCompiler (FR-024/025/027/030)
 
 Create `apps/Scaffolder.Api/Memory/MemoryContextCompiler.cs`:
 
@@ -306,7 +333,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db)
 
 Register `MemoryContextCompiler` as a scoped service in `Program.cs`.
 
-### Phase 8 — RunOrchestrator integration (FR-024/026)
+### Phase 9 — RunOrchestrator integration (FR-024/026)
 
 In `RunOrchestrator`, inject `MemoryContextCompiler`. Modify `StartRunAsync` and `StartReservedProjectRunAsync`:
 
@@ -347,11 +374,11 @@ After completing the task above, please:
 """;
 ```
 
-### Phase 9 — Init seeding (FR-022)
+### Phase 10 — Init seeding (FR-022)
 
 In `apps/Scaffolder.Api/Casting/CastingService.cs`, at end of `ConfirmCastAsync` — unchanged from prior plan.
 
-### Phase 10 — MCP memory tools (FR-028)
+### Phase 11 — MCP memory tools (FR-028)
 
 Add `apps/Scaffolder.Mcp/Tools/MemoryTools.cs` — 13 new MCP tools:
 
@@ -359,7 +386,7 @@ Add `apps/Scaffolder.Mcp/Tools/MemoryTools.cs` — 13 new MCP tools:
 
 Each is a thin proxy to the corresponding REST endpoint following the same `ScaffolderApiClient` pattern as existing tools.
 
-### Phase 11 — Post-run Scribe pass (FR-031/032/033)
+### Phase 12 — Post-run Scribe pass (FR-031/032/033)
 
 **The loop-close phase.** Closes the memory flywheel so each run deposits knowledge into the DB, which feeds the next run's context compilation.
 
@@ -446,8 +473,9 @@ public sealed class PostRunScribeService(
                 await memoryDb.SaveChangesAsync(ct);
             }
 
-            // Export uses same DTO mapping as the explicit export endpoint
-            // (this is wired up in the caller which has access to project.WorkingDirectory)
+
+            // Step 3: Call SquadMemoryExporter.ExportAsync(project.WorkingDirectory, decisionDtos, ...)
+            // PostRunScribeService injects IProjectStore to resolve project.WorkingDirectory.
         }
         catch (Exception ex)
         {
@@ -457,8 +485,15 @@ public sealed class PostRunScribeService(
 }
 ```
 
-**`RunWatchLoopService` trigger** — when a project run with `AgentName` reaches a terminal state (`Completed`, `Merged`, `NoChanges`), call `PostRunScribeService.RunAsync` in a background fire-and-forget scope (using `IServiceScopeFactory`). The trigger fires after the run event is emitted, not before.
+**Constructor signature** (required injections):
+```csharp
+public sealed class PostRunScribeService(
+    MemoryDbContext memoryDb,
+    IProjectStore projectStore,   // resolves project.WorkingDirectory for exporter
+    ILogger<PostRunScribeService> logger)
+```
 
+**`RunWatchLoopService` trigger** — when a project run with `AgentName` reaches a terminal state (`Completed`, `Merged`, `NoChanges`), call `PostRunScribeService.RunAsync` in a background fire-and-forget scope (using `IServiceScopeFactory`). The trigger fires after the run event is emitted, not before.
 Register `PostRunScribeService` as scoped in `Program.cs`.
 
 ---

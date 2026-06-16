@@ -75,21 +75,16 @@ public sealed class SquadMemoryExporter
         foreach (var group in memories.GroupBy(m => m.AgentName))
         {
             var sb = new StringBuilder();
-            foreach (var m in group.Where(m => m.Type != "core_context"))
+            sb.AppendLine($"# {group.Key} History");
+            sb.AppendLine();
+            foreach (var m in group.Where(m => m.Type != "core_context").OrderBy(m => m.CreatedAt))
             {
                 sb.AppendLine($"### [{m.Type}] {m.CreatedAt:yyyy-MM-dd}");
                 sb.AppendLine(m.Content);
                 sb.AppendLine();
             }
             if (sb.Length > 0)
-            {
-                var historyPath = $".squad/agents/{group.Key.ToLowerInvariant()}/history.md";
-                var full = Resolve(historyPath);
-                if (File.Exists(full))
-                    File.AppendAllText(full, "\n" + sb.ToString(), Encoding.UTF8);
-                else
-                    WriteAllText(historyPath, $"# {group.Key} History\n\n" + sb.ToString());
-            }
+                WriteAllText($".squad/agents/{group.Key.ToLowerInvariant()}/history.md", sb.ToString());
         }
     }
 
@@ -98,6 +93,8 @@ public sealed class SquadMemoryExporter
         if (session is null) return;
         var content = $"---\nupdated_at: {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ssZ}\nfocus_area: {session.FocusArea}\nactive_issues: [{session.ActiveIssues ?? ""}]\n---\n\n" +
                       $"# What We're Focused On\n\n{session.FocusArea}\n";
+        if (!string.IsNullOrEmpty(session.Summary))
+            content += $"\n## Summary\n\n{session.Summary}\n";
         WriteAllText(".squad/identity/now.md", content);
     }
 

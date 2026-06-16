@@ -91,6 +91,7 @@ builder.Services.AddDbContext<MemoryDbContext>(opts =>
     opts.UseSqlite($"Data Source={memoryDbPath}");
 });
 builder.Services.AddScoped<MemoryContextCompiler>();
+builder.Services.AddScoped<PostRunScribeService>();
 
 // Checkpoint GC background service (Guardrail 8)
 builder.Services.AddHostedService<CheckpointGcService>();
@@ -2614,7 +2615,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
         return Results.BadRequest(new { error = "agent_name, slug, type, title, and content are required." });
 
     var exists = await memoryDb.DecisionInbox
-        .AnyAsync(e => e.ProjectId == id && e.Slug == request.Slug, ct);
+        .AnyAsync(e => e.ProjectId == id && e.AgentName == request.AgentName && e.Slug == request.Slug, ct);
     if (exists)
         return Results.Conflict(new { error = "An inbox entry with this slug already exists." });
 
@@ -2672,14 +2673,16 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
 
-    var entry = await memoryDb.DecisionInbox.FindAsync(new object[] { entryId }, ct);
-    if (entry is null || entry.ProjectId != id) return Results.NotFound();
-    if (entry.Status != "pending")
-        return Results.Conflict(new { error = "Entry is not pending." });
+    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
+    var entry = await memoryDb.DecisionInbox
+        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
+    if (entry is null)
+        return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
     var now = DateTimeOffset.UtcNow;
     entry.Status = "merged";
     entry.UpdatedAt = now;
+    entry.MergedAt = now;
 
     // Promote to active decision
     var decision = new Decision
@@ -2696,6 +2699,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     };
     memoryDb.Decisions.Add(decision);
     await memoryDb.SaveChangesAsync(ct);
+    await tx.CommitAsync(ct);
     return Results.Ok(new { entry.Id, entry.Status, decisionId = decision.Id });
 });
 
@@ -2712,14 +2716,16 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
 
-    var entry = await memoryDb.DecisionInbox.FindAsync(new object[] { entryId }, ct);
-    if (entry is null || entry.ProjectId != id) return Results.NotFound();
-    if (entry.Status != "pending")
-        return Results.Conflict(new { error = "Entry is not pending." });
+    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
+    var entry = await memoryDb.DecisionInbox
+        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
+    if (entry is null)
+        return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
     entry.Status = "rejected";
     entry.UpdatedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
+    await tx.CommitAsync(ct);
     return Results.Ok(new { entry.Id, entry.Status });
 });
 
@@ -2814,6 +2820,43 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     });
 });
 
+// GET /api/projects/{id}/memory — cross-agent search across all memories for a project
+app.MapGet("/api/projects/{id}/memory", async (
+    string id,
+    string? type,
+    string? tags,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    IQueryable<AgentMemory> query = memoryDb.AgentMemory.Where(m => m.ProjectId == id);
+
+    if (!string.IsNullOrWhiteSpace(type))
+        query = query.Where(m => m.Type == type);
+
+    if (!string.IsNullOrWhiteSpace(tags))
+    {
+        var requestedTags = tags.Split(',')
+            .Select(t => t.Trim())
+            .Where(t => t.Length > 0)
+            .ToList();
+        foreach (var tag in requestedTags)
+            query = query.Where(m => m.Tags != null && EF.Functions.Like(m.Tags, $"%,{tag},%"));
+    }
+
+    var memories = await query.OrderByDescending(m => m.CreatedAt).ToListAsync(ct);
+    return Results.Ok(memories.Select(m => new
+    {
+        m.Id, m.AgentName, m.Type, m.Importance, m.Content, m.Tags,
+        created_at = m.CreatedAt, updated_at = m.UpdatedAt,
+    }));
+});
+
 // GET /api/projects/{id}/agents/{name}/memory
 app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
     string id,
@@ -2854,6 +2897,10 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         return Results.BadRequest(new { error = "type and content are required." });
 
     var now = DateTimeOffset.UtcNow;
+    var tags = request.Tags;
+    var normalizedTags = !string.IsNullOrWhiteSpace(tags)
+        ? "," + string.Join(",", tags.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0)) + ","
+        : null;
     var memory = new AgentMemory
     {
         ProjectId = id,
@@ -2861,7 +2908,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         Type = request.Type!,
         Importance = request.Importance ?? "medium",
         Content = request.Content!,
-        Tags = request.Tags,
+        Tags = normalizedTags,
         CreatedAt = now,
         UpdatedAt = now,
     };
@@ -2934,11 +2981,31 @@ app.MapPost("/api/projects/{id}/sessions", async (
     if (string.IsNullOrWhiteSpace(request.FocusArea))
         return Results.BadRequest(new { error = "focus_area is required." });
 
+    var newSessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
+
+    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
+
+    // Check for duplicate SessionId
+    var duplicate = await memoryDb.SessionContexts
+        .AnyAsync(s => s.ProjectId == id && s.SessionId == newSessionId, ct);
+    if (duplicate)
+    {
+        await tx.RollbackAsync(ct);
+        return Results.Conflict(new { error = "A session with this session_id already exists." });
+    }
+
+    // Close any open sessions
+    var openSessions = await memoryDb.SessionContexts
+        .Where(s => s.ProjectId == id && s.EndedAt == null)
+        .ToListAsync(ct);
+    foreach (var s in openSessions)
+        s.EndedAt = DateTimeOffset.UtcNow;
+
     var now = DateTimeOffset.UtcNow;
     var session = new SessionContext
     {
         ProjectId = id,
-        SessionId = request.SessionId ?? Guid.NewGuid().ToString("N"),
+        SessionId = newSessionId,
         FocusArea = request.FocusArea!,
         ActiveIssues = request.ActiveIssues,
         Summary = request.Summary,
@@ -2946,6 +3013,7 @@ app.MapPost("/api/projects/{id}/sessions", async (
     };
     memoryDb.SessionContexts.Add(session);
     await memoryDb.SaveChangesAsync(ct);
+    await tx.CommitAsync(ct);
     return Results.Created($"/api/projects/{id}/sessions/current", new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -3011,7 +3079,7 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     var memoryDtos = memories.Select(m => new Scaffolder.Squad.Memory.MemoryExportDto(
         m.AgentName, m.Type, m.Content, m.CreatedAt)).ToList();
     var sessionDto = session is null ? null : new Scaffolder.Squad.Memory.SessionExportDto(
-        session.FocusArea, session.ActiveIssues);
+        session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary);
 
     var exporter = new Scaffolder.Squad.Memory.SquadMemoryExporter(project.WorkingDirectory);
     await exporter.ExportAsync(decisionDtos, inboxDtos, memoryDtos, sessionDto, ct);
@@ -3035,7 +3103,7 @@ app.MapPost("/api/projects/{id}/memory/import", async (
     int newCount = 0;
     foreach (var p in parsed)
     {
-        var exists = await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == p.Slug, ct);
+        var exists = await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.AgentName == p.AgentName && e.Slug == p.Slug, ct);
         if (!exists)
         {
             var now = DateTimeOffset.UtcNow;

@@ -24,8 +24,10 @@ public sealed record MemoryExportDto(
     DateTimeOffset CreatedAt);
 
 public sealed record SessionExportDto(
+    string SessionId,
     string FocusArea,
-    string? ActiveIssues);
+    string? ActiveIssues,
+    string? Summary = null);
 
 /// <summary>DTO produced by SquadMemoryImporter.ScanInboxFiles().</summary>
 public sealed record InboxImportDto(
