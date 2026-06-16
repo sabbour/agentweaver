@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Button,
@@ -21,9 +21,20 @@ import {
   ShieldRegular,
   SubtractCircleRegular,
 } from '@fluentui/react-icons';
+import {
+  ReactFlow,
+  MarkerType,
+  Position,
+  Handle,
+  type Node,
+  type Edge,
+  type NodeProps,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { useRunStream } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { API_KEY, API_URL } from '../config';
+import { layoutDag, NODE_W, NODE_H } from '../utils/dagLayout';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,10 +48,6 @@ interface ExecutorState {
   status: StepStatus;
   agentName?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Executor definitions (MAF pipeline order)
-// ---------------------------------------------------------------------------
 
 interface ExecutorDef {
   key: ExecutorKey;
@@ -58,15 +65,27 @@ const EXECUTORS: ExecutorDef[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Styles
+// Node data shape passed into React Flow custom nodes
 // ---------------------------------------------------------------------------
 
-const useStyles = makeStyles({
+interface WorkflowNodeData extends Record<string, unknown> {
+  def: ExecutorDef;
+  state: ExecutorState;
+  agentName?: string;
+  runId: string;
+  projectId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Styles — page-level
+// ---------------------------------------------------------------------------
+
+const usePageStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-    maxWidth: '1020px',
+    maxWidth: '1100px',
   },
   breadcrumb: {
     display: 'flex',
@@ -90,68 +109,34 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
-  // Pipeline layout
-  pipeline: {
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
-  parallelGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  parallelRow: {
-    display: 'flex',
-    alignItems: 'center',
-  },
-  // Connector: 40px wide, hollow circles at each end with a 1px line
-  connector: {
-    display: 'flex',
-    alignItems: 'center',
-    width: '40px',
-    flexShrink: 0,
-  },
-  connectorDot: {
-    width: '6px',
-    height: '6px',
-    borderRadius: '50%',
+  dagContainer: {
+    height: '340px',
+    borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: 'transparent',
-    flexShrink: 0,
+    backgroundColor: tokens.colorNeutralBackground1,
+    // Override React Flow's default background so it matches the page.
+    '& .react-flow__renderer': {
+      borderRadius: '8px',
+    },
   },
-  connectorLine: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: tokens.colorNeutralStroke2,
-  },
-  // Arc above the pipeline — wraps pipeline in relative container with top padding
-  pipelineArcWrap: {
-    position: 'relative',
-    paddingTop: '44px',
-  },
-  arcSvg: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: '44px',
-    pointerEvents: 'none',
-    overflow: 'visible',
-  },
-  // Executor card
-  executorCard: {
+});
+
+// ---------------------------------------------------------------------------
+// Styles — custom workflow node
+// ---------------------------------------------------------------------------
+
+const useNodeStyles = makeStyles({
+  card: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
-    padding: '16px',
-    minWidth: '160px',
-    maxWidth: '220px',
-    flex: '0 0 auto',
+    padding: '14px',
+    width: `${NODE_W}px`,
+    minHeight: `${NODE_H}px`,
+    boxSizing: 'border-box',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '8px',
-    boxSizing: 'border-box',
   },
   cardHeader: {
     display: 'flex',
@@ -164,38 +149,21 @@ const useStyles = makeStyles({
     letterSpacing: '0.5px',
     fontWeight: tokens.fontWeightSemibold,
   },
-  // Status badge (pill)
   statusBadge: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: '3px',
-    padding: '2px 8px',
+    padding: '2px 7px',
     borderRadius: '999px',
     fontSize: tokens.fontSizeBase100,
     fontWeight: tokens.fontWeightSemibold,
     whiteSpace: 'nowrap',
   },
-  badgePending: {
-    backgroundColor: tokens.colorNeutralBackground4,
-    color: tokens.colorNeutralForeground3,
-  },
-  badgeStarted: {
-    backgroundColor: tokens.colorBrandBackground2,
-    color: tokens.colorBrandForeground1,
-  },
-  badgeCompleted: {
-    backgroundColor: tokens.colorPaletteGreenBackground2,
-    color: tokens.colorPaletteGreenForeground1,
-  },
-  badgeSkipped: {
-    backgroundColor: tokens.colorNeutralBackground3,
-    color: tokens.colorNeutralForeground4,
-  },
-  badgeFailed: {
-    backgroundColor: tokens.colorPaletteRedBackground2,
-    color: tokens.colorPaletteRedForeground1,
-  },
-  // Card main content
+  badgePending:   { backgroundColor: tokens.colorNeutralBackground4,        color: tokens.colorNeutralForeground3  },
+  badgeStarted:   { backgroundColor: tokens.colorBrandBackground2,           color: tokens.colorBrandForeground1    },
+  badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2,    color: tokens.colorPaletteGreenForeground1 },
+  badgeSkipped:   { backgroundColor: tokens.colorNeutralBackground3,         color: tokens.colorNeutralForeground4  },
+  badgeFailed:    { backgroundColor: tokens.colorPaletteRedBackground2,      color: tokens.colorPaletteRedForeground1 },
   cardMain: {
     display: 'flex',
     alignItems: 'center',
@@ -227,28 +195,27 @@ const useStyles = makeStyles({
 });
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Status badge component
 // ---------------------------------------------------------------------------
 
-function statusLabel(s: StepStatus): string {
-  if (s === 'pending') return 'Pending';
-  if (s === 'started') return 'In Progress';
+function statusLabel(s: StepStatus) {
+  if (s === 'pending')   return 'Pending';
+  if (s === 'started')   return 'In Progress';
   if (s === 'completed') return 'Complete';
-  if (s === 'skipped') return 'Skipped';
-  if (s === 'failed') return 'Failed';
+  if (s === 'skipped')   return 'Skipped';
+  if (s === 'failed')    return 'Failed';
   return s;
 }
 
 function StatusBadge({ status }: { status: StepStatus }) {
-  const styles = useStyles();
+  const s = useNodeStyles();
   const badgeClass = {
-    pending:   styles.badgePending,
-    started:   styles.badgeStarted,
-    completed: styles.badgeCompleted,
-    skipped:   styles.badgeSkipped,
-    failed:    styles.badgeFailed,
+    pending:   s.badgePending,
+    started:   s.badgeStarted,
+    completed: s.badgeCompleted,
+    skipped:   s.badgeSkipped,
+    failed:    s.badgeFailed,
   }[status];
-
   const Icon = {
     pending:   CircleRegular,
     started:   ArrowSyncRegular,
@@ -256,65 +223,79 @@ function StatusBadge({ status }: { status: StepStatus }) {
     skipped:   SubtractCircleRegular,
     failed:    DismissCircleRegular,
   }[status];
-
   return (
-    <span className={`${styles.statusBadge} ${badgeClass}`}>
+    <span className={`${s.statusBadge} ${badgeClass}`}>
       <Icon fontSize={10} aria-hidden="true" />
       {statusLabel(status)}
     </span>
   );
 }
 
-interface ExecutorCardProps {
-  def: ExecutorDef;
-  state: ExecutorState;
-  agentName: string | undefined;
-  runId: string;
-  projectId: string;
-}
+// ---------------------------------------------------------------------------
+// Custom React Flow node — matches existing ExecutorCard design
+// Handles:
+//   Left  = standard LR target (for forward edges coming in)
+//   Right = standard LR source (for forward edges going out)
+//   Top   = retrigger source (rai, review) / target (agent) for loop-back arcs
+// ---------------------------------------------------------------------------
 
-function ExecutorCard({ def, state, agentName, runId, projectId }: ExecutorCardProps) {
-  const styles = useStyles();
+const LOOP_SOURCES = new Set<ExecutorKey>(['rai', 'review']);
+const LOOP_TARGET: ExecutorKey = 'agent';
+
+function WorkflowNode({ data }: NodeProps) {
+  const s = useNodeStyles();
+  const { def, state, agentName, runId, projectId } = data as WorkflowNodeData;
   const { key, label, Icon, type } = def;
   const { status } = state;
 
+  const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
+
   return (
-    <div className={styles.executorCard} role="article" aria-label={`${label}: ${statusLabel(status)}`}>
-      {/* Type label (top-left) + status badge (top-right) */}
-      <div className={styles.cardHeader}>
-        <span className={styles.cardTypeLabel}>{type}</span>
+    <div className={s.card} role="article" aria-label={`${label}: ${statusLabel(status)}`}>
+      {/* React Flow handles — invisible, only for edge routing */}
+      <Handle type="target" position={Position.Left} style={handleStyle} />
+      <Handle type="source" position={Position.Right} style={handleStyle} />
+      {LOOP_SOURCES.has(key as ExecutorKey) && (
+        <Handle type="source" id="retrigger" position={Position.Top} style={handleStyle} />
+      )}
+      {key === LOOP_TARGET && (
+        <Handle type="target" id="retrigger" position={Position.Top} style={handleStyle} />
+      )}
+
+      {/* Card header: type label + status badge */}
+      <div className={s.cardHeader}>
+        <span className={s.cardTypeLabel}>{type}</span>
         <StatusBadge status={status} />
       </div>
 
-      {/* Icon + title + optional sub-text */}
-      <div className={styles.cardMain}>
-        <span className={styles.cardIcon} aria-hidden="true">
+      {/* Icon + title */}
+      <div className={s.cardMain}>
+        <span className={s.cardIcon} aria-hidden="true">
           <Icon fontSize={22} />
         </span>
-        <div className={styles.cardTitleGroup}>
-          <span className={styles.cardTitle}>{label}</span>
-          {agentName && <span className={styles.cardSubText}>{agentName}</span>}
+        <div className={s.cardTitleGroup}>
+          <span className={s.cardTitle}>{label}</span>
+          {agentName && <span className={s.cardSubText}>{agentName}</span>}
         </div>
       </div>
 
+      {/* Action buttons */}
       {key === 'agent' && (
-        <div className={styles.cardActions}>
+        <div className={s.cardActions}>
           <Link to={`/watch/${runId}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View run</Button>
           </Link>
         </div>
       )}
-
       {(key === 'rai' || key === 'scribe') && (status === 'started' || status === 'completed' || status === 'failed') && (
-        <div className={styles.cardActions}>
+        <div className={s.cardActions}>
           <Link to={`/watch/${runId}-${key}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
       )}
-
       {key === 'review' && status === 'started' && (
-        <div className={styles.cardActions}>
+        <div className={s.cardActions}>
           <Link to={`/watch/${runId}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
             <Button appearance="primary" size="small">Awaiting review</Button>
           </Link>
@@ -324,65 +305,73 @@ function ExecutorCard({ def, state, agentName, runId, projectId }: ExecutorCardP
   );
 }
 
+const nodeTypes = { workflow: WorkflowNode };
+
 // ---------------------------------------------------------------------------
-// Connectors
+// Edge helpers
 // ---------------------------------------------------------------------------
 
-function PipeConnector() {
-  const styles = useStyles();
-  return (
-    <div className={styles.connector} aria-hidden="true">
-      <div className={styles.connectorDot} />
-      <div className={styles.connectorLine} />
-      <div className={styles.connectorDot} />
-    </div>
-  );
+const STROKE = `var(--colorNeutralStroke1)`;
+const STROKE_MUTED = `var(--colorNeutralStroke2)`;
+
+function forwardEdge(id: string, source: string, target: string, animated = false): Edge {
+  return {
+    id,
+    source,
+    target,
+    type: 'smoothstep',
+    animated,
+    style: { stroke: STROKE_MUTED, strokeWidth: 1.5 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: STROKE_MUTED, width: 12, height: 12 },
+  };
 }
+
+function loopbackEdge(id: string, source: string, target: string, label: string): Edge {
+  return {
+    id,
+    source,
+    target,
+    sourceHandle: 'retrigger',
+    targetHandle: 'retrigger',
+    type: 'smoothstep',
+    label,
+    labelStyle: { fill: STROKE, fontSize: 10, fontWeight: 600 },
+    labelBgStyle: { fill: `var(--colorNeutralBackground1)`, fillOpacity: 0.9 },
+    labelBgPadding: [4, 6] as [number, number],
+    labelBgBorderRadius: 4,
+    style: { stroke: STROKE, strokeWidth: 1, strokeDasharray: '5 3' },
+    markerEnd: { type: MarkerType.ArrowClosed, color: STROKE, width: 10, height: 10 },
+  };
+}
+
+// Forward edges only — fed to dagre for layout. Loop-backs excluded so dagre
+// doesn't try to invert cycles and corrupt the LR rank assignment.
+const FORWARD_EDGES: Edge[] = [
+  forwardEdge('agent-rai',     'agent',  'rai'),
+  forwardEdge('rai-review',    'rai',    'review'),
+  forwardEdge('review-merge',  'review', 'merge'),
+  forwardEdge('merge-scribe',  'merge',  'scribe'),
+];
+
+// Loop-back edges rendered by React Flow but excluded from dagre.
+const LOOPBACK_EDGES: Edge[] = [
+  loopbackEdge('rai-agent-revise',    'rai',    'agent', 'Revise'),
+  loopbackEdge('review-agent-change', 'review', 'agent', 'Request changes'),
+];
+
+const ALL_EDGES: Edge[] = [...FORWARD_EDGES, ...LOOPBACK_EDGES];
 
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export function WorkflowRunPage() {
-  const styles = useStyles();
+  const styles = usePageStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
 
   const [agentName, setAgentName] = useState<string | undefined>(undefined);
   const [runStatus, setRunStatus] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
-
-  // Refs for measuring card positions to draw feedback arcs above the pipeline.
-  const pipelineWrapRef = useRef<HTMLDivElement>(null);
-  const agentCardRef    = useRef<HTMLDivElement>(null);
-  const raiCardRef      = useRef<HTMLDivElement>(null);
-  const reviewCardRef   = useRef<HTMLDivElement>(null);
-  const [arcGeom, setArcGeom] = useState<{
-    raiFromX: number; raiFromTop: number;
-    revFromX: number; revFromTop: number;
-    toX:      number; toTop:      number;
-  } | null>(null);
-
-  useLayoutEffect(() => {
-    function measure() {
-      if (!pipelineWrapRef.current || !agentCardRef.current || !raiCardRef.current || !reviewCardRef.current) return;
-      const wrapRect   = pipelineWrapRef.current.getBoundingClientRect();
-      const agentRect  = agentCardRef.current.getBoundingClientRect();
-      const raiRect    = raiCardRef.current.getBoundingClientRect();
-      const reviewRect = reviewCardRef.current.getBoundingClientRect();
-      setArcGeom({
-        raiFromX:   raiRect.left    + raiRect.width    / 2 - wrapRect.left,
-        raiFromTop: raiRect.top                             - wrapRect.top,
-        revFromX:   reviewRect.left + reviewRect.width  / 2 - wrapRect.left,
-        revFromTop: reviewRect.top                          - wrapRect.top,
-        toX:        agentRect.left  + agentRect.width   / 2 - wrapRect.left,
-        toTop:      agentRect.top                           - wrapRect.top,
-      });
-    }
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (pipelineWrapRef.current) ro.observe(pipelineWrapRef.current);
-    return () => ro.disconnect();
-  }, []);
 
   useEffect(() => {
     if (!projectId || !runId) return;
@@ -399,12 +388,9 @@ export function WorkflowRunPage() {
     return () => { cancelled = true; };
   }, [projectId, runId]);
 
-  // Subscribe to SSE stream for live workflow.step events
   const { events, status: streamStatus } = useRunStream(runId ?? '', API_KEY, API_URL);
 
-  // Derive executor states from received workflow.step events.
-  // When the stream closes with no step events (historical run predating RunEvents persistence),
-  // infer completed/skipped states from the run's terminal status.
+  // Derive executor states from SSE workflow.step events.
   const executorStates = useMemo<Record<string, ExecutorState>>(() => {
     const map: Record<string, ExecutorState> = {};
     for (const evt of events) {
@@ -416,7 +402,7 @@ export function WorkflowRunPage() {
       map[step] = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
     }
 
-    // Fallback: stream finished but no step events — infer from terminal run status
+    // Fallback: stream done but no step events — infer from terminal run status.
     const hasStepEvents = Object.keys(map).length > 0;
     const streamDone = streamStatus === 'done' || streamStatus === 'error';
     if (!hasStepEvents && streamDone && runStatus) {
@@ -438,7 +424,6 @@ export function WorkflowRunPage() {
           map['review'] = { status: 'completed' };
           map['merge']  = { status: 'failed' };
         } else if (runStatus === 'completed') {
-          // Legacy "completed" = no-changes path; review/merge skipped
           map['review'] = { status: 'skipped' };
           map['merge']  = { status: 'skipped' };
         }
@@ -448,21 +433,32 @@ export function WorkflowRunPage() {
     return map;
   }, [events, streamStatus, runStatus, agentName]);
 
+  // Build React Flow nodes from executor definitions + live states.
+  // Run dagre on the forward edges only to compute stable LR positions.
+  const rfNodes: Node[] = useMemo(() => {
+    const raw: Node[] = EXECUTORS.map((def) => ({
+      id: def.key,
+      type: 'workflow',
+      data: {
+        def,
+        state: executorStates[def.key] ?? { status: 'pending' },
+        agentName: def.key === 'agent'
+          ? (executorStates['agent']?.agentName ?? agentName)
+          : undefined,
+        runId: runId ?? '',
+        projectId: projectId ?? '',
+      } as WorkflowNodeData,
+      position: { x: 0, y: 0 },
+    }));
+    return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 72, nodeSep: 32 });
+  }, [executorStates, agentName, runId, projectId]);
+
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
   }
 
   const shortId = runId.length > 8 ? runId.slice(0, 8) : runId;
   const isConnecting = streamStatus === 'connecting';
-
-  const [agentDef, raiDef, reviewDef, mergeDef, scribeDef] = EXECUTORS;
-
-  function getState(key: ExecutorKey): ExecutorState {
-    return executorStates[key] ?? { status: 'pending' };
-  }
-
-  // SVG arc — neutral connector style, matches PipeConnector color.
-  const arcColor = tokens.colorNeutralStroke2;
 
   return (
     <div className={styles.root}>
@@ -486,112 +482,24 @@ export function WorkflowRunPage() {
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
 
-      {/* Executor pipeline — wrapped in relative container so arc SVGs can sit above.
-          Layout: [Agent] ──○ ○── [Rai   ] ──○ ○── [Merge] ──○ ○── [Scribe]
-                                  [Review] ──○ /
-          Arcs above (Rai at y=10, Review at y=22): both loop back to Agent top.
-      */}
-      <div ref={pipelineWrapRef} className={styles.pipelineArcWrap}>
-        {/* Feedback arc SVGs — two L-paths above the pipeline */}
-        {arcGeom && (
-          <svg aria-hidden="true" className={styles.arcSvg}>
-            <defs>
-              <marker id="rai-arc-arrow" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse">
-                <path d="M 0 0 L 6 3 L 0 6 z" fill={arcColor} />
-              </marker>
-              <marker id="review-arc-arrow" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse">
-                <path d="M 0 0 L 6 3 L 0 6 z" fill={arcColor} />
-              </marker>
-            </defs>
-            {/* Rai → Agent arc (upper, y=10) */}
-            <circle cx={arcGeom.raiFromX} cy={arcGeom.raiFromTop} r="3"
-              stroke={arcColor} strokeWidth="1" fill="none" />
-            <path
-              d={`M ${arcGeom.raiFromX},${arcGeom.raiFromTop - 3} L ${arcGeom.raiFromX},10 L ${arcGeom.toX},10 L ${arcGeom.toX},${arcGeom.toTop}`}
-              stroke={arcColor} strokeWidth="1" fill="none"
-              markerEnd="url(#rai-arc-arrow)"
-            />
-            {/* Review → Agent arc (lower, y=24) */}
-            <circle cx={arcGeom.revFromX} cy={arcGeom.revFromTop} r="3"
-              stroke={arcColor} strokeWidth="1" fill="none" />
-            <path
-              d={`M ${arcGeom.revFromX},${arcGeom.revFromTop - 3} L ${arcGeom.revFromX},24 L ${arcGeom.toX},24 L ${arcGeom.toX},${arcGeom.toTop}`}
-              stroke={arcColor} strokeWidth="1" fill="none"
-              markerEnd="url(#review-arc-arrow)"
-            />
-            {/* Shared dot at Agent end */}
-            <circle cx={arcGeom.toX} cy={arcGeom.toTop} r="3"
-              stroke={arcColor} strokeWidth="1" fill="none" />
-          </svg>
-        )}
-
-        <div className={styles.pipeline} role="list" aria-label="Workflow executor pipeline">
-          {/* Agent */}
-          <div ref={agentCardRef} role="listitem">
-            <ExecutorCard
-              def={agentDef}
-              state={getState('agent')}
-              agentName={getState('agent').agentName ?? agentName}
-              runId={runId}
-              projectId={projectId}
-            />
-          </div>
-
-          {/* Parallel group: Rai (top) + Review (bottom) */}
-          <div className={styles.parallelGroup} role="listitem" aria-label="Parallel actions">
-            <div className={styles.parallelRow}>
-              <PipeConnector />
-              <div ref={raiCardRef}>
-                <ExecutorCard
-                  def={raiDef}
-                  state={getState('rai')}
-                  agentName={undefined}
-                  runId={runId}
-                  projectId={projectId}
-                />
-              </div>
-              <PipeConnector />
-            </div>
-            <div className={styles.parallelRow}>
-              <PipeConnector />
-              <div ref={reviewCardRef}>
-                <ExecutorCard
-                  def={reviewDef}
-                  state={getState('review')}
-                  agentName={undefined}
-                  runId={runId}
-                  projectId={projectId}
-                />
-              </div>
-              <PipeConnector />
-            </div>
-          </div>
-
-          {/* Merge */}
-          <div role="listitem">
-            <ExecutorCard
-              def={mergeDef}
-              state={getState('merge')}
-              agentName={undefined}
-              runId={runId}
-              projectId={projectId}
-            />
-          </div>
-
-          {/* Connector to Scribe */}
-          <PipeConnector />
-
-          {/* Scribe */}
-          <div role="listitem">
-            <ExecutorCard
-              def={scribeDef}
-              state={getState('scribe')}
-              agentName={undefined}
-              runId={runId}
-              projectId={projectId}
-            />
-          </div>
-        </div>
+      {/* React Flow diagram */}
+      <div className={styles.dagContainer}>
+        <ReactFlow
+          nodes={rfNodes}
+          edges={ALL_EDGES}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.25 }}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          panOnScroll={false}
+          zoomOnScroll={false}
+          zoomOnPinch={false}
+          zoomOnDoubleClick={false}
+          panOnDrag={false}
+          proOptions={{ hideAttribution: true }}
+        />
       </div>
     </div>
   );
