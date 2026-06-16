@@ -17,7 +17,9 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
     private const string TargetPrefix = "Scaffolder.GitHub.";
     private const string TombstoneUsername = "signed-out";
 
-    private readonly InMemoryGitHubTokenStore _fallback = new();
+    // On non-Windows platforms the OS credential manager is unavailable.
+    // Use a file-based store (owner-only 0600 JSON) so tokens survive restarts.
+    private readonly FileSystemGitHubTokenStore _fallback = new();
 
     public async Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default)
     {
