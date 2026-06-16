@@ -65,9 +65,10 @@ interface AgentAvatarProps {
   size?: number;
   isBuiltIn?: boolean;
   isRetired?: boolean;
+  circle?: boolean;
 }
 
-export function AgentAvatar({ name, size = 40, isBuiltIn = false, isRetired = false }: AgentAvatarProps) {
+export function AgentAvatar({ name, size = 40, isBuiltIn = false, isRetired = false, circle = false }: AgentAvatarProps) {
   const styles = useStyles();
   const pixels = generatePixels(name);
   const { bg, fg } = avatarColor(name);
@@ -83,7 +84,7 @@ export function AgentAvatar({ name, size = 40, isBuiltIn = false, isRetired = fa
         height={svgSize}
         viewBox={`0 0 5 5`}
         aria-hidden="true"
-        style={{ opacity, borderRadius: '4px' }}
+        style={{ opacity, borderRadius: circle ? '50%' : '4px' }}
       >
         <rect x="0" y="0" width="5" height="5" fill={bg} />
         {pixels.map((row, rowIdx) =>

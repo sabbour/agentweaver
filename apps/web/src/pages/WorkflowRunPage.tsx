@@ -410,7 +410,7 @@ function WorkflowNode({ data }: NodeProps) {
       <div className={s.cardMain}>
         <span className={s.cardIcon} aria-hidden="true">
           {key === 'agent' && agentName
-            ? <AgentAvatar name={agentName as string} size={28} />
+            ? <AgentAvatar name={agentName as string} size={28} circle />
             : <Icon fontSize={22} />}
         </span>
         <div className={s.cardTitleGroup}>
