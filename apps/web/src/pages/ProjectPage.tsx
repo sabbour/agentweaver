@@ -246,11 +246,22 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
   return (
     <div className={styles.runRow}>
       <Badge appearance="tint" color={
-        run.status === 'completed' || run.status === 'merged' ? 'success' :
+        run.status === 'merged' ? 'success' :
+        run.status === 'completed' && run.result === 'no_changes' ? 'informative' :
+        run.status === 'completed' ? 'success' :
         run.status === 'failed' || run.status === 'merge_failed' ? 'danger' :
         run.status === 'in_progress' ? 'informative' : 'subtle'
       }>
-        {run.status}
+        {run.status === 'completed' && run.result === 'no_changes' ? 'No Changes' :
+         run.status === 'completed' ? 'Completed' :
+         run.status === 'merged' ? 'Merged' :
+         run.status === 'failed' ? 'Failed' :
+         run.status === 'merge_failed' ? 'Merge Failed' :
+         run.status === 'declined' ? 'Declined' :
+         run.status === 'in_progress' ? 'Running' :
+         run.status === 'awaiting_review' ? 'Awaiting Review' :
+         run.status === 'merging' ? 'Merging' :
+         run.status}
       </Badge>
       <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>

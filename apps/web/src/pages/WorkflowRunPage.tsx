@@ -68,6 +68,7 @@ interface ExecutorState {
   status: StepStatus;
   agentName?: string;
   intent?: string;      // latest agent.intent text — replaces static "Working on task..."
+  reviewer?: string;    // GitHub username of the human reviewer (review step only)
   startedAt?: number;   // ms epoch — from timestamp_utc in workflow.step event
   completedAt?: number; // ms epoch — from timestamp_utc of first terminal event
 }
@@ -190,7 +191,7 @@ const useNodeStyles = makeStyles({
   badgeStarted:   { backgroundColor: tokens.colorBrandBackground2,                color: tokens.colorBrandForeground1    },
   badgeAwaiting:  { backgroundColor: tokens.colorPaletteMarigoldBorderActive,     color: tokens.colorNeutralForegroundInverted },
   badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2,         color: tokens.colorPaletteGreenForeground1 },
-  badgeSkipped:   { backgroundColor: tokens.colorNeutralBackground3,              color: tokens.colorNeutralForeground4  },
+  badgeSkipped:   { backgroundColor: tokens.colorPaletteLightTealBackground2,     color: tokens.colorPaletteLightTealForeground2 },
   badgeFailed:    { backgroundColor: tokens.colorPaletteRedBackground2,           color: tokens.colorPaletteRedForeground1 },
   badgeRevise:    { backgroundColor: tokens.colorStatusWarningBackground2,        color: tokens.colorStatusWarningForeground1 },
   cardMain: {
@@ -331,6 +332,7 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
   if (key === 'scribe') {
     if (status === 'started')   return 'Logging session...';
     if (status === 'completed') return 'Done';
+    if (status === 'skipped')   return 'Skipped';
   }
   return null;
 }
@@ -751,10 +753,11 @@ export function WorkflowRunPage() {
         const step      = String(evt.payload['step'] ?? '');
         const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
         const evtAgent  = evt.payload['agent_name'] != null ? String(evt.payload['agent_name']) : undefined;
+        const evtReviewer = evt.payload['reviewer'] != null ? String(evt.payload['reviewer']) : undefined;
         const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
         const tsMs = tsStr ? new Date(tsStr).getTime() : NaN;
         const prev = map[step];
-        const newState: ExecutorState = { status: evtStatus, agentName: evtAgent ?? prev?.agentName };
+        const newState: ExecutorState = { status: evtStatus, agentName: evtAgent ?? prev?.agentName, reviewer: evtReviewer ?? prev?.reviewer };
         if (evtStatus === 'started') {
           newState.startedAt = !isNaN(tsMs) ? tsMs : undefined;
         } else {
@@ -802,6 +805,13 @@ export function WorkflowRunPage() {
     const streamDone = streamStatus === 'done' || streamStatus === 'error';
     if (streamDone && map['merge']?.status === 'completed' && !map['scribe']) {
       map['scribe'] = { status: 'skipped' };
+    }
+
+    // Optimistic: if stream is done and agent completed but no review/merge events arrived,
+    // the run had no changes — both steps were skipped by the workflow.
+    if (streamDone && map['agent']?.status === 'completed' && !map['review'] && !map['merge']) {
+      map['review'] = { status: 'skipped' };
+      map['merge']  = { status: 'skipped' };
     }
 
     // Fallback: stream done but no step events — infer from terminal run status.
@@ -863,7 +873,7 @@ export function WorkflowRunPage() {
         runId:           runId      ?? '',
         executionId:     executionId ?? '',
         projectId:       projectId  ?? '',
-        reviewedBy:      def.key === 'review' ? reviewedBy : undefined,
+        reviewedBy:      def.key === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));

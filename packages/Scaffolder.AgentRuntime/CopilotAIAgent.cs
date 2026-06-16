@@ -458,12 +458,35 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
             case ToolExecutionStartEvent start when start.Data is not null:
             {
                 var callId = start.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
-                if (SuppressedInternalTools.Contains(start.Data.ToolName ?? ""))
+                var toolName = start.Data.ToolName ?? "";
+
+                // Translate report_intent into an agent.intent event BEFORE general suppression.
+                if (string.Equals(toolName, "report_intent", StringComparison.OrdinalIgnoreCase))
+                {
+                    _suppressedCallIds.Add(callId);
+                    try
+                    {
+                        var argsStr = start.Data.Arguments is string argStr
+                            ? argStr
+                            : JsonSerializer.Serialize(start.Data.Arguments);
+                        using var doc = JsonDocument.Parse(argsStr);
+                        if (doc.RootElement.TryGetProperty("intent", out var intentEl))
+                        {
+                            var intentText = intentEl.GetString();
+                            if (!string.IsNullOrWhiteSpace(intentText))
+                                Emit("agent.intent", new { intent = intentText });
+                        }
+                    }
+                    catch { /* non-fatal: suppress raw event even if parsing fails */ }
+                    break;
+                }
+
+                if (SuppressedInternalTools.Contains(toolName))
                 {
                     _suppressedCallIds.Add(callId);
                     break;
                 }
-                EmitToolCallOnce(callId, start.Data.ToolName ?? "unknown", start.Data.Arguments);
+                EmitToolCallOnce(callId, toolName.Length > 0 ? toolName : "unknown", start.Data.Arguments);
                 break;
             }
             case ToolExecutionCompleteEvent complete when complete.Data is not null:

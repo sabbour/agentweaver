@@ -6,12 +6,13 @@ import {
   TabList,
   Text,
   Title2,
+  Badge,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import type { SelectTabData } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
-import type { HistoryDto } from '../api/types';
+import type { DecisionDto, AgentMemoryDto } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -44,43 +45,52 @@ const useStyles = makeStyles({
   tabContent: {
     marginTop: tokens.spacingVerticalM,
   },
-  prose: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: '1.7',
-    color: tokens.colorNeutralForeground1,
-    backgroundColor: tokens.colorNeutralBackground2,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingVerticalM,
-    whiteSpace: 'pre-wrap',
-    overflowY: 'auto',
-    maxHeight: '65vh',
-  },
   empty: {
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
+  itemList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  item: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  itemHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  itemTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    flexGrow: 1,
+  },
+  itemMeta: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+  },
+  itemContent: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground1,
+    lineHeight: '1.6',
+    whiteSpace: 'pre-wrap',
+  },
+  itemRationale: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    fontStyle: 'italic',
+    lineHeight: '1.5',
+  },
 });
-
-// ---------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------
-
-const TABS: { value: string; label: string; member: string; description: string }[] = [
-  {
-    value:       'scribe-decisions',
-    label:       'Decisions & Memory',
-    member:      'Scribe',
-    description: 'Team-wide decisions, scope choices, and architecture notes recorded by Scribe across all sessions.',
-  },
-  {
-    value:       'rai-history',
-    label:       'RAI Audit',
-    member:      'Rai',
-    description: 'Responsible AI review findings and audit trail maintained by Rai.',
-  },
-];
 
 // ---------------------------------------------------------------------------
 // Component
@@ -90,27 +100,29 @@ export function MemoriesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
-  const [selectedTab, setSelectedTab] = useState(TABS[0].value);
-  const [history,     setHistory]     = useState<Record<string, HistoryDto>>({});
-  const [loading,     setLoading]     = useState<Record<string, boolean>>({});
+  const [selectedTab, setSelectedTab] = useState<'decisions' | 'rai'>('decisions');
+  const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
+  const [raiMemory,   setRaiMemory]   = useState<AgentMemoryDto[] | null>(null);
+  const [loading,     setLoading]     = useState(false);
 
-  const currentTab = TABS.find(t => t.value === selectedTab) ?? TABS[0];
-
-  // Load history for the selected tab's member whenever tab changes
   useEffect(() => {
     if (!projectId) return;
-    const member = currentTab.member;
-    if (history[member]) return; // already fetched
+    setLoading(true);
 
-    setLoading(prev => ({ ...prev, [member]: true }));
-    apiClient.getMemberHistory(projectId, member)
-      .then(h => setHistory(prev => ({ ...prev, [member]: h })))
-      .catch(() => setHistory(prev => ({ ...prev, [member]: { member_name: member, content: '' } })))
-      .finally(() => setLoading(prev => ({ ...prev, [member]: false })));
-  }, [projectId, currentTab.member, history]);
-
-  const currentHistory = history[currentTab.member];
-  const isLoading      = loading[currentTab.member] ?? false;
+    if (selectedTab === 'decisions') {
+      if (decisions !== null) { setLoading(false); return; }
+      apiClient.getDecisions(projectId)
+        .then(d => setDecisions(d))
+        .catch(() => setDecisions([]))
+        .finally(() => setLoading(false));
+    } else {
+      if (raiMemory !== null) { setLoading(false); return; }
+      apiClient.getAgentMemory(projectId, 'Rai')
+        .then(m => setRaiMemory(m))
+        .catch(() => setRaiMemory([]))
+        .finally(() => setLoading(false));
+    }
+  }, [projectId, selectedTab, decisions, raiMemory]);
 
   return (
     <div className={styles.root}>
@@ -132,26 +144,58 @@ export function MemoriesPage() {
       {/* Tabs */}
       <TabList
         selectedValue={selectedTab}
-        onTabSelect={(_e, d: SelectTabData) => setSelectedTab(String(d.value))}
+        onTabSelect={(_e, d: SelectTabData) => setSelectedTab(d.value as 'decisions' | 'rai')}
       >
-        {TABS.map(t => (
-          <Tab key={t.value} value={t.value}>{t.label}</Tab>
-        ))}
+        <Tab value="decisions">Decisions &amp; Memory</Tab>
+        <Tab value="rai">RAI Audit</Tab>
       </TabList>
 
       <div className={styles.tabContent}>
-        <Text className={styles.subtitle} style={{ marginBottom: tokens.spacingVerticalS }}>
-          {currentTab.description}
-        </Text>
+        {loading && <Spinner size="small" label="Loading…" />}
 
-        {isLoading && <Spinner size="small" label="Loading…" />}
-
-        {!isLoading && !currentHistory?.content && (
-          <Text className={styles.empty}>Nothing recorded yet.</Text>
+        {!loading && selectedTab === 'decisions' && (
+          decisions === null || decisions.length === 0
+            ? <Text className={styles.empty}>No decisions recorded yet.</Text>
+            : (
+              <div className={styles.itemList}>
+                {decisions.map(d => (
+                  <div key={d.id} className={styles.item}>
+                    <div className={styles.itemHeader}>
+                      <span className={styles.itemTitle}>{d.title}</span>
+                      <Badge appearance="tint" color="informative">{d.type}</Badge>
+                      <Badge appearance="outline">{d.agent_name}</Badge>
+                      <span className={styles.itemMeta}>{new Date(d.created_at).toLocaleString()}</span>
+                    </div>
+                    <span className={styles.itemContent}>{d.content}</span>
+                    {d.rationale && (
+                      <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
         )}
 
-        {!isLoading && currentHistory?.content && (
-          <pre className={styles.prose}>{currentHistory.content}</pre>
+        {!loading && selectedTab === 'rai' && (
+          raiMemory === null || raiMemory.length === 0
+            ? <Text className={styles.empty}>No RAI audit entries recorded yet.</Text>
+            : (
+              <div className={styles.itemList}>
+                {raiMemory.map(m => (
+                  <div key={m.id} className={styles.item}>
+                    <div className={styles.itemHeader}>
+                      <Badge appearance="tint" color={
+                        m.importance === 'high' ? 'danger' :
+                        m.importance === 'medium' ? 'warning' : 'subtle'
+                      }>{m.importance}</Badge>
+                      <Badge appearance="outline">{m.type}</Badge>
+                      <span className={styles.itemMeta}>{new Date(m.created_at).toLocaleString()}</span>
+                    </div>
+                    <span className={styles.itemContent}>{m.content}</span>
+                  </div>
+                ))}
+              </div>
+            )
         )}
       </div>
     </div>

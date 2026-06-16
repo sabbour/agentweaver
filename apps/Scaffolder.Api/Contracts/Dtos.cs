@@ -142,6 +142,9 @@ public sealed record WorkflowRunSummary
 
     [JsonPropertyName("model_id")]
     public string? ModelId { get; init; }
+
+    [JsonPropertyName("result")]
+    public string? Result { get; init; }
 }
 
 public sealed record SandboxStatusDto

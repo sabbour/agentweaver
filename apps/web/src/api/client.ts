@@ -214,6 +214,14 @@ export class ScaffolderApiClient {
     return this.request<HistoryDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/history`);
   }
 
+  getDecisions(projectId: string): Promise<import('./types').DecisionDto[]> {
+    return this.request<import('./types').DecisionDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/decisions`);
+  }
+
+  getAgentMemory(projectId: string, agentName: string): Promise<import('./types').AgentMemoryDto[]> {
+    return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`);
+  }
+
   // Sync
   getSyncStatus(projectId: string): Promise<SyncStatusDto> {
     return this.request<SyncStatusDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/sync`);

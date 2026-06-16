@@ -735,20 +735,20 @@ app.MapPost("/api/runs/{id}/review", async (
         if (request.Approved)
         {
             // Review card flips to completed right away; merge.started bridges the gap until merge.completed.
-            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs });
+            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs, reviewer = caller.User });
             liveEntry.RecordNext(EventTypes.MergeStarted, new { tree_hash = run.TreeHash });
         }
         else if (request.RequestChanges)
         {
             // Review card flips to completed; revision.started signals the loop-back.
-            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs });
+            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs, reviewer = caller.User });
             liveEntry.RecordNext(EventTypes.ReviewChangesRequested, new { });
             liveEntry.RecordNext(EventTypes.RevisionStarted, new { });
         }
         else
         {
             // Declined
-            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs });
+            liveEntry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs, reviewer = caller.User });
         }
     }
 
@@ -1860,6 +1860,7 @@ app.MapGet("/api/projects/{id}/runs", async (
         StartedAt     = r.StartedAt,
         EndedAt       = r.EndedAt,
         ModelId       = r.ModelId,
+        Result        = r.Result,
     }));
 });
 
@@ -1887,6 +1888,7 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
         StartedAt     = run.StartedAt,
         EndedAt       = run.EndedAt,
         ModelId       = run.ModelId,
+        Result        = run.Result,
     });
 });
 

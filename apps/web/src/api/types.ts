@@ -169,11 +169,36 @@ export interface WorkflowRunDto {
   execution_id: string;
   task: string;
   status: string;
+  result?: string;
   agent_name?: string;
   reviewed_by?: string;
   started_at: string;
   ended_at?: string;
   model_id?: string;
+}
+
+export interface DecisionDto {
+  id: string;
+  agent_name: string;
+  type: string;
+  status: string;
+  title: string;
+  content: string;
+  rationale?: string;
+  tags?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentMemoryDto {
+  id: string;
+  agent_name: string;
+  type: string;
+  importance: string;
+  content: string;
+  tags?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CreateRunRequest {
