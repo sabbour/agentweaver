@@ -29,7 +29,7 @@ export function WatchPage() {
 
   return (
     <div className={styles.root}>
-      <Title2>Watch run</Title2>
+      <Title2>Watch execution</Title2>
       <div className={styles.navRow}>
         {workflowRunId && projectId && (
           <Link to={`/projects/${projectId}/runs/${workflowRunId}/workflow`}>

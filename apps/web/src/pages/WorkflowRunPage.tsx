@@ -337,7 +337,7 @@ function WorkflowNode({ data }: NodeProps) {
       {key === 'agent' && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Link to={`/watch/${runId}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
-            <Button appearance="outline" size="small">View run</Button>
+            <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
       )}
@@ -386,17 +386,16 @@ const nodeTypes = { workflow: WorkflowNode };
 // ---------------------------------------------------------------------------
 // Custom loopback edge — topology-agnostic, heuristic orthogonal routing.
 //
-// Coordinate derivation (all from guaranteed React Flow props):
-//   sourceX  = right-handle X  = node.position.x + NODE_W
-//   sourceY  = center Y        = node.position.y + actualHeight/2
-//   targetX  = left-handle X   = node.position.x
-//   targetY  = center Y        = node.position.y + actualHeight/2
+// Shape: orthogonal path with rounded corners (quadratic bezier at each turn)
+// connecting the TOP or BOTTOM CENTER of each card:
+//   above: source top → up → corner → left rail → corner → down to target top
+//   below: source bottom → down → corner → left rail → corner → up to target bottom
 //
-// We derive TOP/BOTTOM CENTER from these reliable props + measured height:
-//   src center-X = sourceX - NODE_W/2
-//   tgt center-X = targetX + NODE_W/2
-//   src top      = sourceY - srcHalf   (above arc start/end point)
-//   src bottom   = sourceY + srcHalf   (below arc start/end point)
+// Coordinate derivation (all from guaranteed React Flow props):
+//   sx  = sourceX - NODE_W/2   (center-X: right-handle - half-width)
+//   tx  = targetX + NODE_W/2   (center-X: left-handle + half-width)
+//   sy  = sourceY ± srcHalf    (top or bottom from center-Y ± half measured-height)
+//   ty  = targetY ± tgtHalf
 //
 // Heuristics:
 // 1. SIDE — Sort siblings by source X, even=above, odd=below.
@@ -406,8 +405,33 @@ const nodeTypes = { workflow: WorkflowNode };
 
 const LOOPBACK_STROKE      = 'var(--colorNeutralStroke1)';
 const LOOPBACK_TEXT_COLOR  = 'var(--colorNeutralForeground2)';
-const ARC_GAP = 12; // clearance above/below card edge
-const STAGGER = 28; // extra rail separation per same-side sibling
+const ARC_GAP    = 16; // clearance above/below card edge
+const STAGGER    = 28; // extra rail separation per same-side sibling
+const CORNER_R   = 10; // radius for corner rounding
+
+function loopbackPath(sx: number, sy: number, tx: number, ty: number, apexY: number, above: boolean): string {
+  // Clamp radius so corners never exceed half the shorter dimension
+  const r = Math.min(CORNER_R, Math.abs(sx - tx) / 4, Math.abs(apexY - sy) / 2, Math.abs(apexY - ty) / 2);
+  if (above) {
+    return [
+      `M ${sx},${sy}`,
+      `L ${sx},${apexY + r}`,
+      `Q ${sx},${apexY} ${sx - r},${apexY}`,
+      `L ${tx + r},${apexY}`,
+      `Q ${tx},${apexY} ${tx},${apexY + r}`,
+      `L ${tx},${ty}`,
+    ].join(' ');
+  } else {
+    return [
+      `M ${sx},${sy}`,
+      `L ${sx},${apexY - r}`,
+      `Q ${sx},${apexY} ${sx - r},${apexY}`,
+      `L ${tx + r},${apexY}`,
+      `Q ${tx},${apexY} ${tx},${apexY - r}`,
+      `L ${tx},${ty}`,
+    ].join(' ');
+  }
+}
 
 function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
   const allEdges = useEdges();
@@ -420,19 +444,15 @@ function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: E
   const sourceNode = allNodes.find(n => n.id === sourceId);
   const targetNode = allNodes.find(n => n.id === targetId);
 
-  // Half-heights for top/bottom offset: use measured when available, else NODE_H
   const srcHalf = (sourceNode?.measured?.height ?? NODE_H) / 2;
   const tgtHalf = (targetNode?.measured?.height ?? NODE_H) / 2;
 
-  // --- Heuristic 1: side (derived from source node X via position, not handles) ---
+  // --- Heuristic 1: side ---
   const siblings = allEdges
     .filter(e => e.type === 'loopback' && e.target === targetId)
     .sort((a, b) => {
-      // sourceX is right-handle so sourceX - NODE_W gives position.x; center = sourceX - NODE_W/2
-      const aNode = allNodes.find(n => n.id === a.source);
-      const bNode = allNodes.find(n => n.id === b.source);
-      const ax = (aNode?.position.x ?? 0);
-      const bx = (bNode?.position.x ?? 0);
+      const ax = allNodes.find(n => n.id === a.source)?.position.x ?? 0;
+      const bx = allNodes.find(n => n.id === b.source)?.position.x ?? 0;
       return ax - bx; // nearest source to target first
     });
 
@@ -440,21 +460,15 @@ function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: E
   const autoAbove = myIndex % 2 === 0;
   const above     = data?.above !== undefined ? Boolean(data.above) : autoAbove;
 
-  // --- Derive TOP/BOTTOM CENTER connection points from props ---
-  // Props give us the L/R handle positions; we compute center-X and top/bottom-Y from them.
-  // sourceX = right-handle → center-X of source = sourceX - NODE_W/2
-  // targetX = left-handle  → center-X of target = targetX + NODE_W/2
-  // sourceY = center-Y of source (handle is at vertical center)
-  const sx = sourceX - NODE_W / 2;
-  const tx = targetX + NODE_W / 2;
+  // --- Derive center-X from handle positions, top/bottom-Y from measured height ---
+  const sx = sourceX - NODE_W / 2;  // right-handle → center-X
+  const tx = targetX + NODE_W / 2;  // left-handle  → center-X
   const sy = above ? sourceY - srcHalf : sourceY + srcHalf;
   const ty = above ? targetY - tgtHalf : targetY + tgtHalf;
 
-  // --- Heuristic 2: clearance against intermediate nodes ---
-  // Exclude source and target themselves; only intermediate cards matter.
+  // --- Heuristic 2: clearance (intermediate nodes only, not source/target) ---
   const minX = Math.min(sx, tx);
   const maxX = Math.max(sx, tx);
-
   const overlapping = allNodes.filter(n => {
     if (n.id === sourceId || n.id === targetId) return false;
     const nl = n.position.x;
@@ -480,12 +494,9 @@ function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: E
     const sAbove = e.data?.above !== undefined ? Boolean(e.data.above) : i % 2 === 0;
     return sAbove === above;
   }).length;
-
   apexY += (above ? -1 : 1) * sameSideBefore * STAGGER;
 
-  // --- Orthogonal path: top/bottom center → up/down → horizontal rail → down/up into target ---
-  const d = `M ${sx},${sy} L ${sx},${apexY} L ${tx},${apexY} L ${tx},${ty}`;
-
+  const d       = loopbackPath(sx, sy, tx, ty, apexY, above);
   const midX    = (sx + tx) / 2;
   const labelY  = above ? apexY - 6 : apexY + 14;
   const markerId = `lb-arrow-${id}`;
@@ -698,16 +709,12 @@ export function WorkflowRunPage() {
         <span aria-hidden="true">/</span>
         <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>Project</Link>
         <span aria-hidden="true">/</span>
-        <Link to={`/watch/${runId}`} state={{ projectId }} className={styles.breadcrumbLink}>
-          Run {shortId}
-        </Link>
-        <span aria-hidden="true">/</span>
-        <span>Workflow</span>
+        <span>Run {shortId}</span>
       </nav>
 
       {/* Header */}
       <div className={styles.headerRow}>
-        <Title2>Workflow Run</Title2>
+        <Title2>Run</Title2>
         <span className={styles.runIdLabel}>{shortId}</span>
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
