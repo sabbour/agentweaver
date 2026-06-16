@@ -50,6 +50,7 @@ type ExecutorKey = 'agent' | 'rai' | 'review' | 'merge' | 'scribe';
 interface ExecutorState {
   status: StepStatus;
   agentName?: string;
+  intent?: string;      // latest agent.intent text — replaces static "Working on task..."
   startedAt?: number;   // ms epoch — from timestamp_utc in workflow.step event
   completedAt?: number; // ms epoch — from timestamp_utc of first terminal event
 }
@@ -342,7 +343,7 @@ function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
   const { def, state, agentName, agentRoleTitle, runId, executionId, projectId, reviewedBy } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
-  const { status, startedAt, completedAt } = state;
+  const { status, startedAt, completedAt, intent } = state;
 
   const isActive         = status === 'started' && key !== 'review';
   const isHumanWaiting   = key === 'review' && status === 'started';
@@ -353,7 +354,9 @@ function WorkflowNode({ data }: NodeProps) {
   ].filter(Boolean).join(' ');
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
-  const subText    = statusDescription(key as ExecutorKey, status);
+  // For the agent card while running, prefer the live intent over the static description.
+  const rawSubText = statusDescription(key as ExecutorKey, status);
+  const subText    = (key === 'agent' && status === 'started' && intent) ? intent : rawSubText;
   // For the agent card use the actual team role title; otherwise the executor's static description.
   const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
 
@@ -736,6 +739,13 @@ export function WorkflowRunPage() {
       } else if (evt.type === 'merge.failed') {
         if (!map['merge'] || map['merge'].status === 'started') {
           map['merge'] = { ...map['merge'], status: 'failed' };
+        }
+      } else if (evt.type === 'agent.intent') {
+        // Track the latest intent message so the agent card shows real progress text.
+        const intentText = evt.payload['intent'] != null ? String(evt.payload['intent']) : undefined;
+        if (intentText) {
+          const prev = map['agent'];
+          map['agent'] = { ...prev, status: prev?.status ?? 'started', intent: intentText };
         }
       }
     }
