@@ -91,7 +91,7 @@ internal static class ScaffolderApiTools
                 CancellationToken ct = default) =>
             {
                 var response = await http.PostAsJsonAsync(
-                    $"api/projects/{projectId}/inbox",
+                    $"api/projects/{projectId}/decisions/inbox",
                     new { agent_name = agentName, slug, type, title, content },
                     ct).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();

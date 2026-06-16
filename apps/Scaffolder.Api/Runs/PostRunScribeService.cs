@@ -34,15 +34,19 @@ public sealed class PostRunScribeService(
             var now = DateTimeOffset.UtcNow;
 
             // Step 1: Auto-merge low-risk inbox entries created during this run.
-            // ToListAsync first — EF Core / SQLite cannot translate array.Contains in WHERE.
-            var candidates = await memoryDb.DecisionInbox
+            // EF Core/SQLite cannot translate DateTimeOffset comparisons or array.Contains in WHERE;
+            // pull all pending entries for this project+agent into memory, then filter in C#.
+            var allPending = await memoryDb.DecisionInbox
                 .Where(e => e.ProjectId == projectId
                          && e.AgentName == agentName
-                         && e.Status == "pending"
-                         && e.CreatedAt >= runStarted)
+                         && e.Status == "pending")
                 .ToListAsync(ct).ConfigureAwait(false);
 
-            var toMerge = candidates
+            var runCandidates = allPending
+                .Where(e => e.CreatedAt >= runStarted)
+                .ToList();
+
+            var toMerge = runCandidates
                 .Where(e => AutoMergeTypes.Contains(e.Type))
                 .ToList();
 
@@ -66,12 +70,9 @@ public sealed class PostRunScribeService(
             }
 
             // Step 2: Count architectural/scope entries needing coordinator review.
-            var pendingReview = await memoryDb.DecisionInbox
-                .CountAsync(e => e.ProjectId == projectId
-                              && e.AgentName == agentName
-                              && e.Status == "pending"
-                              && (e.Type == "architectural" || e.Type == "scope")
-                              && e.CreatedAt >= runStarted, ct).ConfigureAwait(false);
+            var pendingReview = runCandidates
+                .Count(e => e.Status == "pending"
+                         && (e.Type == "architectural" || e.Type == "scope"));
 
             // Step 3: Append outcome to the current open session.
             var session = await memoryDb.SessionContexts

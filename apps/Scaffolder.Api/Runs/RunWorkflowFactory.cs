@@ -77,7 +77,10 @@ public sealed class RunWorkflowFactory
         Directory.CreateDirectory(_checkpointDir);
 
         _apiBaseUrl = configuration["Scaffolder:ApiBaseUrl"] ?? "http://localhost:5000";
-        _apiKey = configuration["Auth:ApiKey"];
+        // Prefer the single-key shorthand; fall back to the first entry in the multi-key list
+        // so Scribe can always authenticate its self-calls regardless of which format the user uses.
+        _apiKey = configuration["Auth:ApiKey"]
+            ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
 
         var store = new FileSystemJsonCheckpointStore(new DirectoryInfo(_checkpointDir));
         _checkpointManager = CheckpointManager.CreateJson(store);
