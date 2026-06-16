@@ -31,22 +31,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// System prompt appended as a system message via AsAIAgent(instructions:...).
     /// Tells the Claude model to use our custom tools instead of native CLI tools.
     /// </summary>
-    private const string CopilotSystemPrompt =
-        """
-        You are a coding and file editing assistant. Complete the given task using the available tools.
-
-        Call report_intent(intent) before each major step to describe what you are about to do.
-        report_intent does NOT write files — always follow it with the actual tool call in the same response.
-
-        Only write files within the current working directory. Do not write files to any path outside it.
-        Work step by step. Do not produce a final summary until ALL writes are done.
-        Do not ask clarifying questions — proceed with your best judgement.
-
-        When your work is complete, call report_outcome(achieved, reason) once to self-assess:
-        - achieved: true if the task was fully completed, false if any critical step failed or was blocked
-        - reason: one-sentence explanation
-        Call this as your final tool call before writing any summary.
-        """;
+    // Universal runtime contract shared with CopilotAIAgent — see AgentBasePrompt.cs.
 
     /// <summary>
     /// SDK-internal tools whose lifecycle events are suppressed from the run stream.
@@ -232,7 +217,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
         // Emit configuration snapshot for debuggability.
-        Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext) });
+        Emit("agent.system_prompt", new { provider = "copilot", prompt = AgentBasePrompt.Base, memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext) });
         Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {
@@ -294,8 +279,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             {
                 Mode = SystemMessageMode.Append,
                 Content = string.IsNullOrEmpty(systemPromptContext)
-                    ? CopilotSystemPrompt
-                    : CopilotSystemPrompt + "\n\n" + systemPromptContext,
+                    ? AgentBasePrompt.Base
+                    : AgentBasePrompt.Base + "\n\n" + systemPromptContext,
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = modelId,

@@ -38,33 +38,7 @@ namespace Scaffolder.AgentRuntime;
 /// </summary>
 public class CopilotAIAgent : AIAgent, IAsyncDisposable
 {
-    /// <summary>
-    /// System prompt appended as a system message via AsAIAgent(instructions:...).
-    /// Tells the Claude model to use our custom tools instead of native CLI tools.
-    /// </summary>
-    private const string CopilotSystemPrompt =
-        """
-        You are a coding and file editing assistant. Complete the given task using the available tools.
-
-        Call report_intent(intent) before each major step to describe what you are about to do.
-        report_intent does NOT write files — always follow it with the actual tool call in the same response.
-
-        Only write files within the current working directory. Do not write files to any path outside it.
-        Work step by step. Do not produce a final summary until ALL writes are done.
-        Do not ask clarifying questions — proceed with your best judgement.
-
-        When your work is complete, call report_outcome(achieved, reason) once to self-assess:
-        - achieved: true if the task was fully completed, false if any critical step failed or was blocked
-        - reason: one-sentence explanation
-        Call this as your final tool call before writing any summary.
-
-        If Scaffolder API tools (submit_decision, record_memory, update_session, submit_inbox_entry) are available:
-        - Use submit_decision for any significant architectural, scope, or process choice you make.
-        - Use record_memory for important learnings or patterns discovered during the task.
-        - Use update_session once after completing your work with a brief summary of what was accomplished.
-        - Use submit_inbox_entry to flag boundary conflicts as type 'process' titled 'Boundary conflict: [description]'.
-        Call these after completing the main task, before report_outcome.
-        """;
+    // Universal runtime contract. Agent identity and tool-usage guidance live in the charter.
 
     /// <summary>
     /// SDK-internal tools whose lifecycle events are suppressed from the run stream.
@@ -235,8 +209,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
             {
                 Mode = SystemMessageMode.Append,
                 Content = string.IsNullOrEmpty(systemPromptContext)
-                    ? CopilotSystemPrompt
-                    : CopilotSystemPrompt + "\n\n" + systemPromptContext,
+                    ? AgentBasePrompt.Base
+                    : AgentBasePrompt.Base + "\n\n" + systemPromptContext,
             },
             Model = modelId,
         };
@@ -325,8 +299,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
 
         // Emit configuration snapshot for debuggability.
         var fullSystemPrompt = string.IsNullOrEmpty(_systemPromptContext)
-            ? CopilotSystemPrompt
-            : CopilotSystemPrompt + "\n\n" + _systemPromptContext;
+            ? AgentBasePrompt.Base
+            : AgentBasePrompt.Base + "\n\n" + _systemPromptContext;
         Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext) });
         Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
