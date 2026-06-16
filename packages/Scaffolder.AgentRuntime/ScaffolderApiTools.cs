@@ -100,6 +100,53 @@ internal static class ScaffolderApiTools
             "submit_inbox_entry",
             "Submit a general inbox entry such as a learning, update, or boundary conflict flag. " +
             "For boundary conflicts use type 'process' and title 'Boundary conflict: [short description]'.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Filter by agent name (optional — omit to list all agents)")] string? forAgent = null,
+                CancellationToken ct = default) =>
+            {
+                var query = forAgent is not null ? $"?agent={Uri.EscapeDataString(forAgent)}&status=pending" : "?status=pending";
+                var response = await http.GetAsync(
+                    $"api/projects/{projectId}/decisions/inbox{query}",
+                    ct).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            },
+            "list_inbox",
+            "List pending decision inbox entries for this project. Returns JSON. " +
+            "Use before merge_inbox_entry to get the numeric entry IDs.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("The numeric id of the inbox entry to merge (from list_inbox)")] int entryId,
+                CancellationToken ct = default) =>
+            {
+                var response = await http.PostAsJsonAsync(
+                    $"api/projects/{projectId}/decisions/inbox/{entryId}/merge",
+                    new { },
+                    ct).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                return $"Inbox entry {entryId} merged into decisions.";
+            },
+            "merge_inbox_entry",
+            "Merge a pending inbox entry into the project decision log. " +
+            "Only merge type: learning, pattern, or update. " +
+            "Leave architectural and scope entries for coordinator review.");
+
+        yield return AIFunctionFactory.Create(
+            async (CancellationToken ct = default) =>
+            {
+                var response = await http.PostAsJsonAsync(
+                    $"api/projects/{projectId}/memory/export",
+                    new { },
+                    ct).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                return "Memory exported to .squad/ and .agentweaver/context/.";
+            },
+            "export_memory",
+            "Export all project decisions, inbox entries, memories, and session context to .squad/ " +
+            "and .agentweaver/context/. Call this as the final step of the Scribe pass.");
     }
 
     private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)

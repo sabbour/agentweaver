@@ -94,16 +94,15 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 Agent: {{input.AgentName}}
                 Run started at: {{input.RunStartedAt:O}}
 
-                Your post-run tasks — use the memory API tools available to you:
+                Complete these post-run steps using the native memory tools available to you:
 
-                1. GET /api/projects/{{input.ProjectId}}/inbox?agent={{input.AgentName}}&status=pending
-                2. For each `learning`, `pattern`, or `update` entry created since {{input.RunStartedAt:O}}:
-                   POST /api/projects/{{input.ProjectId}}/inbox/{id}/merge
-                3. Leave `architectural` and `scope` entries as pending (coordinator must review these).
-                4. POST /api/projects/{{input.ProjectId}}/memory/export
-                5. PUT /api/projects/{{input.ProjectId}}/sessions/current  — append a one-sentence summary of what {{input.AgentName}} accomplished.
+                1. Call list_inbox(forAgent: "{{input.AgentName}}") to see pending entries.
+                2. For each entry of type learning, pattern, or update: call merge_inbox_entry(entryId).
+                   Skip entries of type architectural or scope — leave them for coordinator review.
+                3. Call update_session(summary: one sentence describing what {{input.AgentName}} accomplished).
+                4. Call export_memory() to write the updated memory state to .squad/.
 
-                Complete this post-run Scribe pass now. Be systematic and concise.
+                Be systematic and concise. Do not write code or read project files.
                 """;
 
             var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "scribe") ?? FallbackCharter;
