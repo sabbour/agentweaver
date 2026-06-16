@@ -11,6 +11,9 @@ hero:
     - theme: alt
       text: API reference
       link: /reference/api
+    - theme: alt
+      text: MCP server
+      link: /reference/mcp
 ---
 
 ## How it works

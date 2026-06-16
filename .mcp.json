@@ -1,5 +1,13 @@
 {
   "mcpServers": {
+    "agentweaver": {
+      "command": "dotnet",
+      "args": ["run", "--project", "apps/Scaffolder.Mcp", "--no-build"],
+      "env": {
+        "SCAFFOLDER_API_URL": "http://localhost:5000",
+        "SCAFFOLDER_API_KEY": ""
+      }
+    },
     "squad_state": {
       "command": "npx",
       "args": [
