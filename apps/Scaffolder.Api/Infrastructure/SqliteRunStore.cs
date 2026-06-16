@@ -20,11 +20,11 @@ public sealed class SqliteRunStore
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                               submitting_user, status, started_at, ended_at, result,
                               worktree_path, worktree_branch, project_id, model_id,
-                              agent_name, agent_charter)
+                              agent_name, agent_charter, workflow_run_id)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
                     $user, $status, $startedAt, $endedAt, $result,
                     $worktreePath, $worktreeBranch, $projectId, $modelId,
-                    $agentName, $agentCharter);
+                    $agentName, $agentCharter, $workflowRunId);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -42,6 +42,7 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$modelId", (object?)run.ModelId ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentName", (object?)run.AgentName ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentCharter", (object?)run.AgentCharter ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowRunId", (object?)run.WorkflowRunId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -141,19 +142,20 @@ public sealed class SqliteRunStore
     /// is the idempotency and concurrency guard for the review endpoint (design issue #4).
     /// </summary>
     public async Task<bool> TryTransitionReviewAsync(
-        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
             UPDATE runs
-               SET status = $toStatus, ended_at = $endedAt, result = $result
+               SET status = $toStatus, ended_at = $endedAt, result = $result, reviewed_by = $reviewer
              WHERE run_id = $runId AND status = 'awaiting_review';
             """;
         command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
         command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
         command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+        command.Parameters.AddWithValue("$reviewer", (object?)reviewer ?? DBNull.Value);
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -202,12 +204,13 @@ public sealed class SqliteRunStore
     /// Returns true if the CAS succeeded (this request owns the merge slot),
     /// false if another request already moved the run out of the expected state (MF3).
     /// </summary>
-    public async Task<bool> TryStartMergingAsync(RunId runId, CancellationToken ct = default)
+    public async Task<bool> TryStartMergingAsync(RunId runId, string? reviewer = null, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "UPDATE runs SET status = 'merging' WHERE run_id = $runId AND status IN ('awaiting_review', 'committing');";
+            "UPDATE runs SET status = 'merging', reviewed_by = $reviewer WHERE run_id = $runId AND status IN ('awaiting_review', 'committing');";
+        command.Parameters.AddWithValue("$reviewer", (object?)reviewer ?? DBNull.Value);
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -384,11 +387,11 @@ public sealed class SqliteRunStore
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                               submitting_user, status, started_at, ended_at, result,
                               worktree_path, worktree_branch, project_id, model_id,
-                              agent_name, agent_charter)
+                              agent_name, agent_charter, workflow_run_id)
             SELECT $runId, $repo, $branch, $modelSource, $task,
                    $user, $status, $startedAt, NULL, NULL,
                    NULL, NULL, $projectId, $modelId,
-                   $agentName, $agentCharter
+                   $agentName, $agentCharter, $workflowRunId
             WHERE EXISTS (
                 SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
             );
@@ -405,6 +408,7 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$modelId", (object?)run.ModelId ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentName", (object?)run.AgentName ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentCharter", (object?)run.AgentCharter ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowRunId", (object?)run.WorkflowRunId ?? DBNull.Value);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -414,12 +418,14 @@ public sealed class SqliteRunStore
     //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
     //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
     //           15=merge_conflicts 16=project_id 17=model_id 18=agent_name 19=agent_charter
+    //           20=reviewed_by 21=workflow_run_id
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
                submitting_user, status, started_at, ended_at, result,
                worktree_path, worktree_branch, tree_hash, step_count, diff,
-               merge_conflicts, project_id, model_id, agent_name, agent_charter
+               merge_conflicts, project_id, model_id, agent_name, agent_charter,
+               reviewed_by, workflow_run_id
           FROM runs
         """;
 
@@ -445,8 +451,25 @@ public sealed class SqliteRunStore
         ModelId          = r.IsDBNull(17) ? null : r.GetString(17),
         AgentName        = r.IsDBNull(18) ? null : r.GetString(18),
         AgentCharter     = r.IsDBNull(19) ? null : r.GetString(19),
+        ReviewedBy       = r.IsDBNull(20) ? null : r.GetString(20),
+        WorkflowRunId    = r.IsDBNull(21) ? null : r.GetString(21),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
     private static object NullableTs(DateTimeOffset? v) => v is null ? DBNull.Value : Ts(v.Value);
+
+    /// <summary>
+    /// Returns the run whose workflow_run_id matches, falling back to run_id for
+    /// legacy runs that have no workflow_run_id (COALESCE behaviour).
+    /// </summary>
+    public async Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = SelectSql + " WHERE COALESCE(workflow_run_id, run_id) = $workflowRunId;";
+        command.Parameters.AddWithValue("$workflowRunId", workflowRunId);
+
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? Map(reader) : null;
+    }
 }

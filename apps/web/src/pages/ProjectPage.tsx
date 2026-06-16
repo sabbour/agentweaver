@@ -26,7 +26,7 @@ import {
 import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CreateRunRequest, Project, ProjectRunSummary, TeamMemberDto } from '../api/types';
+import type { CreateRunRequest, Project, WorkflowRunDto, TeamMemberDto } from '../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -148,7 +148,7 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
       const result = await apiClient.createProjectRun(projectId, req);
       setOpen(false);
       reset();
-      onStarted(result.run_id);
+      onStarted(result.workflow_run_id);
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -221,7 +221,7 @@ function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted
   );
 }
 
-function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; projectId: string; onDeleted: (runId: string) => void }) {
+function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId: string; onDeleted: (workflowRunId: string) => void }) {
   const styles = useStyles();
   const [acting, setActing] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -235,8 +235,8 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
     setActing(true);
     setError(null);
     try {
-      await apiClient.deleteRun(run.run_id);
-      onDeleted(run.run_id);
+      await apiClient.deleteRun(run.execution_id);
+      onDeleted(run.workflow_run_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed.');
       setActing(false);
@@ -253,9 +253,8 @@ function RunRow({ run, projectId, onDeleted }: { run: ProjectRunSummary; project
         {run.status}
       </Badge>
       <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
-      <Text className={styles.runMeta}>{run.model_source}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
-      <Link to={`/projects/${projectId}/runs/${run.run_id}/workflow`} style={{ textDecoration: 'none' }}>
+      <Link to={`/projects/${projectId}/runs/${run.workflow_run_id}/workflow`} style={{ textDecoration: 'none' }}>
         <Button appearance="secondary">Workflow</Button>
       </Link>
       {isAbandonable && (
@@ -323,12 +322,12 @@ export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
-  const [runs, setRuns] = useState<ProjectRunSummary[]>([]);
+  const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const handleRunDeleted = (runId: string) => {
-    setRuns((prev) => prev.filter((r) => r.run_id !== runId));
+  const handleRunDeleted = (workflowRunId: string) => {
+    setRuns((prev) => prev.filter((r) => r.workflow_run_id !== workflowRunId));
   };
 
   useEffect(() => {
@@ -430,7 +429,7 @@ export function ProjectPage() {
             <Text>No runs yet. Start one above.</Text>
           ) : (
             <div className={styles.runList}>
-              {runs.map((r) => <RunRow key={r.run_id} run={r} projectId={projectId} onDeleted={handleRunDeleted} />)}
+              {runs.map((r) => <RunRow key={r.workflow_run_id} run={r} projectId={projectId} onDeleted={handleRunDeleted} />)}
             </div>
           )}
         </>

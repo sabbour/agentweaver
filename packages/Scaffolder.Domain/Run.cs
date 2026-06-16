@@ -33,4 +33,8 @@ public sealed record Run
     public string? AgentName { get; init; }
     /// <summary>The agent's charter content injected as system prompt. Null for non-team runs.</summary>
     public string? AgentCharter { get; init; }
+    /// <summary>The GitHub login of the user who reviewed this run. Null until the run is reviewed.</summary>
+    public string? ReviewedBy { get; init; }
+    /// <summary>The workflow run this execution belongs to. Null for legacy runs created before this field was introduced.</summary>
+    public string? WorkflowRunId { get; init; }
 }

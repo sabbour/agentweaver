@@ -164,6 +164,18 @@ export interface ProjectRunSummary {
   ended_at: string | null;
 }
 
+export interface WorkflowRunDto {
+  workflow_run_id: string;
+  execution_id: string;
+  task: string;
+  status: string;
+  agent_name?: string;
+  reviewed_by?: string;
+  started_at: string;
+  ended_at?: string;
+  model_id?: string;
+}
+
 export interface CreateRunRequest {
   repository_path?: string;
   originating_branch: string;
@@ -172,17 +184,25 @@ export interface CreateRunRequest {
   agent_name?: string;
 }
 
+export interface CreateProjectRunResponse {
+  run_id: string;        // execution id
+  workflow_run_id: string;
+  status: string;
+}
+
 export interface RunDto {
   run_id: string;
   status: string;
   model_source: string;
   model_id?: string;
   agent_name?: string;
+  reviewed_by?: string;
   task: string;
   started_at: string;
   ended_at?: string;
   step_count?: number;
   originating_branch?: string;
+  workflow_run_id?: string;
 }
 
 // GitHub auth

@@ -39,7 +39,7 @@ public sealed class MergeCoordinator : IMergeCoordinator
         if (lockHandle is null)
             return MergeLockResult.Failed("repository_busy");
 
-        var casSucceeded = await _runStore.TryStartMergingAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+        var casSucceeded = await _runStore.TryStartMergingAsync(RunId.Parse(runId), ct: CancellationToken.None).ConfigureAwait(false);
         if (!casSucceeded)
         {
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);

@@ -71,6 +71,8 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_branch TEXT NOT NULL DEFAULT 'main';", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_name TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_charter TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN reviewed_by TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_run_id TEXT;", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
@@ -140,6 +142,15 @@ public sealed class SqliteDb
         );
 
         CREATE INDEX IF NOT EXISTS idx_projects_state ON projects (state);
+
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+            workflow_run_id  TEXT PRIMARY KEY,
+            project_id       TEXT NOT NULL,
+            task             TEXT NOT NULL,
+            submitting_user  TEXT NOT NULL,
+            started_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_project ON workflow_runs (project_id);
 
         """;
 }

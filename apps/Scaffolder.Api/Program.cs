@@ -41,6 +41,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<SqliteDb>();
 builder.Services.AddSingleton<SqliteRunStore>();
 builder.Services.AddSingleton<SqliteRunRevisionStore>();
+builder.Services.AddSingleton<SqliteWorkflowRunStore>();
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<WorktreeManager>();
@@ -229,7 +230,7 @@ app.MapPost("/api/runs", async (
         return Results.Problem("Failed to start the run.", statusCode: 500);
     }
 
-    return Results.Accepted($"/api/runs/{run.Id}", new CreateRunResponse { RunId = run.Id.ToString(), Status = "in_progress" });
+    return Results.Accepted($"/api/runs/{run.Id}", new CreateRunResponse { RunId = run.Id.ToString(), WorkflowRunId = run.Id.ToString(), Status = "in_progress" });
 });
 
 app.MapGet("/api/runs/{id}", async (
@@ -338,6 +339,7 @@ app.MapGet("/api/runs/{id}", async (
         OutcomeAchieved = outcomeAchieved,
         OutcomeReason = outcomeReason,
         AgentName = run.AgentName,
+        ReviewedBy = run.ReviewedBy,
     });
 });
 
@@ -668,7 +670,7 @@ app.MapPost("/api/runs/{id}/review", async (
 
     if (request.Approved)
     {
-        var startedMerging = await runStore.TryStartMergingAsync(runId, ct);
+        var startedMerging = await runStore.TryStartMergingAsync(runId, caller.User, ct);
         if (!startedMerging)
             return Results.StatusCode(StatusCodes.Status409Conflict);
     }
@@ -681,7 +683,7 @@ app.MapPost("/api/runs/{id}/review", async (
     }
     else
     {
-        var declined = await runStore.TryTransitionReviewAsync(runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, ct);
+        var declined = await runStore.TryTransitionReviewAsync(runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, caller.User, ct);
         if (!declined)
             return Results.StatusCode(StatusCodes.Status409Conflict);
     }
@@ -1831,17 +1833,45 @@ app.MapGet("/api/projects/{id}/runs", async (
         return Results.BadRequest(new { error = "Invalid project id." });
 
     var runs = await runStore.GetRunsByProjectAsync(projectId, ct);
-    return Results.Ok(runs.Select(r => new
+    return Results.Ok(runs.Select(r => new WorkflowRunSummary
     {
-        run_id = r.Id.ToString(),
-        status = r.Status.ToApiString(),
-        model_source = r.ModelSource.ToApiString(),
-        model_id = r.ModelId,
-        task = r.Task,
-        started_at = r.StartedAt,
-        ended_at = r.EndedAt,
-        agent_name = r.AgentName,
+        WorkflowRunId = r.WorkflowRunId ?? r.Id.ToString(),
+        ExecutionId   = r.Id.ToString(),
+        Task          = r.Task,
+        Status        = r.Status.ToApiString(),
+        AgentName     = r.AgentName,
+        ReviewedBy    = r.ReviewedBy,
+        StartedAt     = r.StartedAt,
+        EndedAt       = r.EndedAt,
+        ModelId       = r.ModelId,
     }));
+});
+
+// GET /api/projects/{id}/runs/{workflowRunId} — get a single workflow run by its workflow_run_id
+app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
+    string id,
+    string workflowRunId,
+    SqliteRunStore runStore,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out _))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var run = await runStore.GetByWorkflowRunIdAsync(workflowRunId, ct);
+    if (run is null) return Results.NotFound();
+
+    return Results.Ok(new WorkflowRunSummary
+    {
+        WorkflowRunId = run.WorkflowRunId ?? run.Id.ToString(),
+        ExecutionId   = run.Id.ToString(),
+        Task          = run.Task,
+        Status        = run.Status.ToApiString(),
+        AgentName     = run.AgentName,
+        ReviewedBy    = run.ReviewedBy,
+        StartedAt     = run.StartedAt,
+        EndedAt       = run.EndedAt,
+        ModelId       = run.ModelId,
+    });
 });
 
 // POST /api/projects/{id}/runs — start a run within a project
@@ -1852,6 +1882,7 @@ app.MapPost("/api/projects/{id}/runs", async (
     IProjectStore projectStore,
     IProjectWorkspaceProvider workspaceProvider,
     SqliteRunStore runStore,
+    SqliteWorkflowRunStore workflowRunStore,
     RunStreamStore streamStore,
     RunOrchestrator orchestrator,
     ILogger<Program> logger,
@@ -1921,6 +1952,7 @@ app.MapPost("/api/projects/{id}/runs", async (
     }
 
     // Build reserved run (Pending)
+    var workflowRunId = Guid.NewGuid().ToString();
     var run = new Run
     {
         Id = RunId.New(),
@@ -1935,7 +1967,18 @@ app.MapPost("/api/projects/{id}/runs", async (
         ProjectId = projectId,
         AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
         AgentCharter = agentCharter,
+        WorkflowRunId = workflowRunId,
     };
+
+    // Insert the workflow run envelope first
+    await workflowRunStore.InsertAsync(new WorkflowRun
+    {
+        Id = workflowRunId,
+        ProjectId = projectId,
+        Task = request.Task!,
+        SubmittingUser = caller.User,
+        StartedAt = DateTimeOffset.UtcNow,
+    }, ct);
 
     // Atomically reserve the run row (Pending) only when project is still Active
     bool reserved = await runStore.TryCreateProjectRunAsync(run, ct);
@@ -1971,7 +2014,7 @@ app.MapPost("/api/projects/{id}/runs", async (
 
     return Results.Accepted(
         $"/api/runs/{run.Id}",
-        new CreateRunResponse { RunId = run.Id.ToString(), Status = "in_progress" });
+        new CreateRunResponse { RunId = run.Id.ToString(), WorkflowRunId = workflowRunId, Status = "in_progress" });
 });
 
 // -----------------------------------------------------------------------

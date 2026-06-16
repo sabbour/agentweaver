@@ -25,7 +25,10 @@ public sealed record CreateRunRequest
 public sealed record CreateRunResponse
 {
     [JsonPropertyName("run_id")]
-    public required string RunId { get; init; }
+    public required string RunId { get; init; }  // execution_id
+
+    [JsonPropertyName("workflow_run_id")]
+    public required string WorkflowRunId { get; init; }
 
     [JsonPropertyName("status")]
     public required string Status { get; init; }
@@ -101,6 +104,44 @@ public sealed record RunResponse
 
     [JsonPropertyName("agent_name")]
     public string? AgentName { get; init; }
+
+    [JsonPropertyName("reviewed_by")]
+    public string? ReviewedBy { get; init; }
+
+    [JsonPropertyName("workflow_run_id")]
+    public string? WorkflowRunId { get; init; }
+}
+
+/// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>
+public sealed record WorkflowRunSummary
+{
+    [JsonPropertyName("workflow_run_id")]
+    public required string WorkflowRunId { get; init; }
+
+    /// <summary>The current active execution's run_id.</summary>
+    [JsonPropertyName("execution_id")]
+    public required string ExecutionId { get; init; }
+
+    [JsonPropertyName("task")]
+    public required string Task { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("agent_name")]
+    public string? AgentName { get; init; }
+
+    [JsonPropertyName("reviewed_by")]
+    public string? ReviewedBy { get; init; }
+
+    [JsonPropertyName("started_at")]
+    public required DateTimeOffset StartedAt { get; init; }
+
+    [JsonPropertyName("ended_at")]
+    public DateTimeOffset? EndedAt { get; init; }
+
+    [JsonPropertyName("model_id")]
+    public string? ModelId { get; init; }
 }
 
 public sealed record SandboxStatusDto

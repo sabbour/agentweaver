@@ -76,6 +76,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   agentName?: string;
   agentRoleTitle?: string;   // actual team role title for the agent executor
   runId: string;
+  executionId: string;
   projectId: string;
   reviewedBy?: string;
 }
@@ -292,7 +293,7 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
 
 function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
-  const { def, state, agentName, agentRoleTitle, runId, projectId, reviewedBy } = data as WorkflowNodeData;
+  const { def, state, agentName, agentRoleTitle, runId, executionId, projectId, reviewedBy } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status } = state;
 
@@ -336,14 +337,14 @@ function WorkflowNode({ data }: NodeProps) {
       {/* Action buttons — nopan/nodrag prevents React Flow from swallowing clicks */}
       {key === 'agent' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/projects/${projectId}/runs/${runId}/execution/${runId}`} style={{ textDecoration: 'none' }}>
+          <Link to={`/projects/${projectId}/runs/${runId}/execution/${executionId}`} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
       )}
       {key === 'rai' && (status === 'started' || status === 'completed' || status === 'failed') && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${runId}-rai`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/watch/${executionId}-rai`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
@@ -351,7 +352,7 @@ function WorkflowNode({ data }: NodeProps) {
       {key === 'scribe' && (
         <div className={`${s.cardActions} nopan nodrag`}>
           {(status === 'started' || status === 'completed' || status === 'failed') && (
-            <Link to={`/watch/${runId}-scribe`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+            <Link to={`/watch/${executionId}-scribe`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
               <Button appearance="outline" size="small">View execution</Button>
             </Link>
           )}
@@ -362,7 +363,7 @@ function WorkflowNode({ data }: NodeProps) {
       )}
       {key === 'review' && status === 'started' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${runId}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/watch/${executionId}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
             <Button appearance="primary" size="medium">Review now</Button>
           </Link>
         </div>
@@ -606,6 +607,7 @@ export function WorkflowRunPage() {
   const [agentRoleTitle, setAgentRoleTitle] = useState<string | undefined>(undefined);
   const [runStatus,      setRunStatus]      = useState<string | undefined>(undefined);
   const [reviewedBy,     setReviewedBy]     = useState<string | undefined>(undefined);
+  const [executionId,    setExecutionId]    = useState<string | undefined>(undefined);
   const [loading,        setLoading]        = useState(true);
 
   useEffect(() => {
@@ -617,11 +619,12 @@ export function WorkflowRunPage() {
       apiClient.getTeam(projectId),
     ]).then(([runs, team]) => {
         if (cancelled) return;
-        const run = runs.find((r) => r.run_id === runId);
+        const run = runs.find((r) => r.workflow_run_id === runId);
         const name = run?.agent_name ?? undefined;
         setAgentName(name);
         setRunStatus(run?.status       ?? undefined);
         setReviewedBy(run?.reviewed_by ?? undefined);
+        setExecutionId(run?.execution_id ?? undefined);
 
         // Look up the team member by cast name to get their role title
         if (name) {
@@ -636,7 +639,7 @@ export function WorkflowRunPage() {
     return () => { cancelled = true; };
   }, [projectId, runId]);
 
-  const { events, status: streamStatus } = useRunStream(runId ?? '', API_KEY, API_URL);
+  const { events, status: streamStatus } = useRunStream(executionId ?? '', API_KEY, API_URL);
 
   // Derive executor states from SSE workflow.step events.
   const executorStates = useMemo<Record<string, ExecutorState>>(() => {
@@ -692,13 +695,14 @@ export function WorkflowRunPage() {
         agentName:       def.key === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
         agentRoleTitle:  def.key === 'agent' ? agentRoleTitle : undefined,
         runId:           runId      ?? '',
+        executionId:     executionId ?? '',
         projectId:       projectId  ?? '',
         reviewedBy:      def.key === 'review' ? reviewedBy : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
     return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
-  }, [executorStates, agentName, agentRoleTitle, reviewedBy, runId, projectId]);
+  }, [executorStates, agentName, agentRoleTitle, reviewedBy, executionId, runId, projectId]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;

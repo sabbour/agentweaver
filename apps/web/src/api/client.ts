@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, ProjectRunSummary, CreateRunRequest, RunDto, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -110,16 +110,20 @@ export class ScaffolderApiClient {
     return this.request<SubmitRunResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/runs`, req);
   }
 
-  listProjectRuns(projectId: string): Promise<ProjectRunSummary[]> {
-    return this.request<ProjectRunSummary[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
+  listProjectRuns(projectId: string): Promise<WorkflowRunDto[]> {
+    return this.request<WorkflowRunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
   }
 
-  createProjectRun(projectId: string, request: CreateRunRequest): Promise<RunDto> {
-    return this.request<RunDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/runs`, request);
+  createProjectRun(projectId: string, request: CreateRunRequest): Promise<CreateProjectRunResponse> {
+    return this.request<CreateProjectRunResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/runs`, request);
   }
 
-  getProjectRuns(projectId: string): Promise<RunDto[]> {
-    return this.request<RunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
+  getProjectRuns(projectId: string): Promise<WorkflowRunDto[]> {
+    return this.request<WorkflowRunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
+  }
+
+  getWorkflowRun(projectId: string, workflowRunId: string): Promise<WorkflowRunDto> {
+    return this.request<WorkflowRunDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(workflowRunId)}`);
   }
 
   deleteRun(runId: string): Promise<void> {

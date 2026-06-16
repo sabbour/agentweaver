@@ -17,14 +17,14 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { TeamMemberDto, RunDto } from '../api/types';
+import type { TeamMemberDto, CreateProjectRunResponse } from '../api/types';
 
 interface NewRunDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
   members: TeamMemberDto[];
-  onRunCreated: (run: RunDto) => void;
+  onRunCreated: (run: CreateProjectRunResponse) => void;
 }
 
 export function NewRunDialog({ open, onOpenChange, projectId, members, onRunCreated }: NewRunDialogProps) {
