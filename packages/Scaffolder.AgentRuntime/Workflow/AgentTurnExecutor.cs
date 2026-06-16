@@ -47,7 +47,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 input.ModelId,
                 writer,
                 ct,
-                input.SystemPrompt).ConfigureAwait(false);
+                input.SystemPromptContext).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsContentSafetyViolation(ex))
         {

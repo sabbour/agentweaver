@@ -23,11 +23,11 @@ public sealed class AgentRunnerDispatcher : IAgentRunner
         string? modelId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct,
-        string? systemPrompt = null) =>
+        string? systemPromptContext = null) =>
         modelSource switch
         {
-            ModelSource.GitHubCopilot => _copilot.ExecuteAsync(task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct, systemPrompt),
-            ModelSource.MicrosoftFoundry => _foundry.ExecuteAsync(task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct, systemPrompt),
+            ModelSource.GitHubCopilot => _copilot.ExecuteAsync(task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct, systemPromptContext),
+            ModelSource.MicrosoftFoundry => _foundry.ExecuteAsync(task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct, systemPromptContext),
             _ => throw new NotSupportedException($"Model source '{modelSource}' is not configured."),
         };
 }

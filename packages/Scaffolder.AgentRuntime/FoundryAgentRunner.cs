@@ -70,7 +70,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
         string? modelId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct,
-        string? systemPrompt = null)
+        string? systemPromptContext = null)
     {
         var seq = new[] { 0 };
         void Emit(string type, object payload)
@@ -141,14 +141,11 @@ public sealed class FoundryAgentRunner : IAgentRunner
         var toolFunctions = SandboxToolRegistry.Build(toolContext);
         var tools = toolFunctions.Cast<AITool>().ToList();
 
-        // Compose the final system message: charter (if any) prepended before scaffold instructions.
-        var effectiveSystemPrompt = string.IsNullOrWhiteSpace(systemPrompt)
-            ? SystemPrompt
-            : $"{systemPrompt}\n\n{SystemPrompt}";
-
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, effectiveSystemPrompt),
+            new(ChatRole.System, string.IsNullOrEmpty(systemPromptContext)
+                ? SystemPrompt
+                : SystemPrompt + "\n\n" + systemPromptContext),
             new(ChatRole.User, task),
         };
 

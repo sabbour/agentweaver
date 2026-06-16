@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -338,5 +339,13 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public void StopApplication() { }
+    }
+
+    // -------------------------------------------------------------------------
+    // No-op IServiceScopeFactory for tests that don't exercise PostRunScribeService.
+    // -------------------------------------------------------------------------
+    private sealed class NullScopeFactory : IServiceScopeFactory
+    {
+        public IServiceScope CreateScope() => throw new NotImplementedException("Not called in restart tests");
     }
 }

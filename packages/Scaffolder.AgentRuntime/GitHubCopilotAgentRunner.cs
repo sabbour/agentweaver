@@ -83,7 +83,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct, string? systemPrompt = null)
+    public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct, string? systemPromptContext = null)
     {
         _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, runId={RunId}, streamIsNull={StreamIsNull}",
             workingDirectory, task.Length, runId, stream is null);
@@ -231,13 +231,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
-        // Compose the final system message: charter (if any) prepended before scaffold instructions.
-        var effectiveSystemPrompt = string.IsNullOrWhiteSpace(systemPrompt)
-            ? CopilotSystemPrompt
-            : $"{systemPrompt}\n\n{CopilotSystemPrompt}";
-
         // Emit configuration snapshot for debuggability.
-        Emit("agent.system_prompt", new { provider = "copilot", prompt = effectiveSystemPrompt });
+        Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext) });
         Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {
@@ -298,7 +293,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = effectiveSystemPrompt,
+                Content = string.IsNullOrEmpty(systemPromptContext)
+                    ? CopilotSystemPrompt
+                    : CopilotSystemPrompt + "\n\n" + systemPromptContext,
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = modelId,
