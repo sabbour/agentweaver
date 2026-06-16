@@ -54,15 +54,16 @@ interface ExecutorState {
 interface ExecutorDef {
   key: ExecutorKey;
   label: string;
+  roleDescription: string;
   Icon: FluentIcon;
 }
 
 const EXECUTORS: ExecutorDef[] = [
-  { key: 'agent',  label: 'Agent',  Icon: BotRegular      },
-  { key: 'rai',    label: 'Rai',    Icon: ShieldRegular   },
-  { key: 'review', label: 'Review', Icon: PersonRegular   },
-  { key: 'merge',  label: 'Merge',  Icon: MergeRegular    },
-  { key: 'scribe', label: 'Scribe', Icon: NotebookRegular },
+  { key: 'agent',  label: 'Agent',  roleDescription: 'AI Assistant',    Icon: BotRegular      },
+  { key: 'rai',    label: 'Rai',    roleDescription: 'RAI Reviewer',     Icon: ShieldRegular   },
+  { key: 'review', label: 'Review', roleDescription: 'Human Review',     Icon: PersonRegular   },
+  { key: 'merge',  label: 'Merge',  roleDescription: 'Merge Coordinator',Icon: MergeRegular    },
+  { key: 'scribe', label: 'Scribe', roleDescription: 'Session Logger',   Icon: NotebookRegular },
 ];
 
 // ---------------------------------------------------------------------------
@@ -187,6 +188,11 @@ const useNodeStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300,
     color: tokens.colorNeutralForeground1,
+  },
+  cardRole: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    marginTop: '1px',
   },
   cardSubText: {
     fontSize: tokens.fontSizeBase200,
@@ -317,6 +323,7 @@ function WorkflowNode({ data }: NodeProps) {
         </span>
         <div className={s.cardTitleGroup}>
           <span className={s.cardTitle}>{label}</span>
+          <span className={s.cardRole}>{def.roleDescription}</span>
           {agentName && <span className={s.cardSubText}>{agentName}</span>}
           {subText && <span className={s.cardSubText}>{subText}</span>}
         </div>
@@ -325,21 +332,21 @@ function WorkflowNode({ data }: NodeProps) {
       {/* Action buttons — nopan/nodrag prevents React Flow from swallowing clicks */}
       {key === 'agent' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${runId}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/watch/${runId}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View run</Button>
           </Link>
         </div>
       )}
       {(key === 'rai' || key === 'scribe') && (status === 'started' || status === 'completed' || status === 'failed') && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${runId}-${key}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/watch/${runId}-${key}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View execution</Button>
           </Link>
         </div>
       )}
       {key === 'review' && status === 'started' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Link to={`/watch/${runId}`} state={{ projectId }} style={{ textDecoration: 'none' }}>
+          <Link to={`/watch/${runId}`} state={{ projectId, workflowRunId: runId }} style={{ textDecoration: 'none' }}>
             <Button appearance="primary" size="medium">Review now</Button>
           </Link>
         </div>
