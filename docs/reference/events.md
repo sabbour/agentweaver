@@ -33,6 +33,7 @@ Clients should order and deduplicate events by `sequence`.
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
+| `workflow.step` | When each workflow executor stage transitions | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only) |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
 | `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |
 | `review.declined` | When the owner declines the run | *(none)* |
@@ -52,7 +53,7 @@ Both the GitHub Copilot and Microsoft Foundry runners stream text as `agent.mess
 
 Both providers surface the same tool event vocabulary. For each tool the agent runs, the stream carries a `tool.call`, followed by a `tool.result` for an approved tool (with its real content) or a `tool.error` for a denial or failure. The Copilot provider reads these from the tool-execution lifecycle that flows inline through the streaming response, so an observer sees individual tool activity on Copilot runs at parity with Foundry.
 
-SDK-internal tools (`report_intent`, `report_outcome`, `glob`, `agent.tools`) are suppressed from the event stream entirely. These are housekeeping operations that never pass through the sandbox permission handler and would confuse the frontend if rendered as tool cards.
+SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stream. `report_intent` is translated into an `agent.intent` event rather than suppressed — the raw tool call is hidden, but the intent text surfaces as a first-class event. `agent.tools` is a synthetic event emitted by the runtime, not an SDK tool.
 
 ## Event details
 
@@ -141,6 +142,24 @@ Emitted when the human reviewer calls `POST /api/runs/{id}/request-changes`. `co
 ### `tool.approval_required`
 
 Emitted when a tool call is paused waiting for human approval. `request_id` identifies the request and is used by `POST /api/runs/{id}/tool-approvals` and `POST /api/runs/{id}/tool-denials`. `tool_name` is the tool being called. `url` is the resource being accessed (for `web_fetch` and similar tools). `intention` is an optional human-readable description of what the agent intends to do. The run is paused until the human approves or denies; `tool.result` or `tool.error` follows once settled.
+
+### `workflow.step`
+
+Emitted by each workflow executor stage when it starts, completes, fails, or is skipped. The `step` field identifies the stage:
+
+| Step | Executor |
+|------|----------|
+| `agent` | AI agent turn (task execution) |
+| `rai` | RAI safety review |
+| `review` | Human review gate |
+| `merge` | Branch merge |
+| `scribe` | Session logger |
+
+Possible `status` values: `started`, `completed`, `failed`, `skipped`, `revise` (RAI step only).
+
+The `label` field is a short human-readable description (e.g. `"Agent turn"`, `"RAI review"`). `timestamp_utc` is an ISO 8601 timestamp. The `agent` step includes `agent_name` (the team member running the turn). The `review` step includes `reviewer` (GitHub username) when a human review decision is recorded.
+
+The web UI uses `workflow.step` events to drive the workflow diagram — each card in the Agent → Rai → Review → Merge → Scribe pipeline updates live as these events arrive.
 
 ## Model-assisted casting
 

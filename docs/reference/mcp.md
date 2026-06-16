@@ -140,9 +140,9 @@ Get the current status and details of a run.
 |-----------|------|----------|-------------|
 | `run_id` | string | yes | Run ID |
 
-**Returns**: Run object with `status`, `task`, `agent_name`, `started_at`, `diff` (when in review), and outcome fields.
+**Returns**: Run object with `status`, `task`, `agent_name`, `started_at`, `result` (when the run completes with no changes: `"no_changes"`), `diff` (when in review), and outcome fields.
 
-Possible `status` values: `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `failed`, `bounded`.
+Possible `status` values: `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `failed`, `merge_failed`.
 
 ---
 

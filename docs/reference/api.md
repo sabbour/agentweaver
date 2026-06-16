@@ -62,6 +62,8 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
 | `POST` | `/api/projects/{id}/runs` | Start a run within a project |
 
+Run summary objects returned by `GET /api/projects/{id}/runs` include a `result` field (`"no_changes"` or `null`). When `result` is `"no_changes"`, the agent found no file changes to commit; the review and merge gates are skipped.
+
 ### Memory
 
 Memory is scoped to projects. Decisions and memories feed the `MemoryContextCompiler`, which assembles a hierarchical context block injected into every agent run (boundaries → core context → learnings → session). Export writes to `.squad/decisions.md`, `.squad/agents/{name}/history.md`, `.agentweaver/context/boundaries.md`, and `.agentweaver/context/patterns.md`.
@@ -70,10 +72,10 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/projects/{id}/inbox` | Submit a decision or learning to the inbox |
-| `GET` | `/api/projects/{id}/inbox` | List inbox entries (`?agent=`, `?type=`, `?status=`) |
-| `POST` | `/api/projects/{id}/inbox/{entryId}/merge` | Merge a pending entry into decisions |
-| `POST` | `/api/projects/{id}/inbox/{entryId}/reject` | Reject a pending entry |
+| `POST` | `/api/projects/{id}/decisions/inbox` | Submit a decision or learning to the inbox |
+| `GET` | `/api/projects/{id}/decisions/inbox` | List inbox entries (`?agent=`, `?type=`, `?status=`) |
+| `POST` | `/api/projects/{id}/decisions/inbox/{entryId}/merge` | Merge a pending entry into decisions |
+| `POST` | `/api/projects/{id}/decisions/inbox/{entryId}/reject` | Reject a pending entry |
 
 #### Decisions
 
@@ -154,7 +156,7 @@ Request:
 }
 ```
 
-`model_source` must be `github-copilot` or `microsoft-foundry`. Any other value returns `400 Bad Request`. The submitting user comes from the bearer key, not the request body.
+`model_source` must be `github-copilot`. Any other value returns `400 Bad Request`. The submitting user comes from the bearer key, not the request body.
 
 `repository_path` must be an absolute local filesystem path. The server canonicalizes it with `Path.GetFullPath` before storing it on the run record. UNC paths (`\\server\share`, `//server/share`), device paths (`\\?\`, `\\.\`), drive-relative paths (`C:foo`), relative paths, and NTFS Alternate Data Streams are rejected with `400`.
 

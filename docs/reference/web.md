@@ -32,7 +32,8 @@ npm run lint
 | `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, relink, delete |
 | `/projects/:projectId/team` | Team | Current team roster, member management, charter editor, and sync panel |
 | `/projects/:projectId/team/cast` | Casting wizard | Single-page casting wizard with Formulate, Template, and Analyze tabs |
-| `/watch/:runId` | Watch run | Live event stream, diff, and review panel for a run |
+| `/projects/:projectId/runs/:runId/workflow` | Workflow run | Live workflow diagram with executor stage cards, execution modal, and status |
+| `/projects/:projectId/memories` | Team Memory | Decisions and RAI audit trail recorded across runs |
 | `/settings` | Settings | API connection settings |
 
 ## Flows
@@ -55,20 +56,19 @@ The project page (`/projects/:projectId`) shows project details, a list of past 
 
 The details section shows the project name, origin, source repository (for GitHub projects), working directory, default branch, and provider settings.
 
-The run list shows each run's id, status, and start time. Clicking a run navigates to the watch screen for that run.
+The run list shows each run's id, status, and start time. Status badges show human-friendly labels: `No Changes`, `Completed`, `Merged`, `Failed`, `Merge Failed`, `Declined`, `Running`, and `Awaiting Review`. The `No Changes` label uses an informative (blue) badge to distinguish it from a full merge. Clicking a run navigates to the workflow run page for that run.
 
 The start-run dialog collects:
 
 - **Task** — required description for the agent
-- **Provider** — optional override; falls back to the project default
-- **Model** — optional override; falls back to the project default for the selected provider
+- **Model** — optional override; falls back to the project default
 - **Base branch** — optional; falls back to the project's default branch
 
 ### Project settings
 
 The project settings page (`/projects/:projectId/settings`) has three sections:
 
-**Provider defaults** — select the default provider (`github-copilot` or `microsoft-foundry`) and enter optional per-provider model overrides. Changes are saved immediately on submit.
+**Provider defaults** — select `github-copilot` as the default provider and enter an optional model override. Changes are saved immediately on submit.
 
 **Rename** — enter a new display name for the project.
 
@@ -167,6 +167,41 @@ Two action buttons appear in the page header:
 A **Cast team** button navigates to the casting wizard at `/projects/:projectId/team/cast`.
 
 The sync panel at the bottom of the page shows the pending uncommitted changes fetched from `GET /api/projects/{id}/team/sync`. Each changed file is listed with its status (`added`, `modified`, or `deleted`). A **Commit** button opens a dialog to enter an optional commit message and then calls `POST /api/projects/{id}/team/sync` with the change set hash. If the change set shifts between the panel load and the commit, the server returns a conflict and the panel shows an error with a prompt to refresh.
+
+### Workflow run page
+
+The workflow run page (`/projects/:projectId/runs/:runId/workflow`) is the primary screen for monitoring a run. It renders the five-stage pipeline as a horizontal React Flow diagram:
+
+**Agent → Rai → Review → Merge → Scribe**
+
+Each card shows:
+- **Stage name and role description** — Agent (AI Assistant), Rai (RAI Reviewer), Review (Human Review), Merge (Merge Coordinator), Scribe (Session Logger)
+- **Status badge** — Pending, In Progress, Awaiting, Complete, Skipped, Failed, or Revise (Rai only)
+- **Elapsed timer** — running clock while the stage is active; freezes on completion
+- **Description text** — current activity (e.g. "Working on task...", the latest `agent.intent` text, "Passed", "Skipped")
+- **Agent identicon** — circular avatar for the agent executor, matching the identicon on the team page
+- **Model name** — displayed on the agent card when a model is known
+- **Reviewer avatar** — on the Review card, once a human has reviewed, shows the reviewer's GitHub profile picture and username
+
+Loop-back arcs (Rai → Agent for revision, Review → Agent for request-changes) are highlighted in blue while the loop is active.
+
+Clicking **View Execution** on any completed card opens the execution modal.
+
+### Execution modal
+
+The execution modal shows the full event timeline for an individual executor's run — agent messages, tool call cards, approval cards, and lifecycle events. The modal is non-scrollable at the outer level; the inner timeline panel has its own scrollbar. Close with the × button or click outside.
+
+### Team Memory page
+
+The team memory page (`/projects/:projectId/memories`) surfaces the durable knowledge recorded by the team across all runs.
+
+Two tabs:
+
+**Decisions & Memory** — decisions recorded by agents (via `submit_decision` / `decision_create`). Each entry shows title, type badge (architectural, process, scope, technical), agent badge, and creation time. Decisions are ordered newest-first.
+
+**RAI Audit** — memory entries recorded by Rai (via `record_memory`). Each entry shows importance badge (high/medium/low), type, and content.
+
+Both tabs fetch live from the API; data is cached for the session tab switch.
 
 ### Casting wizard
 
