@@ -18,37 +18,42 @@ public sealed class MemoryContextCompiler(MemoryDbContext db)
         string projectId, string agentName, CancellationToken ct = default)
     {
         // Layer 1: active architectural + scope decisions (team-wide boundaries)
-        var decisions = await db.Decisions
+        // Note: SQLite does not support DateTimeOffset in ORDER BY — sort client-side.
+        var decisions = (await db.Decisions
             .Where(d => d.ProjectId == projectId
                      && d.Status == "active"
                      && (d.Type == "architectural" || d.Type == "scope"))
+            .ToListAsync(ct))
             .OrderBy(d => d.CreatedAt)
-            .ToListAsync(ct);
+            .ToList();
 
         // Layer 2: agent core_context memories
-        var coreMemories = await db.AgentMemory
+        var coreMemories = (await db.AgentMemory
             .Where(m => m.ProjectId == projectId
                      && m.AgentName == agentName
                      && m.Type == "core_context")
+            .ToListAsync(ct))
             .OrderBy(m => m.CreatedAt)
-            .ToListAsync(ct);
+            .ToList();
 
         // Layer 3: top-5 high-importance learnings/patterns for this agent
         //          + cross-team tagged memories from other agents
-        var learnings = await db.AgentMemory
+        var learnings = (await db.AgentMemory
             .Where(m => m.ProjectId == projectId
                      && m.Importance == "high"
                      && (m.AgentName == agentName || (m.Tags != null && m.Tags.Contains(",cross-team,")))
                      && (m.Type == "learning" || m.Type == "pattern"))
+            .ToListAsync(ct))
             .OrderByDescending(m => m.CreatedAt)
             .Take(5)
-            .ToListAsync(ct);
+            .ToList();
 
         // Layer 4: current open session
-        var session = await db.SessionContexts
+        var session = (await db.SessionContexts
             .Where(s => s.ProjectId == projectId && s.EndedAt == null)
+            .ToListAsync(ct))
             .OrderByDescending(s => s.StartedAt)
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefault();
 
         if (!decisions.Any() && !coreMemories.Any() && !learnings.Any() && session is null)
             return null;
