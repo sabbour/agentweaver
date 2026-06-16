@@ -128,14 +128,14 @@ const useStyles = makeStyles({
   // Arc above the pipeline — wraps pipeline in relative container with top padding
   pipelineArcWrap: {
     position: 'relative',
-    paddingTop: '48px',
+    paddingTop: '32px',
   },
   arcSvg: {
     position: 'absolute',
     top: 0,
     left: 0,
     width: '100%',
-    height: '48px',
+    height: '32px',
     pointerEvents: 'none',
     overflow: 'visible',
   },
@@ -356,7 +356,10 @@ export function WorkflowRunPage() {
   const pipelineWrapRef = useRef<HTMLDivElement>(null);
   const agentCardRef    = useRef<HTMLDivElement>(null);
   const raiCardRef      = useRef<HTMLDivElement>(null);
-  const [arcGeom, setArcGeom] = useState<{ fromX: number; toX: number } | null>(null);
+  const [arcGeom, setArcGeom] = useState<{
+    fromX: number; fromTop: number;
+    toX:   number; toTop:   number;
+  } | null>(null);
 
   useLayoutEffect(() => {
     function measure() {
@@ -365,8 +368,10 @@ export function WorkflowRunPage() {
       const agentRect = agentCardRef.current.getBoundingClientRect();
       const raiRect   = raiCardRef.current.getBoundingClientRect();
       setArcGeom({
-        fromX: raiRect.left   + raiRect.width   / 2 - wrapRect.left,
-        toX:   agentRect.left + agentRect.width  / 2 - wrapRect.left,
+        fromX:   raiRect.left   + raiRect.width   / 2 - wrapRect.left,
+        fromTop: raiRect.top                           - wrapRect.top,
+        toX:     agentRect.left + agentRect.width  / 2 - wrapRect.left,
+        toTop:   agentRect.top                         - wrapRect.top,
       });
     }
     measure();
@@ -452,8 +457,8 @@ export function WorkflowRunPage() {
     return executorStates[key] ?? { status: 'pending' };
   }
 
-  // SVG arc color — use the Fluent red token so it respects theming.
-  const arcColor = tokens.colorPaletteRedForeground1;
+  // SVG arc — neutral connector style, matches PipeConnector color.
+  const arcColor = tokens.colorNeutralStroke2;
   const arcId    = 'rai-arc-arrow';
 
   return (
@@ -481,25 +486,31 @@ export function WorkflowRunPage() {
       {/* Executor pipeline — wrapped in relative container so the arc SVG can sit above.
           Layout: [Agent] ──○ ○── [Rai]    ──○ ○── [Merge] ──○ ○── [Scribe]
                                   [Review] ──○ /
-          Red arc above: Rai center ──┐ top ──┐ ↓ Agent center
+          Arc above: Rai top ─╮ 8px gap ╭─ Agent top (arrowhead enters Agent card)
       */}
       <div ref={pipelineWrapRef} className={styles.pipelineArcWrap}>
-        {/* Feedback arc SVG — rendered above the pipeline row */}
+        {/* Feedback arc SVG — connector-style L-path above the pipeline */}
         {arcGeom && (
           <svg aria-hidden="true" className={styles.arcSvg}>
             <defs>
-              <marker id={arcId} markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto-start-reverse">
-                <path d="M 0 0 L 8 4 L 0 8 z" fill={arcColor} />
+              <marker id={arcId} markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse">
+                <path d="M 0 0 L 6 3 L 0 6 z" fill={arcColor} />
               </marker>
             </defs>
-            {/* L-shaped path: up from Rai, across top, down to Agent with arrowhead */}
+            {/* Dot at Rai end */}
+            <circle cx={arcGeom.fromX} cy={arcGeom.fromTop} r="3"
+              stroke={arcColor} strokeWidth="1" fill="none" />
+            {/* L-path: up from Rai top, across at 8px, down to Agent top */}
             <path
-              d={`M ${arcGeom.fromX},48 L ${arcGeom.fromX},8 L ${arcGeom.toX},8 L ${arcGeom.toX},48`}
+              d={`M ${arcGeom.fromX},${arcGeom.fromTop - 3} L ${arcGeom.fromX},8 L ${arcGeom.toX},8 L ${arcGeom.toX},${arcGeom.toTop}`}
               stroke={arcColor}
-              strokeWidth="1.5"
+              strokeWidth="1"
               fill="none"
               markerEnd={`url(#${arcId})`}
             />
+            {/* Dot at Agent end — sits on top of the card */}
+            <circle cx={arcGeom.toX} cy={arcGeom.toTop} r="3"
+              stroke={arcColor} strokeWidth="1" fill="none" />
           </svg>
         )}
 
