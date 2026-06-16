@@ -62,6 +62,7 @@ export function useArtifactBrowser(
   runStatus: string,
   onRequestChangesSuccess?: () => void,
   onCommitSuccess?: () => void,
+  onSubmitReviewSuccess?: () => void,
 ): ArtifactBrowserState {
   const isHistorical = HISTORICAL_STATUSES.has(runStatus);
   const isLive = runStatus === 'in_progress';
@@ -272,6 +273,7 @@ export function useArtifactBrowser(
     try {
       const resp = await apiClient.submitReview(runId, approved);
       setReviewResult(resp);
+      onSubmitReviewSuccess?.();
     } catch (err) {
       if (err instanceof ApiError) {
         setReviewError(

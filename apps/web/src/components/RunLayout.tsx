@@ -80,15 +80,16 @@ interface RunLayoutProps {
   onCenterScroll?: () => void;
   onRequestChangesSuccess?: () => void;
   onCommitSuccess?: () => void;
+  onSubmitReviewSuccess?: () => void;
   style?: React.CSSProperties;
 }
 
-export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, style }: RunLayoutProps) {
+export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, style }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
   // Sub-runs (Rai, Scribe) have no workspace of their own — skip the artifact browser.
   const effectiveRunId = isSubRunId(runId) ? null : runId;
-  const artifactState = useArtifactBrowser(effectiveRunId ?? '', runStatus, onRequestChangesSuccess, onCommitSuccess);
+  const artifactState = useArtifactBrowser(effectiveRunId ?? '', runStatus, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess);
   const internalRef = useRef<HTMLDivElement>(null);
   const scrollRef = centerScrollRef ?? internalRef;
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Badge, Divider, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
@@ -37,13 +37,18 @@ function resolvedBadgeColor(
   return 'danger';
 }
 
-interface RunWatcherProps { runId: string; style?: React.CSSProperties; }
+interface RunWatcherProps { runId: string; style?: React.CSSProperties; onReviewAction?: () => void; }
 
-export function RunWatcher({ runId, style }: RunWatcherProps) {
+export function RunWatcher({ runId, style, onReviewAction }: RunWatcherProps) {
   const styles = useStyles();
   const { events, status, error, reconnect } = useRunStream(runId, API_KEY, API_URL);
   const { items, runOutcome } = useTimelineItems(events, runId);
   const isLiveRun = status === 'connecting' || status === 'streaming';
+
+  const handleReconnect = useCallback(() => {
+    reconnect();
+    onReviewAction?.();
+  }, [reconnect, onReviewAction]);
 
   // Auto-scroll center panel to bottom as new events arrive,
   // unless the user has manually scrolled up.
@@ -117,8 +122,9 @@ export function RunWatcher({ runId, style }: RunWatcherProps) {
         centerContent={centerContent}
         centerScrollRef={centerScrollRef}
         onCenterScroll={handleCenterScroll}
-        onRequestChangesSuccess={reconnect}
-        onCommitSuccess={reconnect}
+        onRequestChangesSuccess={handleReconnect}
+        onCommitSuccess={handleReconnect}
+        onSubmitReviewSuccess={handleReconnect}
         style={style ? { height: 'calc(100% - 56px)' } : undefined}
       />
     </div>

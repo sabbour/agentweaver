@@ -45,6 +45,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useRunStream } from '../api/sse';
 import { apiClient } from '../api/apiClient';
+import type { TeamDto } from '../api/types';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
@@ -321,6 +322,8 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
   if (key === 'review') {
     if (status === 'started')   return 'Awaiting your review';
     if (status === 'completed') return 'Reviewed';
+    if (status === 'revise')    return 'Revision requested';
+    if (status === 'failed')    return 'Declined';
     if (status === 'skipped')   return 'Skipped';
   }
   if (key === 'merge') {
@@ -463,7 +466,7 @@ function WorkflowNode({ data }: NodeProps) {
           </Button>
         </div>
       )}
-      {key === 'review' && status === 'completed' && reviewedBy && (
+      {key === 'review' && (status === 'completed' || status === 'revise') && reviewedBy && (
         <div className={`${s.reviewerRow} nopan nodrag`}>
           <img
             src={`https://github.com/${reviewedBy}.png?size=28`}
@@ -710,6 +713,7 @@ export function WorkflowRunPage() {
   const [executionId,    setExecutionId]    = useState<string | undefined>(undefined);
   const [loading,        setLoading]        = useState(true);
   const [modalExecId,    setModalExecId]    = useState<string | undefined>(undefined);
+  const [team,           setTeam]           = useState<TeamDto | undefined>(undefined);
 
   const openExecutionModal = useCallback((id: string) => setModalExecId(id), []);
 
@@ -720,7 +724,7 @@ export function WorkflowRunPage() {
     Promise.all([
       apiClient.getProjectRuns(projectId),
       apiClient.getTeam(projectId),
-    ]).then(([runs, team]) => {
+    ]).then(([runs, teamData]) => {
         if (cancelled) return;
         const run = runs.find((r) => r.workflow_run_id === runId);
         const name = run?.agent_name ?? undefined;
@@ -729,10 +733,11 @@ export function WorkflowRunPage() {
         setReviewedBy(run?.reviewed_by ?? undefined);
         setExecutionId(run?.execution_id ?? undefined);
         setModelId(run?.model_id ?? undefined);
+        setTeam(teamData);
 
         // Look up the team member by cast name to get their role title
         if (name) {
-          const member = team.members.find(
+          const member = teamData.members.find(
             m => m.name.toLowerCase() === name.toLowerCase()
           );
           if (member) setAgentRoleTitle(member.role_title);
@@ -743,7 +748,7 @@ export function WorkflowRunPage() {
     return () => { cancelled = true; };
   }, [projectId, runId]);
 
-  const { events, status: streamStatus } = useRunStream(executionId ?? '', API_KEY, API_URL);
+  const { events, status: streamStatus, reconnect } = useRunStream(executionId ?? '', API_KEY, API_URL);
 
   // Derive executor states from SSE workflow.step events plus semantic review/merge events.
   const executorStates = useMemo<Record<string, ExecutorState>>(() => {
@@ -769,7 +774,7 @@ export function WorkflowRunPage() {
         // Belt-and-suspenders: backend now emits workflow.step for review, but handle the
         // semantic event too so older in-flight runs update correctly.
         if (!map['review'] || map['review'].status === 'started') {
-          map['review'] = { ...map['review'], status: 'completed', completedAt: Date.now() };
+          map['review'] = { ...map['review'], status: 'revise', completedAt: Date.now() };
         }
       } else if (evt.type === 'review.approved') {
         if (!map['review'] || map['review'].status === 'started') {
@@ -777,7 +782,7 @@ export function WorkflowRunPage() {
         }
       } else if (evt.type === 'review.declined') {
         if (!map['review'] || map['review'].status === 'started') {
-          map['review'] = { ...map['review'], status: 'completed', completedAt: Date.now() };
+          map['review'] = { ...map['review'], status: 'failed', completedAt: Date.now() };
         }
         if (!map['merge']) {
           map['merge'] = { status: 'skipped' };
@@ -852,8 +857,8 @@ export function WorkflowRunPage() {
     const agentStatus  = executorStates['agent']?.status;
     const mergeStatus  = executorStates['merge']?.status;
     if (raiStatus === 'revise' && agentStatus === 'started') return 'rai-agent-revise';
-    // review→agent: review completed but no merge started → must be a request-changes loop
-    if (agentStatus === 'started' && !mergeStatus && executorStates['review']?.status === 'completed') {
+    // review→agent: review requested changes but no merge started → request-changes loop
+    if (agentStatus === 'started' && !mergeStatus && executorStates['review']?.status === 'revise') {
       return 'review-agent-change';
     }
     return undefined;
@@ -886,6 +891,7 @@ export function WorkflowRunPage() {
 
   const shortId      = runId.length > 8 ? runId.slice(0, 8) : runId;
   const isConnecting = streamStatus === 'connecting';
+  const projectName  = team?.project_name ?? projectId;
 
   return (
     <div className={styles.root}>
@@ -893,7 +899,7 @@ export function WorkflowRunPage() {
       <nav className={styles.breadcrumb} aria-label="Breadcrumb">
         <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
         <span aria-hidden="true">/</span>
-        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>Project</Link>
+        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>{projectName}</Link>
         <span aria-hidden="true">/</span>
         <span>Run {shortId}</span>
       </nav>
@@ -949,7 +955,7 @@ export function WorkflowRunPage() {
               Execution {modalExecId ? modalExecId.slice(0, 8) : ''}
             </DialogTitle>
             <DialogContent style={{ flex: 1, overflow: 'hidden', padding: 0, display: 'flex', flexDirection: 'column' }}>
-              {modalExecId && <RunWatcher key={modalExecId} runId={modalExecId} style={{ height: '100%' }} />}
+              {modalExecId && <RunWatcher key={modalExecId} runId={modalExecId} style={{ height: '100%' }} onReviewAction={reconnect} />}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setModalExecId(undefined)}>Close</Button>
