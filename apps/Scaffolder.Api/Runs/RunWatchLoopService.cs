@@ -175,6 +175,7 @@ public sealed class RunWatchLoopService
                 entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
 
                 _streamStore.Complete(runId);
+                _ = _factory.PersistRunEventsAsync(runId);
                 _ = FirePostRunScribeAsync(runId);
                 return true;
             }
@@ -198,6 +199,7 @@ public sealed class RunWatchLoopService
             entry.RecordNext(EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult });
 
             _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
             return true;
         }
 
@@ -213,6 +215,7 @@ public sealed class RunWatchLoopService
             entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
 
             _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -225,6 +228,7 @@ public sealed class RunWatchLoopService
             entry.RecordNext(EventTypes.ReviewDeclined, new { });
 
             _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
             return true;
         }
 
@@ -241,6 +245,7 @@ public sealed class RunWatchLoopService
             entry.RecordNext(EventTypes.RunFailed, new { reason = "content_safety" });
 
             _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
             return true;
         }
 
@@ -292,6 +297,7 @@ public sealed class RunWatchLoopService
 
             entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
         }
         catch (Exception ex)
         {

@@ -1,12 +1,15 @@
+using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Scaffolder.AgentRuntime;
 using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Infrastructure;
+using Scaffolder.Api.Memory;
 using Scaffolder.Domain;
 using Scaffolder.SandboxExec;
 
@@ -28,6 +31,7 @@ public sealed class RunWorkflowFactory
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
     private readonly string? _apiBaseUrl;
@@ -48,6 +52,7 @@ public sealed class RunWorkflowFactory
         IMergeCoordinator mergeCoordinator,
         RunStreamStore streamStore,
         ILoggerFactory loggerFactory,
+        IServiceScopeFactory scopeFactory,
         IConfiguration configuration)
     {
         _ = agentRunner; // retained for DI/test compatibility; Scribe now uses ScribeAIAgent
@@ -61,6 +66,7 @@ public sealed class RunWorkflowFactory
         _mergeCoordinator = mergeCoordinator;
         _streamStore = streamStore;
         _loggerFactory = loggerFactory;
+        _scopeFactory = scopeFactory;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -100,7 +106,59 @@ public sealed class RunWorkflowFactory
         return new RecordingChannelWriter(entry);
     }
 
-    public void CompleteSubStream(string subRunId) => _streamStore.Complete(subRunId);
+    public void CompleteSubStream(string subRunId)
+    {
+        _streamStore.Complete(subRunId);
+        _ = PersistRunEventsAsync(subRunId);
+    }
+
+    /// <summary>
+    /// Persists the in-memory event history for <paramref name="runId"/> to the
+    /// <see cref="RunEventRecord"/> table so the Watch page can replay them after the
+    /// stream entry is evicted from <see cref="RunStreamStore"/>. Idempotent: already-
+    /// persisted sequences are skipped via a pre-check. Fire-and-forget safe.
+    /// </summary>
+    public async Task PersistRunEventsAsync(string runId)
+    {
+        try
+        {
+            var entry = _streamStore.Get(runId);
+            if (entry is null) return;
+
+            var events = entry.GetSnapshotSince(0).Events;
+            if (events.Count == 0) return;
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+            var existingSeqs = db.RunEvents
+                .Where(e => e.RunId == runId)
+                .Select(e => e.Sequence)
+                .ToHashSet();
+
+            var toInsert = events
+                .Where(e => !existingSeqs.Contains(e.Sequence))
+                .Select(e => new RunEventRecord
+                {
+                    RunId = runId,
+                    Sequence = e.Sequence,
+                    EventType = e.Type,
+                    PayloadJson = JsonSerializer.Serialize(e.Payload),
+                    CreatedAt = DateTime.UtcNow,
+                })
+                .ToList();
+
+            if (toInsert.Count == 0) return;
+
+            db.RunEvents.AddRange(toInsert);
+            await db.SaveChangesAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                .LogWarning(ex, "Failed to persist run events for {RunId}", runId);
+        }
+    }
 
     /// <summary>
     /// Shared workflow state scope used to carry AgentTurnOutput data across the
