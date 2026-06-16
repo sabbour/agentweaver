@@ -324,7 +324,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
         // Emit configuration snapshot for debuggability.
-        Emit("agent.system_prompt", new { provider = "copilot", prompt = CopilotSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext) });
+        var fullSystemPrompt = string.IsNullOrEmpty(_systemPromptContext)
+            ? CopilotSystemPrompt
+            : CopilotSystemPrompt + "\n\n" + _systemPromptContext;
+        Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext) });
         Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {
