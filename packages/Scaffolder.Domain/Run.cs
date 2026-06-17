@@ -37,4 +37,10 @@ public sealed record Run
     public string? ReviewedBy { get; init; }
     /// <summary>The workflow run this execution belongs to. Null for legacy runs created before this field was introduced.</summary>
     public string? WorkflowRunId { get; init; }
+    /// <summary>
+    /// The commit SHA on the originating branch produced by the merge.
+    /// Populated once the run transitions to Merged; null for older runs or non-merged runs.
+    /// Used by the workspace endpoint to serve file content from git after the worktree is deleted.
+    /// </summary>
+    public string? MergedCommitHash { get; init; }
 }

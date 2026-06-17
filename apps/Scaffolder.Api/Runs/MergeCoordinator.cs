@@ -96,7 +96,9 @@ public sealed class MergeCoordinator : IMergeCoordinator
             {
                 case MergeResultKind.Merged:
                     var mergeResult = $"merged:{result.CommitHash}";
-                    var completedMerge = await CompleteMergeAsync(input.RunId, mergeResult, ct).ConfigureAwait(false);
+                    var completedMerge = await _runStore.CompleteMergingAsync(
+                        RunId.Parse(input.RunId), RunStatus.Merged, DateTimeOffset.UtcNow, mergeResult,
+                        null, CancellationToken.None, result.CommitHash).ConfigureAwait(false);
                     if (!completedMerge)
                         _logger.LogWarning("CompleteMergeAsync CAS returned false for run {RunId} — possible concurrency conflict", input.RunId);
 

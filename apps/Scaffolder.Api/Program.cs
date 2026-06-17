@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
 using Scaffolder.AgentRuntime;
 using Scaffolder.Api.Memory;
@@ -1141,12 +1142,45 @@ app.MapGet("/api/runs/{id}/workspace", async (
     if (!IsOwner(httpContext, run)) return Results.NotFound();
 
     // Worktree is gone for terminal statuses that remove or abandon it.
-    if (run.Status is RunStatus.Failed or RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed)
+    // Merged runs are handled separately below by reading from the git commit tree.
+    if (run.Status is RunStatus.Failed or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed)
         return Results.NotFound();
 
     // Pending runs have no worktree yet.
     if (run.Status is RunStatus.Pending)
         return Results.Json(Array.Empty<WorkspaceNode>());
+
+    // Merged runs: enumerate the commit tree from git (worktree has been deleted).
+    if (run.Status is RunStatus.Merged)
+    {
+        if (string.IsNullOrEmpty(run.RepositoryPath))
+            return Results.NotFound();
+        try
+        {
+            using var repo = new Repository(run.RepositoryPath);
+            Commit? commit = null;
+            if (!string.IsNullOrEmpty(run.MergedCommitHash))
+                commit = repo.Lookup<Commit>(run.MergedCommitHash);
+            if (commit is null && !string.IsNullOrEmpty(run.WorktreeBranch))
+                commit = repo.Branches[run.WorktreeBranch]?.Tip;
+            if (commit is null)
+                return Results.Json(Array.Empty<WorkspaceNode>());
+
+            var nodes = new List<WorkspaceNode>();
+            EnumerateGitTree(commit.Tree, "", nodes);
+
+            var sorted = nodes
+                .OrderBy(n => n.IsFolder ? 0 : 1)
+                .ThenBy(n => n.Path, StringComparer.Ordinal)
+                .ToArray();
+            return Results.Json(sorted);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to read git tree for merged run {RunId}", runId);
+            return Results.Problem("Failed to list workspace.", statusCode: 500);
+        }
+    }
 
     if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
         return Results.NotFound();
@@ -1530,9 +1564,71 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     // --- Content endpoint branch ---
     if (isContentRequest)
     {
+        // Merged runs: read blob from git commit tree (worktree has been deleted).
+        if (run.Status is RunStatus.Merged)
+        {
+            if (string.IsNullOrEmpty(run.RepositoryPath))
+                return Results.NotFound();
+            try
+            {
+                using var repo = new Repository(run.RepositoryPath);
+                Commit? commit = null;
+                if (!string.IsNullOrEmpty(run.MergedCommitHash))
+                    commit = repo.Lookup<Commit>(run.MergedCommitHash);
+                if (commit is null && !string.IsNullOrEmpty(run.WorktreeBranch))
+                    commit = repo.Branches[run.WorktreeBranch]?.Tip;
+                if (commit is null)
+                    return Results.NotFound();
+
+                var gitPath = normalizedPath.Replace('\\', '/');
+                var treeEntry = commit[gitPath];
+                if (treeEntry is null || treeEntry.TargetType != TreeEntryTargetType.Blob)
+                    return Results.NotFound();
+
+                var blob = (Blob)treeEntry.Target;
+
+                if (blob.IsBinary)
+                {
+                    return Results.Json(new WorkspaceFileContent
+                    {
+                        Path     = normalizedPath,
+                        Content  = null,
+                        IsBinary = true,
+                        Language = DetectLanguage(normalizedPath),
+                    });
+                }
+
+                const int maxGitContentBytes = 1 * 1024 * 1024;
+                if (blob.Size > maxGitContentBytes)
+                {
+                    return Results.Json(new WorkspaceFileContent
+                    {
+                        Path     = normalizedPath,
+                        Content  = null,
+                        IsBinary = false,
+                        Language = "too_large",
+                    });
+                }
+
+                var content = blob.GetContentText();
+                return Results.Json(new WorkspaceFileContent
+                {
+                    Path     = normalizedPath,
+                    Content  = content,
+                    IsBinary = false,
+                    Language = DetectLanguage(normalizedPath),
+                });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to read git blob for merged run {RunId} path {Path}", runId, normalizedPath);
+                return Results.Problem("Failed to read file content.", statusCode: 500);
+            }
+        }
+
         // Content is only available for live runs that have an accessible worktree.
-        // Terminal-state runs (merged, declined) no longer have a worktree on disk.
-        if (run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed)
+        // Terminal-state runs (declined, merge_failed) no longer have a worktree on disk.
+        if (run.Status is RunStatus.Declined or RunStatus.MergeFailed)
             return Results.NotFound();
 
         if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
@@ -2054,6 +2150,31 @@ app.MapGet("/api/casting/templates", (CastingService castingService, CatalogRead
 {
     var templates = catalog.LoadTemplates();
     return Results.Ok(templates.Select(CastingMappings.ToDto));
+});
+
+// GET /api/projects/{id}/casting/universes — list allowed universe names for a project
+app.MapGet("/api/projects/{id}/casting/universes", async (
+    string id,
+    CastingService castingService,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var universes = await castingService.GetAllowlistUniversesAsync(id, ct);
+        return Results.Ok(new { universes });
+    }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException)
+    {
+        return Results.Conflict(new { error = "project_unavailable" });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 // GET /api/catalog/roles — list all available role archetypes
@@ -3630,6 +3751,28 @@ static SandboxPolicy ToSandboxPolicyDomain(SandboxPolicyDto dto) => new()
     RedactPii                  = dto.RedactPii,
     MaxOutputBytes             = dto.MaxOutputBytes,
 };
+
+/// <summary>
+/// Recursively enumerates all blobs and subtrees in a git tree, building WorkspaceNode entries.
+/// Directories are emitted as folder nodes; blobs as file nodes. The .git directory is never
+/// present in a commit tree, so no filtering is required.
+/// </summary>
+static void EnumerateGitTree(Tree tree, string prefix, List<WorkspaceNode> nodes)
+{
+    foreach (var entry in tree)
+    {
+        var entryPath = string.IsNullOrEmpty(prefix) ? entry.Name : $"{prefix}/{entry.Name}";
+        if (entry.TargetType == TreeEntryTargetType.Tree)
+        {
+            nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = true, Status = null });
+            EnumerateGitTree((Tree)entry.Target, entryPath, nodes);
+        }
+        else if (entry.TargetType == TreeEntryTargetType.Blob)
+        {
+            nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = false, Status = null });
+        }
+    }
+}
 
 /// <summary>
 /// Validates a relative file path from a route parameter. Normalizes percent-encoded

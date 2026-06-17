@@ -237,23 +237,26 @@ public sealed class SqliteRunStore
     /// Transitions a run from Merging to a terminal status (Merged or MergeFailed).
     /// Called after MergeWorktree returns a Merged or Conflict outcome.
     /// <paramref name="mergeConflicts"/> is a JSON array of conflicting file paths; pass null on success.
+    /// <paramref name="mergedCommitHash"/> is the commit SHA produced by the merge; pass null for non-merge transitions.
     /// Returns true if the transition was applied (one row updated); false on a concurrency conflict.
     /// </summary>
     public async Task<bool> CompleteMergingAsync(
-        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default)
+        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
             UPDATE runs
-               SET status = $toStatus, ended_at = $endedAt, result = $result, merge_conflicts = $mergeConflicts
+               SET status = $toStatus, ended_at = $endedAt, result = $result, merge_conflicts = $mergeConflicts,
+                   merged_commit_hash = COALESCE($mergedCommitHash, merged_commit_hash)
              WHERE run_id = $runId AND status = 'merging';
             """;
         command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
         command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
         command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
         command.Parameters.AddWithValue("$mergeConflicts", (object?)mergeConflicts ?? DBNull.Value);
+        command.Parameters.AddWithValue("$mergedCommitHash", (object?)mergedCommitHash ?? DBNull.Value);
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -418,14 +421,14 @@ public sealed class SqliteRunStore
     //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
     //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
     //           15=merge_conflicts 16=project_id 17=model_id 18=agent_name 19=agent_charter
-    //           20=reviewed_by 21=workflow_run_id
+    //           20=reviewed_by 21=workflow_run_id 22=merged_commit_hash
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
                submitting_user, status, started_at, ended_at, result,
                worktree_path, worktree_branch, tree_hash, step_count, diff,
                merge_conflicts, project_id, model_id, agent_name, agent_charter,
-               reviewed_by, workflow_run_id
+               reviewed_by, workflow_run_id, merged_commit_hash
           FROM runs
         """;
 
@@ -453,6 +456,7 @@ public sealed class SqliteRunStore
         AgentCharter     = r.IsDBNull(19) ? null : r.GetString(19),
         ReviewedBy       = r.IsDBNull(20) ? null : r.GetString(20),
         WorkflowRunId    = r.IsDBNull(21) ? null : r.GetString(21),
+        MergedCommitHash = r.IsDBNull(22) ? null : r.GetString(22),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
