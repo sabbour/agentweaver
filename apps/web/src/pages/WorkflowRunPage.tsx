@@ -104,6 +104,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   executionId: string;
   projectId: string;
   reviewedBy?: string;
+  runOutcome?: { achieved: boolean; reason: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +274,7 @@ function statusLabel(s: StepStatus) {
   return s;
 }
 
-function StatusBadge({ status, isAwaiting }: { status: StepStatus; isAwaiting?: boolean }) {
+function StatusBadge({ status, isAwaiting, label: labelOverride }: { status: StepStatus; isAwaiting?: boolean; label?: string }) {
   const s = useNodeStyles();
   if (isAwaiting) {
     return (
@@ -302,7 +303,7 @@ function StatusBadge({ status, isAwaiting }: { status: StepStatus; isAwaiting?: 
   return (
     <span className={`${s.statusBadge} ${badgeClass}`}>
       <Icon fontSize={10} aria-hidden="true" />
-      {statusLabel(status)}
+      {labelOverride ?? statusLabel(status)}
     </span>
   );
 }
@@ -312,6 +313,7 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
   if (key === 'agent') {
     if (status === 'started')   return 'Working on task...';
     if (status === 'completed') return 'Finished';
+    if (status === 'revise')    return 'Task not achieved';
     if (status === 'failed')    return 'Failed';
   }
   if (key === 'rai') {
@@ -380,14 +382,20 @@ function ElapsedTimer({ startedAt, completedAt }: { startedAt?: number; complete
 
 function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
-  const { def, state, agentName, agentRoleTitle, modelId, executionId, projectId, reviewedBy } = data as WorkflowNodeData;
+  const { def, state, agentName, agentRoleTitle, modelId, executionId, projectId, reviewedBy, runOutcome } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent } = state;
 
   const openModal = useContext(ExecutionModalContext);
 
-  const isActive         = status === 'started' && key !== 'review';
-  const isHumanWaiting   = key === 'review' && status === 'started';
+  // When the agent completed but `report_outcome` flagged achieved=false, show amber warning.
+  const effectiveStatus: StepStatus =
+    key === 'agent' && status === 'completed' && runOutcome?.achieved === false
+      ? 'revise'
+      : status;
+
+  const isActive         = effectiveStatus === 'started' && key !== 'review';
+  const isHumanWaiting   = key === 'review' && effectiveStatus === 'started';
   const cardClass = [
     s.card,
     isActive        ? s.cardActive         : '',
@@ -396,20 +404,24 @@ function WorkflowNode({ data }: NodeProps) {
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
   // For the agent card while running, prefer the live intent over the static description.
-  const rawSubText = statusDescription(key as ExecutorKey, status);
-  const subText    = (key === 'agent' && status === 'started' && intent) ? intent : rawSubText;
+  const rawSubText = statusDescription(key as ExecutorKey, effectiveStatus);
+  const subText    = (key === 'agent' && effectiveStatus === 'started' && intent) ? intent : rawSubText;
   // For the agent card use the actual team role title; otherwise the executor's static description.
   const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
 
   return (
-    <div className={cardClass} role="article" aria-label={`${label}: ${statusLabel(status)}`}>
+    <div className={cardClass} role="article" aria-label={`${label}: ${statusLabel(effectiveStatus)}`}>
       {/* Standard LR handles — no Top/Bottom, positions are generic */}
       <Handle type="target" position={Position.Left}  style={handleStyle} />
       <Handle type="source" position={Position.Right} style={handleStyle} />
 
       {/* Status badge */}
       <div className={s.cardHeader}>
-        <StatusBadge status={status} isAwaiting={isHumanWaiting} />
+        <StatusBadge
+          status={effectiveStatus}
+          isAwaiting={isHumanWaiting}
+          label={key === 'agent' && effectiveStatus === 'revise' ? 'Incomplete' : undefined}
+        />
       </div>
 
       {/* Icon + title */}
@@ -758,6 +770,17 @@ export function WorkflowRunPage() {
 
   const { events, status: streamStatus, reconnect } = useRunStream(executionId ?? '', API_KEY, API_URL);
 
+  // Extract the run outcome (report_outcome { achieved, reason }) from the event stream.
+  const runOutcome = useMemo<{ achieved: boolean; reason: string } | undefined>(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'run.outcome') {
+        const p = events[i].payload;
+        return { achieved: p['achieved'] as boolean, reason: String(p['reason'] ?? '') };
+      }
+    }
+    return undefined;
+  }, [events]);
+
   // Derive executor states from SSE workflow.step events plus semantic review/merge events.
   const executorStates = useMemo<Record<string, ExecutorState>>(() => {
     const map: Record<string, ExecutorState> = {};
@@ -887,11 +910,12 @@ export function WorkflowRunPage() {
         executionId:     executionId ?? '',
         projectId:       projectId  ?? '',
         reviewedBy:      def.key === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
+        runOutcome:      def.key === 'agent' ? runOutcome : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
     return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
-  }, [executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId]);
+  }, [executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
