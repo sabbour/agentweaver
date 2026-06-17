@@ -39,23 +39,6 @@ import type {
   ConfirmProposalRequest,
 } from '../api/types';
 
-const UNIVERSE_POOLS: { name: string; count: number }[] = [
-  { name: 'The Matrix', count: 13 },
-  { name: 'Star Wars', count: 13 },
-  { name: 'Inception', count: 9 },
-  { name: 'Firefly', count: 12 },
-  { name: 'The Office', count: 16 },
-  { name: 'Breaking Bad', count: 12 },
-  { name: 'Dune', count: 12 },
-  { name: 'Alien', count: 13 },
-  { name: 'Blade Runner', count: 10 },
-  { name: 'The Lord of the Rings', count: 13 },
-  { name: 'Star Trek', count: 13 },
-  { name: 'Harry Potter', count: 12 },
-  { name: 'The Avengers', count: 12 },
-  { name: 'Battlestar Galactica', count: 12 },
-];
-
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -297,6 +280,9 @@ export function CastingWizardPage() {
   const [templates, setTemplates] = useState<TeamTemplateDto[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
 
+  // Universes (fetched from backend policy)
+  const [universes, setUniverses] = useState<string[]>([]);
+
   // Configure panel
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
 
@@ -330,6 +316,15 @@ export function CastingWizardPage() {
       .finally(() => { if (!cancelled) setTemplatesLoading(false); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    apiClient.getUniverses(projectId)
+      .then((data) => { if (!cancelled) setUniverses(data.universes); })
+      .catch(() => { /* leave universes empty; dropdown will be hidden */ });
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   if (!projectId) return null;
 
@@ -673,11 +668,15 @@ export function CastingWizardPage() {
               <AccordionPanel>
                 <Select
                   value={universe}
-                  onChange={(_, data) => setUniverse(data.value)}
+                  onChange={(_, data) => {
+                    setUniverse(data.value);
+                    setFormulateProposal(null);
+                    setAnalyzeProposal(null);
+                  }}
                 >
                   <option value="">Random (any universe)</option>
-                  {UNIVERSE_POOLS.map((u) => (
-                    <option key={u.name} value={u.name}>{u.name}</option>
+                  {universes.map((u) => (
+                    <option key={u} value={u}>{u}</option>
                   ))}
                 </Select>
               </AccordionPanel>

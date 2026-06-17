@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
@@ -10,6 +10,7 @@ import type { TeamTemplateDto, CastProposalDto } from '../api/types';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getTemplates: vi.fn(),
+    getUniverses: vi.fn(),
     createProposal: vi.fn(),
     amendProposal: vi.fn(),
     confirmProposal: vi.fn(),
@@ -42,6 +43,7 @@ const createProposalMock = () => vi.mocked(apiClient.createProposal);
 beforeEach(() => {
   vi.clearAllMocks();
   getTemplatesMock().mockResolvedValue([] as TeamTemplateDto[]);
+  vi.mocked(apiClient.getUniverses).mockResolvedValue({ universes: [] });
 });
 
 afterEach(() => {

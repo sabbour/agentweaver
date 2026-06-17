@@ -78,6 +78,16 @@ public sealed class CastingService
             .ToList();
     }
 
+    /// <summary>Returns the allowlist universes for a project's casting policy.</summary>
+    public async Task<IReadOnlyList<string>> GetAllowlistUniversesAsync(
+        string projectId, CancellationToken ct)
+    {
+        var (project, _) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+        var reader = new SquadReader(project.WorkingDirectory);
+        var policy = reader.ReadPolicy();
+        return policy.AllowlistUniverses;
+    }
+
     /// <summary>
     /// Builds a cast proposal from a catalog team template. Does not write any files.
     /// A new proposal supersedes any previous pending proposal for the same project.
@@ -124,9 +134,11 @@ public sealed class CastingService
         string universe;
         if (!string.IsNullOrWhiteSpace(universeOverride))
         {
-            universe = allocator.IsValidUniverse(universeOverride)
-                ? universeOverride
-                : allocator.ProposeUniverse(history.UniverseUsageHistory, projectId);
+            if (!allocator.IsValidUniverse(universeOverride))
+                throw new ArgumentException(
+                    $"Universe '{universeOverride}' is not in the allowlist. Use GET /api/projects/{{id}}/casting/universes to see available options.",
+                    nameof(universeOverride));
+            universe = universeOverride;
         }
         else
         {
@@ -209,9 +221,11 @@ public sealed class CastingService
         string universe;
         if (!string.IsNullOrWhiteSpace(universeOverride))
         {
-            universe = allocator.IsValidUniverse(universeOverride)
-                ? universeOverride
-                : allocator.ProposeUniverse(history.UniverseUsageHistory, projectId);
+            if (!allocator.IsValidUniverse(universeOverride))
+                throw new ArgumentException(
+                    $"Universe '{universeOverride}' is not in the allowlist. Use GET /api/projects/{{id}}/casting/universes to see available options.",
+                    nameof(universeOverride));
+            universe = universeOverride;
         }
         else
         {
@@ -375,9 +389,11 @@ public sealed class CastingService
         string universe;
         if (!string.IsNullOrWhiteSpace(universeOverride))
         {
-            universe = allocator.IsValidUniverse(universeOverride)
-                ? universeOverride
-                : allocator.ProposeUniverse(history.UniverseUsageHistory, projectId);
+            if (!allocator.IsValidUniverse(universeOverride))
+                throw new ArgumentException(
+                    $"Universe '{universeOverride}' is not in the allowlist. Use GET /api/projects/{{id}}/casting/universes to see available options.",
+                    nameof(universeOverride));
+            universe = universeOverride;
         }
         else
         {

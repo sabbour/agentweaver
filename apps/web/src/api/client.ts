@@ -165,6 +165,10 @@ export class ScaffolderApiClient {
     return this.request<TeamTemplateDto[]>('GET', '/api/casting/templates');
   }
 
+  getUniverses(projectId: string): Promise<{ universes: string[] }> {
+    return this.request<{ universes: string[] }>('GET', `/api/projects/${encodeURIComponent(projectId)}/casting/universes`);
+  }
+
   createProposal(projectId: string, req: CreateProposalRequest): Promise<CastProposalDto> {
     return this.request<CastProposalDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals`, req);
   }
