@@ -33,6 +33,7 @@ npm run lint
 | `/projects/:projectId/team` | Team | Current team roster, member management, charter editor, and sync panel |
 | `/projects/:projectId/team/cast` | Casting wizard | Single-page casting wizard with Formulate, Template, and Analyze tabs |
 | `/projects/:projectId/runs/:runId/workflow` | Workflow run | Live workflow diagram with executor stage cards, execution modal, and status |
+| `/projects/:projectId/orchestrations/:runId` | Coordinator run | Live outcome-spec review and confirm/revise gate for a coordinator run |
 | `/projects/:projectId/memories` | Team Memory | Decisions and RAI audit trail recorded across runs |
 | `/settings` | Settings | API connection settings |
 
@@ -64,6 +65,8 @@ The start-run dialog collects:
 - **Model** — optional override; falls back to the project default
 - **Base branch** — optional; falls back to the project's default branch
 
+A **Start orchestration** button sits alongside the start-run controls. It opens the start-orchestration dialog and, on success, navigates to the coordinator run page (`/projects/:projectId/orchestrations/:runId`). See [Start an orchestration](#start-an-orchestration) below.
+
 ### Project settings
 
 The project settings page (`/projects/:projectId/settings`) has three sections:
@@ -87,6 +90,29 @@ When signed in, it shows the GitHub username and a **Sign out** button.
 ### Submit a run
 
 The home page collects the repository path, originating branch, task description, and model source. Submit stays disabled until the path, branch, and task are filled in. On success the app navigates to the watch screen for the new run.
+
+### Start an orchestration
+
+The start-orchestration dialog (`StartOrchestrationDialog`) is opened from the **Start orchestration** button on the project page. It collects a single **Goal** field — a plain-language description of the outcome to achieve. Submit stays disabled until the goal is non-empty. Submitting calls `POST /api/projects/{id}/orchestrations`, which starts a coordinator run and returns its `runId`; the app then navigates to the coordinator run page at `/projects/:projectId/orchestrations/:runId`.
+
+### Coordinator run and outcome-spec gate
+
+The coordinator run page (`/projects/:projectId/orchestrations/:runId`) streams the coordinator run live and hosts the outcome-spec review-and-confirm gate. The page header shows the shortened run id and the submitted goal (read from the `coordinator.started` event). The outcome-spec panel (`OutcomeSpecPanel`) renders below it.
+
+The panel derives the spec from two sources, with no spec logic in the client: it seeds from `GET /api/runs/{id}/outcome-spec` and overlays the live `coordinator.outcome_spec` and `coordinator.outcome_spec.confirmed` events from the run stream (ordered and deduplicated by `sequence`). A 404 from the snapshot before the coordinator drafts is expected — the stream fills it in.
+
+The panel shows:
+
+- A **status badge**: `Drafting`, `Awaiting confirmation`, `Confirmed`, or `Declined`.
+- A **dispatch-gate notice**: while drafting or awaiting confirmation, an info bar states that no subagent work is dispatched until the outcome spec is confirmed. Once confirmed, a success bar notes that dispatch is unblocked (and who confirmed); if declined, a warning bar notes that no work was dispatched.
+- The drafted **Goal**, **Desired outcome**, **Scope**, **Assumptions**, and any **Clarifying questions**. While the coordinator is still drafting and no content has arrived, a spinner with "Coordinator is drafting the outcome spec..." is shown.
+
+When the spec is awaiting confirmation, two actions appear:
+
+- **Confirm** — calls `POST /api/runs/{id}/outcome-spec/confirm`, resuming the run past the gate.
+- **Request changes** — opens a dialog with a required **Feedback** field and calls `POST /api/runs/{id}/outcome-spec/revise`. The coordinator re-drafts and re-presents the spec without dispatching any work.
+
+The confirm/revise gate is the safety property of the Phase 1 flow: no dispatch occurs before a human confirms.
 
 ### Watch a run
 
@@ -269,6 +295,8 @@ src/
     ArtifactBrowser.tsx resizable split-panel file tree + Monaco/markdown viewer
     FileViewerModal.tsx read-only Monaco diff viewer and CommonMark preview modal
     GitHubSignIn.tsx    header component: device-flow sign-in, polling, sign-out
+    StartOrchestrationDialog.tsx  goal entry that starts a coordinator run
+    OutcomeSpecPanel.tsx  outcome-spec review with confirm/revise gate
   timeline/
     types.ts            discriminated union types for reducer state
     reducer.ts          pure grouping reducer (turns, steps, streaming state)
@@ -280,6 +308,7 @@ src/
     TeamPage.tsx            team roster, member management, charter dialogs, sync panel
     CastingWizardPage.tsx   Single-page casting wizard (Formulate / Template / Analyze tabs)
     WatchPage.tsx
+    CoordinatorRunPage.tsx  coordinator run page: live outcome-spec gate
     SettingsPage.tsx        API connection settings
     HomePage.tsx            legacy submit form (not the default route)
   App.tsx               Fluent provider and routing

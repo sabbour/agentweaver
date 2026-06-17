@@ -12,6 +12,7 @@ import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { WatchPage } from './pages/WatchPage';
 import { WorkflowRunPage } from './pages/WorkflowRunPage';
+import { CoordinatorRunPage } from './pages/CoordinatorRunPage';
 import { TeamPage } from './pages/TeamPage';
 import { CastingWizardPage } from './pages/CastingWizardPage';
 import { MemoriesPage } from './pages/MemoriesPage';
@@ -89,6 +90,7 @@ function Shell() {
           <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
           <Route path="/projects/:projectId/runs/:runId/execution/:executionId" element={<WatchPage />} />
           <Route path="/projects/:projectId/runs/:runId/workflow" element={<WorkflowRunPage />} />
+          <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunPage />} />
         </Routes>
       </main>
     </div>

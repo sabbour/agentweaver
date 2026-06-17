@@ -43,4 +43,8 @@ public sealed record Run
     /// Used by the workspace endpoint to serve file content from git after the worktree is deleted.
     /// </summary>
     public string? MergedCommitHash { get; init; }
+    /// <summary>The coordinator run that launched this child run. Null for the coordinator run itself and for ordinary single-agent runs.</summary>
+    public string? ParentRunId { get; init; }
+    /// <summary>The Subtask.Id this child run executes. Null for non-orchestrated runs.</summary>
+    public string? SubtaskId { get; init; }
 }

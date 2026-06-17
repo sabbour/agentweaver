@@ -42,6 +42,9 @@ Clients should order and deduplicate events by `sequence`.
 | `merge.started` | When an approved merge begins execution | `tree_hash` |
 | `merge.completed` | After an approved run merges cleanly into the originating branch | `merged_commit_hash`; `previous_head_sha` (direct path only) |
 | `merge.failed` | After an approved run cannot merge back cleanly | `reason` |
+| `coordinator.started` | When a coordinator run begins drafting an OutcomeSpec from the user's goal | `goal` |
+| `coordinator.outcome_spec` | When the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate | `specId`, `status`, `desiredOutcome`, `scope`, `assumptions`, `clarifyingQuestions` |
+| `coordinator.outcome_spec.confirmed` | When a human confirms the drafted OutcomeSpec and the coordinator run proceeds | `specId`, `confirmedBy` |
 
 ## Tool event pairing
 
@@ -160,6 +163,18 @@ Possible `status` values: `started`, `completed`, `failed`, `skipped`, `revise` 
 The `label` field is a short human-readable description (e.g. `"Agent turn"`, `"RAI review"`). `timestamp_utc` is an ISO 8601 timestamp. The `agent` step includes `agent_name` (the team member running the turn). The `review` step includes `reviewer` (GitHub username) when a human review decision is recorded.
 
 The web UI uses `workflow.step` events to drive the workflow diagram — each card in the Agent → Rai → Review → Merge → Scribe pipeline updates live as these events arrive.
+
+### `coordinator.started`
+
+Emitted once when a coordinator run begins. A coordinator run is a Run with `ParentRunId == null` driven by the built-in Coordinator agent. `goal` carries the user's submitted goal text. The run reads the project's Feature 006 memories and decision-inbox entries as grounding context, then drafts an OutcomeSpec.
+
+### `coordinator.outcome_spec`
+
+Emitted when the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate (`coordinator-confirmation-gate`). The OutcomeSpec is persisted to the memory store with status `awaiting_confirmation` before this event fires. `specId` is the persisted row id; `status` is `awaiting_confirmation`. `desiredOutcome`, `scope`, and `assumptions` are the drafted strings; `clarifyingQuestions` is an optional array. No decomposition or child dispatch occurs before a human confirms — the run blocks here until the confirm or revise seam is called.
+
+### `coordinator.outcome_spec.confirmed`
+
+Emitted when a human confirms the drafted OutcomeSpec through the confirm seam. The persisted OutcomeSpec advances to status `confirmed`. `specId` is the confirmed row id; `confirmedBy` is the confirming user. In Phase 1 the coordinator run terminates after confirmation (decomposition and child dispatch are Phase 2); a `run.completed` event follows.
 
 ## Model-assisted casting
 

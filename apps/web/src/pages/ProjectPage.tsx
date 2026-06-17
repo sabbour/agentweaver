@@ -26,6 +26,7 @@ import {
 import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
 import type { CreateRunRequest, Project, WorkflowRunDto, TeamMemberDto } from '../api/types';
 
 const useStyles = makeStyles({
@@ -430,6 +431,10 @@ export function ProjectPage() {
               <Link to={`/projects/${projectId}/team`} style={{ textDecoration: 'none' }}>
                 <Button appearance="secondary">Team</Button>
               </Link>
+              <StartOrchestrationDialog
+                projectId={projectId}
+                onStarted={(runId) => navigate(`/projects/${projectId}/orchestrations/${runId}`)}
+              />
               <StartRunDialog
                 projectId={projectId}
                 onStarted={(runId) => navigate(`/projects/${projectId}/runs/${runId}/workflow`)}

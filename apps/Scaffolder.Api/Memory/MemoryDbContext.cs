@@ -10,6 +10,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
     public DbSet<RunEventRecord> RunEvents => Set<RunEventRecord>();
+    public DbSet<OutcomeSpec> OutcomeSpecs => Set<OutcomeSpec>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -23,5 +24,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);
         model.Entity<RunEventRecord>().HasIndex(e => new { e.RunId, e.Sequence }).IsUnique();
+        model.Entity<OutcomeSpec>().HasIndex(o => new { o.ProjectId, o.CoordinatorRunId });
     }
 }

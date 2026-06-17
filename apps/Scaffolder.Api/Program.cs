@@ -8,6 +8,7 @@ using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Auth;
 using Scaffolder.Api.Casting;
 using Scaffolder.Api.Contracts;
+using Scaffolder.Api.Coordinator;
 using Scaffolder.Api.Git;
 using Scaffolder.Api.Infrastructure;
 using Scaffolder.Api.Projects;
@@ -59,6 +60,8 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorWorkflowFactory>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorRunService>();
 
 // GitHub auth (token store + scope provider + device flow service)
 builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
@@ -2171,6 +2174,166 @@ app.MapPost("/api/projects/{id}/runs", async (
 });
 
 // -----------------------------------------------------------------------
+// Coordinator orchestration (Feature 008 Phase 1) — thin HTTP over CoordinatorRunService.
+// The HTTP layer validates input, resolves owner-scoped context, and maps the service result
+// to status codes. All orchestration lives behind CoordinatorRunService (Principle III).
+// -----------------------------------------------------------------------
+
+// POST /api/projects/{id}/orchestrations — start a coordinator run that drafts a confirmable
+// outcome spec and suspends at the confirmation gate. Body: { goal, modelId? }.
+app.MapPost("/api/projects/{id}/orchestrations", async (
+    HttpContext httpContext,
+    string id,
+    StartOrchestrationRequest request,
+    IProjectStore projectStore,
+    IProjectWorkspaceProvider workspaceProvider,
+    CoordinatorRunService coordinator,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    if (string.IsNullOrWhiteSpace(request.Goal))
+        return Results.BadRequest(new { error = "goal is required." });
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    if (project.State == ProjectState.Deleting)
+        return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
+
+    if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
+        return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available. Use relink to reconnect the project." });
+
+    // The coordinator provider is fixed to GitHub Copilot (Constitution Principle II). Resolve the
+    // model id the same way the run-start endpoint does: explicit override -> project default ->
+    // null (the service falls back to the role-default model). Repository path, originating branch,
+    // and submitting user are taken from the project + authenticated caller, mirroring POST /runs.
+    var modelId = string.IsNullOrWhiteSpace(request.ModelId)
+        ? project.ProviderSettings.GitHubCopilotModel
+        : request.ModelId;
+
+    var runId = await coordinator.StartCoordinatorRunAsync(
+        projectId,
+        request.Goal!,
+        caller.User,
+        project.WorkingDirectory,
+        project.DefaultBranch,
+        modelId,
+        ct);
+
+    return Results.Created(
+        $"/api/runs/{runId}",
+        new StartOrchestrationResponse { RunId = runId.ToString() });
+});
+
+// GET /api/runs/{id}/outcome-spec — current persisted outcome spec for a coordinator run.
+app.MapGet("/api/runs/{id}/outcome-spec", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    CoordinatorRunService coordinator,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var spec = await coordinator.GetOutcomeSpecAsync(id, ct);
+    if (spec is null) return Results.NotFound();
+
+    return Results.Json(MapOutcomeSpec(spec));
+});
+
+// POST /api/runs/{id}/outcome-spec/confirm — confirm the drafted outcome spec.
+app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    CoordinatorRunService coordinator,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec confirm", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var outcome = await coordinator.ConfirmOutcomeSpecAsync(id, caller.User, ct);
+
+    return outcome switch
+    {
+        CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
+        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", message = "The coordinator run is not active and cannot be confirmed." }),
+        CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
+        _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
+    };
+});
+
+// POST /api/runs/{id}/outcome-spec/revise — request a revision of the drafted outcome spec.
+// Body: { feedback }. The coordinator re-drafts and re-suspends at the gate.
+app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
+    HttpContext httpContext,
+    string id,
+    ReviseOutcomeSpecRequest request,
+    SqliteRunStore runStore,
+    CoordinatorRunService coordinator,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    if (string.IsNullOrWhiteSpace(request.Feedback))
+        return Results.BadRequest(new { error = "feedback is required." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec revise", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
+
+    return outcome switch
+    {
+        CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
+        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", message = "The coordinator run is not active and cannot be revised." }),
+        CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
+        _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
+    };
+});
+
+// -----------------------------------------------------------------------
 // Casting & Team endpoints
 // -----------------------------------------------------------------------
 
@@ -3530,6 +3693,29 @@ app.Run();
 
 static bool IsOwner(HttpContext context, Run run) =>
     string.Equals(ApiKeyAuthMiddleware.GetCaller(context).User, run.SubmittingUser, StringComparison.Ordinal);
+
+// Maps a persisted coordinator OutcomeSpec to the web-client-facing camelCase response.
+// Server state is rendered as-is (Principle III); the web panel parses scope/assumptions/
+// clarifyingQuestions defensively.
+static OutcomeSpecResponse MapOutcomeSpec(OutcomeSpec spec) => new()
+{
+    Goal = spec.Goal,
+    DesiredOutcome = spec.DesiredOutcome,
+    Scope = spec.Scope,
+    Assumptions = spec.Assumptions,
+    ClarifyingQuestions = spec.ClarifyingQuestions,
+    Status = spec.Status,
+    ConfirmedBy = spec.ConfirmedBy,
+};
+
+// Reads the current persisted spec after a confirm/revise so the response mirrors the
+// web client's OutcomeSpec | null contract.
+static async Task<OutcomeSpecResponse?> ReadOutcomeSpecAsync(
+    CoordinatorRunService coordinator, string runId, CancellationToken ct)
+{
+    var spec = await coordinator.GetOutcomeSpecAsync(runId, ct);
+    return spec is null ? null : MapOutcomeSpec(spec);
+}
 
 static ProjectResponse MapProject(Project p, bool available) => new()
 {

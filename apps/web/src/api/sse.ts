@@ -90,6 +90,9 @@ export type EventType =
   | 'merge.completed'
   | 'merge.failed'
   | 'workflow.step'
+  | 'coordinator.started'
+  | 'coordinator.outcome_spec'
+  | 'coordinator.outcome_spec.confirmed'
   | 'done'
   | 'error';
 

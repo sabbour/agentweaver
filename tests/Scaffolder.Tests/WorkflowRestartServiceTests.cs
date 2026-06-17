@@ -256,6 +256,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
 
         var registry = new RunWorkflowRegistry();
         var pendingStore = new PendingRequestStore();
+        var scopeFactory = new ServiceCollection().BuildServiceProvider()
+            .GetRequiredService<IServiceScopeFactory>();
         var copilotClientFactory = new Scaffolder.AgentRuntime.Providers.GitHubCopilotClientFactory(
             config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
         var factory = new RunWorkflowFactory(
@@ -269,7 +271,9 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             worktreeOps,
             new ThrowingMergeCoordinator(),
             streamStore,
+            runStore,
             loggerFactory,
+            scopeFactory,
             config);
 
         var watchLoop = new RunWatchLoopService(
@@ -280,6 +284,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             factory,
             worktreeOps,
             new TestHostApplicationLifetime(),
+            scopeFactory,
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
         return new WorkflowRestartService(

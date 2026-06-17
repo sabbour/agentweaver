@@ -707,6 +707,105 @@ Response `202 Accepted`:
 `409 Conflict` with `error: "project_deleting"` when the project is being deleted.
 `409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible. Use `POST /api/projects/{id}/relink` to reconnect the project to its new location.
 
+## Coordinator endpoints
+
+The Coordinator agent drafts a confirmable outcome spec for a goal, then suspends at a confirmation gate. These endpoints are a thin HTTP layer over `CoordinatorRunService`; all orchestration lives in the service. A coordinator run is an ordinary run (`agent_name: "Coordinator"`, no parent), so its events stream from `GET /api/runs/{id}/stream` and it is owner-scoped like any other run.
+
+### POST /api/projects/{id}/orchestrations
+
+Starts a coordinator run for the project. The project's working directory, default branch, and the authenticated caller are used as the run's repository path, originating branch, and submitting user. The provider is fixed to GitHub Copilot.
+
+Request:
+
+```json
+{
+  "goal": "Make the onboarding flow resumable across sessions",
+  "modelId": null
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `goal` | string | Yes | The outcome the coordinator should draft a spec for. |
+| `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
+
+Response `201 Created` (with `Location: /api/runs/{runId}`):
+
+```json
+{ "runId": "f36800fd-..." }
+```
+
+`400 Bad Request` when `id` is not a valid project id or `goal` is missing.
+`404 Not Found` when the project does not exist.
+`409 Conflict` with `error: "project_deleting"` when the project is being deleted.
+`409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible.
+
+### GET /api/runs/{id}/outcome-spec
+
+Returns the current persisted outcome spec for a coordinator run. Owner-scoped.
+
+Response `200 OK`:
+
+```json
+{
+  "goal": "Make the onboarding flow resumable across sessions",
+  "desiredOutcome": "Users can leave and resume onboarding without losing progress",
+  "scope": "Onboarding wizard, session persistence",
+  "assumptions": "Existing session store can hold partial onboarding state",
+  "clarifyingQuestions": "Should resumption work across devices?",
+  "status": "awaiting_confirmation",
+  "confirmedBy": null
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `goal` | string | The submitted goal. |
+| `desiredOutcome` | string | The drafted desired outcome. |
+| `scope` | string | Drafted scope. |
+| `assumptions` | string | Drafted assumptions. |
+| `clarifyingQuestions` | string | Omitted when none were drafted. |
+| `status` | string | `drafting`, `awaiting_confirmation`, `confirmed`, or `declined`. |
+| `confirmedBy` | string | Set once confirmed; omitted otherwise. |
+
+`400 Bad Request` when `id` is not a valid run id.
+`403 Forbidden` when the caller does not own the run.
+`404 Not Found` when the run or its outcome spec does not exist.
+
+### POST /api/runs/{id}/outcome-spec/confirm
+
+Confirms the drafted outcome spec, resuming the suspended coordinator run. Owner-scoped. No request body.
+
+Response `200 OK` with the current outcome spec (same shape as `GET /api/runs/{id}/outcome-spec`, or `null` if not yet readable).
+
+`400 Bad Request` when `id` is not a valid run id.
+`403 Forbidden` when the caller does not own the run.
+`404 Not Found` when the run does not exist.
+`409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
+`409 Conflict` with `error: "no_pending_gate"` when the spec is not currently awaiting confirmation (for example, already confirmed).
+
+### POST /api/runs/{id}/outcome-spec/revise
+
+Requests a revision of the drafted outcome spec. The coordinator re-drafts using the feedback and re-suspends at the gate. Owner-scoped.
+
+Request:
+
+```json
+{ "feedback": "Tighten the scope to a single device for now" }
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `feedback` | string | Yes | Revision guidance for the coordinator. |
+
+Response `200 OK` with the current outcome spec (same shape as `GET /api/runs/{id}/outcome-spec`, or `null` if not yet readable).
+
+`400 Bad Request` when `id` is not a valid run id or `feedback` is missing.
+`403 Forbidden` when the caller does not own the run.
+`404 Not Found` when the run does not exist.
+`409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
+`409 Conflict` with `error: "no_pending_gate"` when the spec is not currently awaiting confirmation.
+
 ## GitHub authentication endpoints
 
 GitHub authentication allows the GitHub Copilot provider to use a token obtained through the OAuth device flow rather than a static API key.

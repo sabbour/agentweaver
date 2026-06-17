@@ -642,3 +642,49 @@ public sealed record UpdateSessionRequest
     [JsonPropertyName("summary")] public string? Summary { get; init; }
     [JsonPropertyName("end")] public bool? End { get; init; }
 }
+
+// -----------------------------------------------------------------------
+// Coordinator (Feature 008 Phase 1) — outcome-spec flow.
+// These contracts use camelCase JSON to match the web client (apps/web/src/api/types.ts).
+// -----------------------------------------------------------------------
+
+/// <summary>Request body for POST /api/projects/{id}/orchestrations.</summary>
+public sealed record StartOrchestrationRequest
+{
+    [JsonPropertyName("goal")] public string? Goal { get; init; }
+    [JsonPropertyName("modelId")] public string? ModelId { get; init; }
+}
+
+/// <summary>Response body for POST /api/projects/{id}/orchestrations.</summary>
+public sealed record StartOrchestrationResponse
+{
+    [JsonPropertyName("runId")] public required string RunId { get; init; }
+}
+
+/// <summary>Request body for POST /api/runs/{id}/outcome-spec/revise.</summary>
+public sealed record ReviseOutcomeSpecRequest
+{
+    [JsonPropertyName("feedback")] public string? Feedback { get; init; }
+}
+
+/// <summary>
+/// Response body for GET /api/runs/{id}/outcome-spec. Field names mirror the web client's
+/// <c>OutcomeSpec</c> interface. Server state is rendered as-is (Principle III).
+/// </summary>
+public sealed record OutcomeSpecResponse
+{
+    [JsonPropertyName("goal")] public required string Goal { get; init; }
+    [JsonPropertyName("desiredOutcome")] public required string DesiredOutcome { get; init; }
+    [JsonPropertyName("scope")] public required string Scope { get; init; }
+    [JsonPropertyName("assumptions")] public required string Assumptions { get; init; }
+
+    [JsonPropertyName("clarifyingQuestions")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ClarifyingQuestions { get; init; }
+
+    [JsonPropertyName("status")] public required string Status { get; init; }
+
+    [JsonPropertyName("confirmedBy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ConfirmedBy { get; init; }
+}

@@ -747,13 +747,14 @@ public sealed class CastingService
             retiredNames = existingTeam?.Members.Select(m => m.Name).ToList() ?? [];
         }
 
-        // Built-in MAF agents (Scribe, Ralph, Rai) are always part of every team.
+        // Built-in MAF agents (Scribe, Ralph, Rai, Coordinator) are always part of every team.
         // They are never proposed by the user — the framework provisions them automatically.
         var builtinRoles = new (string Name, string RoleTitle, string RoleId)[]
         {
             ("Scribe", "Scribe", "scribe"),
             ("Ralph", "Work Monitor", "work-monitor"),
             ("Rai", "RAI Reviewer", "rai-reviewer"),
+            ("Coordinator", "Coordinator", "coordinator"),
         };
 
         foreach (var (name, title, roleId) in builtinRoles)
@@ -948,7 +949,7 @@ public sealed class CastingService
             var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
             var builtinNames = new HashSet<string>(
-                new[] { "Scribe", "Ralph", "Rai" }, StringComparer.OrdinalIgnoreCase);
+                new[] { "Scribe", "Ralph", "Rai", "Coordinator" }, StringComparer.OrdinalIgnoreCase);
 
             foreach (var member in team.Members
                 .Where(m => addedNames.Contains(m.Name)
@@ -1003,15 +1004,15 @@ public sealed class CastingService
     }
 
     /// <summary>
-    /// Provisions the built-in agents (Scribe, Ralph, Rai). These are system-level agents
-    /// that every project gets automatically — they are never part of a cast proposal. For each
-    /// built-in, writes <c>.squad/agents/{name}/charter.md</c>. All writes are idempotent.
+    /// Provisions the built-in agents (Scribe, Ralph, Rai, Coordinator). These are system-level
+    /// agents that every project gets automatically — they are never part of a cast proposal. For
+    /// each built-in, writes <c>.squad/agents/{name}/charter.md</c>. All writes are idempotent.
     /// Built-in agents are NOT written to <c>.github/agents/</c> — the coordinator (squad.agent.md)
     /// is the only MAF agent file; built-ins are addressed via their charters only.
     /// </summary>
     private void ProvisionBuiltinAgents(SquadWriter writer, Team team, string owner, string projectName)
     {
-        var builtins = new[] { ("scribe", "Scribe"), ("ralph", "Ralph"), ("rai", "Rai") };
+        var builtins = new[] { ("scribe", "Scribe"), ("ralph", "Ralph"), ("rai", "Rai"), ("coordinator", "Coordinator") };
 
         foreach (var (agentId, displayName) in builtins)
         {

@@ -69,4 +69,23 @@ public static class EventTypes
     /// Written to the Rai sub-stream ({runId}-rai).
     /// </summary>
     public const string RaiVerdict = "rai.verdict";
+
+    /// <summary>
+    /// Emitted when a coordinator (orchestration) run begins.
+    /// Payload: { goal: string }
+    /// </summary>
+    public const string CoordinatorStarted = "coordinator.started";
+
+    /// <summary>
+    /// Emitted when the coordinator presents an outcome-spec draft (or revision) for
+    /// human confirmation. The run is suspended at the await-confirmation gate after this.
+    /// Payload: { specId, status, desiredOutcome, scope, assumptions, clarifyingQuestions }
+    /// </summary>
+    public const string CoordinatorOutcomeSpec = "coordinator.outcome_spec";
+
+    /// <summary>
+    /// Emitted when a human confirms the coordinator's outcome spec, unblocking the run.
+    /// Payload: { specId, confirmedBy }
+    /// </summary>
+    public const string CoordinatorOutcomeSpecConfirmed = "coordinator.outcome_spec.confirmed";
 }

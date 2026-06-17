@@ -373,3 +373,31 @@ export interface SyncCommitRequest {
 export interface SyncCommitResponseDto {
   commit_id: string;
 }
+
+// Feature 008 — Squad Coordinator Agent (orchestration / outcome spec)
+export type OutcomeSpecStatus = 'drafting' | 'awaiting_confirmation' | 'confirmed' | 'declined';
+
+// Server-authored outcome spec. Scope/assumptions/clarifyingQuestions may arrive
+// either as a single string or as a list depending on the coordinator's output;
+// the panel renders them defensively (Principle III — render server state as-is).
+export interface OutcomeSpec {
+  goal?: string;
+  desiredOutcome?: string;
+  scope?: string | string[];
+  assumptions?: string | string[];
+  clarifyingQuestions?: string[];
+  status: OutcomeSpecStatus;
+  confirmedBy?: string;
+}
+
+export interface StartOrchestrationRequest {
+  goal: string;
+}
+
+export interface StartOrchestrationResponse {
+  runId: string;
+}
+
+export interface ReviseOutcomeSpecRequest {
+  feedback: string;
+}

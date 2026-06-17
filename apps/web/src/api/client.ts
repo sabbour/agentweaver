@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -233,6 +233,23 @@ export class ScaffolderApiClient {
 
   commitSync(projectId: string, req: SyncCommitRequest): Promise<SyncCommitResponseDto> {
     return this.request<SyncCommitResponseDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/team/sync`, req);
+  }
+
+  // Orchestration (Feature 008 — Squad Coordinator Agent)
+  startOrchestration(projectId: string, goal: string): Promise<StartOrchestrationResponse> {
+    return this.request<StartOrchestrationResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/orchestrations`, { goal });
+  }
+
+  getOutcomeSpec(runId: string): Promise<OutcomeSpec> {
+    return this.request<OutcomeSpec>('GET', `/api/runs/${encodeURIComponent(runId)}/outcome-spec`);
+  }
+
+  confirmOutcomeSpec(runId: string): Promise<OutcomeSpec | null> {
+    return this.request<OutcomeSpec | null>('POST', `/api/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, {});
+  }
+
+  reviseOutcomeSpec(runId: string, feedback: string): Promise<OutcomeSpec | null> {
+    return this.request<OutcomeSpec | null>('POST', `/api/runs/${encodeURIComponent(runId)}/outcome-spec/revise`, { feedback });
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

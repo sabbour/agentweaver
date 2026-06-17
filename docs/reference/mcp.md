@@ -202,6 +202,67 @@ Get the content or diff of a specific file from a run's worktree.
 
 ---
 
+## Coordinator
+
+Thin proxies over the Coordinator endpoints. The Coordinator agent drafts a confirmable outcome spec for a goal, then suspends at a confirmation gate. No subagent work is dispatched until the spec is confirmed. A coordinator run is an ordinary run, so its live drafting is observable with `run_watch` (see below).
+
+### `coordinator_start`
+
+Start a coordinator orchestration for a project from a plain-language goal. Proxies `POST /api/projects/{id}/orchestrations`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `goal` | string | yes | The outcome the coordinator should draft a spec for |
+| `model_id` | string | no | Model id override; falls back to the project default, then the role default |
+
+**Returns**: `{ runId }` for the new coordinator run.
+
+---
+
+### `coordinator_outcome_spec_get`
+
+Get the current persisted outcome spec for a coordinator run. Proxies `GET /api/runs/{id}/outcome-spec`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Coordinator run ID |
+
+**Returns**: Outcome spec object with `goal`, `desiredOutcome`, `scope`, `assumptions`, `clarifyingQuestions` (omitted when none), `status` (`drafting`, `awaiting_confirmation`, `confirmed`, or `declined`), and `confirmedBy` (set once confirmed).
+
+---
+
+### `coordinator_outcome_spec_confirm`
+
+Confirm the drafted outcome spec, resuming the suspended coordinator run past the confirmation gate. Proxies `POST /api/runs/{id}/outcome-spec/confirm`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Coordinator run ID |
+
+**Returns**: The current outcome spec (same shape as `coordinator_outcome_spec_get`), or `null` if not yet readable. Surfaces `409` errors `run_not_active` and `no_pending_gate` as tool errors.
+
+---
+
+### `coordinator_outcome_spec_revise`
+
+Request a revision of the drafted outcome spec. The coordinator re-drafts using the feedback and re-suspends at the gate. Proxies `POST /api/runs/{id}/outcome-spec/revise`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Coordinator run ID |
+| `feedback` | string | yes | Revision guidance for the coordinator |
+
+**Returns**: The revised outcome spec (same shape as `coordinator_outcome_spec_get`), or `null` if not yet readable. Surfaces `409` errors `run_not_active` and `no_pending_gate` as tool errors.
+
+---
+
+### Watching a coordinator run
+
+There is no separate streaming tool for the coordinator. A coordinator run is an ordinary run, so point the existing [`run_watch`](#run_watch) tool at the coordinator `run_id` to observe live drafting. The `coordinator.started`, `coordinator.outcome_spec`, and `coordinator.outcome_spec.confirmed` events ride the same `sequence`-ordered run stream and are reported as progress notifications until the run completes. Use `coordinator_outcome_spec_get` for the authoritative persisted snapshot.
+
+---
+
 ## Team
 
 ### `team_get`

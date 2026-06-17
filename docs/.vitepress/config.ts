@@ -28,6 +28,7 @@ export default defineConfig({
             { text: 'CLI', link: '/reference/cli' },
             { text: 'Web UI', link: '/reference/web' },
             { text: 'Events', link: '/reference/events' },
+            { text: 'Coordinator', link: '/reference/coordinator' },
           ],
         },
       ],
