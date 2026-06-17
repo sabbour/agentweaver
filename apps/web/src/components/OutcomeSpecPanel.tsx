@@ -96,6 +96,10 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  reviseHint: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
 });
 
 // Render a value that may be a single string or a list of strings.
@@ -249,6 +253,16 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
   const clarifying = toLines(spec?.clarifyingQuestions);
 
+  // Open the revise dialog, seeding a Q/A template from the clarifying questions
+  // when the user has not already typed feedback. Answering the questions IS the
+  // revise feedback the coordinator re-drafts from.
+  const openRevise = () => {
+    if (!feedback.trim() && clarifying.length > 0) {
+      setFeedback(clarifying.map((q) => `Q: ${q}\nA: `).join('\n\n'));
+    }
+    setReviseOpen(true);
+  };
+
   return (
     <div className={styles.panel}>
       <div className={styles.headerRow}>
@@ -322,7 +336,7 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
             appearance="secondary"
             icon={<EditRegular />}
             disabled={acting}
-            onClick={() => setReviseOpen(true)}
+            onClick={openRevise}
           >
             Request changes
           </Button>
@@ -340,6 +354,19 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
                   Describe what to change. The coordinator revises and re-presents the spec without
                   dispatching any work.
                 </Text>
+                {clarifying.length > 0 && (
+                  <div className={styles.section}>
+                    <Text className={styles.sectionLabel}>Clarifying questions</Text>
+                    <Text className={styles.reviseHint}>
+                      Answer these to refine the spec, or edit the feedback freely.
+                    </Text>
+                    <ul className={styles.list}>
+                      {clarifying.map((q, i) => (
+                        <li key={i} className={styles.listItem}>{q}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <Field label="Feedback" required>
                   <Textarea
                     value={feedback}
