@@ -45,6 +45,16 @@ export function RunWatcher({ runId, style, onReviewAction }: RunWatcherProps) {
   const { items, runOutcome } = useTimelineItems(events, runId);
   const isLiveRun = status === 'connecting' || status === 'streaming';
 
+  const commitMessage = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'agent.message') {
+        const content = (events[i].payload as Record<string, unknown>)['content'];
+        return content != null ? String(content) : null;
+      }
+    }
+    return null;
+  }, [events]);
+
   const handleReconnect = useCallback(() => {
     reconnect();
     onReviewAction?.();
@@ -125,6 +135,7 @@ export function RunWatcher({ runId, style, onReviewAction }: RunWatcherProps) {
         onRequestChangesSuccess={handleReconnect}
         onCommitSuccess={handleReconnect}
         onSubmitReviewSuccess={handleReconnect}
+        commitMessage={commitMessage}
         style={style ? { height: 'calc(100% - 56px)' } : undefined}
       />
     </div>

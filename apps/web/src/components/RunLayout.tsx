@@ -75,6 +75,7 @@ function isSubRunId(id: string): boolean {
 interface RunLayoutProps {
   runId: string;
   runStatus: string;
+  commitMessage?: string | null;
   centerContent: ReactNode;
   centerScrollRef?: RefObject<HTMLDivElement | null>;
   onCenterScroll?: () => void;
@@ -84,12 +85,12 @@ interface RunLayoutProps {
   style?: React.CSSProperties;
 }
 
-export function RunLayout({ runId, runStatus, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, style }: RunLayoutProps) {
+export function RunLayout({ runId, runStatus, commitMessage, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, style }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
   // Sub-runs (Rai, Scribe) have no workspace of their own — skip the artifact browser.
   const effectiveRunId = isSubRunId(runId) ? null : runId;
-  const artifactState = useArtifactBrowser(effectiveRunId ?? '', runStatus, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess);
+  const artifactState = useArtifactBrowser(effectiveRunId ?? '', runStatus, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, commitMessage);
   const internalRef = useRef<HTMLDivElement>(null);
   const scrollRef = centerScrollRef ?? internalRef;
 

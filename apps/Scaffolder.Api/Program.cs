@@ -466,36 +466,65 @@ app.MapGet("/api/runs/{id}/stream", async (
             return;
         }
 
-        // No retained event stream (for example after a process restart). Replay from DB if available.
-        httpContext.Response.Headers.ContentType = "text/event-stream";
-        httpContext.Response.Headers.CacheControl = "no-cache";
-        httpContext.Response.Headers.Connection = "keep-alive";
-
-        using var dbScope = httpContext.RequestServices.CreateScope();
-        var db = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var persistedEvents = db.RunEvents
-            .Where(e => e.RunId == id)
-            .OrderBy(e => e.Sequence)
-            .ToList();
-
-        if (persistedEvents.Any())
+        // If the run is still starting up (Pending/InProgress) the background task may not
+        // have registered its stream entry yet. Poll for up to 10s so freshly-created runs
+        // stream in real-time without requiring a page refresh.
+        if (!isSubStream && run is not null
+            && (run.Status == RunStatus.Pending || run.Status == RunStatus.InProgress))
         {
-            foreach (var rec in persistedEvents)
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+            while (DateTimeOffset.UtcNow < deadline && !ct.IsCancellationRequested)
             {
-                object payload;
-                try { payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson); }
-                catch { payload = new { }; }
-                var evt = new RunEvent(rec.Sequence, rec.EventType, payload);
-                await WriteSseEventAsync(httpContext.Response, evt, ct);
+                try { await Task.Delay(150, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                entry = streamStore.Get(id);
+                if (entry is not null) break;
             }
         }
-        else if (!isSubStream && run?.Result is not null)
+
+        if (entry is not null)
         {
-            var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = run.Result });
-            await WriteSseEventAsync(httpContext.Response, evt, ct);
+            // Authorize the entry we found after waiting.
+            if (!string.Equals(caller.User, entry.Owner, StringComparison.Ordinal))
+            {
+                httpContext.Response.StatusCode = 404;
+                return;
+            }
+            // Fall through to live streaming below.
         }
-        await WriteSseDoneAsync(httpContext.Response, ct);
-        return;
+        else
+        {
+            // No live stream (e.g. after process restart). Replay from DB if available.
+            httpContext.Response.Headers.ContentType = "text/event-stream";
+            httpContext.Response.Headers.CacheControl = "no-cache";
+            httpContext.Response.Headers.Connection = "keep-alive";
+
+            using var dbScope = httpContext.RequestServices.CreateScope();
+            var db = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var persistedEvents = db.RunEvents
+                .Where(e => e.RunId == id)
+                .OrderBy(e => e.Sequence)
+                .ToList();
+
+            if (persistedEvents.Any())
+            {
+                foreach (var rec in persistedEvents)
+                {
+                    object payload;
+                    try { payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson); }
+                    catch { payload = new { }; }
+                    var evt = new RunEvent(rec.Sequence, rec.EventType, payload);
+                    await WriteSseEventAsync(httpContext.Response, evt, ct);
+                }
+            }
+            else if (!isSubStream && run?.Result is not null)
+            {
+                var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = run.Result });
+                await WriteSseEventAsync(httpContext.Response, evt, ct);
+            }
+            await WriteSseDoneAsync(httpContext.Response, ct);
+            return;
+        }
     }
 
     httpContext.Response.Headers.ContentType = "text/event-stream";
