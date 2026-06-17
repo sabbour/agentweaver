@@ -97,6 +97,11 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
                 ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
                 ["RunBounds:MaxSteps"]                    = "50",
                 ["RunBounds:MaxMinutes"]                  = "10",
+                // Phase 1 + decompose/persist suite: keep child dispatch off so the confirm/decline
+                // lifecycle and the work-plan contract stay deterministic in this hermetic host
+                // (non-git workspaces + signed-out tokens cannot spawn real child runs). The
+                // dispatch-frontier logic is covered by SubtaskFrontierTests instead.
+                ["Coordinator:AutoDispatch"]              = "false",
             });
         });
 

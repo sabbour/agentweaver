@@ -103,8 +103,51 @@ public static class EventTypes
     /// Terminal signal emitted on a coordinator CHILD run's existing run stream when the child
     /// completes its trimmed pipeline (agent + RAI) and is ready to be collected/assembled by
     /// the coordinator. This is the minimal child-side hand-off; the coordinator-level
-    /// <c>subtask.*</c> projection events are produced in a later wave.
+    /// <c>subtask.*</c> projection events are produced by the dispatch wave.
     /// Payload: { runId, subtaskId?, parentRunId?, worktreeBranch, treeHash, hasChanges, stepCount, raiSafetyFlagged }
     /// </summary>
     public const string RunAssembleReady = "run.assemble_ready";
+
+    // -----------------------------------------------------------------------
+    // Coordinator dispatch + observe (Feature 008 Phase 2) — subtask lifecycle.
+    // All of these are projected onto the COORDINATOR run's stream (never the child's). Each
+    // carries the same shape so a client can apply them uniformly:
+    //   { subtaskId, childRunId, assignedAgent, selectedModelId, status }
+    // where status is the new Subtask.Status (pending|dispatched|running|rai_flagged|
+    // assemble_ready|completed|failed).
+    // -----------------------------------------------------------------------
+
+    /// <summary>Emitted when a subtask's child run has been launched (Subtask.Status -> dispatched).</summary>
+    public const string SubtaskDispatched = "subtask.dispatched";
+
+    /// <summary>Emitted once the dispatched child run is executing (Subtask.Status -> running).</summary>
+    public const string SubtaskRunning = "subtask.running";
+
+    /// <summary>Emitted when the child run reached assemble-ready (Subtask.Status -> assemble_ready).</summary>
+    public const string SubtaskAssembleReady = "subtask.assemble_ready";
+
+    /// <summary>Emitted when the child run was flagged by RAI (Subtask.Status -> rai_flagged).</summary>
+    public const string SubtaskRaiFlagged = "subtask.rai_flagged";
+
+    /// <summary>Emitted when the child run terminated with no changes (Subtask.Status -> completed).</summary>
+    public const string SubtaskCompleted = "subtask.completed";
+
+    /// <summary>Emitted when the child run failed or was cancelled (Subtask.Status -> failed).</summary>
+    public const string SubtaskFailed = "subtask.failed";
+
+    /// <summary>
+    /// Live topology of the coordinator graph, emitted on the coordinator run stream. A FULL
+    /// snapshot (<c>kind == "snapshot"</c>) is emitted once at dispatch time; a DELTA
+    /// (<c>kind == "delta"</c>) is emitted on every subsequent lifecycle transition. The client
+    /// renders the graph thin from these payloads with NO client-side topology computation: the
+    /// snapshot provides every node + edge, and each delta replaces the changed node(s) by id.
+    /// Snapshot payload: { version, kind:"snapshot", coordinatorRunId, workPlanId, workPlanStatus,
+    ///   seq, nodes: [ { id, kind, subtaskId?, status, label, agent?, model?, childRunId?, phase?,
+    ///   isolation? } ], edges: [ { from, to } ], emittedAt }.
+    /// Delta payload: { version, kind:"delta", coordinatorRunId, workPlanId, workPlanStatus, seq,
+    ///   changed: [ { id, kind, subtaskId?, status, agent?, model?, childRunId? } ], emittedAt }.
+    /// An edge { from, to } means node 'from' must reach assemble_ready/completed before node 'to'
+    /// is dispatched (from = dependency, to = dependent). Edges never change after the snapshot.
+    /// </summary>
+    public const string CoordinatorTopology = "coordinator.topology";
 }

@@ -1,5 +1,6 @@
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -43,8 +44,10 @@ public sealed class CoordinatorRunService
     private readonly PendingRequestStore _pendingStore;
     private readonly CoordinatorWorkflowFactory _factory;
     private readonly RunWorkflowFactory _runWorkflowFactory;
+    private readonly CoordinatorDispatchService _dispatchService;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<CoordinatorRunService> _logger;
+    private readonly bool _autoDispatch;
     private readonly CancellationToken _appStopping;
 
     public CoordinatorRunService(
@@ -54,8 +57,10 @@ public sealed class CoordinatorRunService
         PendingRequestStore pendingStore,
         CoordinatorWorkflowFactory factory,
         RunWorkflowFactory runWorkflowFactory,
+        CoordinatorDispatchService dispatchService,
         IServiceScopeFactory scopeFactory,
         IHostApplicationLifetime lifetime,
+        IConfiguration configuration,
         ILogger<CoordinatorRunService> logger)
     {
         _runStore = runStore;
@@ -64,8 +69,14 @@ public sealed class CoordinatorRunService
         _pendingStore = pendingStore;
         _factory = factory;
         _runWorkflowFactory = runWorkflowFactory;
+        _dispatchService = dispatchService;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        // Auto-dispatch is ON in production: confirming a spec launches and tracks child runs.
+        // Hermetic web tests (non-git workspaces, signed-out tokens) disable it so the Phase 1
+        // confirm/decline lifecycle and the decompose+persist contract stay deterministic; the
+        // dispatch-frontier logic is covered by a focused unit test instead.
+        _autoDispatch = configuration.GetValue("Coordinator:AutoDispatch", true);
         _appStopping = lifetime.ApplicationStopping;
     }
 
@@ -244,6 +255,21 @@ public sealed class CoordinatorRunService
                 case WorkflowOutputEvent woe:
                     if (woe.Is<CoordinatorOutcome>(out var outcome))
                     {
+                        // Phase 2: on confirm, if a work plan was persisted and auto-dispatch is on,
+                        // DON'T terminate the coordinator run. Hand off to the dispatch + observe
+                        // engine, which keeps the run in progress and the stream open while it
+                        // launches and tracks child runs (subtask.* + coordinator.topology events).
+                        if (outcome!.Status == "confirmed"
+                            && _autoDispatch
+                            && await TryHandOffToDispatchAsync(runId).ConfigureAwait(false))
+                        {
+                            // MAF coordinator workflow is done; release its registry slot + checkpoints,
+                            // but leave the run InProgress and the stream open for dispatch/observe.
+                            _registry.Abandon(runId);
+                            _factory.DeleteCheckpoints(runId);
+                            return;
+                        }
+
                         await FinalizeRunAsync(runId, outcome!, entry).ConfigureAwait(false);
                         _registry.Abandon(runId);
                         _factory.DeleteCheckpoints(runId);
@@ -252,6 +278,129 @@ public sealed class CoordinatorRunService
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// If a work plan with at least one subtask was persisted for this confirmed run, starts the
+    /// dispatch + observe engine (which keeps the coordinator run in progress) and returns true so
+    /// the caller skips the Phase 1 finalize/complete path. Returns false when there is no plan or
+    /// no subtasks, so the run finalizes normally.
+    /// </summary>
+    private async Task<bool> TryHandOffToDispatchAsync(string runId)
+    {
+        Run? run;
+        bool hasSubtasks;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var workPlan = await db.WorkPlans.AsNoTracking()
+                .FirstOrDefaultAsync(w => w.CoordinatorRunId == runId).ConfigureAwait(false);
+            if (workPlan is null)
+                return false;
+            hasSubtasks = await db.Subtasks.AsNoTracking()
+                .AnyAsync(s => s.WorkPlanId == workPlan.Id).ConfigureAwait(false);
+        }
+
+        if (!hasSubtasks)
+            return false;
+
+        run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+        if (run is null)
+            return false;
+
+        _dispatchService.StartDispatch(new CoordinatorDispatchContext(
+            CoordinatorRunId: runId,
+            RepositoryPath: run.RepositoryPath,
+            OriginatingBranch: run.OriginatingBranch,
+            SubmittingUser: run.SubmittingUser,
+            ProjectId: run.ProjectId));
+
+        _logger.LogInformation("Coordinator run {RunId} confirmed; handed off to dispatch + observe", runId);
+        return true;
+    }
+
+    // -----------------------------------------------------------------------
+    // API seams for the HTTP wave (Tank): GET /children + GET /plan. These are read-only
+    // projections over the persisted work plan; they do not mutate dispatch state.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Work plan view for <c>GET /plan</c>: the <see cref="WorkPlan"/> plus its subtasks (id, title,
+    /// scope, assigned agent, selected model, phase, isolation, status, childRunId) and the
+    /// dependency edges (subtaskId depends on dependsOnSubtaskId). Returns null when no plan exists
+    /// for the coordinator run.
+    /// </summary>
+    public async Task<CoordinatorWorkPlanView?> GetWorkPlanAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var plan = await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.CoordinatorRunId == coordinatorRunId, ct).ConfigureAwait(false);
+        if (plan is null) return null;
+
+        var subtasks = await db.Subtasks.AsNoTracking()
+            .Where(s => s.WorkPlanId == plan.Id)
+            .OrderBy(s => s.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var ids = subtasks.Select(s => s.Id).ToHashSet();
+        var edges = await db.SubtaskDependencies.AsNoTracking()
+            .Where(d => ids.Contains(d.SubtaskId))
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        return new CoordinatorWorkPlanView(
+            plan.Id,
+            plan.CoordinatorRunId,
+            plan.OutcomeSpecId,
+            plan.Status,
+            plan.IsolationSummary,
+            subtasks.Select(s => new CoordinatorSubtaskView(
+                s.Id, s.Title, s.Scope, s.AssignedAgent, s.SelectedModelId,
+                s.Phase, s.IsolationStrategy, s.Status, s.ChildRunId)).ToList(),
+            edges.Select(e => new CoordinatorDependencyView(e.SubtaskId, e.DependsOnSubtaskId)).ToList());
+    }
+
+    /// <summary>
+    /// Children view for <c>GET /children</c>: one row per subtask that has a dispatched child run,
+    /// pairing the child run's persisted lifecycle (status, worktree branch, tree hash, step count)
+    /// with the subtask's coordinator-side status. Returns an empty list when nothing has been
+    /// dispatched yet (or no plan exists).
+    /// </summary>
+    public async Task<IReadOnlyList<CoordinatorChildView>> GetChildrenAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var plan = await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.CoordinatorRunId == coordinatorRunId, ct).ConfigureAwait(false);
+        if (plan is null) return [];
+
+        var subtasks = await db.Subtasks.AsNoTracking()
+            .Where(s => s.WorkPlanId == plan.Id && s.ChildRunId != null)
+            .OrderBy(s => s.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var children = new List<CoordinatorChildView>(subtasks.Count);
+        foreach (var s in subtasks)
+        {
+            Run? child = RunId.TryParse(s.ChildRunId, out var cid)
+                ? await _runStore.GetAsync(cid, ct).ConfigureAwait(false)
+                : null;
+
+            children.Add(new CoordinatorChildView(
+                s.Id,
+                s.ChildRunId!,
+                s.Status,
+                s.AssignedAgent,
+                s.SelectedModelId,
+                child?.Status.ToString(),
+                child?.WorktreeBranch,
+                child?.TreeHash,
+                child?.StepCount ?? 0));
+        }
+
+        return children;
     }
 
     private async Task FinalizeRunAsync(string runId, CoordinatorOutcome outcome, RunStreamEntry entry)
@@ -301,3 +450,40 @@ public enum CoordinatorGateOutcome
     /// <summary>The run is not currently suspended at a confirmation gate (already consumed or not yet suspended).</summary>
     NoPendingGate,
 }
+
+/// <summary>Read-only work plan projection for the <c>GET /plan</c> endpoint.</summary>
+public sealed record CoordinatorWorkPlanView(
+    int WorkPlanId,
+    string CoordinatorRunId,
+    int OutcomeSpecId,
+    string Status,
+    string? IsolationSummary,
+    IReadOnlyList<CoordinatorSubtaskView> Subtasks,
+    IReadOnlyList<CoordinatorDependencyView> Dependencies);
+
+/// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>
+public sealed record CoordinatorSubtaskView(
+    int SubtaskId,
+    string Title,
+    string Scope,
+    string AssignedAgent,
+    string SelectedModelId,
+    string Phase,
+    string Isolation,
+    string Status,
+    string? ChildRunId);
+
+/// <summary>A dependency edge: <see cref="SubtaskId"/> depends on <see cref="DependsOnSubtaskId"/>.</summary>
+public sealed record CoordinatorDependencyView(int SubtaskId, int DependsOnSubtaskId);
+
+/// <summary>A dispatched child run paired with its subtask status, for the <c>GET /children</c> endpoint.</summary>
+public sealed record CoordinatorChildView(
+    int SubtaskId,
+    string ChildRunId,
+    string SubtaskStatus,
+    string AssignedAgent,
+    string SelectedModelId,
+    string? ChildRunStatus,
+    string? WorktreeBranch,
+    string? TreeHash,
+    int StepCount);

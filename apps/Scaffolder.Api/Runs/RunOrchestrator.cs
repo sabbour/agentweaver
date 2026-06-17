@@ -99,6 +99,71 @@ public sealed class RunOrchestrator
     }
 
     /// <summary>
+    /// Starts a coordinator CHILD run (Feature 008 Phase 2 dispatch). Identical to
+    /// <see cref="StartRunAsync"/> except the workflow is built with the TRIMMED child pipeline
+    /// (<c>isChild: true</c>): agent + RAI terminating assemble-ready, with no per-child review
+    /// gate, merge, or scribe. The supplied <paramref name="run"/> MUST carry
+    /// <see cref="Run.ParentRunId"/> (the coordinator run id) and <see cref="Run.SubtaskId"/>.
+    /// The existing <see cref="RunWatchLoopService"/> observes the child stream and persists the
+    /// assemble-ready terminal exactly as for any other child run; the coordinator's dispatch
+    /// service projects <c>subtask.*</c> / <c>coordinator.topology</c> events from that stream.
+    /// </summary>
+    public async Task StartChildRunAsync(Run run, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(run.ParentRunId))
+            throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
+
+        WorktreeInfo worktreeInfo;
+        try
+        {
+            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create worktree for child run {RunId}", run.Id);
+            throw;
+        }
+
+        var agentCharter = ResolveAgentCharter(run);
+
+        var started = run with
+        {
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            WorktreePath = worktreeInfo.WorktreePath,
+            WorktreeBranch = worktreeInfo.BranchName,
+            AgentCharter = agentCharter,
+        };
+
+        await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+        var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+
+        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+
+        var input = new AgentTurnInput(
+            run.Id.ToString(),
+            taskWithHarvest,
+            worktreeInfo.WorktreePath,
+            worktreeInfo.BranchName,
+            run.RepositoryPath,
+            run.OriginatingBranch,
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser,
+            systemPromptContext,
+            run.ProjectId?.ToString(),
+            run.AgentName,
+            started.StartedAt);
+
+        var runCts = new CancellationTokenSource();
+        var streamingRun = await _workflowFactory
+            .StartAsync(input, run.Id.ToString(), runCts.Token, isChild: true)
+            .ConfigureAwait(false);
+        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
+    }
+
+    /// <summary>
     /// TryCreateProjectRunAsync (Pending row already in DB). Transitions the row to InProgress
     /// with worktree info, then fires off the workflow. The caller is responsible for
     /// compensating (terminalizing) the Pending row if this method throws.

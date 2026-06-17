@@ -60,6 +60,7 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorDispatchService>();
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorRunService>();
 
