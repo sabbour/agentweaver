@@ -43,7 +43,7 @@ A user gives the coordinator a goal in plain language. The coordinator consults 
 
 ### User Story 2 - Decompose, cast, and orchestrate subagents to a result (Priority: P1)
 
-Once the spec is confirmed, the coordinator selects the most suitable agents from the team's roster, chooses a model for each unit of work based on its complexity, decomposes the spec into subtasks, and decides which subtasks can run in parallel versus which must be serialized because of dependencies. It launches the selected agents as subagents, observes each one through a read-only timeline of its run, collects their results, reports progress back to the user, and can steer subagents (redirect, pause, or stop) while they work — including relaying real-time direction the user gives the coordinator to the running subagents.
+Once the spec is confirmed, the coordinator selects the most suitable agents from the team's roster, chooses a model for each unit of work based on its complexity, decomposes the spec into subtasks, and decides which subtasks can run in parallel versus which must be serialized because of dependencies. It launches the selected agents as subagents, observes each one through a read-only timeline of its run, collects their results, reports progress back to the user, and can steer subagents (redirect, pause, or stop) while they work — relaying direction the user gives the coordinator to the running subagents, where a stop takes effect immediately and redirect/amend/pause take effect at the subagent's next turn boundary without restarting the run.
 
 **Why this priority**: This is the core orchestration value — the coordinator actually getting a team to do the work. Combined with US1 it forms the minimum viable coordinator: confirm, then deliver.
 
@@ -56,7 +56,7 @@ Once the spec is confirmed, the coordinator selects the most suitable agents fro
 3. **Given** subtasks where one depends on another's output, **When** the coordinator dispatches, **Then** the dependent subtask does not start until its prerequisite completes.
 4. **Given** running subagents, **When** the user asks for status, **Then** the coordinator reports per-subagent progress derived from each run's read-only timeline.
 5. **Given** a running subagent going off track, **When** the user (or the coordinator) intervenes, **Then** the coordinator can redirect, pause, or stop that subagent without disrupting unrelated subagents.
-6. **Given** subagents are running, **When** the user gives the coordinator new direction in real time, **Then** the coordinator relays that direction to the affected subagent(s) without restarting the run.
+6. **Given** subagents are running, **When** the user gives the coordinator new direction, **Then** the coordinator relays it to the affected subagent(s) — a stop applying immediately and a redirect/amend/pause applying at the subagent's next turn boundary, without restarting the run.
 7. **Given** all subagents have produced results, **When** they complete, **Then** the coordinator collects and combines their outputs into a single coherent result.
 
 ---
@@ -173,7 +173,7 @@ When deciding how subagents do their work, the coordinator chooses the appropria
 - **FR-016**: The coordinator MUST collect subagent results and combine them into a single coherent collective output.
 - **FR-017**: The coordinator MUST report per-subagent progress to the user on request.
 - **FR-018**: The coordinator MUST be able to steer a running subagent — redirect, pause, or stop it — without disrupting unrelated subagents.
-- **FR-018a**: A user MUST be able to steer the coordinator in real time while subagents are running — issuing direction that the coordinator relays to one or more running subagents (redirect, pause, stop, or amend scope) without restarting the run.
+- **FR-018a**: A user MUST be able to steer the coordinator while subagents are running — issuing direction (redirect, amend scope, pause, or stop) that the coordinator relays to one or more running subagents. A stop MUST take effect immediately (cancellation); a redirect, amend, or pause MUST take effect at the targeted subagent's next turn boundary, without restarting the run.
 
 **Workflow integration (RAI, review, merge, scribe)**
 
@@ -216,7 +216,7 @@ When deciding how subagents do their work, the coordinator chooses the appropria
 
 - **SC-001**: For a goal a team can address, the coordinator produces a confirmable outcome spec, and in 100% of cases no subagent work begins before the user confirms.
 - **SC-002**: For a spec whose subtasks include both independent and dependent work, the coordinator runs all independent subtasks concurrently and never starts a dependent subtask before its prerequisite completes.
-- **SC-003**: A user can obtain accurate per-subagent progress at any time during a multi-agent run, and can issue real-time direction that reaches a running subagent without restarting the run.
+- **SC-003**: A user can obtain accurate per-subagent progress at any time during a multi-agent run, and can issue direction that reaches a running subagent — taking effect immediately for a stop, or at the subagent's next turn boundary for a redirect/amend/pause — without restarting the run.
 - **SC-004**: Across a multi-agent run, the second human review, the merge, and the scribe pass each occur exactly once over the combined output (never per subagent).
 - **SC-005**: 100% of RAI flags and review "request changes" verdicts route back through the coordinator and result in dispatched follow-up work rather than silently shipping or silently dropping.
 - **SC-006**: 100% of subagent permission requests for gated/irreversible actions block the action until a human decides.
@@ -229,7 +229,7 @@ When deciding how subagents do their work, the coordinator chooses the appropria
 - The coordinator's prompt/charter is adapted from the reference Squad coordinator governance (the project's template and the upstream reference), with all platform-provided behaviors (RAI, memory, casting, sandbox, review, merge, scribe) removed so the charter does not duplicate platform functionality.
 - "Memories and decisions" the coordinator consumes are exactly those defined by Feature 006; the coordinator reads them and also writes to them on the team's behalf (notably to persist the confirmed outcome spec and work plan that subagents read from), without introducing a parallel memory store.
 - Each subagent is a first-class child run parented by the coordinator's run, so per-subagent RAI, sandboxing, and step streaming reuse the existing single-agent run machinery (Features 001/002); the coordinator adds the parent/child relationship and the read-only observation, not new run primitives.
-- The user can steer the coordinator in real time during a multi-agent run; the coordinator relays that direction to running subagents rather than only acting between batches.
+- The user can steer the coordinator during a multi-agent run; the coordinator relays that direction to running subagents rather than only acting between batches. Because an in-flight agent turn cannot be interrupted mid-turn under the run model, a stop cancels immediately while redirect/amend/pause are queued and applied at the subagent's next turn boundary.
 - "Cast/roster," per-role charters, and per-role default models are exactly those defined by Feature 005; model selection stays within the GitHub-Copilot-only provider constraint (Constitution Principle II).
 - RAI, human review, merge, and scribe stages are the existing workflow stages from Feature 001's run pipeline; this feature reuses them and changes only *where* the collective gates apply.
 - Branch/worktree isolation and sandboxing reuse Features 001/002; the coordinator decides *which* strategy to apply, not new isolation primitives.
