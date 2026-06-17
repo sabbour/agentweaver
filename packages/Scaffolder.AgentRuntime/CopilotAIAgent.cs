@@ -101,6 +101,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
     private ConcurrentDictionary<string, byte> _emittedTerminals = new(StringComparer.Ordinal);
     private HashSet<string> _suppressedCallIds = new(StringComparer.Ordinal);
 
+    // Sandbox-degradation tracking. The permission handler (which fires on SDK callback
+    // threads) records that at least one tool call was denied, plus the first deny reason.
+    // run.degraded is emitted exactly once via EmitRunDegradedOnce; _runDegradedEmitted is
+    // the 0/1 Interlocked guard. ExecuteStreamingLoopAsync performs a guaranteed flush of
+    // this signal AFTER the streaming loop but BEFORE agent.turn.end, so run.degraded is
+    // always ordered ahead of the run's completion/await events (and therefore ahead of the
+    // SSE `done` sentinel). Without this, a deny emitted late by an out-of-band callback
+    // could land in history after live clients already stopped reading on `done` — surfacing
+    // green live but amber ("Incomplete") only after a refresh replays the full history.
+    private volatile bool _degradedFlagged;
+    private string? _degradedToolName;
+    private string? _degradedReason;
+    private int _runDegradedEmitted;
+
     public CopilotAIAgent(
         GitHubCopilotClientFactory factory,
         IGitHubTokenScopeProvider scopeProvider,
@@ -157,6 +171,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         _emittedCalls = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         _emittedTerminals = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         _suppressedCallIds = new HashSet<string>(StringComparer.Ordinal);
+        _degradedFlagged = false;
+        _degradedToolName = null;
+        _degradedReason = null;
+        _runDegradedEmitted = 0;
 
         _logger.LogInformation(
             "SetupAsync entered — workingDirectory={WorkingDirectory}, runId={RunId}, streamIsNull={StreamIsNull}",
@@ -401,6 +419,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
             throw;
         }
 
+        // Guaranteed flush: if the sandbox denied any tool call this turn, ensure run.degraded
+        // is in the run history BEFORE agent.turn.end (and thus before the workflow's terminal
+        // /await-review events and the SSE `done` sentinel). The deny branches already emit it
+        // inline; this is the dedup-safe safety net that closes the cross-thread window where a
+        // permission callback's emit could otherwise interleave after completion. Without it,
+        // live clients can stop reading on `done` and miss the event, showing green live while a
+        // later refresh (full-history replay) shows the amber "Incomplete" badge.
+        if (_degradedFlagged)
+            EmitRunDegradedOnce(_degradedToolName ?? "unknown", _degradedReason ?? "Sandbox denied a tool call.");
+
         Emit("agent.turn.end", new { turnId = "0" });
 
         if (_suppressedCallIds.Count > 0)
@@ -448,6 +476,24 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         EmitToolCallOnce(callId, "unknown", null); // defensive call-before-error
         if (_emittedTerminals.TryAdd(callId, 0))
             Emit("tool.error", new { callId, errorMessage });
+    }
+
+    /// <summary>
+    /// Records a sandbox denial and emits <c>run.degraded</c> at most once per run.
+    /// Called from the permission handler (SDK callback threads) at each deny branch and
+    /// once more as a guaranteed flush at the end of the streaming loop. The first caller
+    /// wins the emit; later calls only ensure the degraded state is captured. Emitting from
+    /// the deny branch keeps the event adjacent to its tool.error; the end-of-turn flush
+    /// guarantees the event is in history BEFORE agent.turn.end and the run's completion
+    /// events, so live SSE clients always receive it ahead of the `done` sentinel.
+    /// </summary>
+    private void EmitRunDegradedOnce(string toolName, string reason)
+    {
+        _degradedFlagged = true;
+        _degradedToolName ??= toolName;
+        _degradedReason ??= reason;
+        if (Interlocked.Exchange(ref _runDegradedEmitted, 1) == 0)
+            Emit(EventTypes.RunDegraded, new { toolName, reason });
     }
 
     private void EmitDelta(string text, string? messageId)
@@ -699,7 +745,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                         emitToolCallOnce(customCallId, toolName, args);
                         var denyReason = reason ?? "Operation denied by sandbox policy.";
                         emitToolErrorOnce(customCallId, denyReason);
-                        Emit(EventTypes.RunDegraded, new { toolName, reason = denyReason });
+                        EmitRunDegradedOnce(toolName, denyReason);
                     }
 
                     return Task.FromResult(new PermissionRequestResult
@@ -717,7 +763,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                     emitToolCallOnce(customCallId, toolName, null);
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
-                    Emit(EventTypes.RunDegraded, new { toolName, reason = failReason });
+                    EmitRunDegradedOnce(toolName, failReason);
                     return Task.FromResult(new PermissionRequestResult
                     {
                         Kind = PermissionRequestResultKind.Rejected,
@@ -758,7 +804,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                     var denyReason2 = reason ?? "Operation denied by sandbox policy.";
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, denyReason2);
-                    Emit(EventTypes.RunDegraded, new { toolName, reason = denyReason2 });
+                    EmitRunDegradedOnce(toolName, denyReason2);
                 }
 
                 return Task.FromResult(new PermissionRequestResult
@@ -775,7 +821,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                 var failReason2 = "Operation denied: internal error evaluating sandbox policy.";
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
-                Emit(EventTypes.RunDegraded, new { toolName = request.Kind ?? "unknown", reason = failReason2 });
+                EmitRunDegradedOnce(request.Kind ?? "unknown", failReason2);
                 return Task.FromResult(new PermissionRequestResult
                 {
                     Kind = PermissionRequestResultKind.Rejected,
