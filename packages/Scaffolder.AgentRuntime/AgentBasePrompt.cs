@@ -16,6 +16,7 @@ internal static class AgentBasePrompt
 
         Call report_intent(intent) before each major step.
         Call report_outcome(achieved, reason) as your final tool call.
+        If any tool call was blocked by the sandbox, call report_outcome(achieved=false, reason=<what was blocked and why>).
         Do not ask clarifying questions — proceed with best judgement.
         """;
 }

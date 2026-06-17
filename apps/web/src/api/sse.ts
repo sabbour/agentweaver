@@ -80,6 +80,7 @@ export type EventType =
   | 'run.failed'
   | 'run.error'
   | 'run.outcome'
+  | 'run.degraded'
   | 'review.requested'
   | 'review.approved'
   | 'review.declined'

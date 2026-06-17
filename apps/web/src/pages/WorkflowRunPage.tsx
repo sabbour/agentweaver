@@ -105,6 +105,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   projectId: string;
   reviewedBy?: string;
   runOutcome?: { achieved: boolean; reason: string };
+  runDegraded?: { toolName: string; reason: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -382,17 +383,23 @@ function ElapsedTimer({ startedAt, completedAt }: { startedAt?: number; complete
 
 function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
-  const { def, state, agentName, agentRoleTitle, modelId, executionId, projectId, reviewedBy, runOutcome } = data as WorkflowNodeData;
+  const { def, state, agentName, agentRoleTitle, modelId, executionId, projectId, reviewedBy, runOutcome, runDegraded } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent } = state;
 
   const openModal = useContext(ExecutionModalContext);
 
-  // When the agent completed but `report_outcome` flagged achieved=false, show amber warning.
+  // When the agent completed but `report_outcome` flagged achieved=false OR the sandbox
+  // blocked a tool call (run.degraded), show amber warning regardless of agent self-assessment.
   const effectiveStatus: StepStatus =
-    key === 'agent' && status === 'completed' && runOutcome?.achieved === false
+    key === 'agent' && status === 'completed' && (runOutcome?.achieved === false || runDegraded !== undefined)
       ? 'revise'
       : status;
+
+  // Reason to surface on the card when degraded (sandbox blocked) and the agent didn't self-report failure.
+  const degradedReason = key === 'agent' && runDegraded !== undefined && runOutcome?.achieved !== false
+    ? `Blocked: ${runDegraded.reason}`
+    : undefined;
 
   const isActive         = effectiveStatus === 'started' && key !== 'review';
   const isHumanWaiting   = key === 'review' && effectiveStatus === 'started';
@@ -404,8 +411,9 @@ function WorkflowNode({ data }: NodeProps) {
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
   // For the agent card while running, prefer the live intent over the static description.
+  // When sandbox-degraded, surface the block reason instead of the generic status text.
   const rawSubText = statusDescription(key as ExecutorKey, effectiveStatus);
-  const subText    = (key === 'agent' && effectiveStatus === 'started' && intent) ? intent : rawSubText;
+  const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : rawSubText);
   // For the agent card use the actual team role title; otherwise the executor's static description.
   const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
 
@@ -781,6 +789,17 @@ export function WorkflowRunPage() {
     return undefined;
   }, [events]);
 
+  // Extract the first run.degraded event — sandbox blocked at least one tool call.
+  const runDegraded = useMemo<{ toolName: string; reason: string } | undefined>(() => {
+    for (const evt of events) {
+      if (evt.type === 'run.degraded') {
+        const p = evt.payload;
+        return { toolName: String(p['toolName'] ?? ''), reason: String(p['reason'] ?? 'Sandbox denied a tool call') };
+      }
+    }
+    return undefined;
+  }, [events]);
+
   // Derive executor states from SSE workflow.step events plus semantic review/merge events.
   const executorStates = useMemo<Record<string, ExecutorState>>(() => {
     const map: Record<string, ExecutorState> = {};
@@ -911,11 +930,12 @@ export function WorkflowRunPage() {
         projectId:       projectId  ?? '',
         reviewedBy:      def.key === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
         runOutcome:      def.key === 'agent' ? runOutcome : undefined,
+        runDegraded:     def.key === 'agent' ? runDegraded : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
     return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
-  }, [executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome]);
+  }, [executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;

@@ -697,7 +697,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                     if (!allowed)
                     {
                         emitToolCallOnce(customCallId, toolName, args);
-                        emitToolErrorOnce(customCallId, reason ?? "Operation denied by sandbox policy.");
+                        var denyReason = reason ?? "Operation denied by sandbox policy.";
+                        emitToolErrorOnce(customCallId, denyReason);
+                        Emit(EventTypes.RunDegraded, new { toolName, reason = denyReason });
                     }
 
                     return Task.FromResult(new PermissionRequestResult
@@ -713,7 +715,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                         "Permission handler exception for custom tool (fail-closed deny) — Tool={ToolName} RunId={RunId}",
                         toolName, runId);
                     emitToolCallOnce(customCallId, toolName, null);
-                    emitToolErrorOnce(customCallId, "Operation denied: internal error evaluating sandbox policy.");
+                    var failReason = "Operation denied: internal error evaluating sandbox policy.";
+                    emitToolErrorOnce(customCallId, failReason);
+                    Emit(EventTypes.RunDegraded, new { toolName, reason = failReason });
                     return Task.FromResult(new PermissionRequestResult
                     {
                         Kind = PermissionRequestResultKind.Rejected,
@@ -749,9 +753,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
                 if (!allowed)
                 {
                     // A denied call is terminal here and never reaches the lifecycle, so emit a
-                    // self-consistent call+error pair.
+                    // self-consistent call+error pair, then a run.degraded event so the UI can
+                    // show an amber badge regardless of the agent's self-assessment.
+                    var denyReason2 = reason ?? "Operation denied by sandbox policy.";
                     emitToolCallOnce(callId, toolName, args);
-                    emitToolErrorOnce(callId, reason ?? "Operation denied by sandbox policy.");
+                    emitToolErrorOnce(callId, denyReason2);
+                    Emit(EventTypes.RunDegraded, new { toolName, reason = denyReason2 });
                 }
 
                 return Task.FromResult(new PermissionRequestResult
@@ -765,8 +772,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
             {
                 // Fail-closed: any failure mapping or evaluating the request denies the tool call.
                 _logger.LogError(ex, "Permission handler exception (fail-closed deny) — RunId={RunId}", runId);
+                var failReason2 = "Operation denied: internal error evaluating sandbox policy.";
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
-                emitToolErrorOnce(callId, "Operation denied: internal error evaluating sandbox policy.");
+                emitToolErrorOnce(callId, failReason2);
+                Emit(EventTypes.RunDegraded, new { toolName = request.Kind ?? "unknown", reason = failReason2 });
                 return Task.FromResult(new PermissionRequestResult
                 {
                     Kind = PermissionRequestResultKind.Rejected,

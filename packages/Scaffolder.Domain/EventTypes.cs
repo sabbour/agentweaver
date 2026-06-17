@@ -57,6 +57,13 @@ public static class EventTypes
     public const string WorkflowStep = "workflow.step";
 
     /// <summary>
+    /// Emitted when the sandbox blocks at least one tool call during a run.
+    /// Non-terminal — the run continues, but the outcome is degraded.
+    /// Payload: { toolName: string, reason: string }
+    /// </summary>
+    public const string RunDegraded = "run.degraded";
+
+    /// <summary>
     /// Emitted by <see cref="RaiTurnExecutor"/> with the verdict issued by the RAI reviewer.
     /// Payload: { verdict: "green"|"yellow"|"red", runId: string }
     /// Written to the Rai sub-stream ({runId}-rai).

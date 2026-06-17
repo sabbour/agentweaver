@@ -538,7 +538,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     if (!allowed)
                     {
                         emitToolCallOnce(customCallId, toolName, args);
-                        emitToolErrorOnce(customCallId, reason ?? "Operation denied by sandbox policy.");
+                        var denyReason = reason ?? "Operation denied by sandbox policy.";
+                        emitToolErrorOnce(customCallId, denyReason);
+                        emit(EventTypes.RunDegraded, new { toolName, reason = denyReason });
                     }
 
                     return Task.FromResult(new PermissionRequestResult
@@ -554,7 +556,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                         "Permission handler exception for custom tool (fail-closed deny) — Tool={ToolName} RunId={RunId}",
                         toolName, runId);
                     emitToolCallOnce(customCallId, toolName, null);
-                    emitToolErrorOnce(customCallId, "Operation denied: internal error evaluating sandbox policy.");
+                    var failReason = "Operation denied: internal error evaluating sandbox policy.";
+                    emitToolErrorOnce(customCallId, failReason);
+                    emit(EventTypes.RunDegraded, new { toolName, reason = failReason });
                     return Task.FromResult(new PermissionRequestResult
                     {
                         Kind = PermissionRequestResultKind.Rejected,
@@ -595,10 +599,13 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 if (!allowed)
                 {
                     // A denied call is terminal here and never reaches the lifecycle, so emit a
-                    // self-consistent call+error pair. emitToolCallOnce is a no-op if the call was
-                    // already surfaced above; for a synthetic id this is its only emission point.
+                    // self-consistent call+error pair, then a run.degraded event so the UI can
+                    // show an amber badge regardless of the agent's self-assessment.
+                    // emitToolCallOnce is a no-op if the call was already surfaced above.
+                    var denyReason2 = reason ?? "Operation denied by sandbox policy.";
                     emitToolCallOnce(callId, toolName, args);
-                    emitToolErrorOnce(callId, reason ?? "Operation denied by sandbox policy.");
+                    emitToolErrorOnce(callId, denyReason2);
+                    emit(EventTypes.RunDegraded, new { toolName, reason = denyReason2 });
                 }
 
                 return Task.FromResult(new PermissionRequestResult
@@ -612,8 +619,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             {
                 // Fail-closed: any failure mapping or evaluating the request denies the tool call.
                 _logger.LogError(ex, "Permission handler exception (fail-closed deny) — RunId={RunId}", runId);
+                var failReason2 = "Operation denied: internal error evaluating sandbox policy.";
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
-                emitToolErrorOnce(callId, "Operation denied: internal error evaluating sandbox policy.");
+                emitToolErrorOnce(callId, failReason2);
+                emit(EventTypes.RunDegraded, new { toolName = request.Kind ?? "unknown", reason = failReason2 });
                 return Task.FromResult(new PermissionRequestResult
                 {
                     Kind = PermissionRequestResultKind.Rejected,
