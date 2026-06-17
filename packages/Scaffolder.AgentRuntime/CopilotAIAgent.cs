@@ -250,9 +250,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
     {
         if (_inner is null)
             throw new InvalidOperationException("SetupAsync must be called before ResumeSessionAsync.");
-        if (_inner is GitHubCopilotAgent ghAgent)
-            return await ghAgent.CreateSessionAsync($"scaffolder-run-{_runId}").ConfigureAwait(false);
-        // Fallback for non-Copilot inner agents (test doubles, etc.): create a fresh session.
+        // SessionId is already set in SessionConfig ("scaffolder-run-{runId}") so the SDK
+        // resumes the persisted session automatically — no raw overload needed.
         return await _inner.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
     }
 
