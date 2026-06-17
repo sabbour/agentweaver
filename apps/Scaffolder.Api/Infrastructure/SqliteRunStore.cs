@@ -284,6 +284,37 @@ public sealed class SqliteRunStore
     /// Conditionally sets a terminal status. Only writes if the current status is NOT already
     /// terminal (Guardrail 3: dual-writer safety). Returns true if the update was applied.
     /// </summary>
+    /// <summary>
+    /// Records a coordinator CHILD run's assemble-ready hand-off: persists the produced tree hash,
+    /// worktree branch, diff, and step count, and transitions the run to <c>assemble_ready</c>.
+    /// This is the contract the coordinator's collect/assemble wave reads (branch + tree hash).
+    /// Guarded so an already-terminal run is not overwritten. Returns true if the row was updated.
+    /// </summary>
+    public async Task<bool> SetAssembleReadyAsync(
+        RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount,
+        DateTimeOffset endedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE runs
+               SET status = 'assemble_ready', tree_hash = $treeHash,
+                   worktree_branch = $worktreeBranch, diff = $diff,
+                   step_count = $stepCount, ended_at = $endedAt
+             WHERE run_id = $runId
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready');
+            """;
+        command.Parameters.AddWithValue("$treeHash", treeHash);
+        command.Parameters.AddWithValue("$worktreeBranch", worktreeBranch);
+        command.Parameters.AddWithValue("$diff", diff);
+        command.Parameters.AddWithValue("$stepCount", stepCount);
+        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
     public async Task<bool> TrySetTerminalStatusAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
     {

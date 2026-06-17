@@ -78,6 +78,29 @@ public sealed record DeclinedOutput(string RunId);
 /// <summary>Terminal output for content-safety-flagged runs.</summary>
 public sealed record ContentSafetyFailedOutput(string RunId);
 
+/// <summary>
+/// Terminal output for a coordinator CHILD run (ParentRunId != null). Produced by the
+/// <c>child-assemble-ready</c> executor at the end of the trimmed child pipeline
+/// (agentInputStorer -> agent -> RAI). The child does NOT run its own review gate, merge, or
+/// scribe — those happen ONCE collectively over all children in Phase 3.
+/// <para>
+/// This record is the hand-off contract the coordinator's dispatch/assemble wave reads to
+/// collect each child's produced tree: <see cref="WorktreeBranch"/> identifies the child's
+/// isolated branch and <see cref="TreeHash"/> pins the exact tree it produced.
+/// <see cref="HasChanges"/> is false for an empty-diff (no-op) child, which is still a valid
+/// assemble-ready outcome.
+/// </para>
+/// </summary>
+public sealed record AssembleReadyOutput(
+    string RunId,
+    string WorktreeBranch,
+    string TreeHash,
+    string Diff,
+    bool HasChanges,
+    int StepCount,
+    /// <summary>True when RAI flagged a safety concern; carried forward so the collective gate sees it.</summary>
+    bool RaiSafetyFlagged = false);
+
 /// <summary>Input to the Scribe agent turn, carrying context + terminal output for pass-through.</summary>
 public sealed record ScribeTurnInput(
     string RunId,

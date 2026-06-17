@@ -22,4 +22,12 @@ public enum RunStatus
     Merged,
     Declined,
     MergeFailed,
+    /// <summary>
+    /// Terminal state for a coordinator CHILD run (ParentRunId != null). The child completed
+    /// its agent turn + RAI and produced a tree the coordinator will collect and review/merge
+    /// collectively in Phase 3. A child NEVER runs its own review gate, merge, or scribe; it
+    /// stops here. Its <see cref="Run.WorktreeBranch"/> + <see cref="Run.TreeHash"/> are the
+    /// hand-off contract the coordinator's assemble wave reads.
+    /// </summary>
+    AssembleReady,
 }

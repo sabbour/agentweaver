@@ -176,7 +176,7 @@ public sealed class RunWorkflowFactory
     /// <summary>Maximum revision iterations before capping (Rai or Review).</summary>
     private const int MaxIterations = 3;
 
-    private Workflow BuildWorkflow()
+    private Workflow BuildWorkflow(bool isChild = false)
     {
         // A fresh CopilotAIAgent per workflow build (per run). It is an AIAgent the MAF
         // checkpoint manager can serialize, so the Copilot SDK session is persisted into the
@@ -239,6 +239,22 @@ public sealed class RunWorkflowFactory
         ExecutorBinding terminalNoOp = new FunctionExecutor<AgentTurnOutput, NoChangesOutput>(
             "terminal-no-op",
             (input, ctx, ct) => new ValueTask<NoChangesOutput>(new NoChangesOutput(input.RunId)));
+
+        // Child assemble-ready terminal (coordinator child runs only). Short-circuits the per-child
+        // human gate / merge / scribe: marks the run assemble-ready and STOPS. Records the child's
+        // worktree branch + produced tree hash as the hand-off contract the coordinator collects.
+        // Empty-diff (no-op) children terminalize here too — a valid assemble-ready outcome with
+        // HasChanges == false.
+        ExecutorBinding childAssembleReady = new FunctionExecutor<AgentTurnOutput, AssembleReadyOutput>(
+            "child-assemble-ready",
+            (input, ctx, ct) => new ValueTask<AssembleReadyOutput>(new AssembleReadyOutput(
+                RunId: input.RunId,
+                WorktreeBranch: input.WorktreeBranch,
+                TreeHash: input.TreeHash,
+                Diff: input.Diff,
+                HasChanges: !string.IsNullOrEmpty(input.Diff),
+                StepCount: input.StepCount,
+                RaiSafetyFlagged: input.ContentSafetyFlagged)));
 
         ExecutorBinding terminalDeclined = new FunctionExecutor<WorkflowReviewDecision, DeclinedOutput>(
             "terminal-declined",
@@ -482,6 +498,30 @@ public sealed class RunWorkflowFactory
                 return revised;
             });
 
+        // ----- Coordinator CHILD pipeline (B1) ---------------------------------------------
+        // Trimmed graph: agentInputStorer -> agent -> RAI (+ the existing RAI revise loop),
+        // then EVERY non-revision RAI outcome routes to childAssembleReady instead of the
+        // review gate. No review-gate RequestPort, no MergeExecutor, no ScribeTurnExecutor.
+        // The two edges are mutually exclusive and exhaustive over all RAI outputs, so a child
+        // can never hang: it either loops (revision under cap) or terminalizes assemble-ready
+        // (OK / RED / empty-diff no-op / revise-at-cap).
+        if (isChild)
+        {
+            var childWf = new WorkflowBuilder(agentInputStorer)
+                .AddEdge(agentInputStorer, agentBinding)
+                .AddEdge(agentBinding, raiBinding)
+                // RAI REVISE (iteration < cap) -> revision adapter -> loop back to agent
+                .AddEdge<AgentTurnOutput>(raiBinding, raiRevisionAdapter,
+                    output => output is not null && output.RaiRevisionRequired && output.Iteration < MaxIterations)
+                .AddEdge(raiRevisionAdapter, agentBinding, idempotent: true)
+                // Everything else (OK, RED, empty-diff no-op, revise-at-cap) -> assemble-ready terminal
+                .AddEdge<AgentTurnOutput>(raiBinding, childAssembleReady,
+                    output => output is not null && !(output.RaiRevisionRequired && output.Iteration < MaxIterations))
+                .WithOutputFrom(childAssembleReady)
+                .Build()!;
+            return childWf;
+        }
+
         var wf = new WorkflowBuilder(agentInputStorer)
             // storer -> agent turn (unconditional)
             .AddEdge(agentInputStorer, agentBinding)
@@ -534,21 +574,31 @@ public sealed class RunWorkflowFactory
     }
 
     /// <summary>
-    /// Launches a new streaming workflow run.
+    /// Launches a new streaming workflow run. When <paramref name="isChild"/> is true
+    /// (the run carries <c>ParentRunId</c>), the trimmed coordinator CHILD pipeline is used:
+    /// agent + RAI terminating assemble-ready, with no per-child review gate / merge / scribe.
     /// </summary>
-    public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct)
+    public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false)
     {
-        var workflow = BuildWorkflow();
+        var workflow = BuildWorkflow(isChild);
         return await InProcessExecution.RunStreamingAsync(
             workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Resumes a workflow run from checkpoint.
+    /// Resumes a workflow run from checkpoint. The pipeline shape (full vs trimmed child)
+    /// is reselected from the persisted run's <c>ParentRunId</c> so a resumed child keeps
+    /// its trimmed graph.
     /// </summary>
     public async Task<StreamingRun> ResumeAsync(CheckpointInfo checkpointInfo, CancellationToken ct)
     {
-        var workflow = BuildWorkflow();
+        var isChild = false;
+        if (RunId.TryParse(checkpointInfo.SessionId, out var rid))
+        {
+            var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
+            isChild = run?.ParentRunId is not null;
+        }
+        var workflow = BuildWorkflow(isChild);
         return await InProcessExecution.ResumeStreamingAsync(
             workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
     }

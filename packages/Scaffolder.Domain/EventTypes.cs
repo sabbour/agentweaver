@@ -88,4 +88,13 @@ public static class EventTypes
     /// Payload: { specId, confirmedBy }
     /// </summary>
     public const string CoordinatorOutcomeSpecConfirmed = "coordinator.outcome_spec.confirmed";
+
+    /// <summary>
+    /// Terminal signal emitted on a coordinator CHILD run's existing run stream when the child
+    /// completes its trimmed pipeline (agent + RAI) and is ready to be collected/assembled by
+    /// the coordinator. This is the minimal child-side hand-off; the coordinator-level
+    /// <c>subtask.*</c> projection events are produced in a later wave.
+    /// Payload: { runId, subtaskId?, parentRunId?, worktreeBranch, treeHash, hasChanges, stepCount, raiSafetyFlagged }
+    /// </summary>
+    public const string RunAssembleReady = "run.assemble_ready";
 }

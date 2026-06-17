@@ -16,6 +16,7 @@ public static class RunStatusExtensions
         RunStatus.Merged         => "merged",
         RunStatus.Declined       => "declined",
         RunStatus.MergeFailed    => "merge_failed",
+        RunStatus.AssembleReady  => "assemble_ready",
         _ => throw new ArgumentOutOfRangeException(nameof(status))
     };
 
@@ -31,6 +32,7 @@ public static class RunStatusExtensions
         "merged"          => RunStatus.Merged,
         "declined"        => RunStatus.Declined,
         "merge_failed"    => RunStatus.MergeFailed,
+        "assemble_ready"  => RunStatus.AssembleReady,
         _ => throw new ArgumentException($"Unknown run status: {value}", nameof(value))
     };
 }

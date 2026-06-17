@@ -222,6 +222,40 @@ public sealed class RunWatchLoopService
             return true;
         }
 
+        // Coordinator CHILD run (ParentRunId != null) assemble-ready terminal (B1).
+        // The child completed agent + RAI; it does NOT run its own review gate, merge, or scribe.
+        // Persist the produced tree hash + worktree branch (the coordinator's hand-off contract),
+        // emit run.assemble_ready on the child's existing stream, and preserve the worktree so the
+        // coordinator can collect/assemble it in Phase 3. No scribe, no merge, no cleanup.
+        if (woe.Is<AssembleReadyOutput>(out var assembleReady))
+        {
+            await _runStore.SetAssembleReadyAsync(
+                parsedRunId,
+                assembleReady.TreeHash ?? string.Empty,
+                assembleReady.WorktreeBranch ?? string.Empty,
+                assembleReady.Diff ?? string.Empty,
+                assembleReady.StepCount,
+                DateTimeOffset.UtcNow,
+                CancellationToken.None).ConfigureAwait(false);
+
+            var child = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
+            entry.RecordNext(EventTypes.RunAssembleReady, new
+            {
+                runId,
+                subtaskId = child?.SubtaskId,
+                parentRunId = child?.ParentRunId,
+                worktreeBranch = assembleReady.WorktreeBranch,
+                treeHash = assembleReady.TreeHash,
+                hasChanges = assembleReady.HasChanges,
+                stepCount = assembleReady.StepCount,
+                raiSafetyFlagged = assembleReady.RaiSafetyFlagged,
+            });
+
+            _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
+            return true;
+        }
+
         if (woe.Is<DeclinedOutput>())
         {
             await _runStore.TrySetTerminalStatusAsync(

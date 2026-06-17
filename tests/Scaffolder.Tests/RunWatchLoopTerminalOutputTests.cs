@@ -108,6 +108,32 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         result.Should().BeTrue("a content_safety output is genuinely terminal");
     }
 
+    [Fact]
+    public async Task HandleTerminalOutput_AssembleReady_ReturnsTrue()
+    {
+        var (svc, entry, runId) = CreateServiceAndEntry();
+        var woe = new WorkflowOutputEvent(
+            new AssembleReadyOutput(runId, "scaffolder/child-branch", "treehash123", "diff --git a b", HasChanges: true, StepCount: 4),
+            "child-assemble-ready");
+
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
+
+        result.Should().BeTrue("a child assemble_ready output is genuinely terminal (no per-child review/merge/scribe)");
+    }
+
+    [Fact]
+    public async Task HandleTerminalOutput_AssembleReady_EmptyDiff_ReturnsTrue()
+    {
+        var (svc, entry, runId) = CreateServiceAndEntry();
+        var woe = new WorkflowOutputEvent(
+            new AssembleReadyOutput(runId, "scaffolder/child-branch", "treehash456", "", HasChanges: false, StepCount: 1),
+            "child-assemble-ready");
+
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, entry.Generation, CancellationToken.None);
+
+        result.Should().BeTrue("an empty-diff child still terminalizes cleanly as assemble_ready");
+    }
+
     private (RunWatchLoopService Service, RunStreamEntry Entry, string RunId) CreateServiceAndEntry()
     {
         var scope = _factory.Services.CreateScope();
