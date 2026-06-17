@@ -316,29 +316,46 @@ public sealed class RunWorkflowFactory
             "scribe-input-merge",
             async (output, ctx, ct) =>
             {
+                var log = _loggerFactory.CreateLogger<RunWorkflowFactory>();
                 Scaffolder.Domain.Run? run = null;
                 if (!RunId.TryParse(output.RunId, out var rid))
                 {
-                    _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                        .LogWarning("scribe-input-merge: RunId.TryParse failed for value '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                    log.LogWarning("scribe-input-merge: RunId.TryParse failed for value '{RunId}' — will fall back to workflow context", output.RunId);
                 }
                 else
                 {
                     run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
                     if (run is null)
-                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                            .LogWarning("scribe-input-merge: _runStore.GetAsync returned null for RunId '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                        log.LogWarning("scribe-input-merge: _runStore.GetAsync returned null for RunId '{RunId}' — will fall back to workflow context", output.RunId);
                     else if (string.IsNullOrEmpty(run.AgentName))
-                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                            .LogWarning("scribe-input-merge: run {RunId} has no AgentName — Scribe will skip", output.RunId);
+                        log.LogWarning("scribe-input-merge: run {RunId} has no AgentName — will fall back to workflow context", output.RunId);
                     else if (run.ProjectId is null)
-                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                            .LogWarning("scribe-input-merge: run {RunId} has no ProjectId — Scribe will skip", output.RunId);
+                        log.LogWarning("scribe-input-merge: run {RunId} has no ProjectId — will fall back to workflow context", output.RunId);
                 }
+
+                // Fall back to workflow context when DB run is missing fields.
+                // AgentTurnInput is stored at ("agent-input","run-context") by the workflow entry storer.
+                string? projectId = run?.ProjectId?.ToString();
+                string? agentName = run?.AgentName;
+                if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName))
+                {
+                    var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
+                    {
+                        projectId = agentInput!.ProjectId;
+                        log.LogInformation("scribe-input-merge: resolved ProjectId from workflow context for run {RunId}", output.RunId);
+                    }
+                    if (string.IsNullOrEmpty(agentName) && !string.IsNullOrEmpty(agentInput?.AgentName))
+                    {
+                        agentName = agentInput!.AgentName;
+                        log.LogInformation("scribe-input-merge: resolved AgentName from workflow context for run {RunId}", output.RunId);
+                    }
+                }
+
                 return new ScribeTurnInput(
                     output.RunId,
-                    run?.ProjectId?.ToString() ?? "",
-                    run?.AgentName ?? "",
+                    projectId ?? "",
+                    agentName ?? "",
                     run?.StartedAt ?? DateTimeOffset.UtcNow,
                     run?.RepositoryPath ?? "",
                     run?.ModelSource.ToApiString() ?? "github-copilot",
@@ -352,29 +369,46 @@ public sealed class RunWorkflowFactory
             "scribe-input-no-changes",
             async (output, ctx, ct) =>
             {
+                var log = _loggerFactory.CreateLogger<RunWorkflowFactory>();
                 Scaffolder.Domain.Run? run = null;
                 if (!RunId.TryParse(output.RunId, out var rid))
                 {
-                    _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                        .LogWarning("scribe-input-no-changes: RunId.TryParse failed for value '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                    log.LogWarning("scribe-input-no-changes: RunId.TryParse failed for value '{RunId}' — will fall back to workflow context", output.RunId);
                 }
                 else
                 {
                     run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
                     if (run is null)
-                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                            .LogWarning("scribe-input-no-changes: _runStore.GetAsync returned null for RunId '{RunId}' — ProjectId and AgentName will be empty; Scribe will skip", output.RunId);
+                        log.LogWarning("scribe-input-no-changes: _runStore.GetAsync returned null for RunId '{RunId}' — will fall back to workflow context", output.RunId);
                     else if (string.IsNullOrEmpty(run.AgentName))
-                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                            .LogWarning("scribe-input-no-changes: run {RunId} has no AgentName — Scribe will skip", output.RunId);
+                        log.LogWarning("scribe-input-no-changes: run {RunId} has no AgentName — will fall back to workflow context", output.RunId);
                     else if (run.ProjectId is null)
-                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
-                            .LogWarning("scribe-input-no-changes: run {RunId} has no ProjectId — Scribe will skip", output.RunId);
+                        log.LogWarning("scribe-input-no-changes: run {RunId} has no ProjectId — will fall back to workflow context", output.RunId);
                 }
+
+                // Fall back to workflow context when DB run is missing fields.
+                // AgentTurnInput is stored at ("agent-input","run-context") by the workflow entry storer.
+                string? projectId = run?.ProjectId?.ToString();
+                string? agentName = run?.AgentName;
+                if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName))
+                {
+                    var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
+                    {
+                        projectId = agentInput!.ProjectId;
+                        log.LogInformation("scribe-input-no-changes: resolved ProjectId from workflow context for run {RunId}", output.RunId);
+                    }
+                    if (string.IsNullOrEmpty(agentName) && !string.IsNullOrEmpty(agentInput?.AgentName))
+                    {
+                        agentName = agentInput!.AgentName;
+                        log.LogInformation("scribe-input-no-changes: resolved AgentName from workflow context for run {RunId}", output.RunId);
+                    }
+                }
+
                 return new ScribeTurnInput(
                     output.RunId,
-                    run?.ProjectId?.ToString() ?? "",
-                    run?.AgentName ?? "",
+                    projectId ?? "",
+                    agentName ?? "",
                     run?.StartedAt ?? DateTimeOffset.UtcNow,
                     run?.RepositoryPath ?? "",
                     run?.ModelSource.ToApiString() ?? "github-copilot",

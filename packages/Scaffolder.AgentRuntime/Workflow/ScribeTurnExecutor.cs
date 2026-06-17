@@ -90,15 +90,31 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     public override async ValueTask<ScribeTurnInput> HandleAsync(
         ScribeTurnInput input, IWorkflowContext context, CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(input.ProjectId) || string.IsNullOrEmpty(input.AgentName))
+        // Skip only when both fields are missing — truly no context to act on.
+        if (string.IsNullOrEmpty(input.ProjectId) && string.IsNullOrEmpty(input.AgentName))
         {
             _logger.LogWarning(
-                "Scribe skipped for run {RunId} — missing context: ProjectId='{ProjectId}' AgentName='{AgentName}'",
-                input.RunId,
-                string.IsNullOrEmpty(input.ProjectId) ? "<empty>" : input.ProjectId,
-                string.IsNullOrEmpty(input.AgentName) ? "<empty>" : input.AgentName);
+                "Scribe skipped for run {RunId} — both ProjectId and AgentName are empty",
+                input.RunId);
             WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, input.RunId, "scribe", "skipped", "Scribe pass");
             return input;
+        }
+
+        // ProjectId present but AgentName missing: proceed with "unknown" so update_session
+        // and export_memory still run and the session record is not lost.
+        if (string.IsNullOrEmpty(input.AgentName))
+        {
+            _logger.LogWarning(
+                "Scribe run {RunId} — AgentName missing, proceeding with 'unknown'; ProjectId='{ProjectId}'",
+                input.RunId, input.ProjectId);
+            input = input with { AgentName = "unknown" };
+        }
+
+        if (string.IsNullOrEmpty(input.ProjectId))
+        {
+            _logger.LogWarning(
+                "Scribe run {RunId} — ProjectId missing, AgentName='{AgentName}'; proceeding without project context",
+                input.RunId, input.AgentName);
         }
 
         var writer = _getRecordingWriter(input.RunId);
