@@ -90,6 +90,16 @@ public static class EventTypes
     public const string CoordinatorOutcomeSpecConfirmed = "coordinator.outcome_spec.confirmed";
 
     /// <summary>
+    /// Emitted once, at plan time, after the coordinator decomposes a confirmed outcome spec into
+    /// a persisted work plan (WorkPlan + Subtask rows + SubtaskDependency edges). Carries the full
+    /// plan-time snapshot so clients can render the plan without any client-side computation. The
+    /// richer <c>coordinator.topology</c> delta stream (dispatch/observe transitions) is a later wave.
+    /// Payload: { workPlanId, status, subtasks: [ { id, title, assignedAgent, selectedModelId,
+    /// phase, isolation, dependsOn: number[] } ] }
+    /// </summary>
+    public const string CoordinatorWorkPlan = "coordinator.work_plan";
+
+    /// <summary>
     /// Terminal signal emitted on a coordinator CHILD run's existing run stream when the child
     /// completes its trimmed pipeline (agent + RAI) and is ready to be collected/assembled by
     /// the coordinator. This is the minimal child-side hand-off; the coordinator-level

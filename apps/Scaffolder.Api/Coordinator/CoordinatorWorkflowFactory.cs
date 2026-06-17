@@ -53,6 +53,7 @@ public sealed class CoordinatorWorkflowFactory
     private readonly ILogger<CoordinatorWorkflowFactory> _logger;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
+    private readonly CoordinatorOrchestratorExecutor _orchestrator;
 
     public CoordinatorWorkflowFactory(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -82,6 +83,19 @@ public sealed class CoordinatorWorkflowFactory
         Directory.CreateDirectory(_checkpointDir);
         var store = new FileSystemJsonCheckpointStore(new DirectoryInfo(_checkpointDir));
         _checkpointManager = CheckpointManager.CreateJson(store);
+
+        // Phase 2 orchestrator: decompose + persist runs only after the human confirms the spec.
+        _orchestrator = new CoordinatorOrchestratorExecutor(
+            copilotClientFactory,
+            scopeProvider,
+            sandboxExecutor,
+            sandboxPolicyStore,
+            approvalStore,
+            toolApprovalGate,
+            streamStore,
+            scopeFactory,
+            loggerFactory,
+            configuration["Providers:GitHubCopilot:Model"] ?? "gpt-4o");
     }
 
     /// <summary>The request-port id surfaced to the resume seam when the run suspends.</summary>
@@ -125,16 +139,34 @@ public sealed class CoordinatorWorkflowFactory
                 return revised;
             });
 
+        // orchestrate: AFTER confirm, decompose the confirmed spec into a persisted work plan
+        // (Phase 2 — decompose + persist only; dispatch is the next wave). On the declined path this
+        // is a pass-through so the run still terminates cleanly. This is the seam the dispatch wave
+        // extends; the persisted pending subtasks are its hand-off.
+        ExecutorBinding orchestrate = new FunctionExecutor<CoordinatorOutcome, CoordinatorOutcome>(
+            "coordinator-orchestrate",
+            async (outcome, ctx, ct) =>
+            {
+                if (outcome.Status != "confirmed")
+                    return outcome;
+
+                var input = await ctx.ReadStateAsync<CoordinatorDraftInput>(InputStateKey, InputStateScope, ct)
+                    .ConfigureAwait(false);
+                await _orchestrator.OrchestrateAsync(input!, ct).ConfigureAwait(false);
+                return outcome;
+            });
+
         return new WorkflowBuilder(draft)
             .AddEdge(draft, gateBinding)
             // Revise -> re-draft (loop back). Idempotent: the draft node has multiple inbound edges.
             .AddEdge<CoordinatorOutcomeSpecDecision>(gateBinding, revise,
                 decision => decision is not null && decision.Revise)
             .AddEdge(revise, draft, idempotent: true)
-            // Confirm or decline -> finalize terminal.
+            // Confirm or decline -> finalize, then orchestrate (decompose + persist on confirm only).
             .AddEdge<CoordinatorOutcomeSpecDecision>(gateBinding, finalize,
                 decision => decision is not null && !decision.Revise)
-            .WithOutputFrom(finalize)
+            .AddEdge(finalize, orchestrate)
+            .WithOutputFrom(orchestrate)
             .Build()!;
     }
 
