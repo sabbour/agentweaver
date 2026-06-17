@@ -23,6 +23,7 @@ import {
   CircleRegular,
   DismissCircleRegular,
   DismissRegular,
+  FolderRegular,
   MergeRegular,
   NotebookRegular,
   PersonRegular,
@@ -457,6 +458,13 @@ function WorkflowNode({ data }: NodeProps) {
           <Link to={`/projects/${projectId}/memories`} style={{ textDecoration: 'none' }}>
             <Button appearance="outline" size="small">View memories</Button>
           </Link>
+        </div>
+      )}
+      {key === 'merge' && status === 'completed' && (
+        <div className={`${s.cardActions} nopan nodrag`}>
+          <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => openModal?.(executionId as string)}>
+            Browse files
+          </Button>
         </div>
       )}
       {key === 'review' && status === 'started' && (
