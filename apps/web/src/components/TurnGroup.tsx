@@ -3,7 +3,6 @@ import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { AgentMessageBubble } from './AgentMessageBubble';
 import { ToolCallCard } from './ToolCallCard';
-import { IntentCard } from './IntentCard';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import type { TurnGroupItem, TurnStep, ToolCallItem, ApprovalRequestItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
@@ -38,6 +37,10 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
+  },
+  intentAnnotation: {
+    padding: '1px 0',
+    color: tokens.colorNeutralForeground3,
   },
 });
 
@@ -169,16 +172,14 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
           }
           // report_intent — render as a compact system annotation, not a tool call row
           if ((step as ToolCallItem).toolName === 'report_intent') {
-            const nextCluster = clusters[i + 1];
-            const hasFollowingErrors =
-              nextCluster?.kind === 'cluster' &&
-              nextCluster.steps.some(s => s.error != null);
             return (
-              <IntentCard
+              <Text
                 key={(step as ToolCallItem).callId != null ? String((step as ToolCallItem).callId) : "ri-" + i}
-                item={step as ToolCallItem}
-                hasFollowingErrors={hasFollowingErrors}
-              />
+                size={100}
+                className={styles.intentAnnotation}
+              >
+                {(step as ToolCallItem).humanTitle}
+              </Text>
             );
           }
           // Fallback for any other inline tool-call step

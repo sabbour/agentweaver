@@ -24,6 +24,7 @@ function extractErrorMessage(err: unknown): string {
 
 export interface ArtifactBrowserState {
   runStatus: string;
+  commitMessage: string | null;
   filter: FilterValue;
   activeFilter: FilterValue;
   isHistorical: boolean;
@@ -63,6 +64,7 @@ export function useArtifactBrowser(
   onRequestChangesSuccess?: () => void,
   onCommitSuccess?: () => void,
   onSubmitReviewSuccess?: () => void,
+  commitMessage?: string | null,
 ): ArtifactBrowserState {
   const isHistorical = HISTORICAL_STATUSES.has(runStatus);
   const isLive = runStatus === 'in_progress';
@@ -329,6 +331,7 @@ export function useArtifactBrowser(
 
   return {
     runStatus,
+    commitMessage: commitMessage ?? null,
     filter,
     activeFilter,
     isHistorical,
