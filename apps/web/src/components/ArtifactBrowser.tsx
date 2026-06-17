@@ -188,6 +188,31 @@ const useFileTreeStyles = makeStyles({
     gap: tokens.spacingVerticalXS,
     marginTop: tokens.spacingVerticalXS,
   },
+  commitMessageBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalXS}`,
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    marginBottom: tokens.spacingVerticalXS,
+    maxHeight: '120px',
+    overflowY: 'auto',
+  },
+  commitMessageLabel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    fontWeight: tokens.fontWeightSemibold,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  commitMessageText: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground1,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    fontFamily: tokens.fontFamilyMonospace,
+  },
   requestChangesLabel: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
@@ -692,6 +717,7 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
   const styles = useFileTreeStyles();
   const {
     runStatus,
+    commitMessage,
     files,
     filesLoading,
     filesError,
@@ -748,6 +774,12 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
       {/* Review bar — visible on both tabs when awaiting review */}
       {showReviewBar && (
         <div className={styles.reviewBar}>
+          {commitMessage && (
+            <div className={styles.commitMessageBox}>
+              <Text className={styles.commitMessageLabel}>Commit message</Text>
+              <Text className={styles.commitMessageText}>{commitMessage}</Text>
+            </div>
+          )}
           {(commitPending || reviewPending || requestChangesPending) ? (
             <Spinner size="tiny" aria-label="Processing" />
           ) : (
