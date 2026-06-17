@@ -155,6 +155,7 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
   const [actionError, setActionError] = useState<string | null>(null);
   const [reviseOpen, setReviseOpen] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const [revising, setRevising] = useState(false);
 
   const fetchSpec = useCallback(async () => {
     try {
@@ -238,6 +239,7 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
       const updated = await apiClient.reviseOutcomeSpec(runId, feedback.trim());
       if (updated) setSpecFromApi(updated);
       else await fetchSpec();
+      setRevising(true);
       setReviseOpen(false);
       setFeedback('');
     } catch (err) {
@@ -252,6 +254,12 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
   const awaiting = status === 'awaiting_confirmation';
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
   const clarifying = toLines(spec?.clarifyingQuestions);
+
+  // Once a freshly re-drafted spec returns to awaiting_confirmation, clear the
+  // "incorporating your changes" state so the panel reflects the new spec.
+  useEffect(() => {
+    if (status === 'awaiting_confirmation') setRevising(false);
+  }, [status]);
 
   // Open the revise dialog, seeding a Q/A template from the clarifying questions
   // when the user has not already typed feedback. Answering the questions IS the
@@ -302,7 +310,11 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
       {!hasContent ? (
         <div className={styles.drafting}>
           <Spinner size="extra-tiny" aria-hidden="true" />
-          <Text>Coordinator is drafting the outcome spec...</Text>
+          <Text>
+            {revising
+              ? 'Coordinator is incorporating your changes and re-drafting the spec...'
+              : 'Coordinator is drafting the outcome spec...'}
+          </Text>
         </div>
       ) : (
         <>
@@ -338,7 +350,7 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
             disabled={acting}
             onClick={openRevise}
           >
-            Request changes
+            Clarify and request changes
           </Button>
           {acting && <Spinner size="extra-tiny" aria-hidden="true" />}
         </div>
@@ -347,12 +359,13 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
       <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) setFeedback(''); }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Request changes</DialogTitle>
+            <DialogTitle>Clarify and request changes</DialogTitle>
             <DialogContent>
               <div className={styles.reviseFields}>
                 <Text>
-                  Describe what to change. The coordinator revises and re-presents the spec without
-                  dispatching any work.
+                  Describe what to change. After you send, the coordinator re-drafts and
+                  re-presents the spec for your confirmation; no subagent work is dispatched
+                  until you confirm.
                 </Text>
                 {clarifying.length > 0 && (
                   <div className={styles.section}>
