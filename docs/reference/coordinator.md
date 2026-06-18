@@ -4,7 +4,7 @@ The Coordinator is a built-in agent (codename Squad) that every team gains autom
 
 The coordinator is itself an observable, streamed, human-accountable run (`agent_name: "Coordinator"`, no parent run). It does not perform domain work itself — it only orchestrates and persists artifacts into the existing memory store.
 
-This page documents the Phase 1 outcome-spec flow. Decomposition, child-run dispatch, steering, bubble-up, and the collective review/merge are later phases and are out of scope here.
+This page documents the Phase 1 outcome-spec flow and the Phase 2 orchestration capabilities (decomposition, child dispatch, observation, topology events, and steering). Bubble-up and the collective review/merge are later phases and are out of scope here.
 
 ## What it is (and is not)
 
@@ -52,9 +52,52 @@ The gate is the safety property of the flow: **no subagent work is dispatched be
 
 Both clients are thin: all orchestration logic lives in the API's coordinator service, and clients hold no spec logic.
 
+## Phase 2 orchestration
+
+Confirming the outcome spec carries the coordinator run through Phase 2: **confirm -> decompose -> dispatch -> observe -> steer**. No work begins before confirmation, so the Phase 1 gate stays the single safety property.
+
+### Decomposition and the work plan
+
+After confirmation, the coordinator decomposes the spec into a **work plan**: a set of subtasks plus the dependency edges between them. Each subtask carries an assigned roster agent (selected for role fit), a selected model (chosen for the subtask's complexity within the GitHub Copilot provider), a `phase`, an `isolation`, and a status. The plan is persisted to the memory store and emitted as `coordinator.work_plan`. Subagents read the confirmed spec and plan from the memory store; the coordinator does not introduce a parallel store. Read it over HTTP with `GET /api/runs/{id}/work-plan` or over MCP with `coordinator_work_plan_get`.
+
+### Child dispatch: parallel and serial
+
+The coordinator dispatches subtasks as first-class **child runs** parented by the coordinator run, reusing the existing single-agent run machinery (per-child RAI, sandboxing, and step streaming) rather than new run primitives. Dispatch is dependency-ordered:
+
+- Subtasks with no unmet dependencies dispatch together and run **in parallel**.
+- A subtask with a dependency does not start until every prerequisite reaches `assemble_ready`/`completed`, so dependent work runs **serially** behind it.
+- A failed or RAI-flagged predecessor does not satisfy a dependency, so its dependents stay blocked.
+
+A subtask's status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`, surfaced as `subtask.*` events. The dispatched child runs (paired with subtask status) are available from `GET /api/runs/{id}/children` or the `coordinator_children_get` MCP tool.
+
+### Observation and topology events
+
+The coordinator observes each child through its read-only run timeline and projects two views onto its own run stream:
+
+- `subtask.*` events — the granular per-subtask lifecycle (`subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status`).
+- `coordinator.topology` events — the orchestration graph. A `version: 1` snapshot (`seq: 0`) carries every node (one coordinator node plus one per subtask) and the dependency edges; deltas (`seq > 0`) carry only the changed node(s). Edge direction is always dependency to dependent, and edges never change after the snapshot.
+
+Because these events ride the coordinator run's ordinary event stream, the live graph is fully reconstructable from a single stream. Over MCP, point `run_watch` at the coordinator run id; there is no separate streaming tool. `orchestration_topology` (or the work-plan plus children endpoints) gives a one-shot snapshot when a point-in-time view is enough.
+
+### Steering verbs
+
+A user steers the coordinator while subagents run, and the coordinator relays the direction to the targeted child run(s) via `POST /api/runs/{id}/steer` or the `coordinator_steer` MCP tool. The verbs carry the following semantics:
+
+| Verb | Effect | Timing |
+| --- | --- | --- |
+| `stop` | Cancels the targeted child run's in-flight turn. | Immediate. |
+| `redirect` | Relays new direction the subagent applies as a revised task turn. | At the subagent's next turn boundary; no restart. |
+| `amend` | Relays an adjustment the subagent folds into its next turn. | At the subagent's next turn boundary; no restart. |
+
+An in-flight agent turn cannot be interrupted mid-turn under the run model, so only `stop` reaches a subagent during a turn. A `redirect` or `amend` is queued and applied when the child's current turn completes (or when it next suspends at a gate), without restarting the run. Omitting the target broadcasts to every active child. Directives progress through `coordinator.steering` events (`pending -> queued -> relayed -> applied`).
+
+**Pause is not supported in Phase 2.** No hold-before-next-turn primitive exists in the run model; the steering surface is `stop`, `redirect`, and `amend` only. Pause is deferred to a later phase.
+
 ## Related references
 
 - [API reference — Coordinator endpoints](./api.md#coordinator-endpoints)
-- [Events reference — `coordinator.*` events](./events.md)
+- [API reference — The orchestration lifecycle](./api.md#the-orchestration-lifecycle)
+- [Events reference — `coordinator.*` and `subtask.*` events](./events.md)
 - [MCP server reference — Coordinator tools](./mcp.md#coordinator)
+- [Web UI reference — Coordinator orchestration and topology view](./web.md#coordinator-orchestration-and-topology-view)
 - [Web UI reference — Coordinator run and outcome-spec gate](./web.md#coordinator-run-and-outcome-spec-gate)

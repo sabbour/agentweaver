@@ -47,6 +47,7 @@ public sealed class CoordinatorDispatchService
     private readonly SqliteRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunOrchestrator _orchestrator;
+    private readonly CoordinatorSteeringQueue _steering;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<CoordinatorDispatchService> _logger;
     private readonly CancellationToken _appStopping;
@@ -57,6 +58,7 @@ public sealed class CoordinatorDispatchService
         SqliteRunStore runStore,
         RunStreamStore streamStore,
         RunOrchestrator orchestrator,
+        CoordinatorSteeringQueue steering,
         IServiceScopeFactory scopeFactory,
         IHostApplicationLifetime lifetime,
         ILogger<CoordinatorDispatchService> logger)
@@ -64,6 +66,7 @@ public sealed class CoordinatorDispatchService
         _runStore = runStore;
         _streamStore = streamStore;
         _orchestrator = orchestrator;
+        _steering = steering;
         _scopeFactory = scopeFactory;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
@@ -159,6 +162,23 @@ public sealed class CoordinatorDispatchService
             var result = await finished.ConfigureAwait(false);
             inFlight.Remove(result.SubtaskId);
 
+            // Honest next-turn-boundary steering: the child's current turn has just completed, so a
+            // queued redirect/amend for this child can now be applied by injecting a revised task
+            // turn (no mid-turn interrupt). Only a child that reached a clean boundary
+            // (assemble_ready / completed) can carry a revised turn; a failed/cancelled child falls
+            // through to normal finalization.
+            if (result.Outcome is ChildOutcome.AssembleReady or ChildOutcome.Completed)
+            {
+                var directive = _steering.TryTakeForChild(context.CoordinatorRunId, result.ChildRunId);
+                if (directive is not null
+                    && await TryInjectSteeringRevisionAsync(
+                        context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false))
+                {
+                    inFlight[result.SubtaskId] = ObserveChildAsync(result.SubtaskId, result.ChildRunId, ct);
+                    continue;
+                }
+            }
+
             await ApplyChildResultAsync(
                 context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
         }
@@ -253,6 +273,96 @@ public sealed class CoordinatorDispatchService
         statusById[result.SubtaskId] = status;
         if (subtask is not null)
             EmitSubtask(context, workPlanId, subtask, eventType, seq.Next());
+    }
+
+    // -----------------------------------------------------------------------
+    // Steering — apply a queued redirect/amend at the child's next turn boundary (Phase 2).
+    // Reuses the revision-injection mechanism identified in the steering spike: the child resumes
+    // its session and worktree with the steered instruction as a fresh trimmed-pipeline turn. There
+    // is NO mid-turn interrupt — this only runs once the child's prior turn has fully completed.
+    // Returns true when the revised turn was injected (the caller re-observes the child), false to
+    // fall through to normal finalization.
+    // -----------------------------------------------------------------------
+
+    private async Task<bool> TryInjectSteeringRevisionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        ChildResult result,
+        QueuedSteering directive,
+        Dictionary<int, string> statusById,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(result.ChildRunId, out var childRunId))
+            return false;
+
+        var childRun = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
+        if (childRun is null)
+        {
+            _logger.LogWarning(
+                "Steering: child run {ChildRunId} not found; cannot inject directive {DirectiveId}",
+                result.ChildRunId, directive.DirectiveId);
+            return false;
+        }
+
+        // queued -> relayed: the directive is handed to the child's control seam.
+        await UpdateDirectiveStatusAsync(directive.DirectiveId, SteeringStatus.Relayed, DateTimeOffset.UtcNow, ct)
+            .ConfigureAwait(false);
+        EmitSteering(context.CoordinatorRunId, directive, SteeringStatus.Relayed);
+
+        try
+        {
+            // Drop the now-completed child stream entry and reset the run to in-progress so the
+            // injected turn observes a clean, live run (the child reached an assemble_ready terminal,
+            // which marked its stream completed). Same runId + worktree — the run is never restarted.
+            _streamStore.Remove(result.ChildRunId);
+            await _runStore.UpdateStatusAsync(childRunId, RunStatus.InProgress, null, ct).ConfigureAwait(false);
+            await _orchestrator.StartRevisionAsync(childRun, directive.Instruction, ct, isChild: true)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Steering: failed to inject revised turn for child {ChildRunId} (directive {DirectiveId}); finalizing normally",
+                result.ChildRunId, directive.DirectiveId);
+            return false;
+        }
+
+        // The child is executing a new turn carrying the steered instruction.
+        var running = await UpdateSubtaskAsync(result.SubtaskId, SubtaskStatus.Running, result.ChildRunId, ct)
+            .ConfigureAwait(false);
+        statusById[result.SubtaskId] = SubtaskStatus.Running;
+        if (running is not null)
+            EmitSubtask(context, workPlanId, running, EventTypes.SubtaskRunning, seq.Next());
+
+        // relayed -> applied: the revised task turn is now running (the directive took effect).
+        await UpdateDirectiveStatusAsync(directive.DirectiveId, SteeringStatus.Applied, relayedAt: null, ct)
+            .ConfigureAwait(false);
+        EmitSteering(context.CoordinatorRunId, directive, SteeringStatus.Applied);
+
+        _logger.LogInformation(
+            "Steering: applied {Kind} directive {DirectiveId} to child {ChildRunId} at its next turn boundary",
+            directive.Kind, directive.DirectiveId, result.ChildRunId);
+        return true;
+    }
+
+    private async Task UpdateDirectiveStatusAsync(
+        int directiveId, string status, DateTimeOffset? relayedAt, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.SteeringDirectives.FirstOrDefaultAsync(d => d.Id == directiveId, ct).ConfigureAwait(false);
+        if (row is null) return;
+        row.Status = status;
+        if (relayedAt is not null) row.RelayedAt = relayedAt;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    private void EmitSteering(string coordinatorRunId, QueuedSteering directive, string status)
+    {
+        var entry = _streamStore.Get(coordinatorRunId);
+        entry?.RecordNext(EventTypes.CoordinatorSteering, CoordinatorSteeringEvent.Payload(
+            directive.DirectiveId, directive.Kind, directive.TargetChildRunId, status, directive.Instruction));
     }
 
     // -----------------------------------------------------------------------

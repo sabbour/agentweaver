@@ -114,6 +114,14 @@ When the spec is awaiting confirmation, two actions appear:
 
 The confirm/revise gate is the safety property of the Phase 1 flow: no dispatch occurs before a human confirms.
 
+### Coordinator orchestration and topology view
+
+Once the outcome spec is confirmed, the coordinator run page switches from the outcome-spec gate to a live orchestration view. For coordinator runs this dynamic topology graph stands in for the generic five-stage pipeline used by single-agent runs: rather than a fixed Agent → Rai → Review → Merge → Scribe row, it renders the coordinator node and one node per subtask, with edges drawn from each dependency to its dependent.
+
+The graph is driven entirely by stream events, with no client-side topology computation. It seeds from the `coordinator.topology` snapshot (`version: 1`, `seq: 0`) and applies each `coordinator.topology` delta by replacing the changed node(s) by id; `subtask.*` events update per-subtask status badges in step. Each node shows its assigned agent, selected model, status, and a link to the child run's own timeline for read-only observation.
+
+Inline steering controls sit on the graph: selecting a subagent node exposes **Stop**, **Redirect**, and **Amend** actions that call `POST /api/runs/{id}/steer`. Stop is presented as an immediate cancel; redirect and amend are presented as queued, applying at the subagent's next turn boundary, and their directives surface as `coordinator.steering` events. Pause is not offered in Phase 2.
+
 ### Watch a run
 
 The watch screen streams events with `fetch`, not `EventSource`, so it can send the bearer key and `Last-Event-ID`. The stream reconnects after a drop and deduplicates by `sequence`. Reconnection replays from the in-memory buffer while the run's entry is retained on the server.

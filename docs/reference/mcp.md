@@ -257,9 +257,62 @@ Request a revision of the drafted outcome spec. The coordinator re-drafts using 
 
 ---
 
+### `coordinator_work_plan_get`
+
+Get the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Proxies `GET /api/runs/{id}/work-plan`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Coordinator run ID |
+
+**Returns**: Work plan object with `workPlanId`, `coordinatorRunId`, `outcomeSpecId`, `status`, `subtasks` (each with `subtaskId`, `title`, `scope`, `assignedAgent`, `selectedModelId`, `phase`, `isolation`, `status`, `childRunId`), and `dependencies` (`{ subtaskId, dependsOnSubtaskId }` edges). `null` before a plan is drafted.
+
+---
+
+### `coordinator_children_get`
+
+List the child runs dispatched by a coordinator run, each paired with its subtask status. Proxies `GET /api/runs/{id}/children`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Coordinator run ID |
+
+**Returns**: Array of child rows, each with `subtaskId`, `childRunId`, `subtaskStatus`, `assignedAgent`, `selectedModelId`, `childRunStatus`, `worktreeBranch`, `treeHash`, and `stepCount`. Empty when nothing has been dispatched.
+
+---
+
+### `coordinator_steer`
+
+Steer a coordinator run's subagents. Proxies `POST /api/runs/{id}/steer`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Coordinator run ID |
+| `kind` | string | yes | `stop`, `redirect`, or `amend` |
+| `instruction` | string | yes | Direction relayed to the targeted subagent(s) |
+| `target_child_run_id` | string | no | Target child run ID; omit to broadcast to every active child |
+
+A `stop` cancels the targeted child run's in-flight turn immediately. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run. Pause is not supported in Phase 2.
+
+**Returns**: The created steering directive with `directiveId`, `kind`, `targetChildRunId`, `status` (`pending`), and `instruction`.
+
+---
+
+### `orchestration_topology`
+
+Get a one-shot topology snapshot for a coordinator run by combining the work plan and child runs. Proxies `GET /api/runs/{id}/work-plan` and `GET /api/runs/{id}/children`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Coordinator run ID |
+
+**Returns**: `{ coordinatorRunId, workPlan, children }` — the current work plan (subtasks and dependency edges) alongside the dispatched child runs. For the live graph, use `run_watch` (see below).
+
+---
+
 ### Watching a coordinator run
 
-There is no separate streaming tool for the coordinator. A coordinator run is an ordinary run, so point the existing [`run_watch`](#run_watch) tool at the coordinator `run_id` to observe live drafting. The `coordinator.started`, `coordinator.outcome_spec`, and `coordinator.outcome_spec.confirmed` events ride the same `sequence`-ordered run stream and are reported as progress notifications until the run completes. Use `coordinator_outcome_spec_get` for the authoritative persisted snapshot.
+There is no separate streaming tool for the coordinator. A coordinator run is an ordinary run, so point the existing [`run_watch`](#run_watch) tool at the coordinator `run_id` to observe live drafting and orchestration. The `coordinator.started`, `coordinator.outcome_spec`, and `coordinator.outcome_spec.confirmed` events ride the same `sequence`-ordered run stream, and Phase 2 adds `coordinator.work_plan`, `coordinator.topology` (a `version: 1` snapshot at `seq: 0` followed by deltas), `subtask.*`, and `coordinator.steering` on that same stream. The live orchestration graph is reconstructable from `run_watch` alone — no extra streaming tool is needed. Use `coordinator_outcome_spec_get`, `coordinator_work_plan_get`, `coordinator_children_get`, or `orchestration_topology` for an authoritative point-in-time snapshot.
 
 ---
 

@@ -1,0 +1,482 @@
+import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
+  MessageBar,
+  MessageBarBody,
+  Spinner,
+  Text,
+  Textarea,
+  makeStyles,
+  tokens,
+} from '@fluentui/react-components';
+import type { FluentIcon } from '@fluentui/react-icons';
+import {
+  AlertRegular,
+  ArrowRoutingRegular,
+  ArrowSyncRegular,
+  BotRegular,
+  BoxRegular,
+  CheckmarkCircleRegular,
+  CircleRegular,
+  DismissCircleRegular,
+  EditRegular,
+  FlowRegular,
+  OpenRegular,
+  SendRegular,
+  StopRegular,
+} from '@fluentui/react-icons';
+import {
+  ReactFlow,
+  MarkerType,
+  Position,
+  Handle,
+  type Node,
+  type Edge,
+  type NodeProps,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import type { SteerKind, TopologyEdge } from '../api/types';
+import type { TopologyNodeState } from '../state/topologyReducer';
+import { layoutDag, NODE_W } from '../utils/dagLayout';
+import { AgentAvatar } from './AgentAvatar';
+
+// ---------------------------------------------------------------------------
+// Steering context — lets a custom node trigger a steering action without
+// threading callbacks through React Flow node data.
+// ---------------------------------------------------------------------------
+
+interface SteerRequest {
+  node: TopologyNodeState;
+  kind: SteerKind;
+}
+
+const SteerContext = createContext<((req: SteerRequest) => void) | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Status presentation — render server status as-is (Principle III).
+// ---------------------------------------------------------------------------
+
+const useStyles = makeStyles({
+  card: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: '14px',
+    width: `${NODE_W}px`,
+    boxSizing: 'border-box',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '8px',
+    cursor: 'default',
+  },
+  cardCoordinator: {
+    borderLeft: `3px solid ${tokens.colorBrandForeground1}`,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  cardActive: {
+    borderLeft: `3px solid ${tokens.colorBrandForeground1}`,
+  },
+  cardFlagged: {
+    border: `2px solid ${tokens.colorPaletteMarigoldBorderActive}`,
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
+  },
+  cardHeader: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  statusBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px',
+    padding: '2px 7px',
+    borderRadius: '999px',
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    whiteSpace: 'nowrap',
+  },
+  badgePending: { backgroundColor: tokens.colorNeutralBackground4, color: tokens.colorNeutralForeground3 },
+  badgeDispatched: { backgroundColor: tokens.colorPaletteLightTealBackground2, color: tokens.colorPaletteLightTealForeground2 },
+  badgeRunning: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1 },
+  badgeAssemble: { backgroundColor: tokens.colorPaletteLavenderBackground2, color: tokens.colorPaletteLavenderForeground2 },
+  badgeFlagged: { backgroundColor: tokens.colorPaletteMarigoldBorderActive, color: tokens.colorNeutralForegroundInverted },
+  badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2, color: tokens.colorPaletteGreenForeground1 },
+  badgeFailed: { backgroundColor: tokens.colorPaletteRedBackground2, color: tokens.colorPaletteRedForeground1 },
+  cardMain: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  cardIcon: {
+    display: 'flex',
+    color: tokens.colorNeutralForeground2,
+    flexShrink: 0,
+  },
+  cardTitleGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  cardTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  cardSubText: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    marginTop: '2px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  cardModel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground4,
+    fontFamily: tokens.fontFamilyMonospace,
+    marginTop: '2px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  steeringNote: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground2,
+  },
+  actions: {
+    marginTop: tokens.spacingVerticalXS,
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+  },
+  container: {
+    height: '560px',
+    borderRadius: '8px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    '& .react-flow__renderer': { borderRadius: '8px' },
+  },
+  dialogFields: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+});
+
+interface StatusMeta {
+  label: string;
+  badgeClass: keyof ReturnType<typeof useStyles>;
+  Icon: FluentIcon;
+}
+
+function statusMeta(status: string, styles: ReturnType<typeof useStyles>): { label: string; className: string; Icon: FluentIcon } {
+  const table: Record<string, StatusMeta> = {
+    pending: { label: 'Pending', badgeClass: 'badgePending', Icon: CircleRegular },
+    dispatched: { label: 'Dispatched', badgeClass: 'badgeDispatched', Icon: SendRegular },
+    running: { label: 'Running', badgeClass: 'badgeRunning', Icon: ArrowSyncRegular },
+    assemble_ready: { label: 'Assemble ready', badgeClass: 'badgeAssemble', Icon: BoxRegular },
+    rai_flagged: { label: 'RAI flagged', badgeClass: 'badgeFlagged', Icon: AlertRegular },
+    completed: { label: 'Completed', badgeClass: 'badgeCompleted', Icon: CheckmarkCircleRegular },
+    failed: { label: 'Failed', badgeClass: 'badgeFailed', Icon: DismissCircleRegular },
+  };
+  const meta = table[status] ?? { label: status, badgeClass: 'badgePending' as const, Icon: CircleRegular };
+  return { label: meta.label, className: styles[meta.badgeClass] as string, Icon: meta.Icon };
+}
+
+const ACTIVE_STATUSES = new Set(['dispatched', 'running', 'assemble_ready', 'rai_flagged']);
+
+// ---------------------------------------------------------------------------
+// Node data passed into the React Flow custom node
+// ---------------------------------------------------------------------------
+
+interface TopologyNodeData extends Record<string, unknown> {
+  node: TopologyNodeState;
+  projectId: string;
+}
+
+function TopologyNodeCard({ data }: NodeProps) {
+  const styles = useStyles();
+  const { node, projectId } = data as TopologyNodeData;
+  const onSteer = useContext(SteerContext);
+
+  const isCoordinator = node.kind === 'coordinator';
+  const sm = statusMeta(node.status, styles);
+  const isActive = ACTIVE_STATUSES.has(node.status);
+  const isFlagged = node.status === 'rai_flagged';
+
+  const cardClass = [
+    styles.card,
+    isCoordinator ? styles.cardCoordinator : '',
+    isFlagged ? styles.cardFlagged : isActive ? styles.cardActive : '',
+  ].filter(Boolean).join(' ');
+
+  // Steering is offered on the coordinator (whole orchestration) and on active
+  // subtasks that already have a child run to target.
+  const canSteer = isCoordinator || (node.kind === 'subtask' && !!node.childRunId && ACTIVE_STATUSES.has(node.status));
+  const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
+
+  return (
+    <div className={cardClass} role="article" aria-label={`${node.title}: ${sm.label}`}>
+      <Handle type="target" position={Position.Left} style={handleStyle} />
+      <Handle type="source" position={Position.Right} style={handleStyle} />
+
+      <div className={styles.cardHeader}>
+        <span className={`${styles.statusBadge} ${sm.className}`}>
+          <sm.Icon fontSize={10} aria-hidden="true" />
+          {sm.label}
+        </span>
+      </div>
+
+      <div className={styles.cardMain}>
+        <span className={styles.cardIcon} aria-hidden="true">
+          {isCoordinator ? (
+            <FlowRegular fontSize={24} />
+          ) : node.assignedAgent ? (
+            <AgentAvatar name={node.assignedAgent} size={28} circle />
+          ) : (
+            <BotRegular fontSize={22} />
+          )}
+        </span>
+        <div className={styles.cardTitleGroup}>
+          <span className={styles.cardTitle}>{node.title}</span>
+          {isCoordinator && <span className={styles.cardSubText}>Coordinator</span>}
+          {node.assignedAgent && <span className={styles.cardSubText}>{node.assignedAgent}</span>}
+          {node.selectedModelId && <span className={styles.cardModel}>{node.selectedModelId}</span>}
+        </div>
+      </div>
+
+      {node.steering && (
+        <span className={styles.steeringNote}>
+          <ArrowRoutingRegular fontSize={12} aria-hidden="true" />
+          {steerKindLabel(node.steering.kind)} · {node.steering.status}
+        </span>
+      )}
+
+      <div className={`${styles.actions} nopan nodrag`}>
+        {node.kind === 'subtask' && node.childRunId && (
+          <Link to={`/projects/${projectId}/runs/${node.childRunId}/workflow`} style={{ textDecoration: 'none' }}>
+            <Button appearance="outline" size="small" icon={<OpenRegular />}>View run</Button>
+          </Link>
+        )}
+        {canSteer && (
+          <>
+            <Button appearance="subtle" size="small" icon={<StopRegular />} onClick={() => onSteer?.({ node, kind: 'stop' })}>
+              Stop
+            </Button>
+            <Button appearance="subtle" size="small" icon={<ArrowRoutingRegular />} onClick={() => onSteer?.({ node, kind: 'redirect' })}>
+              Redirect
+            </Button>
+            <Button appearance="subtle" size="small" icon={<EditRegular />} onClick={() => onSteer?.({ node, kind: 'amend' })}>
+              Amend
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const nodeTypes = { topology: TopologyNodeCard };
+
+function steerKindLabel(kind: SteerKind): string {
+  if (kind === 'stop') return 'Stop';
+  if (kind === 'redirect') return 'Redirect';
+  return 'Amend';
+}
+
+// ---------------------------------------------------------------------------
+// Edge helper
+// ---------------------------------------------------------------------------
+
+const STROKE_MUTED = 'var(--colorNeutralStroke2)';
+
+function topoEdge(source: string, target: string): Edge {
+  return {
+    id: `${source}->${target}`,
+    source,
+    target,
+    type: 'default',
+    style: { stroke: STROKE_MUTED, strokeWidth: 1.5 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: STROKE_MUTED, width: 12, height: 12 },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Graph
+// ---------------------------------------------------------------------------
+
+interface CoordinatorTopologyGraphProps {
+  projectId: string;
+  coordinatorRunId: string;
+  nodes: TopologyNodeState[];
+  edges: TopologyEdge[];
+}
+
+export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, edges }: CoordinatorTopologyGraphProps) {
+  const styles = useStyles();
+
+  const [steerReq, setSteerReq] = useState<SteerRequest | null>(null);
+  const [instruction, setInstruction] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const openSteer = useCallback((req: SteerRequest) => {
+    setSteerReq(req);
+    setInstruction('');
+    setError(null);
+  }, []);
+
+  const closeSteer = useCallback(() => {
+    setSteerReq(null);
+    setInstruction('');
+    setError(null);
+    setBusy(false);
+  }, []);
+
+  const submitSteer = useCallback(async () => {
+    if (!steerReq) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const targetChildRunId = steerReq.node.kind === 'subtask' ? steerReq.node.childRunId : undefined;
+      await apiClient.steerCoordinator(coordinatorRunId, {
+        kind: steerReq.kind,
+        targetChildRunId,
+        instruction: steerReq.kind === 'stop' ? undefined : instruction.trim() || undefined,
+      });
+      closeSteer();
+    } catch (err) {
+      setError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }, [steerReq, instruction, coordinatorRunId, closeSteer]);
+
+  // Build forward edges from server dependency edges. As pure layout glue (not
+  // topology computation), connect the coordinator node to root subtasks ONLY
+  // when the server did not already wire the coordinator into the graph.
+  const displayEdges = useMemo<TopologyEdge[]>(() => {
+    const coordinator = nodes.find((n) => n.kind === 'coordinator');
+    const coordinatorWired = coordinator
+      ? edges.some((e) => e.from === coordinator.id || e.to === coordinator.id)
+      : true;
+    if (coordinator && !coordinatorWired) {
+      const hasIncoming = new Set(edges.map((e) => e.to));
+      const roots = nodes.filter((n) => n.kind === 'subtask' && !hasIncoming.has(n.id));
+      return [...edges, ...roots.map((r) => ({ from: coordinator.id, to: r.id }))];
+    }
+    return edges;
+  }, [nodes, edges]);
+
+  const rfEdges = useMemo<Edge[]>(() => displayEdges.map((e) => topoEdge(e.from, e.to)), [displayEdges]);
+
+  const rfNodes = useMemo<Node[]>(() => {
+    const raw: Node[] = nodes.map((node) => ({
+      id: node.id,
+      type: 'topology',
+      data: { node, projectId } as TopologyNodeData,
+      position: { x: 0, y: 0 },
+    }));
+    return layoutDag(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: 30 });
+  }, [nodes, projectId, rfEdges]);
+
+  const needsInstruction = steerReq?.kind === 'redirect' || steerReq?.kind === 'amend';
+
+  return (
+    <>
+      <SteerContext.Provider value={openSteer}>
+        <div className={styles.container}>
+          <ReactFlow
+            nodes={rfNodes}
+            edges={rfEdges}
+            nodeTypes={nodeTypes}
+            fitView
+            fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }}
+            minZoom={0.4}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            nodesFocusable={false}
+            edgesFocusable={false}
+            panOnScroll={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            zoomOnDoubleClick={false}
+            panOnDrag
+            proOptions={{ hideAttribution: true }}
+          />
+        </div>
+      </SteerContext.Provider>
+
+      <Dialog open={!!steerReq} onOpenChange={(_, d) => { if (!d.open) closeSteer(); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>
+              {steerReq ? steerKindLabel(steerReq.kind) : ''}{steerReq ? ` — ${steerReq.node.title}` : ''}
+            </DialogTitle>
+            <DialogContent>
+              <div className={styles.dialogFields}>
+                {steerReq?.kind === 'stop' ? (
+                  <Text>
+                    Stop {steerReq.node.kind === 'coordinator' ? 'this orchestration' : 'this subtask'}? No
+                    further work will be dispatched for it.
+                  </Text>
+                ) : (
+                  <>
+                    <Text>
+                      {steerReq?.kind === 'redirect'
+                        ? 'Describe the new direction for this work.'
+                        : 'Describe the amendment to apply to this work.'}
+                    </Text>
+                    <Field label="Instruction" required>
+                      <Textarea
+                        value={instruction}
+                        onChange={(_, v) => setInstruction(v.value)}
+                        placeholder={steerReq?.kind === 'redirect'
+                          ? 'e.g. Target the v2 API instead and skip the legacy adapter.'
+                          : 'e.g. Also add integration tests for the new endpoint.'}
+                        rows={4}
+                      />
+                    </Field>
+                  </>
+                )}
+                {error && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{error}</MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" disabled={busy} onClick={closeSteer}>Cancel</Button>
+              <Button
+                appearance="primary"
+                disabled={busy || (!!needsInstruction && !instruction.trim())}
+                onClick={() => void submitSteer()}
+              >
+                {busy ? 'Sending' : steerReq?.kind === 'stop' ? 'Stop' : 'Send'}
+              </Button>
+              {busy && <Spinner size="extra-tiny" aria-hidden="true" />}
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Steering dialog above is the only overlay this graph owns. */}
+    </>
+  );
+}

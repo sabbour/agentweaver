@@ -45,6 +45,10 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.started` | When a coordinator run begins drafting an OutcomeSpec from the user's goal | `goal` |
 | `coordinator.outcome_spec` | When the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate | `specId`, `status`, `desiredOutcome`, `scope`, `assumptions`, `clarifyingQuestions` |
 | `coordinator.outcome_spec.confirmed` | When a human confirms the drafted OutcomeSpec and the coordinator run proceeds | `specId`, `confirmedBy` |
+| `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
+| `coordinator.topology` | When the orchestration graph is first dispatched (snapshot) and on every subsequent subtask lifecycle transition (delta) | `version`, `kind`, `seq`, `nodes` (snapshot) / `changed` (delta), `edges` (snapshot) |
+| `subtask.dispatched` / `subtask.running` / `subtask.assemble_ready` / `subtask.rai_flagged` / `subtask.completed` / `subtask.failed` | As a subtask's child run advances through its lifecycle | `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status` |
+| `coordinator.steering` | When a steering directive is created or changes state | `directiveId`, `kind`, `targetChildRunId`, `status`, `instruction` |
 
 ## Tool event pairing
 
@@ -175,6 +179,27 @@ Emitted when the coordinator has drafted an OutcomeSpec and suspended at the awa
 ### `coordinator.outcome_spec.confirmed`
 
 Emitted when a human confirms the drafted OutcomeSpec through the confirm seam. The persisted OutcomeSpec advances to status `confirmed`. `specId` is the confirmed row id; `confirmedBy` is the confirming user. In Phase 1 the coordinator run terminates after confirmation (decomposition and child dispatch are Phase 2); a `run.completed` event follows.
+
+### `coordinator.work_plan`
+
+Emitted when the coordinator decomposes a confirmed OutcomeSpec into a work plan and persists it. `workPlanId` is the persisted plan id; `status` begins at `planned`. `subtasks` is the array of decomposed units of work, each carrying its `subtaskId`, `title`, `scope`, `assignedAgent`, `selectedModelId`, `phase`, `isolation`, and `status`. `dependencies` is the array of `{ subtaskId, dependsOnSubtaskId }` edges that constrain dispatch order. The work plan is the durable artifact behind the live `coordinator.topology` graph; subagents read from it once dispatched.
+
+### `coordinator.topology`
+
+Emitted to describe the orchestration graph as it executes. The payload is versioned (`version: 1`) and comes in two `kind`s, ordered by a per-coordinator `seq` counter:
+
+- A `snapshot` (`kind: "snapshot"`, `seq: 0`) fires once when dispatch begins. It carries the complete `nodes` array and the `edges` array. There is one `coordinator` node (`id: "coordinator"`) plus one node per subtask (`id: "subtask-{id}"`). Each node carries `id`, `kind` (`coordinator` or `subtask`), `subtaskId`, `status`, `label`, `agent`, `model`, `childRunId`, `phase`, and `isolation`. Each edge is `{ from, to }`, meaning the `from` node (a dependency) must reach `assemble_ready`/`completed` before the `to` node (its dependent) is dispatched.
+- A `delta` (`kind: "delta"`, `seq > 0`) fires on every subtask lifecycle transition. It carries a `changed` array of the node(s) whose state moved (replace by `id`); `edges` never change after the snapshot, so deltas omit them. A delta may carry the `coordinator` node when the work plan's own status transitions.
+
+Clients render directly from these events and never compute topology themselves. Edge direction is always dependency to dependent.
+
+### `subtask.*`
+
+The `subtask.dispatched`, `subtask.running`, `subtask.assemble_ready`, `subtask.rai_flagged`, `subtask.completed`, and `subtask.failed` events track a single subtask's child run through its lifecycle on the coordinator stream. Each carries `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, and `status`. The subtask status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`. Each `subtask.*` event is paired with a `coordinator.topology` delta for the changed node, so observers can choose either the granular per-subtask signal or the graph view.
+
+### `coordinator.steering`
+
+Emitted when a steering directive is created through `POST /api/runs/{id}/steer` and as it changes state. `directiveId` identifies the directive; `kind` is `stop`, `redirect`, or `amend`; `targetChildRunId` is the targeted child run, or null for a broadcast to every active child; `instruction` is the direction relayed to the subagent(s); `status` advances `pending -> queued -> relayed -> applied`. A `stop` collapses to `applied` essentially immediately because it cancels the in-flight turn's token. A `redirect` or `amend` reaches `applied` only at the targeted subagent's next turn boundary, so observers should surface it as queued until then. Pause is not supported in Phase 2.
 
 ## Model-assisted casting
 

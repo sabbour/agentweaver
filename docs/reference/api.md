@@ -806,7 +806,130 @@ Response `200 OK` with the current outcome spec (same shape as `GET /api/runs/{i
 `409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
 `409 Conflict` with `error: "no_pending_gate"` when the spec is not currently awaiting confirmation.
 
-## GitHub authentication endpoints
+### The orchestration lifecycle
+
+Confirming the outcome spec advances the coordinator run through Phase 2: **confirm -> decompose -> dispatch -> observe -> steer**. After confirmation, the coordinator decomposes the spec into a work plan (subtasks plus dependency edges), dispatches the ready subtasks as child runs (independent subtasks in parallel, dependent ones serialized behind their prerequisites), observes each child's read-only timeline, and relays any steering direction to the running subagents. The work plan, child runs, and steering directives are read and driven through the endpoints below; the live graph streams as `coordinator.work_plan`, `coordinator.topology`, `subtask.*`, and `coordinator.steering` events on the coordinator run's own `GET /api/runs/{id}/stream`.
+
+### GET /api/runs/{id}/work-plan
+
+Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Owner-scoped. Returns `null` (or `404`) before the coordinator has drafted a plan.
+
+Response `200 OK`:
+
+```json
+{
+  "workPlanId": "a1b2c3d4-...",
+  "coordinatorRunId": "f36800fd-...",
+  "outcomeSpecId": "9e8d7c6b-...",
+  "status": "dispatching",
+  "subtasks": [
+    {
+      "subtaskId": 5,
+      "title": "Add session persistence to the onboarding store",
+      "scope": "Persist partial onboarding state",
+      "assignedAgent": "morpheus",
+      "selectedModelId": "gpt-4o",
+      "phase": "execution",
+      "isolation": "worktree",
+      "status": "running",
+      "childRunId": "7c1f..."
+    }
+  ],
+  "dependencies": [
+    { "subtaskId": 7, "dependsOnSubtaskId": 5 }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `workPlanId` | string | Persisted work plan id. |
+| `coordinatorRunId` | string | The coordinator run that owns the plan. |
+| `outcomeSpecId` | string | The confirmed outcome spec the plan was decomposed from. |
+| `status` | string | `planned`, `dispatching`, `assembling`, `in_review`, or `complete`. |
+| `subtasks` | array | Decomposed units of work; each has `subtaskId`, `title`, `scope`, `assignedAgent`, `selectedModelId`, `phase`, `isolation`, `status`, and `childRunId` (null until dispatched). |
+| `dependencies` | array | `{ subtaskId, dependsOnSubtaskId }` edges; a subtask dispatches only once every dependency reaches `assemble_ready`/`completed`. |
+
+`400 Bad Request` when `id` is not a valid run id.
+`403 Forbidden` when the caller does not own the run.
+`404 Not Found` when the run does not exist or has no work plan yet.
+
+### GET /api/runs/{id}/children
+
+Lists the child runs dispatched by a coordinator run, one row per subtask that has a child run, each paired with its subtask status. Owner-scoped. Empty array when nothing has been dispatched.
+
+Response `200 OK`:
+
+```json
+[
+  {
+    "subtaskId": 5,
+    "childRunId": "7c1f...",
+    "subtaskStatus": "running",
+    "assignedAgent": "morpheus",
+    "selectedModelId": "gpt-4o",
+    "childRunStatus": "in_progress",
+    "worktreeBranch": "coordinator/5-session-persistence",
+    "treeHash": null,
+    "stepCount": 12
+  }
+]
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `subtaskId` | integer | The subtask this child run executes. |
+| `childRunId` | string | The dispatched child run id. |
+| `subtaskStatus` | string | The subtask's status in the work plan. |
+| `assignedAgent` | string | The roster agent running the subtask. |
+| `selectedModelId` | string | The model selected for the subtask. |
+| `childRunStatus` | string | The child run's own status. |
+| `worktreeBranch` | string | The child run's worktree branch. |
+| `treeHash` | string | The committed worktree tree hash once the child reaches assemble-ready; null before then. |
+| `stepCount` | integer | Steps observed on the child run so far. |
+
+`400 Bad Request` when `id` is not a valid run id.
+`403 Forbidden` when the caller does not own the run.
+`404 Not Found` when the run does not exist.
+
+### POST /api/runs/{id}/steer
+
+Creates a steering directive that the coordinator relays to one or more running subagents. Owner-scoped.
+
+Request:
+
+```json
+{
+  "kind": "redirect",
+  "targetChildRunId": "7c1f...",
+  "instruction": "Use the existing session store instead of adding a new table"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `kind` | string | Yes | `stop`, `redirect`, or `amend`. Pause is not supported in Phase 2. |
+| `targetChildRunId` | string | No | The child run to steer; omit to broadcast to every active child. |
+| `instruction` | string | Yes | Direction relayed to the targeted subagent(s). |
+
+Response `202 Accepted` with the created directive:
+
+```json
+{
+  "directiveId": "d4c3b2a1-...",
+  "kind": "redirect",
+  "targetChildRunId": "7c1f...",
+  "status": "pending",
+  "instruction": "Use the existing session store instead of adding a new table"
+}
+```
+
+A `stop` takes effect immediately: it cancels the targeted child run's in-flight turn. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run — it is queued and applied when the child's current turn completes (or when it next suspends at a gate). The directive's progress is observable as `coordinator.steering` events (`pending -> queued -> relayed -> applied`) on the coordinator run stream.
+
+`400 Bad Request` when `id` is not a valid run id, `kind` is not one of `stop`/`redirect`/`amend`, or `instruction` is missing.
+`403 Forbidden` when the caller does not own the run.
+`404 Not Found` when the run does not exist.
+`409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
 
 GitHub authentication allows the GitHub Copilot provider to use a token obtained through the OAuth device flow rather than a static API key.
 

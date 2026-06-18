@@ -688,3 +688,107 @@ public sealed record OutcomeSpecResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ConfirmedBy { get; init; }
 }
+
+// -----------------------------------------------------------------------
+// Coordinator (Feature 008 Phase 2) — work plan, children, and steering.
+// These contracts use camelCase JSON to match the web client and MCP tools,
+// mirroring the Phase 1 OutcomeSpecResponse style. The endpoints are thin
+// projections of the service views (CoordinatorWorkPlanView / CoordinatorChildView /
+// SteeringDirectiveView); server state is rendered as-is (Principle III).
+// -----------------------------------------------------------------------
+
+/// <summary>Response body for GET /api/runs/{coordinatorRunId}/work-plan.</summary>
+public sealed record WorkPlanResponse
+{
+    [JsonPropertyName("workPlanId")] public required int WorkPlanId { get; init; }
+    [JsonPropertyName("coordinatorRunId")] public required string CoordinatorRunId { get; init; }
+    [JsonPropertyName("outcomeSpecId")] public required int OutcomeSpecId { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+
+    [JsonPropertyName("isolationSummary")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IsolationSummary { get; init; }
+
+    [JsonPropertyName("subtasks")] public required IReadOnlyList<WorkPlanSubtaskResponse> Subtasks { get; init; }
+    [JsonPropertyName("dependencies")] public required IReadOnlyList<WorkPlanDependencyResponse> Dependencies { get; init; }
+}
+
+/// <summary>A subtask row in <see cref="WorkPlanResponse"/>.</summary>
+public sealed record WorkPlanSubtaskResponse
+{
+    [JsonPropertyName("subtaskId")] public required int SubtaskId { get; init; }
+    [JsonPropertyName("title")] public required string Title { get; init; }
+    [JsonPropertyName("scope")] public required string Scope { get; init; }
+    [JsonPropertyName("assignedAgent")] public required string AssignedAgent { get; init; }
+    [JsonPropertyName("selectedModelId")] public required string SelectedModelId { get; init; }
+    [JsonPropertyName("phase")] public required string Phase { get; init; }
+    [JsonPropertyName("isolation")] public required string Isolation { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+
+    [JsonPropertyName("childRunId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ChildRunId { get; init; }
+}
+
+/// <summary>A dependency edge in <see cref="WorkPlanResponse"/>: subtaskId depends on dependsOnSubtaskId.</summary>
+public sealed record WorkPlanDependencyResponse
+{
+    [JsonPropertyName("subtaskId")] public required int SubtaskId { get; init; }
+    [JsonPropertyName("dependsOnSubtaskId")] public required int DependsOnSubtaskId { get; init; }
+}
+
+/// <summary>An element of the GET /api/runs/{coordinatorRunId}/children response array.</summary>
+public sealed record CoordinatorChildResponse
+{
+    [JsonPropertyName("subtaskId")] public required int SubtaskId { get; init; }
+    [JsonPropertyName("childRunId")] public required string ChildRunId { get; init; }
+    [JsonPropertyName("subtaskStatus")] public required string SubtaskStatus { get; init; }
+    [JsonPropertyName("assignedAgent")] public required string AssignedAgent { get; init; }
+    [JsonPropertyName("selectedModelId")] public required string SelectedModelId { get; init; }
+
+    [JsonPropertyName("childRunStatus")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ChildRunStatus { get; init; }
+
+    [JsonPropertyName("worktreeBranch")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorktreeBranch { get; init; }
+
+    [JsonPropertyName("treeHash")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TreeHash { get; init; }
+
+    [JsonPropertyName("stepCount")] public required int StepCount { get; init; }
+}
+
+/// <summary>Request body for POST /api/runs/{coordinatorRunId}/steer.</summary>
+public sealed record SteerRequest
+{
+    [JsonPropertyName("kind")] public string? Kind { get; init; }
+    [JsonPropertyName("targetChildRunId")] public string? TargetChildRunId { get; init; }
+    [JsonPropertyName("instruction")] public string? Instruction { get; init; }
+}
+
+/// <summary>
+/// Response body for POST /api/runs/{coordinatorRunId}/steer. Mirrors the persisted steering
+/// directive (SteeringDirectiveView). Server state is rendered as-is (Principle III).
+/// </summary>
+public sealed record SteeringDirectiveResponse
+{
+    [JsonPropertyName("id")] public required int Id { get; init; }
+    [JsonPropertyName("coordinatorRunId")] public required string CoordinatorRunId { get; init; }
+
+    [JsonPropertyName("targetChildRunId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetChildRunId { get; init; }
+
+    [JsonPropertyName("kind")] public required string Kind { get; init; }
+    [JsonPropertyName("instruction")] public required string Instruction { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("createdBy")] public required string CreatedBy { get; init; }
+    [JsonPropertyName("createdAt")] public required DateTimeOffset CreatedAt { get; init; }
+
+    [JsonPropertyName("relayedAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? RelayedAt { get; init; }
+}

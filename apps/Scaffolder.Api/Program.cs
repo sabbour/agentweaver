@@ -61,6 +61,8 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorDispatchService>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorSteeringQueue>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorSteeringService>();
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorRunService>();
 
@@ -2335,6 +2337,121 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
 });
 
 // -----------------------------------------------------------------------
+// Coordinator orchestration (Feature 008 Phase 2) — work plan, children, steering.
+// Thin HTTP over CoordinatorRunService/CoordinatorSteeringService: validate input, resolve
+// owner-scoped context, delegate, and map the service result/exception to status codes
+// (Principle III). No business logic lives in these endpoints.
+// -----------------------------------------------------------------------
+
+// GET /api/runs/{coordinatorRunId}/work-plan — the persisted work plan (subtasks + dependencies)
+// for a coordinator run. 404 when the run is not a coordinator run / has no work plan yet.
+app.MapGet("/api/runs/{coordinatorRunId}/work-plan", async (
+    HttpContext httpContext,
+    string coordinatorRunId,
+    SqliteRunStore runStore,
+    CoordinatorRunService coordinator,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(coordinatorRunId, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for work-plan", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var plan = await coordinator.GetWorkPlanAsync(coordinatorRunId, ct);
+    if (plan is null) return Results.NotFound();
+
+    return Results.Json(MapWorkPlan(plan));
+});
+
+// GET /api/runs/{coordinatorRunId}/children — dispatched child runs paired with subtask status.
+// Returns an empty array when nothing has been dispatched yet (or no plan exists).
+app.MapGet("/api/runs/{coordinatorRunId}/children", async (
+    HttpContext httpContext,
+    string coordinatorRunId,
+    SqliteRunStore runStore,
+    CoordinatorRunService coordinator,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(coordinatorRunId, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for children", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var children = await coordinator.GetChildrenAsync(coordinatorRunId, ct);
+    return Results.Json(children.Select(MapChild).ToList());
+});
+
+// POST /api/runs/{coordinatorRunId}/steer — relay a human steering directive to a running
+// coordinator. Body: { kind: stop|redirect|amend, targetChildRunId?, instruction }. The descoped
+// 'pause' verb, unknown verbs, and a missing instruction for redirect/amend are rejected by the
+// service with a SteeringValidationException, which maps to 400 here. createdBy is the caller.
+app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
+    HttpContext httpContext,
+    string coordinatorRunId,
+    SteerRequest request,
+    SqliteRunStore runStore,
+    CoordinatorSteeringService steering,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(coordinatorRunId, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    if (string.IsNullOrWhiteSpace(request.Kind))
+        return Results.BadRequest(new { error = "kind is required." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for steer", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+    try
+    {
+        var directive = await steering.SteerAsync(
+            coordinatorRunId,
+            request.Kind!,
+            string.IsNullOrWhiteSpace(request.TargetChildRunId) ? null : request.TargetChildRunId,
+            request.Instruction ?? string.Empty,
+            caller.User,
+            ct);
+
+        return Results.Json(MapSteeringDirective(directive), statusCode: StatusCodes.Status201Created);
+    }
+    catch (SteeringValidationException ex)
+    {
+        return Results.BadRequest(new { error = "steering_invalid", message = ex.Message });
+    }
+});
+
+// -----------------------------------------------------------------------
 // Casting & Team endpoints
 // -----------------------------------------------------------------------
 
@@ -3717,6 +3834,61 @@ static async Task<OutcomeSpecResponse?> ReadOutcomeSpecAsync(
     var spec = await coordinator.GetOutcomeSpecAsync(runId, ct);
     return spec is null ? null : MapOutcomeSpec(spec);
 }
+
+// Maps a coordinator work-plan view to its camelCase response (Feature 008 Phase 2).
+static WorkPlanResponse MapWorkPlan(CoordinatorWorkPlanView plan) => new()
+{
+    WorkPlanId = plan.WorkPlanId,
+    CoordinatorRunId = plan.CoordinatorRunId,
+    OutcomeSpecId = plan.OutcomeSpecId,
+    Status = plan.Status,
+    IsolationSummary = plan.IsolationSummary,
+    Subtasks = plan.Subtasks.Select(s => new WorkPlanSubtaskResponse
+    {
+        SubtaskId = s.SubtaskId,
+        Title = s.Title,
+        Scope = s.Scope,
+        AssignedAgent = s.AssignedAgent,
+        SelectedModelId = s.SelectedModelId,
+        Phase = s.Phase,
+        Isolation = s.Isolation,
+        Status = s.Status,
+        ChildRunId = s.ChildRunId,
+    }).ToList(),
+    Dependencies = plan.Dependencies.Select(d => new WorkPlanDependencyResponse
+    {
+        SubtaskId = d.SubtaskId,
+        DependsOnSubtaskId = d.DependsOnSubtaskId,
+    }).ToList(),
+};
+
+// Maps a coordinator child view to its camelCase response (Feature 008 Phase 2).
+static CoordinatorChildResponse MapChild(CoordinatorChildView child) => new()
+{
+    SubtaskId = child.SubtaskId,
+    ChildRunId = child.ChildRunId,
+    SubtaskStatus = child.SubtaskStatus,
+    AssignedAgent = child.AssignedAgent,
+    SelectedModelId = child.SelectedModelId,
+    ChildRunStatus = child.ChildRunStatus,
+    WorktreeBranch = child.WorktreeBranch,
+    TreeHash = child.TreeHash,
+    StepCount = child.StepCount,
+};
+
+// Maps a steering directive view to its camelCase response (Feature 008 Phase 2).
+static SteeringDirectiveResponse MapSteeringDirective(SteeringDirectiveView directive) => new()
+{
+    Id = directive.Id,
+    CoordinatorRunId = directive.CoordinatorRunId,
+    TargetChildRunId = directive.TargetChildRunId,
+    Kind = directive.Kind,
+    Instruction = directive.Instruction,
+    Status = directive.Status,
+    CreatedBy = directive.CreatedBy,
+    CreatedAt = directive.CreatedAt,
+    RelayedAt = directive.RelayedAt,
+};
 
 static ProjectResponse MapProject(Project p, bool available) => new()
 {

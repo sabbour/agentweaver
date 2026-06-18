@@ -1,16 +1,18 @@
 import { useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Spinner, Text, Title2, makeStyles, tokens } from '@fluentui/react-components';
+import { Spinner, Text, Title2, Title3, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
 import { API_KEY, API_URL } from '../config';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
+import { CoordinatorTopologyGraph } from '../components/CoordinatorTopologyGraph';
+import { buildTopologyState, type TopologyNodeState } from '../state/topologyReducer';
 
 const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-    maxWidth: '860px',
+    maxWidth: '1100px',
   },
   breadcrumb: {
     display: 'flex',
@@ -38,6 +40,23 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     color: tokens.colorNeutralForeground2,
   },
+  section: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  sectionTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  hint: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  specMax: {
+    maxWidth: '860px',
+  },
 });
 
 export function CoordinatorRunPage() {
@@ -55,6 +74,14 @@ export function CoordinatorRunPage() {
     }
     return undefined;
   }, [events]);
+
+  // Fold the SSE stream into topology state (snapshot + deltas + subtask/steering).
+  const topology = useMemo(() => buildTopologyState(events), [events]);
+  const topologyNodes = useMemo<TopologyNodeState[]>(
+    () => topology.nodeOrder.map((id) => topology.nodes[id]).filter(Boolean),
+    [topology],
+  );
+  const hasTopology = topologyNodes.length > 0;
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -80,7 +107,30 @@ export function CoordinatorRunPage() {
 
       {goal && <Text className={styles.goal}>Goal: {goal}</Text>}
 
-      <OutcomeSpecPanel runId={runId} events={events} streamStatus={streamStatus} />
+      {/* Live coordinator topology — replaces the generic pipeline for coordinator runs. */}
+      {hasTopology && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitleRow}>
+            <Title3>Topology</Title3>
+            {streamStatus === 'streaming' && <Spinner size="extra-tiny" aria-label="Live" />}
+          </div>
+          <Text className={styles.hint}>
+            Live view of the coordinator and its subtasks. Open a subtask to drill into its run, or use the
+            inline controls to stop, redirect, or amend.
+          </Text>
+          <CoordinatorTopologyGraph
+            projectId={projectId}
+            coordinatorRunId={runId}
+            nodes={topologyNodes}
+            edges={topology.edges}
+          />
+        </div>
+      )}
+
+      {/* Outcome spec — the coordinator node's detail (confirmation gate before dispatch). */}
+      <div className={styles.specMax}>
+        <OutcomeSpecPanel runId={runId} events={events} streamStatus={streamStatus} />
+      </div>
     </div>
   );
 }

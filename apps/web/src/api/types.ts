@@ -401,3 +401,94 @@ export interface StartOrchestrationResponse {
 export interface ReviseOutcomeSpecRequest {
   feedback: string;
 }
+
+// --- Feature 008 Phase 2 — Coordinator dynamic topology + steering ---
+// All of these mirror server event contracts. The client renders them as-is
+// (Principle III — thin client, no topology computation).
+
+export type SubtaskStatus =
+  | 'pending'
+  | 'dispatched'
+  | 'running'
+  | 'assemble_ready'
+  | 'rai_flagged'
+  | 'completed'
+  | 'failed';
+
+// coordinator.work_plan event payload.
+export interface WorkPlanSubtask {
+  id: string | number;
+  title: string;
+  assignedAgent?: string;
+  selectedModelId?: string;
+  phase?: string;
+  isolation?: string;
+  dependsOn?: number[];
+}
+
+export interface CoordinatorWorkPlan {
+  workPlanId: string;
+  status: string;
+  subtasks: WorkPlanSubtask[];
+}
+
+export type TopologyNodeKind = 'coordinator' | 'subtask';
+
+// A node in the coordinator.topology graph (snapshot node or delta-changed node).
+export interface TopologyNode {
+  id: string;
+  kind: TopologyNodeKind;
+  title: string;
+  status: string;
+  assignedAgent?: string;
+  selectedModelId?: string;
+  childRunId?: string;
+}
+
+// Dependency edge: from = dependency, to = dependent. Edges never change.
+export interface TopologyEdge {
+  from: string;
+  to: string;
+}
+
+// coordinator.topology snapshot (seq 0).
+export interface TopologySnapshot {
+  version: number;
+  seq: number;
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+}
+
+// coordinator.topology delta (seq > 0) — changed nodes merged by id.
+export interface TopologyDelta {
+  version: number;
+  seq: number;
+  changed: TopologyNode[];
+}
+
+// subtask.* event payload.
+export interface SubtaskEvent {
+  subtaskId: string;
+  childRunId?: string;
+  assignedAgent?: string;
+  selectedModelId?: string;
+  status: SubtaskStatus;
+}
+
+export type SteerKind = 'stop' | 'redirect' | 'amend';
+
+// POST /api/runs/{coordinatorRunId}/steer body.
+export interface SteerCoordinatorRequest {
+  kind: SteerKind;
+  targetChildRunId?: string;
+  instruction?: string;
+}
+
+// coordinator.steering event payload — steering directive state surfaced on a node.
+export interface SteeringDirective {
+  directiveId: string;
+  kind: SteerKind;
+  targetChildRunId?: string;
+  status: string;
+  instruction?: string;
+}

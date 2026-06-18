@@ -150,4 +150,17 @@ public static class EventTypes
     /// is dispatched (from = dependency, to = dependent). Edges never change after the snapshot.
     /// </summary>
     public const string CoordinatorTopology = "coordinator.topology";
+
+    /// <summary>
+    /// Emitted on the COORDINATOR run's stream whenever a human steering directive
+    /// (Feature 008 Phase 2) changes state, so the topology view can surface steering. Phase 2
+    /// supports <c>stop</c>, <c>redirect</c>, and <c>amend</c> only (<c>pause</c> is descoped).
+    /// Honest semantics: only <c>stop</c> reaches a child mid-turn (hard cancel, status jumps
+    /// straight to <c>applied</c>); <c>redirect</c>/<c>amend</c> are <c>queued</c> and take effect
+    /// at the target child's NEXT TURN BOUNDARY (queued -&gt; relayed -&gt; applied), never mid-turn.
+    /// Payload: { directiveId: int, kind: "stop"|"redirect"|"amend", targetChildRunId: string|null
+    ///   (null = broadcast to all active children), status: "pending"|"queued"|"relayed"|"applied",
+    ///   instruction: string }.
+    /// </summary>
+    public const string CoordinatorSteering = "coordinator.steering";
 }

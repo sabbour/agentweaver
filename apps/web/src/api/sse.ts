@@ -93,6 +93,16 @@ export type EventType =
   | 'coordinator.started'
   | 'coordinator.outcome_spec'
   | 'coordinator.outcome_spec.confirmed'
+  | 'coordinator.work_plan'
+  | 'coordinator.topology'
+  | 'coordinator.steering'
+  | 'subtask.dispatched'
+  | 'subtask.running'
+  | 'subtask.assemble_ready'
+  | 'subtask.rai_flagged'
+  | 'subtask.completed'
+  | 'subtask.failed'
+  | 'run.assemble_ready'
   | 'done'
   | 'error';
 

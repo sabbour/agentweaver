@@ -214,13 +214,17 @@ public sealed class RunOrchestrator
 
     /// <summary>
     /// Starts a fresh workflow execution against the SAME worktree for a revision cycle
-    /// (B3 / request-changes). Skips worktree creation — the existing worktree and branch
-    /// are reused so the agent builds on top of prior commits. The stream entry is reused
-    /// (or recreated if evicted) to preserve full event history for replay. The caller is
-    /// responsible for the CAS transition, checkpoint deletion, and audit row insertion
-    /// BEFORE invoking this method.
+    /// (B3 / request-changes, and Feature 008 Phase 2 child steering injection). Skips worktree
+    /// creation — the existing worktree and branch are reused so the agent builds on top of prior
+    /// commits. The stream entry is reused (or recreated if evicted) to preserve full event history
+    /// for replay. The caller is responsible for the CAS transition, checkpoint deletion, and audit
+    /// row insertion BEFORE invoking this method. When <paramref name="isChild"/> is true the
+    /// revised turn runs the TRIMMED coordinator child pipeline (agent + RAI, no review/merge/scribe
+    /// gate), matching how the child was originally launched via <see cref="StartChildRunAsync"/>;
+    /// this is the mechanism a queued <c>redirect</c>/<c>amend</c> steering directive uses to inject
+    /// the steered instruction at the child's next turn boundary.
     /// </summary>
-    public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct)
+    public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false)
     {
         if (string.IsNullOrEmpty(run.WorktreePath))
             throw new InvalidOperationException($"Run {run.Id} has no worktree path; cannot start revision.");
@@ -267,7 +271,7 @@ public sealed class RunOrchestrator
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.
         var runCts = new CancellationTokenSource();
-        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token).ConfigureAwait(false);
+        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token, isChild).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, generation, runCt);
     }
