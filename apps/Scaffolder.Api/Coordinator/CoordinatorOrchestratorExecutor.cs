@@ -350,6 +350,12 @@ public sealed class CoordinatorOrchestratorExecutor
     // Roster + model selection (Feature 005)
     // -----------------------------------------------------------------------
 
+    // Infrastructure/built-in agents that are exempt from subtask dispatch.
+    // CastMember has no IsBuiltIn flag, so we exclude by a case-insensitive denylist
+    // matched against member Name, Role.Id, and Role.Title.
+    private static readonly HashSet<string> BuiltInAgentDenyList =
+        new(StringComparer.OrdinalIgnoreCase) { "scribe", "ralph", "rai" };
+
     private IReadOnlyList<RosterCandidate> ResolveRoster(string repositoryPath)
     {
         try
@@ -360,6 +366,7 @@ public sealed class CoordinatorOrchestratorExecutor
 
             return team.Members
                 .Where(m => m.Status == CastMemberStatus.Active)
+                .Where(m => IsDispatchable(m.Name, m.Role?.Id, m.Role?.Title))
                 .Select(m => new RosterCandidate(
                     m.Name,
                     m.Role.Id,
@@ -374,6 +381,40 @@ public sealed class CoordinatorOrchestratorExecutor
             _logger.LogWarning(ex, "Coordinator orchestrate: failed to read team roster at {Path}", repositoryPath);
             return [];
         }
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> if a roster member is eligible for subtask dispatch.
+    /// Built-in infrastructure agents (Scribe, Ralph, Rai) are always excluded.
+    ///
+    /// A field matches a denylist token when the trimmed, lower-cased value either:
+    /// <list type="bullet">
+    ///   <item>equals the token exactly (e.g. "scribe" == "scribe"), or</item>
+    ///   <item>starts with the token and the next character is a non-letter
+    ///         (e.g. "Scribe (silent)" matches "scribe", but "Scribner" does NOT).</item>
+    /// </list>
+    /// </summary>
+    internal static bool IsDispatchable(string? name, string? roleId, string? roleTitle)
+    {
+        static bool MatchesDenyToken(string? field, string token)
+        {
+            if (string.IsNullOrWhiteSpace(field)) return false;
+            var norm = field.Trim().ToLowerInvariant();
+            if (norm == token) return true;
+            return norm.Length > token.Length
+                && norm.StartsWith(token, StringComparison.Ordinal)
+                && !char.IsLetter(norm[token.Length]);
+        }
+
+        foreach (var token in BuiltInAgentDenyList)
+        {
+            if (MatchesDenyToken(name, token)
+                || MatchesDenyToken(roleId, token)
+                || MatchesDenyToken(roleTitle, token))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>Maps a suggested role to the best-fit active roster member (FR-011), or null if the team is empty.</summary>
