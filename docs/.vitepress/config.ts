@@ -1,9 +1,16 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'Scaffolders',
+  title: 'Agentweaver',
   description: 'AI agent runs inside a sandboxed git worktree. You review before anything merges.',
   base: '/',
+  markdown: {
+    // Endpoint headings end in route params like `{id}`/`{path}`, which
+    // markdown-it-attrs otherwise parses as an (empty) attribute block and
+    // collides on a duplicate empty id. Disable attribute parsing — no doc
+    // relies on `{.class}`/`{#anchor}` syntax.
+    attrs: { disable: true },
+  },
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
@@ -25,10 +32,11 @@ export default defineConfig({
           text: 'Reference',
           items: [
             { text: 'API', link: '/reference/api' },
-            { text: 'CLI', link: '/reference/cli' },
+            { text: 'MCP server', link: '/reference/mcp' },
             { text: 'Web UI', link: '/reference/web' },
             { text: 'Events', link: '/reference/events' },
             { text: 'Coordinator', link: '/reference/coordinator' },
+            { text: 'Memory', link: '/reference/memory' },
           ],
         },
       ],

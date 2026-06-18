@@ -22,7 +22,7 @@ public sealed record SandboxPolicy
 
     /// <summary>
     /// Allow outbound network access inside the sandbox.
-    /// Default: false (blocked — safer default for scaffolders vs Copilot CLI which defaults to true).
+    /// Default: false (blocked — safer default for Agentweaver vs Copilot CLI which defaults to true).
     /// When true, passes <c>NetworkPolicy { AllowOutbound = true }</c> to the sandbox engine.
     /// </summary>
     public bool NetworkEnabled { get; init; } = false;

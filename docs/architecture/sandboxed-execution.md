@@ -1,10 +1,10 @@
 # Sandboxed execution
 
-This document describes the design of mxc-based sandboxed command execution in scaffolders — how the sandbox engine plugs into the existing governance and runner layers, how executor selection works, and the security model behind it.
+This document describes the design of mxc-based sandboxed command execution in Agentweaver — how the sandbox engine plugs into the existing governance and runner layers, how executor selection works, and the security model behind it.
 
 ## Overview
 
-Scaffolders originally permitted no shell execution. The governance policy categorically denied any `shell` tool call, and agents were restricted to path-contained in-process file operations.
+Agentweaver originally permitted no shell execution. The governance policy categorically denied any `shell` tool call, and agents were restricted to path-contained in-process file operations.
 
 This feature adds sandboxed shell execution by adopting Microsoft's `mxc` sandboxing engine. The key constraint is that `mxc` is an early preview and its own documentation says its profiles are not yet hardened security boundaries. It is therefore adopted as a **defense-in-depth layer only** — it augments the existing in-process path containment and deny-by-default governance, and never replaces them.
 
@@ -220,7 +220,7 @@ PATH is never consulted. Install `lxc-exec` at one of those locations before sta
 
 ### mxc is not a hardened security boundary
 
-The mxc project's own documentation states that profiles are not yet hardened security boundaries. Scaffolders adopts mxc as a defense-in-depth layer on top of the existing path containment and deny-by-default governance. mxc is not and must not be presented as the primary security layer.
+The mxc project's own documentation states that profiles are not yet hardened security boundaries. Agentweaver adopts mxc as a defense-in-depth layer on top of the existing path containment and deny-by-default governance. mxc is not and must not be presented as the primary security layer.
 
 ### Network allowlist enforcement on Windows
 

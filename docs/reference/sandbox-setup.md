@@ -4,7 +4,7 @@ This guide covers installing and configuring sandboxed execution for operators. 
 
 ## Security caveat
 
-`mxc` is an early preview. Its profiles are not yet hardened security boundaries. The sandbox is a defense-in-depth layer on top of scaffolders' existing path containment and deny-by-default governance. Do not rely on it as the sole security control.
+`mxc` is an early preview. Its profiles are not yet hardened security boundaries. The sandbox is a defense-in-depth layer on top of Agentweaver's existing path containment and deny-by-default governance. Do not rely on it as the sole security control.
 
 When the `processcontainer` backend is active on Windows, network allowlist enforcement is not available (see [Network allowlist gap](#network-allowlist-gap)).
 
@@ -34,7 +34,7 @@ Restart any terminals or services that need to pick up the variable.
 
 A response containing `"tier": "base-container"` or any tier other than an error confirms the binary is working. If the command fails, check that the path `C:\mxc-bin\arm64\wxc-exec.exe` exists.
 
-When scaffolders starts, it logs the selected executor. Look for a line like:
+When Agentweaver starts, it logs the selected executor. Look for a line like:
 
 ```
 SandboxExecutorFactory: selected MxcSandboxExecutor (processcontainer)
@@ -49,7 +49,7 @@ The Linux executor probes for `lxc-exec` at two absolute paths, in order:
 1. `/usr/local/bin/lxc-exec`
 2. `/usr/bin/lxc-exec`
 
-Install `lxc-exec` at one of those paths before starting the server. No environment variable is required. If neither path exists at startup, scaffolders falls back to `passthrough-deny` and shell commands are denied.
+Install `lxc-exec` at one of those paths before starting the server. No environment variable is required. If neither path exists at startup, Agentweaver falls back to `passthrough-deny` and shell commands are denied.
 
 ## Configuring sandbox policy
 
@@ -64,7 +64,7 @@ Each project's sandbox policy lives at `.agentweaver/settings.yml` in the projec
 sandbox:
   shell_enabled: true
   # Allow outbound network access inside the sandbox.
-  # Default: false. Scaffolders defaults to blocked for security;
+  # Default: false. Agentweaver defaults to blocked for security;
   # Copilot CLI defaults to true. Set to true only when agents need
   # external package downloads (e.g. npm install, go get).
   network_enabled: false

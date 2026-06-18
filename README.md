@@ -1,6 +1,6 @@
-# Scaffolders
+# Agentweaver
 
-Scaffolders runs an AI agent on a task inside a sandboxed git worktree, streams every step live, and waits for human review before anything merges.
+Agentweaver runs an AI agent on a task inside a sandboxed git worktree, streams every step live, and waits for human review before anything merges.
 
 Read the docs: [docs/index.md](docs/index.md)
 
@@ -8,7 +8,7 @@ Read the docs: [docs/index.md](docs/index.md)
 
 ```powershell
 dotnet run --project apps/Agentweaver.Api
-dotnet run --project apps/Agentweaver.Cli -- run submit
+dotnet run --project apps/Agentweaver.Mcp
 npm --prefix apps/web install
 npm --prefix apps/web run dev
 ```
@@ -17,5 +17,5 @@ npm --prefix apps/web run dev
 
 - [Getting started](docs/guide/getting-started.md)
 - [API reference](docs/reference/api.md)
-- [CLI reference](docs/reference/cli.md)
+- [MCP server reference](docs/reference/mcp.md)
 - [Architecture overview](docs/architecture/overview.md)
