@@ -98,6 +98,9 @@ export const ExecutionModalContext = createContext<((executionId: string) => voi
 /** WorkflowRunPage: id of the active loopback edge (highlighted in blue). */
 export const ActiveEdgeContext = createContext<string | undefined>(undefined);
 
+/** CoordinatorRunPage: open/scroll to the all-up orchestration session panel. */
+export const CoordinatorSessionContext = createContext<(() => void) | undefined>(undefined);
+
 // ---------------------------------------------------------------------------
 // Role → icon / description helpers (exported so pages can build node data)
 // ---------------------------------------------------------------------------
@@ -428,6 +431,7 @@ export function WorkflowNode({ data }: NodeProps) {
   const { status, startedAt, completedAt, intent, message } = state;
 
   const openModal = useContext(ExecutionModalContext);
+  const openSession = useContext(CoordinatorSessionContext);
 
   const effectiveStatus: StepStatus =
     key === 'agent' && status === 'completed' && (runOutcome?.achieved === false || runDegraded !== undefined)
@@ -505,6 +509,13 @@ export function WorkflowNode({ data }: NodeProps) {
         </div>
       </div>
 
+      {key === 'coordinator' && !isPlanned && openSession && (
+        <div className={`${s.cardActions} nopan nodrag`}>
+          <Button appearance="outline" size="small" onClick={() => openSession()}>
+            View session
+          </Button>
+        </div>
+      )}
       {key === 'agent' && !isPlanned && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>
@@ -723,4 +734,18 @@ export function forwardEdge(id: string, source: string, target: string, animated
 
 export function loopbackEdge(id: string, source: string, target: string, label: string): Edge {
   return { id, source, target, type: 'loopback', label };
+}
+
+// Derive a human-readable label for a coordinator-level loopback back-edge from the SOURCE
+// node's role (falling back to its id) so it is robust across descriptor id schemes. Tank adds
+// two coordinator loopbacks: rai→coordinator (re-dispatch on RAI flags) and review→coordinator
+// (request changes). GraphEdge carries no label field, so the renderer computes it here.
+export function coordinatorLoopbackLabel(sourceRole: string | undefined, sourceId: string | undefined): string {
+  const role = (sourceRole ?? '').toLowerCase();
+  if (role.includes('rai'))    return 'RAI flags';
+  if (role.includes('review')) return 'Request changes';
+  const id = (sourceId ?? '').toLowerCase();
+  if (id.includes('rai'))    return 'RAI flags';
+  if (id.includes('review')) return 'Request changes';
+  return 'Rework';
 }

@@ -18,6 +18,8 @@ vi.mock('../api/apiClient', () => ({
     getWorkPlan: vi.fn(),
     getCoordinatorChildren: vi.fn(),
     steerCoordinator: vi.fn(),
+    reviewAssembly: vi.fn(),
+    getRun: vi.fn(),
     // OutcomeSpecPanel uses these — return empty/null to avoid noise.
     getOutcomeSpec: vi.fn(),
   },
@@ -53,6 +55,8 @@ beforeEach(() => {
   vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR);
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
 });
 
 afterEach(() => cleanup());

@@ -57,6 +57,14 @@ export interface RunDetail {
   // dispatched CHILD of a coordinator (trimmed agent → RAI → assemble-ready pipeline).
   parent_run_id?: string | null;
   subtask_id?: string | null;
+  // GET /api/runs/{id} also carries the cast agent name for a child run (the list
+  // endpoint omits child runs entirely). Optional — absent on plain runs.
+  agent_name?: string | null;
+  // Feature 008 Phase 3 — orchestration lifecycle string surfaced on a coordinator
+  // run (dispatching | awaiting_assembly | assembling | in_review | complete | failed).
+  // Added by the backend concurrently; treat as optional and degrade gracefully.
+  coordinator_status?: string | null;
+  coordinator_status_reason?: string | null;
 }
 
 // GET /api/runs/{id}/events — persisted append-only event log (FR-022). Used to seed
@@ -188,6 +196,10 @@ export interface WorkflowRunDto {
   started_at: string;
   ended_at?: string;
   model_id?: string;
+  // Feature 008 Phase 3 — orchestration lifecycle for a coordinator run. Optional;
+  // present only once the backend adds it, so render the bare status as a fallback.
+  coordinator_status?: string;
+  coordinator_status_reason?: string;
 }
 
 export interface DecisionDto {
@@ -591,4 +603,13 @@ export interface SteeringDirective {
   targetChildRunId?: string;
   status: string;
   instruction?: string;
+}
+
+// POST /api/runs/{coordinatorRunId}/assembly/review body — the collective human review
+// over the assembled integration output (approve / request_changes / decline).
+export type AssemblyReviewDecision = 'approve' | 'request_changes' | 'decline';
+
+export interface AssemblyReviewRequest {
+  decision: AssemblyReviewDecision;
+  comment?: string;
 }

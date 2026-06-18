@@ -113,4 +113,34 @@ describe('WorkflowRunPage child run graph', () => {
     expect(text).not.toContain('Human Review');
     expect(text).not.toContain('Session Logger');
   });
+
+  it('loads a coordinator child that is absent from getProjectRuns via the getRun fallback', async () => {
+    // The server excludes child runs from the project list (parent_run_id IS NULL filter),
+    // so getProjectRuns has no match. The page must fall back to GET /api/runs/{id}.
+    vi.mocked(apiClient.getProjectRuns).mockResolvedValue([]);
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'child-1',
+      status: 'parked',
+      model_source: 'github-copilot',
+      agent_name: 'Trinity',
+      parent_run_id: 'coord-1',
+      subtask_id: '3',
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+
+    render(<Wrapper><WorkflowRunPage /></Wrapper>);
+
+    // executionId resolves to runId → the trimmed child pipeline renders (no infinite spinner).
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Assemble-ready'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Awaiting collective assembly');
+    // getRun was called with the route runId (the child run id), not an execution id.
+    expect(vi.mocked(apiClient.getRun)).toHaveBeenCalledWith('child-1');
+    // Full-pipeline nodes must never appear for a child.
+    expect(text).not.toContain('Merge Coordinator');
+    expect(text).not.toContain('Session Logger');
+  });
 });

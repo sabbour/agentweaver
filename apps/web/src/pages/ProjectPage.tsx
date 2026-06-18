@@ -30,6 +30,23 @@ import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog
 import { isCoordinatorRun } from '../utils/runKind';
 import type { CreateRunRequest, Project, WorkflowRunDto, TeamMemberDto } from '../api/types';
 
+// Map a coordinator orchestration status (Feature 008) to a human label. Optional —
+// the backend adds coordinator_status concurrently, so callers fall back to the bare
+// RunStatus when it is absent.
+function coordinatorStatusLabel(status: string | undefined): string | undefined {
+  if (!status) return undefined;
+  const k = status.toLowerCase().replace(/[^a-z]/g, '');
+  if (k.includes('awaitingassembly')) return 'Awaiting assembly';
+  if (k.includes('assembling')) return 'Assembling';
+  if (k.includes('inreview')) return 'In review';
+  if (k.includes('dispatch')) return 'Dispatching';
+  if (k.includes('complete')) return 'Complete';
+  if (k.includes('declin')) return 'Declined';
+  if (k.includes('block')) return 'Blocked';
+  if (k.includes('fail')) return 'Failed';
+  return status;
+}
+
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -231,6 +248,9 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
 
   const isTerminal = ['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status);
   const isAbandonable = !isTerminal;
+  const isCoord = isCoordinatorRun(run);
+  const coordLabel = isCoord ? coordinatorStatusLabel(run.coordinator_status) : undefined;
+  const coordReason = run.coordinator_status_reason;
 
   const handleConfirmed = async () => {
     setConfirmOpen(false);
@@ -247,6 +267,16 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
 
   return (
     <div className={styles.runRow}>
+      {coordLabel ? (
+        <Badge appearance="tint" color={
+          coordLabel === 'Complete' ? 'success' :
+          coordLabel === 'Failed' || coordLabel === 'Blocked' || coordLabel === 'Declined' ? 'danger' :
+          coordLabel === 'In review' || coordLabel === 'Awaiting assembly' ? 'warning' :
+          'informative'
+        }>
+          {coordLabel === 'Failed' && coordReason ? `Failed: ${coordReason}` : coordLabel}
+        </Badge>
+      ) : (
       <Badge appearance="tint" color={
         run.status === 'merged' ? 'success' :
         run.status === 'completed' && run.result === 'no_changes' ? 'informative' :
@@ -265,9 +295,10 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
          run.status === 'merging' ? 'Merging' :
          run.status}
       </Badge>
+      )}
       <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
-      {isCoordinatorRun(run) ? (
+      {isCoord ? (
         <Link to={`/projects/${projectId}/orchestrations/${run.workflow_run_id ?? run.execution_id}`} style={{ textDecoration: 'none' }}>
           <Button appearance="secondary">Topology</Button>
         </Link>

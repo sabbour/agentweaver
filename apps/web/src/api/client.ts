@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewRequest } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -274,6 +274,13 @@ export class AgentweaverApiClient {
 
   getCoordinatorChildren(coordinatorRunId: string): Promise<CoordinatorChildResponse[]> {
     return this.request<CoordinatorChildResponse[]>('GET', `/api/runs/${encodeURIComponent(coordinatorRunId)}/children`);
+  }
+
+  // Collective human review over the assembled integration output (Feature 008 Phase 3).
+  // The backend adds this endpoint concurrently; the client codes against the agreed
+  // contract (approve / request_changes / decline + optional comment).
+  reviewAssembly(coordinatorRunId: string, req: AssemblyReviewRequest): Promise<void> {
+    return this.request<void>('POST', `/api/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, req);
   }
 
   // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller

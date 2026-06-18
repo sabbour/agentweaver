@@ -118,6 +118,15 @@ const usePageStyles = makeStyles({
       borderRadius: '8px',
     },
   },
+  dagLoading: {
+    height: '520px',
+    borderRadius: '8px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -213,40 +222,65 @@ export function WorkflowRunPage() {
     if (!projectId || !runId) return;
     let cancelled = false;
 
+    // Resolve the team member's role title by cast name (best-effort).
+    const applyRoleTitle = (name: string | undefined, teamData: TeamDto) => {
+      if (!name) return;
+      const member = teamData.members.find(
+        m => m.name.toLowerCase() === name.toLowerCase()
+      );
+      if (member) setAgentRoleTitle(member.role_title);
+    };
+
     Promise.all([
       apiClient.getProjectRuns(projectId),
       apiClient.getTeam(projectId),
     ]).then(async ([runs, teamData]) => {
         if (cancelled) return;
-        const run = runs.find((r) => r.workflow_run_id === runId);
-        const name = run?.agent_name ?? undefined;
-        setAgentName(name);
-        setRunStatus(run?.status       ?? undefined);
-        setReviewedBy(run?.reviewed_by ?? undefined);
-        setExecutionId(run?.execution_id ?? undefined);
-        setModelId(run?.model_id ?? undefined);
         setTeam(teamData);
+        const run = runs.find((r) => r.workflow_run_id === runId);
 
-        // Look up the team member by cast name to get their role title
-        if (name) {
-          const member = teamData.members.find(
-            m => m.name.toLowerCase() === name.toLowerCase()
-          );
-          if (member) setAgentRoleTitle(member.role_title);
+        if (run) {
+          const name = run.agent_name ?? undefined;
+          setAgentName(name);
+          setRunStatus(run.status       ?? undefined);
+          setReviewedBy(run.reviewed_by ?? undefined);
+          setExecutionId(run.execution_id ?? undefined);
+          setModelId(run.model_id ?? undefined);
+          applyRoleTitle(name, teamData);
+
+          // Fetch the run detail (GET /api/runs/{id}) to learn whether this is a coordinator
+          // child (parent_run_id) and to get the authoritative terminal status. The list
+          // endpoint above does not carry parent_run_id.
+          const execId = run.execution_id;
+          if (execId) {
+            try {
+              const detail = await apiClient.getRun(execId);
+              if (cancelled) return;
+              setParentRunId(detail.parent_run_id ?? undefined);
+              if (detail.status) setRunStatus(detail.status);
+            } catch { /* parent_run_id unavailable — treat as a non-child run */ }
+          }
+          return;
         }
 
-        // Fetch the run detail (GET /api/runs/{id}) to learn whether this is a coordinator
-        // child (parent_run_id) and to get the authoritative terminal status. The list
-        // endpoint above does not carry parent_run_id.
-        const execId = run?.execution_id;
-        if (execId) {
-          try {
-            const detail = await apiClient.getRun(execId);
-            if (cancelled) return;
-            setParentRunId(detail.parent_run_id ?? undefined);
-            if (detail.status) setRunStatus(detail.status);
-          } catch { /* parent_run_id unavailable — treat as a non-child run */ }
-        }
+        // FIX (coordinator child View-run) — the run is NOT in the project list because
+        // the server filters that list to parent runs (parent_run_id IS NULL). A child
+        // run is reachable via GET /api/runs/{id}, which returns parent_run_id, status,
+        // agent_name and model_source. For a child, the child RunId IS the stream/graph
+        // key, so set executionId = runId directly (mirrors the inline expand in
+        // CoordinatorRunPage). Without this the page never resolved executionId and span
+        // forever on a Pending full pipeline.
+        try {
+          const detail = await apiClient.getRun(runId);
+          if (cancelled) return;
+          const name = detail.agent_name ?? undefined;
+          setExecutionId(runId);
+          setParentRunId(detail.parent_run_id ?? undefined);
+          setRunStatus(detail.status ?? undefined);
+          setAgentName(name);
+          setModelId(detail.model_source ?? undefined);
+          applyRoleTitle(name, teamData);
+        } catch { /* run not resolvable — leave executionId unset */ }
       })
       .catch(() => { /* non-fatal */ })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -600,6 +634,15 @@ export function WorkflowRunPage() {
       {/* React Flow diagram wrapped in contexts so WorkflowNode can open the modal and arc highlighting works */}
       <ExecutionModalContext.Provider value={openExecutionModal}>
       <ActiveEdgeContext.Provider value={activeLoopbackId}>
+        {/* While the run detail is still resolving we do NOT know whether this is a coordinator
+            child yet. Rendering the graph here would flash the full agent→…→scribe placeholder
+            for a child run (whose real pipeline is the trimmed agent→RAI→assemble-ready). Show a
+            loading state until child-ness is known, then render the correct (trimmed or full) graph. */}
+        {loading ? (
+          <div className={styles.dagLoading} aria-label="Loading run graph" aria-busy="true">
+            <Spinner size="small" label="Loading run…" />
+          </div>
+        ) : (
         <div className={styles.dagContainer}>
           <ReactFlow
             nodes={rfNodes}
@@ -621,6 +664,7 @@ export function WorkflowRunPage() {
             proOptions={{ hideAttribution: true }}
           />
         </div>
+        )}
       </ActiveEdgeContext.Provider>
       </ExecutionModalContext.Provider>
 

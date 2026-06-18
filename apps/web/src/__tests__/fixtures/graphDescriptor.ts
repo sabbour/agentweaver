@@ -75,3 +75,19 @@ export const COORDINATOR_GRAPH_DESCRIPTOR: GraphDescriptor = {
   ],
 };
 
+/**
+ * Coordinator-variant descriptor WITH the two coordinator-level loopback back-edges Tank adds:
+ * the RAI gate and the Human Review gate can each send the collective output back to the
+ * coordinator for re-dispatch. GraphEdge has no label field — the renderer derives the label
+ * from the SOURCE node's role (rai vs review).
+ */
+export const COORDINATOR_GRAPH_DESCRIPTOR_LOOPBACKS: GraphDescriptor = {
+  ...COORDINATOR_GRAPH_DESCRIPTOR,
+  graph_id: 'coordinator:coord-run-loopbacks',
+  edges: [
+    ...COORDINATOR_GRAPH_DESCRIPTOR.edges,
+    { from: 'planned:assembly-rai',    to: 'coordinator', cardinality: 'direct', loopback: true },
+    { from: 'planned:assembly-review', to: 'coordinator', cardinality: 'direct', loopback: true },
+  ],
+};
+

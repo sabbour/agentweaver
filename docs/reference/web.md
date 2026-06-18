@@ -59,6 +59,8 @@ The details section shows the project name, origin, source repository (for GitHu
 
 The run list shows each run's id, status, and start time. Status badges show human-friendly labels: `No Changes`, `Completed`, `Merged`, `Failed`, `Merge Failed`, `Declined`, `Running`, and `Awaiting Review`. The `No Changes` label uses an informative (blue) badge to distinguish it from a full merge. Clicking a run navigates to the workflow run page for that run.
 
+Coordinator runs (detected via `isCoordinatorRun`) instead show their **orchestration status** label when the optional `coordinator_status` field is present — `Dispatching`, `Awaiting assembly`, `In review`, `Assembling`, `Complete`, `Failed`, `Blocked`, or `Declined` (a `Failed` badge appends `coordinator_status_reason` when available). When the field is absent the bare run status is shown. Coordinator rows link to the orchestration topology page via the **Topology** button; other runs link to the **Workflow** page.
+
 The start-run dialog collects:
 
 - **Task** — required description for the agent
@@ -118,6 +120,13 @@ The confirm/revise gate is the safety property of the Phase 1 flow: no dispatch 
 
 Once the outcome spec is confirmed, the coordinator run page renders a **unified dynamic graph** using the same generic `WorkflowNode` renderer as the workflow run page. This single graph shows the coordinator node, all subtask nodes, and the planned assembly pipeline in one React Flow canvas — replacing the previous separate topology view.
 
+#### Page layout
+
+The coordinator run page uses a **two-column layout** (Fluent `makeStyles` grid, `minmax(320px, 420px) 1fr`, stacking to a single column below 980px):
+
+- **Left column** — the **Outcome spec** in its own scroll container (bounded height, `overflow-y: auto`), so a long spec scrolls independently of the topology.
+- **Right column** — the **execution topology** (React Flow canvas), the **assembly-review affordance**, and the **coordinator session** panel with the steering chat box.
+
 #### Graph data flow
 
 The graph seeds from `GET /api/runs/{coordinatorRunId}/graph`, which returns a `GraphDescriptor` with `variant: "coordinator"`. Live `coordinator.graph` SSE snapshots (highest `seq` wins) are applied on top; the REST snapshot is used as-is for finished/parked runs where the SSE stream is closed.
@@ -129,13 +138,41 @@ The coordinator-variant descriptor contains:
 
 Subtask status is projected from topology and run events by mapping the subtask node id (`plan:subtask-{n}`) to the topology node id (`subtask-{n}`) by stripping the `plan:` prefix.
 
+#### Coordinator loopback edges
+
+The coordinator descriptor may include **loopback back-edges** (`loopback: true`) from the assembly RAI gate and Human Review gate back to the coordinator node — representing a re-dispatch when the collective output is flagged or changes are requested. `GraphEdge` has no `label` field, so the renderer derives a visible label from the **source node's role** (falling back to its id) via `coordinatorLoopbackLabel`: a RAI source is labelled **"RAI flags"** and a review source **"Request changes"** (unknown sources get a generic **"Rework"** so the back-edge is never unlabelled). These render with the same dashed/curved back-edge styling as the per-run loopbacks. The logic is robust to descriptors with zero loopbacks (older runs simply have no back-edges).
+
+
 #### Subtask node expansion
 
 Subtask nodes (`node_type: "subtask"`) are expandable cards. Each shows the assigned agent, selected model, phase, and a status badge. When a subtask has a `child_graph_ref` (i.e. the coordinator has dispatched that subtask to a child run), clicking **Expand pipeline** fetches the child run's `GraphDescriptor` from `GET /api/runs/{childRunId}/graph` and simultaneously subscribes to the child run's live SSE stream. The inline panel then renders the child pipeline as a horizontal row of node cards — one per node in the child descriptor — connected by arrow separators. Each inline card shows the same status badge, elapsed timer, role text, and optional status message as the full workflow graph. If the descriptor is not yet available (fetch in-flight), a hardcoded fallback pipeline (Agent → Rai → Assemble-ready) is shown immediately while the fetch completes.
 
 The SSE subscription for each inline child graph is scoped to the expansion: it starts when the subtask is expanded and tears down when collapsed. At most one child run is subscribed per open panel; no background subscriptions are held for collapsed subtasks.
 
-A **View run** link navigates to the child run's full workflow page.
+While a subtask is expanded, the parent subtask card header also shows an **aggregate elapsed time** — the sum of the child pipeline steps' durations (each step's `completedAt − startedAt`, or `now − startedAt` while still running). It ticks live (1s) when any child step is in progress and is labelled `aria-label="Total child elapsed"`.
+
+A **View run** link navigates to the child run's full workflow page (see [Child run View-run resolution](#child-run-view-run-resolution)).
+
+#### Coordinator node and orchestration status
+
+The coordinator node's status reflects the **orchestration lifecycle** rather than a stale `pending`. The lifecycle phase is derived (in priority order) from live `coordinator.assembly_*` events, then the optional `coordinator_status` field on the run summary / run detail, then the work-plan status — all read defensively so the page degrades gracefully whether or not those backend fields are present. The phase is mapped to `running` / `completed` / `failed` for the node badge and shown as a label (`Dispatching`, `Awaiting assembly`, `Assembling`, `In review`, `Complete`, `Failed`, `Blocked`, `Declined`) next to the graph title.
+
+The coordinator node also carries a **View session** button that scrolls to the coordinator session panel (provided via `CoordinatorSessionContext`).
+
+#### Coordinator session panel and steering chat box
+
+The right column hosts an all-up **Coordinator session** panel:
+
+- A **timeline** derived from the coordinator's own event stream — `coordinator.started` (goal), outcome spec confirmed, work plan ready, each `subtask.*` transition, `coordinator.children_complete`, and the `coordinator.assembly_*` milestones — each with a relative elapsed offset from the first timestamped milestone.
+- A persistent **steering chat box** (a text area + **Send** button, plus quick **Redirect** and **Stop** affordances) that submits free-form steering via `POST /api/runs/{id}/steer` (default `kind: "amend"`) **without** opening a dialog. Queued/applied steering directives from `coordinator.steering` events are listed below the box.
+
+#### Assembly-review affordance
+
+When the orchestration reaches the collective human-review stage, the page presents a clear next action instead of a bare status:
+
+- **`awaiting_assembly` / `assembling`** — an "Assembling collective output…" panel with a spinner.
+- **`in_review`** (or a `coordinator.assembly_review_requested` event) — an **Assembly review** panel that surfaces the integration diff/summary (read from the event payload's `diff` / `summary` / `treeHash` fields) and **Approve** / **Request changes** / **Decline** buttons. These POST to `POST /api/runs/{coordinatorRunId}/assembly/review` via `apiClient.reviewAssembly(runId, { decision, comment? })`. A comment is required for request-changes and decline.
+- **`failed` / `blocked` / `declined`** — the human-readable **reason** (from the `coordinator.assembly_failed`/`blocked`/`declined` event payload or `coordinator_status_reason`) plus guidance that the subtasks are parked and can be redirected/amended via the steering chat box. The stuck state never renders a bare "Failed" with no explanation.
 
 #### Steering bar
 
@@ -145,7 +182,7 @@ A page-level steering bar sits above the React Flow canvas. Three buttons are al
 - **Redirect** — opens a dialog to enter an instruction; sends `{ kind: "redirect", instruction: "..." }`
 - **Amend** — opens a dialog to enter an instruction; sends `{ kind: "amend", instruction: "..." }`
 
-The steering bar is always visible on the coordinator run page even for finished runs (buttons remain rendered; the API will reject the call if the run is not active).
+The steering bar is always visible on the coordinator run page even for finished runs (buttons remain rendered; the API will reject the call if the run is not active). The same steering actions are also available inline on the page via the steering chat box (no dialog required) — see [Coordinator session panel and steering chat box](#coordinator-session-panel-and-steering-chat-box).
 
 ### Watch a run
 
@@ -159,7 +196,16 @@ The workflow run page (`/projects/:projectId/runs/:runId/workflow`) shows a live
 - An **elapsed timer** that ticks live from the `started` event's `timestamp_utc` until the corresponding `completed`/`failed` event
 - An optional **status message line** — when the backend emits a `workflow.step` event with a `message` field, that text is rendered below the role description in a muted colour. It takes priority over the hardcoded fallback description; omitting `message` restores the default text.
 
-For coordinator child runs (runs with a non-null `parent_run_id`), the page renders a trimmed three-node pipeline: Agent → Rai → Assemble-ready. Human Review, Merge, and Scribe are never shown on a child run — they execute once on the collective output at the coordinator level. This trimming is enforced defensively: if a full-variant `GraphDescriptor` somehow arrives for a child run (e.g., a stale cache entry), the page discards it and falls back to the hardcoded child pipeline.
+For coordinator child runs (runs with a non-null `parent_run_id`), the page renders a trimmed three-node pipeline: Agent → Rai → Assemble-ready. Human Review, Merge, and Scribe are never shown on a child run — they execute once on the collective output at the coordinator level. This trimming is enforced defensively in two ways: (1) the page renders a **loading spinner** (not any graph) until the run detail resolves and child-ness is known, so a child run never flashes the full Agent → … → Scribe placeholder before the trimmed pipeline is selected; and (2) if a full-variant `GraphDescriptor` somehow arrives for a child run (e.g., a stale cache entry), the page discards it and falls back to the hardcoded child pipeline.
+
+#### Child run View-run resolution
+
+The workflow run page resolves a run by first looking it up in `GET /api/projects/{id}/runs`. That list **excludes coordinator child runs** (the server filters it to parent runs, `parent_run_id IS NULL`). When the route's run id is not found in the list, the page falls back to `GET /api/runs/{id}` (`apiClient.getRun`), which **does** return child runs, and resolves:
+
+- `executionId = runId` directly — for a child run the child RunId is itself the stream/graph key (the same key the inline subtask expansion uses), so it drives `getRunGraph(runId)` and `useRunStream(runId)`;
+- `parentRunId` from `parent_run_id` (so `isChild` trims the pipeline), `runStatus` from `status`, `agentName` from `agent_name`, and the model from `model_source`.
+
+Without this fallback the child "View run" link previously left `executionId` unset, so the page spun forever on an all-"Pending" full pipeline. The trimmed child pipeline plus the persisted-events seed (`SEED_STATUSES`) then render the child's live/terminal status.
 
 #### Run header
 
