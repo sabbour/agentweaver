@@ -10,6 +10,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getTeam: vi.fn(),
     getTemplates: vi.fn(),
+    getProject: vi.fn(),
     getMemberCharter: vi.fn(),
     updateMemberCharter: vi.fn(),
     addMember: vi.fn(),
@@ -41,10 +42,12 @@ function renderWithRouter(projectId: string) {
 
 const getTeamMock = () => vi.mocked(apiClient.getTeam);
 const getTemplatesMock = () => vi.mocked(apiClient.getTemplates);
+const getProjectMock = () => vi.mocked(apiClient.getProject);
 
 beforeEach(() => {
   vi.clearAllMocks();
   getTemplatesMock().mockResolvedValue([] as TeamTemplateDto[]);
+  getProjectMock().mockRejectedValue(new Error('not needed'));
 });
 
 afterEach(() => {
@@ -104,7 +107,8 @@ describe('TeamPage', () => {
 
     expect(screen.getByText('Backend Engineer')).toBeDefined();
     expect(screen.getByText('Frontend Engineer')).toBeDefined();
-    expect(screen.getByText('active')).toBeDefined();
-    expect(screen.getByText('retired')).toBeDefined();
+    // Status is reflected in the filter tabs, not as raw text in the card
+    expect(screen.getByRole('tab', { name: /Active/ })).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Retired/ })).toBeDefined();
   });
 });

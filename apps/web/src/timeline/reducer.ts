@@ -394,7 +394,8 @@ function processEvent(
       return { ...s, items: [...s.items, { kind: 'lifecycle', event }] };
     }
 
-    // Workflow-orchestration events: consumed by WorkflowRunPage, not the Watch page.
+    // Workflow-lifecycle events: surface as lifecycle cards in the timeline so every
+    // event type is rendered live (Constitution Principle V).
     case 'review.requested':
     case 'review.approved':
     case 'review.declined':
@@ -402,6 +403,9 @@ function processEvent(
     case 'revision.started':
     case 'merge.completed':
     case 'merge.failed':
+      return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
+
+    // Internal orchestration step — not surfaced as a user-visible card.
     case 'workflow.step':
       return state;
 

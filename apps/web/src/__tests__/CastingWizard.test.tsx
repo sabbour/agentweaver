@@ -5,7 +5,7 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { type ReactNode } from 'react';
 import { CastingWizardPage } from '../pages/CastingWizardPage';
-import type { TeamTemplateDto, CastProposalDto } from '../api/types';
+import type { TeamTemplateDto } from '../api/types';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -38,7 +38,6 @@ function renderWithRouter(projectId: string) {
 }
 
 const getTemplatesMock = () => vi.mocked(apiClient.getTemplates);
-const createProposalMock = () => vi.mocked(apiClient.createProposal);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -52,16 +51,19 @@ afterEach(() => {
 });
 
 describe('CastingWizardPage', () => {
-  it('renders mode selection step by default', () => {
+  it('renders cast step with tabs by default', () => {
     renderWithRouter('proj-001');
 
-    expect(screen.getByText('Choose casting mode')).toBeDefined();
-    expect(screen.getByText(/Team template/)).toBeDefined();
-    expect(screen.getByText(/Describe a goal/)).toBeDefined();
-    expect(screen.getByText(/Analyze project/)).toBeDefined();
+    expect(screen.getByText('Cast a team')).toBeDefined();
+    expect(screen.getByText(/1\. Cast/)).toBeDefined();
+    expect(screen.getByText(/2\. Review proposal/)).toBeDefined();
+    expect(screen.getByText(/3\. Confirm/)).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Formulate/ })).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Template/ })).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Analyze/ })).toBeDefined();
   });
 
-  it('navigates to configure step when Next is clicked', async () => {
+  it('Template tab shows available templates', async () => {
     const templates: TeamTemplateDto[] = [
       {
         id: 'grp-1',
@@ -75,15 +77,14 @@ describe('CastingWizardPage', () => {
     const user = userEvent.setup();
     renderWithRouter('proj-002');
 
-    const nextButton = screen.getByRole('button', { name: 'Next' });
-    await user.click(nextButton);
+    await user.click(screen.getByRole('tab', { name: /Template/ }));
 
     await waitFor(() => {
-      expect(screen.getByText('Configure')).toBeDefined();
+      expect(screen.getByText('Web App Team')).toBeDefined();
     });
   });
 
-  it('shows scenario list on configure step for scenario mode', async () => {
+  it('selecting a template card enables the Review button', async () => {
     const templates: TeamTemplateDto[] = [
       {
         id: 'grp-1',
@@ -97,35 +98,41 @@ describe('CastingWizardPage', () => {
     const user = userEvent.setup();
     renderWithRouter('proj-003');
 
-    const nextButton = screen.getByRole('button', { name: 'Next' });
-    await user.click(nextButton);
+    await user.click(screen.getByRole('tab', { name: /Template/ }));
 
     await waitFor(() => {
       expect(screen.getByText('Web App Team')).toBeDefined();
-      expect(screen.getByText('Frontend, backend, and devops roles')).toBeDefined();
+    });
+
+    const reviewBefore = screen.getByRole('button', { name: 'Review' });
+    expect(
+      reviewBefore.hasAttribute('disabled') ||
+      reviewBefore.getAttribute('aria-disabled') === 'true',
+    ).toBe(true);
+
+    await user.click(screen.getByText('Web App Team'));
+
+    await waitFor(() => {
+      const reviewBtn = screen.getByRole('button', { name: 'Review' });
+      expect(
+        !reviewBtn.hasAttribute('disabled') && reviewBtn.getAttribute('aria-disabled') !== 'true',
+      ).toBe(true);
     });
   });
 
-  it('disables Next on configure step until scenario is selected', async () => {
+  it('Review button is disabled by default when no cast action has been completed', async () => {
     const templates: TeamTemplateDto[] = [
       { id: 'grp-1', title: 'Web App Team', description: 'A team', roles: [] },
     ];
     getTemplatesMock().mockResolvedValue(templates);
-    createProposalMock().mockResolvedValue({} as CastProposalDto);
 
-    const user = userEvent.setup();
     renderWithRouter('proj-004');
 
-    await user.click(screen.getByRole('button', { name: 'Next' }));
-
     await waitFor(() => {
-      expect(screen.getByText('Web App Team')).toBeDefined();
+      const btn = screen.getByRole('button', { name: 'Review' });
+      expect(
+        btn.hasAttribute('disabled') || btn.getAttribute('aria-disabled') === 'true',
+      ).toBe(true);
     });
-
-    const nextBtn = screen.getByRole('button', { name: 'Next' });
-    expect(
-      nextBtn.hasAttribute('disabled') ||
-      nextBtn.getAttribute('aria-disabled') === 'true',
-    ).toBe(true);
   });
 });
