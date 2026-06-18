@@ -41,6 +41,13 @@ const useStyles = makeStyles({
     flexGrow: 1,
   },
   badge: { flexShrink: 0 },
+  // agent.intent renders with the SAME subtle treatment as the "Used N tools"
+  // cluster header (muted foreground, compact) — no card, icon, or badge chrome.
+  intentAnnotation: {
+    padding: '1px 0',
+    color: tokens.colorNeutralForeground3,
+    wordBreak: 'break-word',
+  },
 
   // truncated comment text (max 3 lines)
   changesRequestedComment: {
@@ -822,13 +829,10 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
   if (event.type === 'agent.intent') {
     const intent = event.payload['intent'] ? String(event.payload['intent']) : '';
     if (!intent) return null;
+    // SECURITY (Y-3): intent rendered as escaped text — no HTML interpretation.
+    // Styled to match the muted "Used N tools" cluster header, per user request.
     return (
-      <div className={styles.card}>
-        <CodeRegular className={styles.subtleIcon} aria-hidden="true" />
-        <Badge className={styles.badge} color="subtle" shape="rounded" size="small">intent</Badge>
-        {/* SECURITY (Y-3): intent rendered as escaped text — no HTML interpretation */}
-        <Text className={styles.summary}>{intent}</Text>
-      </div>
+      <Text size={100} className={styles.intentAnnotation}>{intent}</Text>
     );
   }
 
