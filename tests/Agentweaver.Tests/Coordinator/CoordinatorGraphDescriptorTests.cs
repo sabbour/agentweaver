@@ -149,8 +149,54 @@ public sealed class CoordinatorGraphDescriptorTests
         edges.Should().Contain(("planned:assembly-review", "planned:assembly-merge"));
         edges.Should().Contain(("planned:assembly-merge", "planned:assembly-scribe"));
 
-        // The coordinator graph is a DAG — no loopbacks.
-        d.Edges.Should().OnlyContain(e => e.Loopback == false);
+        // Loopback edges: RAI and human review both flow back to the coordinator (re-dispatch).
+        edges.Should().Contain(("planned:assembly-rai", "coordinator"));
+        edges.Should().Contain(("planned:assembly-review", "coordinator"));
+    }
+
+    [Fact]
+    public void Build_AddsRaiAndReviewLoopbacks_WithoutDistortingForwardCardinality()
+    {
+        var (subtasks, deps) = SamplePlan();
+
+        var d = CoordinatorGraphDescriptor.Build("coord_run", subtasks, deps);
+
+        // Exactly two loopback edges exist: rai -> coordinator and review -> coordinator.
+        var loopbacks = d.Edges.Where(e => e.Loopback).Select(e => (e.From, e.To)).ToList();
+        loopbacks.Should().BeEquivalentTo(new[]
+        {
+            ("planned:assembly-rai", "coordinator"),
+            ("planned:assembly-review", "coordinator"),
+        });
+
+        // Both loopbacks are marked Loopback==true with cardinality "direct".
+        foreach (var (from, to) in new[]
+                 {
+                     ("planned:assembly-rai", "coordinator"),
+                     ("planned:assembly-review", "coordinator"),
+                 })
+        {
+            var edge = d.Edges.Single(e => e.From == from && e.To == to);
+            edge.Loopback.Should().BeTrue();
+            edge.Cardinality.Should().Be("direct");
+        }
+
+        // Every other edge stays Loopback==false.
+        d.Edges.Where(e => !(e.From.StartsWith("planned:assembly-") && e.To == "coordinator"))
+            .Should().OnlyContain(e => e.Loopback == false);
+
+        // The forward chain's fan-out/fan-in are unchanged by the loopbacks: the coordinator still
+        // fans out to its two roots, RAI is still fan-in from two leaves, and the rai -> review and
+        // review -> merge forward edges stay "direct" (the loopback out of rai/review is excluded
+        // from the forward out-degree, so it does not turn them into fan-outs).
+        d.Edges.Single(e => e.From == "coordinator" && e.To == "plan:subtask-1")
+            .Cardinality.Should().Be("fanout");
+        d.Edges.Single(e => e.From == "plan:subtask-2" && e.To == "planned:assembly-rai")
+            .Cardinality.Should().Be("fanin");
+        d.Edges.Single(e => e.From == "planned:assembly-rai" && e.To == "planned:assembly-review")
+            .Cardinality.Should().Be("direct");
+        d.Edges.Single(e => e.From == "planned:assembly-review" && e.To == "planned:assembly-merge")
+            .Cardinality.Should().Be("direct");
     }
 
     [Fact]

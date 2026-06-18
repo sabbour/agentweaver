@@ -75,6 +75,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringQue
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
 
 // GitHub auth (token store + scope provider + device flow service)
 builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();

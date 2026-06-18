@@ -332,6 +332,7 @@ static WorkPlanResponse MapWorkPlan(CoordinatorWorkPlanView plan) => new()
     CoordinatorRunId = plan.CoordinatorRunId,
     OutcomeSpecId = plan.OutcomeSpecId,
     Status = plan.Status,
+    StatusReason = plan.StatusReason,
     IsolationSummary = plan.IsolationSummary,
     Subtasks = plan.Subtasks.Select(s => new WorkPlanSubtaskResponse
     {

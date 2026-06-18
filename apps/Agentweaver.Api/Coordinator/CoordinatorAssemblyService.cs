@@ -140,6 +140,38 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         var (workPlanId, subtasks, edges) = plan.Value;
+
+        try
+        {
+            await RunAssemblyCoreAsync(context, workPlanId, subtasks, edges, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // App shutdown / run abandon — leave the plan recoverable, no terminal write.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // An UNEXPECTED fault (integration merge, pipeline, store, or emit path threw outside the
+            // handled terminals). Never swallow it leaving subtasks parked with no signal: record a
+            // human-readable terminal on the coordinator run, mark the plan failed, and emit the
+            // terminal event so the UI shows the reason and the next action.
+            await FailUnexpectedAsync(context, workPlanId, edges, ex, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The collective-assembly state machine (claim -&gt; integration -&gt; RAI -&gt; review -&gt; merge/scribe).
+    /// Wrapped by <see cref="RunAssemblyAsync"/> so any unexpected fault is terminalized rather than
+    /// leaving the children parked at assemble_ready with no signal.
+    /// </summary>
+    private async Task RunAssemblyCoreAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        List<Subtask> subtasks,
+        List<(int, int)> edges,
+        CancellationToken ct)
+    {
         var integrationBranch = IntegrationBranchName(context.CoordinatorRunId);
 
         // D4 exactly-once claim: awaiting_assembly -> assembling.
@@ -183,6 +215,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var branchesInOrder = new List<string>();
         var touchedFilesBySubtask = new Dictionary<int, IReadOnlySet<string>>();
+        var includedSubtaskIds = new List<int>();
         foreach (var id in orderedIds)
         {
             if (!childRunBySubtask.TryGetValue(id, out var childRunId)) continue;
@@ -192,7 +225,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             touchedFilesBySubtask[id] = AssemblyPlanning.ExtractTouchedFiles(run.Diff);
             if (!string.IsNullOrEmpty(run.WorktreeBranch)
                 && !string.IsNullOrEmpty(run.Diff))
+            {
                 branchesInOrder.Add(run.WorktreeBranch);
+                includedSubtaskIds.Add(id);
+            }
         }
 
         // D1 — build the COMBINED integration branch.
@@ -253,6 +289,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         {
             workPlanId,
             integrationBranch,
+            treeHash = aggregateTreeHash,
+            includedSubtaskIds,
             raiSafetyFlagged = rai.SafetyFlagged,
             hasChanges = integration.HasChanges,
         });
@@ -287,11 +325,20 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         // Pure decline (neither approved nor request_changes): terminal assembly_declined.
+        const string declineReason = "assembly_declined";
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.AssemblyDeclined, null, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyDeclined, new
+        {
+            workPlanId,
+            reason = declineReason,
+            reviewer = decision.Reviewer,
+        });
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyDeclined, edges, ct)
             .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Declined, declineReason, ct).ConfigureAwait(false);
         _streamStore.Complete(context.CoordinatorRunId);
         _logger.LogInformation("Collective assembly: run {RunId} declined", context.CoordinatorRunId);
     }
@@ -320,16 +367,20 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (merge.Outcome != CollectiveMergeOutcome.Merged)
         {
+            var mergeReason = merge.Reason ?? merge.Outcome.ToString().ToLowerInvariant();
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeFailed, new
             {
                 workPlanId,
-                reason = merge.Reason ?? merge.Outcome.ToString().ToLowerInvariant(),
+                reason = mergeReason,
                 conflictingFiles = merge.ConflictingFiles,
             });
             await _assemblyStore.SetStatusAndStageAsync(
                 workPlanId, WorkPlanStatus.AssemblyFailed, null, ct).ConfigureAwait(false);
             await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
             await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyFailed, edges, ct)
+                .ConfigureAwait(false);
+            await TerminalizeCoordinatorRunAsync(
+                context.CoordinatorRunId, RunStatus.MergeFailed, $"assembly_merge_failed: {mergeReason}", ct)
                 .ConfigureAwait(false);
             _streamStore.Complete(context.CoordinatorRunId);
             _logger.LogWarning("Collective assembly: merge failed for run {RunId} ({Reason})",
@@ -381,9 +432,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.Complete, edges, ct)
             .ConfigureAwait(false);
 
-        if (RunId.TryParse(context.CoordinatorRunId, out var coordRunId))
-            await _runStore.UpdateStatusAsync(coordRunId, RunStatus.Completed, DateTimeOffset.UtcNow, ct)
-                .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Completed, "assembly_complete", ct).ConfigureAwait(false);
 
         _streamStore.Complete(context.CoordinatorRunId);
         _logger.LogInformation("Collective assembly complete for run {RunId}", context.CoordinatorRunId);
@@ -452,8 +502,64 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyBlocked, edges, ct)
             .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Failed, $"assembly_blocked: {reason}", ct).ConfigureAwait(false);
         _streamStore.Complete(context.CoordinatorRunId);
         _logger.LogWarning("Collective assembly blocked for run {RunId}: {Reason}", context.CoordinatorRunId, reason);
+    }
+
+    /// <summary>
+    /// Terminalizes the assembly background task on an UNEXPECTED fault: marks the work plan failed,
+    /// emits <see cref="EventTypes.CoordinatorAssemblyFailed"/> with a human-readable reason, and
+    /// records the same reason on the coordinator run so the UI never shows a bare "Failed" with no
+    /// explanation. The inner emit/store work is itself guarded so a secondary fault cannot prevent
+    /// the run from reaching a terminal status.
+    /// </summary>
+    private async Task FailUnexpectedAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        Exception ex,
+        CancellationToken ct)
+    {
+        var reason = $"assembly_error: {ex.Message}";
+        _logger.LogError(ex, "Collective assembly: unexpected error for run {RunId}", context.CoordinatorRunId);
+        try
+        {
+            await _assemblyStore.SetStatusAndStageAsync(
+                workPlanId, WorkPlanStatus.AssemblyFailed, null, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyFailed, new
+            {
+                workPlanId,
+                reason,
+                phase = "assembly",
+            });
+            await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+            await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyFailed, edges, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception inner)
+        {
+            _logger.LogError(inner,
+                "Collective assembly: failed to record terminal state for run {RunId}", context.CoordinatorRunId);
+        }
+        await TerminalizeCoordinatorRunAsync(context.CoordinatorRunId, RunStatus.Failed, reason, ct)
+            .ConfigureAwait(false);
+        _streamStore.Complete(context.CoordinatorRunId);
+    }
+
+    /// <summary>
+    /// Records a terminal status + human-readable result on the COORDINATOR run so the project runs
+    /// list and run detail surface why assembly ended (instead of leaving the run InProgress, which a
+    /// later restart would sweep to a bare "Failed"). A no-op when the run row is absent or already
+    /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>).
+    /// </summary>
+    private async Task TerminalizeCoordinatorRunAsync(
+        string coordinatorRunId, RunStatus status, string result, CancellationToken ct)
+    {
+        if (RunId.TryParse(coordinatorRunId, out var id))
+            await _runStore.TrySetTerminalStatusAsync(id, status, DateTimeOffset.UtcNow, result, ct)
+                .ConfigureAwait(false);
     }
 
     private void Emit(string coordinatorRunId, string eventType, object payload) =>

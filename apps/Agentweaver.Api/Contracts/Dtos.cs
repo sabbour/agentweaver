@@ -126,6 +126,27 @@ public sealed record RunResponse
     /// </summary>
     [JsonPropertyName("subtask_id")]
     public string? SubtaskId { get; init; }
+
+    /// <summary>
+    /// Orchestration status of a COORDINATOR run, sourced from its work plan
+    /// (planned | dispatching | awaiting_assembly | assembling | in_review | complete |
+    /// assembly_blocked | assembly_failed | assembly_declined). Null for standalone runs, child
+    /// runs, and coordinator runs with no work plan yet. The web UI shows this (plus
+    /// <see cref="Result"/> for the failure detail) instead of the bare run status so an
+    /// awaiting-assembly run is not mislabeled "Failed". (Feature 008)
+    /// </summary>
+    [JsonPropertyName("coordinator_status")]
+    public string? CoordinatorStatus { get; init; }
+
+    /// <summary>
+    /// Human-readable detail for a COORDINATOR run's terminal/failure state, sourced from
+    /// <see cref="Result"/> (e.g. "assembly_blocked: &lt;reason&gt;", "interrupted: ..."). Scoped to
+    /// coordinator runs so the web UI can render "Failed: &lt;reason&gt;" without overloading the
+    /// generic run result. Null for standalone runs, child runs, and non-terminal coordinator
+    /// runs with no result yet. (Feature 008)
+    /// </summary>
+    [JsonPropertyName("coordinator_status_reason")]
+    public string? CoordinatorStatusReason { get; init; }
 }
 
 /// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>
@@ -161,6 +182,24 @@ public sealed record WorkflowRunSummary
 
     [JsonPropertyName("result")]
     public string? Result { get; init; }
+
+    /// <summary>
+    /// Orchestration status of a COORDINATOR run, sourced from its work plan (planned | dispatching |
+    /// awaiting_assembly | assembling | in_review | complete | assembly_blocked | assembly_failed |
+    /// assembly_declined). Null for standalone and child runs. The web runs list shows this (plus
+    /// <see cref="Result"/> for the failure detail) so a long-running assembly is not mislabeled.
+    /// (Feature 008)
+    /// </summary>
+    [JsonPropertyName("coordinator_status")]
+    public string? CoordinatorStatus { get; init; }
+
+    /// <summary>
+    /// Human-readable detail for a COORDINATOR run's terminal/failure state, sourced from
+    /// <see cref="Result"/>. Scoped to coordinator runs so the runs list can render
+    /// "Failed: &lt;reason&gt;". Null for standalone and child runs. (Feature 008)
+    /// </summary>
+    [JsonPropertyName("coordinator_status_reason")]
+    public string? CoordinatorStatusReason { get; init; }
 }
 
 public sealed record SandboxStatusDto
@@ -744,6 +783,15 @@ public sealed record WorkPlanResponse
     [JsonPropertyName("coordinatorRunId")] public required string CoordinatorRunId { get; init; }
     [JsonPropertyName("outcomeSpecId")] public required int OutcomeSpecId { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
+
+    /// <summary>
+    /// Human-readable reason for a terminal/blocked assembly status (assembly_blocked / assembly_failed
+    /// / assembly_declined), sourced from the coordinator run's result. Null while the plan is in a
+    /// non-failed state. The web UI polls this to render "Failed: &lt;reason&gt;". (Feature 008)
+    /// </summary>
+    [JsonPropertyName("statusReason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? StatusReason { get; init; }
 
     [JsonPropertyName("isolationSummary")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

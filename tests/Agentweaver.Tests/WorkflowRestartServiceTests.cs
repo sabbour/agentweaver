@@ -238,6 +238,42 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     }
 
     // =========================================================================
+    // Feature 008: a stranded InProgress COORDINATOR run is failed WITH a
+    // human-readable reason on restart (not a bare "Failed" the user can't act on).
+    // =========================================================================
+    [Fact]
+    public async Task RecoverAsync_StrandedCoordinatorRun_FailsWithReason()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var worktreeOps = new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null);
+
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "goal",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Coordinator",
+            ParentRunId = null,
+        });
+
+        var service = BuildService(runStore, streamStore, worktreeOps);
+        await service.RecoverAsync(CancellationToken.None);
+
+        var updated = await runStore.GetAsync(runId);
+        updated!.Status.Should().Be(RunStatus.Failed);
+        updated.Result.Should().NotBeNullOrEmpty(
+            "a stranded coordinator run must carry a human-readable reason, not a bare Failed");
+        updated.Result.Should().Contain("interrupted");
+    }
+
+    // =========================================================================
     // Helpers
     // =========================================================================
 

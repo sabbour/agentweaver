@@ -210,15 +210,28 @@ app.MapDelete("/api/projects/{id}", async (
 app.MapGet("/api/projects/{id}/runs", async (
     string id,
     SqliteRunStore runStore,
+    CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
 
     var runs = await runStore.GetRunsByProjectAsync(projectId, ct: ct);
-    return Results.Ok(runs.Select(r => new WorkflowRunSummary
+
+    // For coordinator runs, surface the work-plan orchestration status so the list can render
+    // "Dispatching" / "Awaiting assembly" / "Failed: <reason>" instead of the bare run status.
+    var coordinatorRunIds = runs
+        .Where(r => r.ParentRunId is null && string.Equals(r.AgentName, "Coordinator", StringComparison.Ordinal))
+        .Select(r => r.Id.ToString())
+        .ToList();
+    var coordinatorStatuses = await coordinator.GetCoordinatorStatusesAsync(coordinatorRunIds, ct);
+
+    return Results.Ok(runs.Select(r =>
     {
-        WorkflowRunId = r.WorkflowRunId ?? r.Id.ToString(),
+        var isCoordinator = r.ParentRunId is null && string.Equals(r.AgentName, "Coordinator", StringComparison.Ordinal);
+        return new WorkflowRunSummary
+        {
+            WorkflowRunId = r.WorkflowRunId ?? r.Id.ToString(),
         ExecutionId   = r.Id.ToString(),
         Task          = r.Task,
         Status        = r.Status.ToApiString(),
@@ -228,6 +241,9 @@ app.MapGet("/api/projects/{id}/runs", async (
         EndedAt       = r.EndedAt,
         ModelId       = r.ModelId,
         Result        = r.Result,
+        CoordinatorStatus = coordinatorStatuses.GetValueOrDefault(r.Id.ToString()),
+        CoordinatorStatusReason = isCoordinator ? r.Result : null,
+        };
     }));
 });
 
@@ -236,6 +252,7 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
     string id,
     string workflowRunId,
     SqliteRunStore runStore,
+    CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out _))
@@ -243,6 +260,12 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
 
     var run = await runStore.GetByWorkflowRunIdAsync(workflowRunId, ct);
     if (run is null) return Results.NotFound();
+
+    string? coordinatorStatus = null;
+    var isCoordinatorRun = run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+    if (isCoordinatorRun)
+        coordinatorStatus = (await coordinator.GetCoordinatorStatusesAsync(new[] { run.Id.ToString() }, ct))
+            .GetValueOrDefault(run.Id.ToString());
 
     return Results.Ok(new WorkflowRunSummary
     {
@@ -256,6 +279,8 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
         EndedAt       = run.EndedAt,
         ModelId       = run.ModelId,
         Result        = run.Result,
+        CoordinatorStatus = coordinatorStatus,
+        CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
     });
 });
 

@@ -51,6 +51,21 @@ public sealed class WorkflowRestartService
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
+            // A coordinator run is intentionally left InProgress while it dispatches children and runs
+            // collective assembly (its stream stays open across that window). A process restart cannot
+            // resume that background pipeline, so fail it WITH a human-readable reason rather than a
+            // bare "Failed" the user can't act on (which previously showed as an unexplained red badge
+            // while subtasks sat parked at assemble_ready).
+            if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Failing interrupted coordinator run {RunId} (orchestration was in progress at restart)", run.Id);
+                await _runStore.UpdateResultAsync(
+                    run.Id, RunStatus.Failed, "interrupted: orchestration was in progress at restart",
+                    DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+                continue;
+            }
+
             _logger.LogWarning("Failing stranded InProgress run {RunId}", run.Id);
             await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         }

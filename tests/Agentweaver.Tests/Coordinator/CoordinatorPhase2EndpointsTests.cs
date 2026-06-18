@@ -232,6 +232,84 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     // =========================================================================
+    // Feature 008: coordinator orchestration status + failure reason surfacing.
+    // A coordinator run parked at a terminal assembly status must expose the work-plan status on the
+    // run detail (coordinator_status) and the failure reason on the work-plan (statusReason), so the
+    // UI never shows a bare "Failed" the user can't act on.
+    // =========================================================================
+    [Fact]
+    public async Task RunDetail_And_WorkPlan_SurfaceCoordinatorStatusAndReason_ForBlockedAssembly()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+
+        // Park the run at a terminal blocked assembly: run Failed + reason, work plan assembly_blocked.
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        await runStore.UpdateResultAsync(
+            RunId.Parse(runId), RunStatus.Failed, "assembly_blocked: integration_conflict",
+            DateTimeOffset.UtcNow, CancellationToken.None);
+        await SeedWorkPlanAsync(runId, "assembly_blocked");
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        detail.GetProperty("status").GetString().Should().Be("failed");
+        detail.GetProperty("coordinator_status").GetString().Should().Be("assembly_blocked");
+        detail.GetProperty("result").GetString().Should().Be("assembly_blocked: integration_conflict");
+        detail.GetProperty("coordinator_status_reason").GetString().Should().Be("assembly_blocked: integration_conflict");
+
+        var plan = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}/work-plan");
+        plan.GetProperty("status").GetString().Should().Be("assembly_blocked");
+        plan.GetProperty("statusReason").GetString().Should().Be("assembly_blocked: integration_conflict");
+    }
+
+    /// <summary>Seeds an OutcomeSpec + WorkPlan (with the given status) + one subtask for a run.</summary>
+    private async Task SeedWorkPlanAsync(string coordinatorRunId, string status)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Agentweaver.Api.Memory.MemoryDbContext>();
+
+        var spec = new Agentweaver.Api.Memory.OutcomeSpec
+        {
+            ProjectId = "proj-x",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "g",
+            DesiredOutcome = "o",
+            Scope = "s",
+            Assumptions = "a",
+            Status = "confirmed",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+
+        var plan = new Agentweaver.Api.Memory.WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-x",
+            CoordinatorRunId = coordinatorRunId,
+            Status = status,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        db.Subtasks.Add(new Agentweaver.Api.Memory.Subtask
+        {
+            WorkPlanId = plan.Id,
+            Title = "t",
+            Scope = "s",
+            AssignedAgent = "morpheus",
+            SelectedModelId = "gpt",
+            Phase = "execution",
+            IsolationStrategy = "worktree",
+            Status = Agentweaver.Api.Coordinator.SubtaskStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    // =========================================================================
     // Helpers
     // =========================================================================
 

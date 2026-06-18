@@ -403,6 +403,18 @@ public sealed class CoordinatorRunService
             .Where(d => ids.Contains(d.SubtaskId))
             .ToListAsync(ct).ConfigureAwait(false);
 
+        // Surface the failure reason for a terminal/blocked plan from the coordinator run's result so
+        // the UI can render "Failed: <reason>" without a separate round-trip.
+        string? statusReason = null;
+        if (plan.Status is WorkPlanStatus.AssemblyBlocked
+                        or WorkPlanStatus.AssemblyFailed
+                        or WorkPlanStatus.AssemblyDeclined
+            && RunId.TryParse(coordinatorRunId, out var coordRunId))
+        {
+            var run = await _runStore.GetAsync(coordRunId, ct).ConfigureAwait(false);
+            statusReason = run?.Result;
+        }
+
         return new CoordinatorWorkPlanView(
             plan.Id,
             plan.CoordinatorRunId,
@@ -413,7 +425,8 @@ public sealed class CoordinatorRunService
                 s.Id, s.Title, s.Scope, s.AssignedAgent, s.SelectedModelId,
                 s.Phase, s.IsolationStrategy, s.Status, s.ChildRunId)).ToList(),
             edges.Select(e => new CoordinatorDependencyView(e.SubtaskId, e.DependsOnSubtaskId)).ToList(),
-            plan.AssemblyStage);
+            plan.AssemblyStage,
+            statusReason);
     }
 
     /// <summary>
@@ -515,7 +528,8 @@ public sealed record CoordinatorWorkPlanView(
     string? IsolationSummary,
     IReadOnlyList<CoordinatorSubtaskView> Subtasks,
     IReadOnlyList<CoordinatorDependencyView> Dependencies,
-    string? AssemblyStage = null);
+    string? AssemblyStage = null,
+    string? StatusReason = null);
 
 /// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>
 public sealed record CoordinatorSubtaskView(

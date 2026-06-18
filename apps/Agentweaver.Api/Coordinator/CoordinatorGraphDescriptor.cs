@@ -130,19 +130,35 @@ public static class CoordinatorGraphDescriptor
         edges.Add((AssemblyReviewNodeId, AssemblyMergeNodeId));
         edges.Add((AssemblyMergeNodeId, AssemblyScribeNodeId));
 
-        // Cardinality by forward degree (the coordinator graph is a DAG; loopback always false).
-        var outDeg = edges.GroupBy(e => e.From).ToDictionary(g => g.Key, g => g.Count());
-        var inDeg = edges.GroupBy(e => e.To).ToDictionary(g => g.Key, g => g.Count());
+        // Loopback edges: on RAI-RED or human-review request_changes the coordinator RE-DISPATCHES
+        // affected subtasks, so control flows back to the coordinator. These reflect the orchestration
+        // semantics ("RAI flows back to the coordinator; review flows back to the coordinator") and
+        // are the only non-forward edges, so the graph is no longer a pure DAG.
+        var loopbacks = new HashSet<(string From, string To)>
+        {
+            (AssemblyRaiNodeId, CoordinatorNodeId),
+            (AssemblyReviewNodeId, CoordinatorNodeId),
+        };
+        edges.Add((AssemblyRaiNodeId, CoordinatorNodeId));
+        edges.Add((AssemblyReviewNodeId, CoordinatorNodeId));
+
+        // Cardinality by FORWARD degree: loopback edges are excluded from the degree counts (so they
+        // do not distort fan-out/fan-in on the coordinator or assembly nodes) and always render
+        // "direct" (mirrors GraphDescriptorBuilder).
+        var forwardEdges = edges.Where(e => !loopbacks.Contains(e)).ToList();
+        var outDeg = forwardEdges.GroupBy(e => e.From).ToDictionary(g => g.Key, g => g.Count());
+        var inDeg = forwardEdges.GroupBy(e => e.To).ToDictionary(g => g.Key, g => g.Count());
 
         string Cardinality((string From, string To) e)
         {
+            if (loopbacks.Contains(e)) return "direct";
             if (outDeg.GetValueOrDefault(e.From, 0) > 1) return "fanout";
             if (inDeg.GetValueOrDefault(e.To, 0) > 1) return "fanin";
             return "direct";
         }
 
         var edgeArr = edges
-            .Select(e => new GraphEdge(e.From, e.To, Cardinality(e), Loopback: false))
+            .Select(e => new GraphEdge(e.From, e.To, Cardinality(e), Loopback: loopbacks.Contains(e)))
             .ToArray();
 
         return new GraphDescriptor(

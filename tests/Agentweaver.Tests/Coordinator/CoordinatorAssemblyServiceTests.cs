@@ -203,6 +203,115 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _dispatch.StartDispatchCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
     }
 
+    // ── Terminal coordinator-run status + reason (so the UI never shows a bare "Failed") ──────────
+
+    [Fact]
+    public async Task RunAssembly_Blocked_TerminalizesCoordinatorRun_Failed_WithReason()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        var run = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
+        run!.Status.Should().Be(RunStatus.Failed);
+        run.Result.Should().StartWith("assembly_blocked:");
+    }
+
+    [Fact]
+    public async Task RunAssembly_Declined_EmitsDeclinedEvent_AndTerminalizesCoordinatorRun_Declined()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: false, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyDeclined);
+        var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
+        persisted!.Status.Should().Be(RunStatus.Declined);
+        persisted.Result.Should().Be("assembly_declined");
+    }
+
+    [Fact]
+    public async Task RunAssembly_MergeFailed_TerminalizesCoordinatorRun_MergeFailed_WithReason()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.MergeOverride = CollectiveMergeResult.Conflict(new[] { "src/x.txt" }, "merge_conflict");
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyMergeFailed);
+        var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
+        persisted!.Status.Should().Be(RunStatus.MergeFailed);
+        persisted.Result.Should().StartWith("assembly_merge_failed:");
+    }
+
+    [Fact]
+    public async Task RunAssembly_UnexpectedFault_FailsRunWithReason_AndEmitsAssemblyFailed()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.MergeThrows = true;
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyFailed);
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
+        persisted!.Status.Should().Be(RunStatus.Failed);
+        persisted.Result.Should().StartWith("assembly_error:");
+        _streamStore.Get(coordinatorRunId)!.IsCompleted.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunAssembly_Approved_TerminalizesCoordinatorRun_Completed_WithReason()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
+        persisted!.Status.Should().Be(RunStatus.Completed);
+        persisted.Result.Should().Be("assembly_complete");
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private static CoordinatorDispatchContext Context(string coordinatorRunId) =>
@@ -222,6 +331,22 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         for (var i = 0; i < 200 && !_reviewGate.IsArmed(coordinatorRunId); i++)
             await Task.Delay(25);
         _reviewGate.IsArmed(coordinatorRunId).Should().BeTrue("the pipeline should arm the review gate");
+    }
+
+    private async Task SeedCoordinatorRunAsync(string coordinatorRunId)
+    {
+        await _runStore.InsertAsync(new Run
+        {
+            Id = RunId.Parse(coordinatorRunId),
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "goal",
+            SubmittingUser = "alice",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Coordinator",
+        });
     }
 
     private async Task SeedChildRunAsync(RunId runId, string worktreeBranch, string diff)
@@ -315,6 +440,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public int Merges;
         public int Scribes;
 
+        /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
+        public CollectiveMergeResult? MergeOverride;
+
+        /// <summary>When true, <see cref="MergeAsync"/> throws to exercise the unexpected-fault path.</summary>
+        public bool MergeThrows;
+
         public IntegrationBranchResult BuildIntegrationBranch(CollectiveIntegrationRequest request)
         {
             IntegrationBuilds++;
@@ -327,7 +458,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
         {
             Merges++;
-            return Task.FromResult(CollectiveMergeResult.Merged("merge-commit"));
+            if (MergeThrows) throw new InvalidOperationException("boom in merge");
+            return Task.FromResult(MergeOverride ?? CollectiveMergeResult.Merged("merge-commit"));
         }
 
         public Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)

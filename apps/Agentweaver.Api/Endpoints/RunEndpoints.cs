@@ -95,6 +95,7 @@ app.MapGet("/api/runs/{id}", async (
     string id,
     SqliteRunStore runStore,
     RunStreamStore streamStore,
+    CoordinatorStatusReader coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -179,6 +180,14 @@ app.MapGet("/api/runs/{id}", async (
         }
     }
 
+    // Coordinator runs surface their work-plan orchestration status so the UI can show
+    // "Awaiting assembly" / "Assembling" / "Failed: <result>" rather than the bare run status.
+    string? coordinatorStatus = null;
+    var isCoordinatorRun = run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+    if (isCoordinatorRun)
+        coordinatorStatus = (await coordinator.GetCoordinatorStatusesAsync(new[] { run.Id.ToString() }, ct))
+            .GetValueOrDefault(run.Id.ToString());
+
     return Results.Json(new RunResponse
     {
         RunId = run.Id.ToString(),
@@ -199,6 +208,8 @@ app.MapGet("/api/runs/{id}", async (
         ReviewedBy = run.ReviewedBy,
         ParentRunId = run.ParentRunId,
         SubtaskId = run.SubtaskId,
+        CoordinatorStatus = coordinatorStatus,
+        CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
     });
 });
 

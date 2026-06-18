@@ -63,7 +63,7 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
 | `POST` | `/api/projects/{id}/runs` | Start a run within a project |
 
-Run summary objects returned by `GET /api/projects/{id}/runs` include a `result` field (`"no_changes"` or `null`). When `result` is `"no_changes"`, the agent found no file changes to commit; the review and merge gates are skipped.
+Run summary objects returned by `GET /api/projects/{id}/runs` include a `result` field (`"no_changes"` or `null`). When `result` is `"no_changes"`, the agent found no file changes to commit; the review and merge gates are skipped. Each summary also includes `coordinator_status`: for a coordinator run (`agent_name: "Coordinator"`, no parent) this is the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`); it is `null` for normal runs. A companion `coordinator_status_reason` (the coordinator run's `result`, scoped to coordinator rows) carries the human-readable terminal/failure detail so the UI can render "Failed: &lt;reason&gt;". Children are excluded from this list. The UI should render `coordinator_status` (plus `coordinator_status_reason`) for coordinator rows so a long-running assembly does not show as a bare `in_progress` and a terminal failure does not show as an unexplained `failed`.
 
 ### Memory
 
@@ -191,6 +191,8 @@ Response `200 OK`:
 ```
 
 Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `merge_failed`, `failed`, and `completed`. `completed` is reached when the agent turn produced no file changes (no review gate is entered on that path).
+
+For a **coordinator** run (`agent_name: "Coordinator"`, no parent), the response also carries `coordinator_status`: the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`). It is `null` for normal runs and for coordinator runs that have no work plan yet. Because a coordinator run stays `in_progress` while it dispatches children and runs collective assembly, `coordinator_status` is what the UI should render (for example "Awaiting assembly" or "Failed: <result>") instead of the bare `status`. On a terminal assembly failure the `result` — also surfaced as `coordinator_status_reason` on this response (scoped to coordinator runs) — carries the human-readable reason (for example `assembly_blocked: <reason>`, `assembly_merge_failed: <reason>`, `assembly_error: <message>`).
 
 ### GET /api/runs/{id}/stream
 
@@ -324,7 +326,7 @@ When the run is a coordinator run, the descriptor is built from its work plan (`
 - Node `coordinator` (`node_type: "agent"`, `role: "coordinator"`, `kind: "live"`).
 - One node per subtask, id `plan:subtask-{id}` (`node_type: "subtask"`, `role: "subtask"`, `kind: "live"`). Subtask nodes carry rich display fields as OPTIONAL snake_case properties (omitted when null): `agent`, `model`, `phase`, `isolation`, `child_run_id`. Once the subtask's child run is dispatched, `child_graph_ref` is `run:{childRunId}` so the client can expand the child's own graph via `GET /api/runs/{childRunId}/graph`; it is `null` until dispatched.
 - PLANNED collective-assembly nodes (`kind: "planned"`): `planned:assembly-rai` (`node_type: "agent"`, `role: "rai"`), `planned:assembly-review` (`node_type: "gate"`, `role: "review"`), `planned:assembly-merge` (`node_type: "action"`, `role: "merge"`), `planned:assembly-scribe` (`node_type: "agent"`, `role: "scribe"`).
-- Edges: `coordinator` → each root subtask; dependency edges `plan:subtask-{dependsOn}` → `plan:subtask-{dependent}`; each terminal (leaf) subtask → `planned:assembly-rai`; then the assembly chain `assembly-rai` → `assembly-review` → `assembly-merge` → `assembly-scribe`. The coordinator graph is a DAG (`loopback` always `false`); `cardinality` is `fanout`/`fanin` by forward degree.
+- Edges: `coordinator` → each root subtask; dependency edges `plan:subtask-{dependsOn}` → `plan:subtask-{dependent}`; each terminal (leaf) subtask → `planned:assembly-rai`; then the assembly chain `assembly-rai` → `assembly-review` → `assembly-merge` → `assembly-scribe`. Two loopback back-edges (`loopback: true`) close the cycle: `planned:assembly-rai` → `coordinator` and `planned:assembly-review` → `coordinator`, reflecting that an RAI flag or a human-review request-changes re-dispatches affected subtasks through the coordinator. All forward edges are `loopback: false`. `cardinality` is `fanout`/`fanin` by forward (non-loopback) degree; loopback edges are always `direct` and are excluded from the degree counts so they do not distort fan-out/fan-in.
 
 ```json
 {
@@ -874,6 +876,7 @@ Response `200 OK`:
   "coordinatorRunId": "f36800fd-...",
   "outcomeSpecId": "9e8d7c6b-...",
   "status": "dispatching",
+  "statusReason": null,
   "subtasks": [
     {
       "subtaskId": 5,
@@ -899,6 +902,7 @@ Response `200 OK`:
 | `coordinatorRunId` | string | The coordinator run that owns the plan. |
 | `outcomeSpecId` | string | The confirmed outcome spec the plan was decomposed from. |
 | `status` | string | `planned`, `dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, or a parked/terminal state `assembly_blocked` / `assembly_failed` / `assembly_declined`. |
+| `statusReason` | string\|null | Human-readable failure reason for a terminal plan, taken from the coordinator run's `result` (for example `assembly_blocked: <reason>`, `assembly_merge_failed: <reason>`, `assembly_error: <message>`). `null` while the plan is non-terminal. The UI can render "Failed: &lt;statusReason&gt;" without a second round-trip. |
 | `subtasks` | array | Decomposed units of work; each has `subtaskId`, `title`, `scope`, `assignedAgent`, `selectedModelId`, `phase`, `isolation`, `status`, and `childRunId` (null until dispatched). |
 | `dependencies` | array | `{ subtaskId, dependsOnSubtaskId }` edges; a subtask dispatches only once every dependency reaches `assemble_ready`/`completed`. |
 
@@ -1009,7 +1013,9 @@ Request:
 
 - **Approve** (`approved: true`) → the pipeline merges the integration branch into the originating branch and runs the collective scribe, emitting `coordinator.assembly_merge_*`, `coordinator.assembly_scribe_*`, then `coordinator.assembly_completed`; the work plan reaches `complete`.
 - **Request changes** (`approved: false`, `request_changes: true`) → the coordinator infers the affected children from `target_files` ∪ path tokens in `feedback`, intersects them with each child's persisted touched-files, expands to include dependents, resets those subtasks to `pending` (leaving the rest intact), returns the plan to `dispatching`, and re-dispatches. If no file can be inferred or no child matches, it falls back to re-dispatching **all** children. Emits `coordinator.assembly_changes_requested`.
-- **Decline** (`approved: false`, `request_changes: false`) → terminal `assembly_declined`; the coordinator stream closes.
+- **Decline** (`approved: false`, `request_changes: false`) → terminal `assembly_declined`; the coordinator emits `coordinator.assembly_declined` (`reason`, `reviewer`), the work plan moves to `assembly_declined`, the run ends `declined`, and the coordinator stream closes.
+
+When the pipeline arms this gate it emits `coordinator.assembly_review_requested` on the coordinator stream with `integrationBranch`, `treeHash` (the assembled integration tree hash), `includedSubtaskIds` (which subtasks the assembled output covers), `raiSafetyFlagged`, and `hasChanges` — the UI subscribes to this to know a collective human review is being requested and to render the assembled output. If the assembly background task hits an unexpected fault it emits `coordinator.assembly_failed` (`reason`, `phase`) and the run ends `failed` with `result: "assembly_error: <message>"`.
 
 Response `200 OK`:
 

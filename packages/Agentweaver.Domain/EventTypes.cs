@@ -263,4 +263,14 @@ public static class EventTypes
     /// subtask was not assembly-eligible, or merging child branches into the integration branch
     /// conflicted. Payload: { workPlanId, reason, ineligibleSubtaskIds?, conflictingFiles? }.</summary>
     public const string CoordinatorAssemblyBlocked = "coordinator.assembly_blocked";
+
+    /// <summary>The reviewer declined the collective output (a pure decline, not request_changes);
+    /// assembly stops terminally. Payload: { workPlanId, reason, reviewer? }.</summary>
+    public const string CoordinatorAssemblyDeclined = "coordinator.assembly_declined";
+
+    /// <summary>Collective assembly ended on an unexpected error (an exception in the background
+    /// assembly task). Distinct from the blocked/declined/merge-failed expected terminals — this
+    /// signals the pipeline faulted so subtasks are never left parked with no signal.
+    /// Payload: { workPlanId?, reason, phase }.</summary>
+    public const string CoordinatorAssemblyFailed = "coordinator.assembly_failed";
 }
