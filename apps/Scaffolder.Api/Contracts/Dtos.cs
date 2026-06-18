@@ -110,6 +110,22 @@ public sealed record RunResponse
 
     [JsonPropertyName("workflow_run_id")]
     public string? WorkflowRunId { get; init; }
+
+    /// <summary>
+    /// Parent coordinator run id when this run is a coordinator CHILD (Feature 008).
+    /// Null for standalone runs and for the coordinator run itself. The web run-detail
+    /// page uses this to render the TRIMMED child pipeline (agent → RAI → assemble-ready)
+    /// instead of the full 5-stage graph.
+    /// </summary>
+    [JsonPropertyName("parent_run_id")]
+    public string? ParentRunId { get; init; }
+
+    /// <summary>
+    /// Identifier of the coordinator subtask this child run executes (Feature 008).
+    /// Null for standalone runs and for the coordinator run itself.
+    /// </summary>
+    [JsonPropertyName("subtask_id")]
+    public string? SubtaskId { get; init; }
 }
 
 /// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>

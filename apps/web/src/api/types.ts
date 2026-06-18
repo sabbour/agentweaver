@@ -53,6 +53,19 @@ export interface RunDetail {
   tree_hash: string | null;
   sandbox?: RunSandboxInfo | null;
   worktree_branch?: string | null;
+  // Feature 008 — coordinator child runs. Non-null parent_run_id ⇒ this run is a
+  // dispatched CHILD of a coordinator (trimmed agent → RAI → assemble-ready pipeline).
+  parent_run_id?: string | null;
+  subtask_id?: string | null;
+}
+
+// GET /api/runs/{id}/events — persisted append-only event log (FR-022). Used to seed
+// the execution timeline for terminal/parked runs whose live SSE stream is closed.
+// Shape mirrors the SSE frame: per-run sequence, event type, and JSON payload.
+export interface PersistedRunEvent {
+  sequence: number;
+  type: string;
+  payload: Record<string, unknown>;
 }
 
 export interface ReviewRequest {

@@ -44,7 +44,7 @@ import {
   type EdgeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useRunStream } from '../api/sse';
+import { useRunStream, type RunStreamEvent, type EventType } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import type { TeamDto } from '../api/types';
 import { API_KEY, API_URL } from '../config';
@@ -64,7 +64,7 @@ const ActiveEdgeContext = createContext<string | undefined>(undefined);
 // ---------------------------------------------------------------------------
 
 type StepStatus = 'pending' | 'started' | 'completed' | 'skipped' | 'failed' | 'revise';
-type ExecutorKey = 'agent' | 'rai' | 'review' | 'merge' | 'scribe';
+type ExecutorKey = 'agent' | 'rai' | 'review' | 'merge' | 'scribe' | 'assemble-ready';
 
 interface ExecutorState {
   status: StepStatus;
@@ -88,6 +88,16 @@ const EXECUTORS: ExecutorDef[] = [
   { key: 'review', label: 'Review', roleDescription: 'Human Review',     Icon: PersonRegular   },
   { key: 'merge',  label: 'Merge',  roleDescription: 'Merge Coordinator',Icon: MergeRegular    },
   { key: 'scribe', label: 'Scribe', roleDescription: 'Session Logger',   Icon: NotebookRegular },
+];
+
+// Coordinator CHILD runs execute a TRIMMED pipeline server-side: agent → RAI →
+// assemble-ready. Human Review, Merge, and Scribe run ONCE later on the collective
+// output at the coordinator level, so a child must not show those nodes. Assemble-ready
+// is a terminal node — the child is parked awaiting collective assembly.
+const CHILD_EXECUTORS: ExecutorDef[] = [
+  { key: 'agent',          label: 'Agent',          roleDescription: 'AI Assistant',                Icon: BotRegular            },
+  { key: 'rai',            label: 'Rai',            roleDescription: 'RAI Reviewer',                Icon: ShieldRegular         },
+  { key: 'assemble-ready', label: 'Assemble-ready', roleDescription: 'Awaiting collective assembly', Icon: CheckmarkCircleRegular },
 ];
 
 // ---------------------------------------------------------------------------
@@ -340,6 +350,11 @@ function statusDescription(key: ExecutorKey, status: StepStatus): string | null 
     if (status === 'started')   return 'Logging session...';
     if (status === 'completed') return 'Done';
     if (status === 'skipped')   return 'Skipped';
+  }
+  if (key === 'assemble-ready') {
+    if (status === 'started')   return 'Awaiting assembly...';
+    if (status === 'completed') return 'Ready for assembly';
+    if (status === 'failed')    return 'Failed';
   }
   return null;
 }
@@ -725,6 +740,44 @@ const LOOPBACK_EDGES: Edge[] = [
 
 const ALL_EDGES: Edge[] = [...FORWARD_EDGES, ...LOOPBACK_EDGES];
 
+// CHILD pipeline edges — agent → RAI → assemble-ready. No revise/request-changes
+// loopbacks: a child runs once and parks; revision loops belong to the full pipeline.
+const CHILD_FORWARD_EDGES: Edge[] = [
+  forwardEdge('agent-rai',      'agent', 'rai'),
+  forwardEdge('rai-assemble',   'rai',   'assemble-ready'),
+];
+
+const CHILD_EDGES: Edge[] = [...CHILD_FORWARD_EDGES];
+
+// Statuses for which the run is finished/parked and its live SSE stream is closed, so the
+// timeline must be seeded from the persisted events endpoint. Generous on purpose: a child
+// parks at assemble-ready, and listing unknown-but-inactive states here is harmless.
+const SEED_STATUSES: ReadonlySet<string> = new Set([
+  'completed', 'failed', 'merged', 'declined', 'merge_failed',
+  'parked', 'assemble_ready', 'assembled', 'cancelled', 'stopped',
+]);
+
+// Fold a persisted-events REST seed under live SSE deltas. Seeded events come first in
+// order; a live event is appended only when not already represented (dedupe by sequence,
+// and singleton seq-0 events by type) so a finished run shows persisted progress and an
+// in-flight reconnect still layers new deltas on top.
+function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStreamEvent[] {
+  if (seed.length === 0) return live;
+  const merged = [...seed];
+  const seenSeq = new Set(seed.filter((e) => e.sequence > 0).map((e) => e.sequence));
+  const seenType = new Set(seed.map((e) => e.type));
+  for (const evt of live) {
+    if (evt.sequence > 0) {
+      if (seenSeq.has(evt.sequence)) continue;
+      seenSeq.add(evt.sequence);
+    } else if (seenType.has(evt.type)) {
+      continue;
+    }
+    merged.push(evt);
+  }
+  return merged;
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -739,9 +792,14 @@ export function WorkflowRunPage() {
   const [runStatus,      setRunStatus]      = useState<string | undefined>(undefined);
   const [reviewedBy,     setReviewedBy]     = useState<string | undefined>(undefined);
   const [executionId,    setExecutionId]    = useState<string | undefined>(undefined);
+  const [parentRunId,    setParentRunId]    = useState<string | undefined>(undefined);
   const [loading,        setLoading]        = useState(true);
   const [modalExecId,    setModalExecId]    = useState<string | undefined>(undefined);
   const [team,           setTeam]           = useState<TeamDto | undefined>(undefined);
+  const [seedEvents,     setSeedEvents]     = useState<RunStreamEvent[]>([]);
+
+  // A run is a coordinator CHILD when GET /api/runs/{id} returns a non-null parent_run_id.
+  const isChild = parentRunId !== undefined && parentRunId !== null && parentRunId !== '';
 
   const openExecutionModal = useCallback((id: string) => setModalExecId(id), []);
 
@@ -752,7 +810,7 @@ export function WorkflowRunPage() {
     Promise.all([
       apiClient.getProjectRuns(projectId),
       apiClient.getTeam(projectId),
-    ]).then(([runs, teamData]) => {
+    ]).then(async ([runs, teamData]) => {
         if (cancelled) return;
         const run = runs.find((r) => r.workflow_run_id === runId);
         const name = run?.agent_name ?? undefined;
@@ -770,13 +828,53 @@ export function WorkflowRunPage() {
           );
           if (member) setAgentRoleTitle(member.role_title);
         }
+
+        // Fetch the run detail (GET /api/runs/{id}) to learn whether this is a coordinator
+        // child (parent_run_id) and to get the authoritative terminal status. The list
+        // endpoint above does not carry parent_run_id.
+        const execId = run?.execution_id;
+        if (execId) {
+          try {
+            const detail = await apiClient.getRun(execId);
+            if (cancelled) return;
+            setParentRunId(detail.parent_run_id ?? undefined);
+            if (detail.status) setRunStatus(detail.status);
+          } catch { /* parent_run_id unavailable — treat as a non-child run */ }
+        }
       })
       .catch(() => { /* non-fatal */ })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [projectId, runId]);
 
-  const { events, status: streamStatus, reconnect } = useRunStream(executionId ?? '', API_KEY, API_URL);
+  const { events: liveEvents, status: streamStatus, reconnect } = useRunStream(executionId ?? '', API_KEY, API_URL);
+
+  // FIX 2 — seed the execution timeline for a finished/parked run from the persisted
+  // events endpoint. A terminal child has a closed SSE stream, so without this the graph
+  // reads all-"Pending" and the timeline is empty. Mirrors the topology REST-seed pattern.
+  useEffect(() => {
+    if (!executionId) { setSeedEvents([]); return; }
+    if (!runStatus || !SEED_STATUSES.has(runStatus)) { setSeedEvents([]); return; }
+    let cancelled = false;
+    apiClient.getRunEvents(executionId)
+      .then((persisted) => {
+        if (cancelled) return;
+        setSeedEvents(persisted.map((e) => ({
+          sequence: e.sequence,
+          type: e.type as EventType,
+          payload: e.payload,
+        })));
+      })
+      .catch(() => { /* endpoint may 404 if the durable log is absent — fall back to SSE */ });
+    return () => { cancelled = true; };
+  }, [executionId, runStatus]);
+
+  // Fold the REST seed under the live SSE deltas: persisted events first, then any live
+  // event not already present (dedupe by sequence; singleton seq-0 events by type).
+  const events = useMemo<RunStreamEvent[]>(
+    () => mergeRunEvents(seedEvents, liveEvents),
+    [seedEvents, liveEvents],
+  );
 
   // Extract the run outcome (report_outcome { achieved, reason }) from the event stream.
   const runOutcome = useMemo<{ achieved: boolean; reason: string } | undefined>(() => {
@@ -845,6 +943,12 @@ export function WorkflowRunPage() {
         if (!map['merge'] || map['merge'].status === 'started') {
           map['merge'] = { ...map['merge'], status: 'failed' };
         }
+      } else if (evt.type === 'run.assemble_ready' || evt.type === 'subtask.assemble_ready') {
+        // CHILD pipeline terminal: the child finished agent + RAI and is parked awaiting
+        // collective assembly. Mark the assemble-ready node complete.
+        const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
+        const tsMs = tsStr ? new Date(tsStr).getTime() : NaN;
+        map['assemble-ready'] = { status: 'completed', completedAt: !isNaN(tsMs) ? tsMs : Date.now() };
       } else if (evt.type === 'agent.intent') {
         // Track the latest intent message so the agent card shows real progress text.
         const intentText = evt.payload['intent'] != null ? String(evt.payload['intent']) : undefined;
@@ -858,8 +962,28 @@ export function WorkflowRunPage() {
     // Optimistic: if stream is done and merge completed but no scribe events arrived,
     // treat as skipped (scribe was skipped due to missing project/agent context, not completed).
     const streamDone = streamStatus === 'done' || streamStatus === 'error';
-    if (streamDone && map['merge']?.status === 'completed' && !map['scribe']) {
+    if (!isChild && streamDone && map['merge']?.status === 'completed' && !map['scribe']) {
       map['scribe'] = { status: 'skipped' };
+    }
+
+    // CHILD pipeline: agent → RAI → assemble-ready only. When the run is finished/parked
+    // (terminal status or closed stream) and the explicit assemble_ready event did not
+    // arrive, infer the trimmed pipeline progress so the child shows execution rather than
+    // all-"Pending". Review/Merge/Scribe are intentionally never set for a child.
+    if (isChild) {
+      const childParked = streamDone || (runStatus !== undefined && SEED_STATUSES.has(runStatus));
+      if (childParked) {
+        if (!map['agent']) {
+          map['agent'] = { status: runStatus === 'failed' ? 'failed' : 'completed', agentName };
+        }
+        if (map['agent']?.status === 'completed') {
+          if (!map['rai']) map['rai'] = { status: 'completed' };
+          if (!map['assemble-ready'] && map['rai']?.status === 'completed') {
+            map['assemble-ready'] = { status: 'completed' };
+          }
+        }
+      }
+      return map;
     }
 
     // Optimistic: if stream is done and agent completed but no review/merge events arrived,
@@ -897,7 +1021,7 @@ export function WorkflowRunPage() {
     }
 
     return map;
-  }, [events, streamStatus, runStatus, agentName]);
+  }, [events, streamStatus, runStatus, agentName, isChild]);
 
   // Determine which loopback arc is "active" (lit in blue) based on executor states.
   // rai→agent: active when Rai requested a revision and agent is now running again.
@@ -914,9 +1038,16 @@ export function WorkflowRunPage() {
     return undefined;
   }, [executorStates]);
 
+  // Select the graph shape from the child flag: a coordinator child renders the trimmed
+  // agent → RAI → assemble-ready pipeline with no revise/request-changes loopbacks; a
+  // normal run keeps the full 5-stage graph. Derived (not mutated) from the shared consts.
+  const executors    = isChild ? CHILD_EXECUTORS : EXECUTORS;
+  const forwardEdges = isChild ? CHILD_FORWARD_EDGES : FORWARD_EDGES;
+  const displayEdges = isChild ? CHILD_EDGES : ALL_EDGES;
+
   // Build React Flow nodes; run dagre on forward edges only for LR layout.
   const rfNodes: Node[] = useMemo(() => {
-    const raw: Node[] = EXECUTORS.map((def) => ({
+    const raw: Node[] = executors.map((def) => ({
       id: def.key,
       type: 'workflow',
       data: {
@@ -934,8 +1065,8 @@ export function WorkflowRunPage() {
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
-    return layoutDag(raw, FORWARD_EDGES, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
-  }, [executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded]);
+    return layoutDag(raw, forwardEdges, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
+  }, [executors, forwardEdges, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -969,7 +1100,7 @@ export function WorkflowRunPage() {
         <div className={styles.dagContainer}>
           <ReactFlow
             nodes={rfNodes}
-            edges={ALL_EDGES}
+            edges={displayEdges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             fitView

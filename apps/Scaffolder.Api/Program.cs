@@ -347,6 +347,8 @@ app.MapGet("/api/runs/{id}", async (
         OutcomeReason = outcomeReason,
         AgentName = run.AgentName,
         ReviewedBy = run.ReviewedBy,
+        ParentRunId = run.ParentRunId,
+        SubtaskId = run.SubtaskId,
     });
 });
 
@@ -586,6 +588,52 @@ app.MapGet("/api/runs/{id}/stream", async (
         try { await httpContext.Response.WriteAsync("event: error\ndata: stream failure\n\n", CancellationToken.None); }
         catch { /* response may already be closed */ }
     }
+});
+
+// GET /api/runs/{id}/events — return the persisted RunEvents for a run, ordered by sequence.
+// This is the REST seed the web execution timeline uses to render a finished run's log without
+// holding an SSE connection. For coordinator CHILD runs (Feature 008) the trimmed pipeline's
+// agent + RAI events are persisted at the assemble-ready terminal, so this returns a non-empty,
+// replayable log after the in-memory stream entry is evicted. Auth mirrors the other
+// /api/runs endpoints (owner-scoped Bearer key).
+app.MapGet("/api/runs/{id}/events", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for events", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var key = runId.ToString();
+    using var dbScope = httpContext.RequestServices.CreateScope();
+    var db = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+    var persisted = db.RunEvents
+        .Where(e => e.RunId == key)
+        .OrderBy(e => e.Sequence)
+        .ToList();
+
+    var result = persisted.Select(rec =>
+    {
+        object payload;
+        try { payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson); }
+        catch { payload = new { }; }
+        return new { sequence = rec.Sequence, type = rec.EventType, payload };
+    });
+
+    return Results.Ok(result);
 });
 
 // GET /api/runs/{id}/history — replay persisted session events for terminal runs.
