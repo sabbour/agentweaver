@@ -397,7 +397,7 @@ public sealed class RunOrchestrator
     public async Task MarkChildRunFailedAsync(Run run, Exception error, CancellationToken ct)
     {
         var runId = run.Id.ToString();
-        var reason = error.Message;
+        var reason = RedactFailureReason(error);
         try
         {
             var now = DateTimeOffset.UtcNow;
@@ -436,6 +436,40 @@ public sealed class RunOrchestrator
             _logger.LogError(ex,
                 "MarkChildRunFailedAsync failed to terminalize child run {RunId}; subtask will still be marked failed",
                 runId);
+        }
+    }
+
+    /// <summary>
+    /// Normalizes an exception into a durable, user-visible failure reason that is safe to persist
+    /// into the run event log and serve over the API. Prepends the exception type, masks user-home
+    /// path segments (which embed the OS login name / internal layout — info-disclosure, RAI YELLOW),
+    /// collapses whitespace, and caps length. The full unredacted exception remains in the server
+    /// logger for operators. Defensive: never throws.
+    /// </summary>
+    internal static string RedactFailureReason(Exception error)
+    {
+        const int maxLength = 500;
+        try
+        {
+            var text = $"{error.GetType().Name}: {error.Message}";
+
+            // Mask Windows user-home paths: C:\Users\<login>\... -> C:\Users\<redacted>\...
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text, @"(?i)([A-Za-z]:\\Users\\)[^\\""'\s]+", "$1<redacted>");
+            // Mask Unix user-home paths: /home/<login>/... and /Users/<login>/...
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text, @"(?i)(/(?:home|Users)/)[^/\s""']+", "$1<redacted>");
+
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+
+            if (text.Length > maxLength)
+                text = text[..maxLength] + "…";
+
+            return text.Length == 0 ? error.GetType().Name : text;
+        }
+        catch
+        {
+            return error.GetType().Name;
         }
     }
 

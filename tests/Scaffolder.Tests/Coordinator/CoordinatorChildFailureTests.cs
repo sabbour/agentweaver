@@ -102,6 +102,26 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         fetched.Result.Should().Contain("workflow start boom");
     }
 
+    [Theory]
+    [InlineData(@"could not create worktree at C:\Users\asabbour\.local\share\scaffolder\worktrees\abc")]
+    [InlineData("path /home/asabbour/.copilot/session-state/x rejected")]
+    [InlineData("path /Users/asabbour/Git/scaffolders/y outside sandbox")]
+    public void RedactFailureReason_MasksUserHomePaths(string message)
+    {
+        var reason = RunOrchestrator.RedactFailureReason(new InvalidOperationException(message));
+
+        reason.Should().Contain("<redacted>");
+        reason.Should().NotContain("asabbour", "the OS login name must not leak into a persisted, user-visible log");
+        reason.Should().StartWith("InvalidOperationException", "the exception type prefixes the reason");
+    }
+
+    [Fact]
+    public void RedactFailureReason_CapsLength()
+    {
+        var reason = RunOrchestrator.RedactFailureReason(new Exception(new string('x', 5000)));
+        reason.Length.Should().BeLessThanOrEqualTo(520, "the reason is length-capped before persistence");
+    }
+
     private static Run NewChildRun() => new()
     {
         Id = RunId.New(),
