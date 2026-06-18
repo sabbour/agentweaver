@@ -72,6 +72,21 @@ public sealed class GraphDescriptorBuilder
     /// <summary>Builds the underlying MAF workflow.</summary>
     public Workflow Build() => _inner.Build()!;
 
+    /// <summary>
+    /// Snapshot of every wired executor's render metadata keyed by its MAF executor id (the id MAF
+    /// reports on <c>ExecutorInvokedEvent</c>/<c>ExecutorCompletedEvent</c>/<c>ExecutorFailedEvent</c>).
+    /// Built as a byproduct of wiring so the watch loop can translate a live executor id into its
+    /// rendered <see cref="ExecutorNodeMeta.LogicalNodeId"/> (== the descriptor node id) without
+    /// runtime reflection. Includes the known <see cref="ReviewGatePortId"/> port fallback.
+    /// </summary>
+    public IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaMap()
+    {
+        var map = new Dictionary<string, ExecutorNodeMeta>(StringComparer.Ordinal);
+        foreach (var (id, m) in _rawNodes)
+            map[id] = new ExecutorNodeMeta(m.LogicalNodeId, m.Label, m.Hidden);
+        return map;
+    }
+
     // ── Recording ──────────────────────────────────────────────────────────
 
     private void RecordEdge(ExecutorBinding source, ExecutorBinding target)
@@ -244,3 +259,11 @@ public sealed class GraphDescriptorBuilder
     private readonly record struct RawMeta(
         string LogicalNodeId, string Label, string Role, string NodeType, string Kind, bool Hidden);
 }
+
+/// <summary>
+/// Lightweight per-executor render metadata keyed (externally) by MAF executor id. Used by the run
+/// watch loop to translate MAF executor lifecycle events (<c>ExecutorInvoked/Completed/Failed</c>)
+/// into <c>workflow.step</c> UI events. <see cref="LogicalNodeId"/> equals the rendered descriptor
+/// node id so <c>payload.step</c> lines up with the graph node the frontend keys on.
+/// </summary>
+public sealed record ExecutorNodeMeta(string LogicalNodeId, string DisplayLabel, bool Hidden);

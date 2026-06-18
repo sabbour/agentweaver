@@ -40,6 +40,11 @@ public sealed class RunWorkflowFactory
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
 
+    // Per-run snapshot of executorId -> render metadata, captured when the run's workflow is built
+    // (StartAsync/ResumeAsync). The watch loop uses it to translate MAF executor lifecycle events
+    // into workflow.step UI events. Cleared on genuine terminal cleanup so it cannot leak.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyDictionary<string, ExecutorNodeMeta>> _runExecutorMeta = new();
+
     public CheckpointManager CheckpointManager => _checkpointManager;
     public string CheckpointDirectory => _checkpointDir;
 
@@ -180,7 +185,7 @@ public sealed class RunWorkflowFactory
     /// <summary>Maximum revision iterations before capping (Rai or Review).</summary>
     private const int MaxIterations = 3;
 
-    private (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflow(bool isChild = false)
+    private (Workflow Workflow, GraphDescriptor Descriptor, IReadOnlyDictionary<string, ExecutorNodeMeta> ExecutorMeta) BuildWorkflow(bool isChild = false)
     {
         // A fresh worker agent per workflow build (per run), resolved through the injectable
         // IWorkflowAgentFactory seam. In production this builds a CopilotAIAgent — an AIAgent the
@@ -519,7 +524,7 @@ public sealed class RunWorkflowFactory
                 .WithOutputFrom(childAssembleReady);
             var childWf = childBuilder.Build();
             var childDescriptor = childBuilder.BuildDescriptor("agentweaver-workflow-child", "child");
-            return (childWf, childDescriptor);
+            return (childWf, childDescriptor, childBuilder.BuildExecutorMetaMap());
         }
 
         var fullBuilder = new GraphDescriptorBuilder(agentInputStorer)
@@ -580,7 +585,7 @@ public sealed class RunWorkflowFactory
         var wf = fullBuilder.Build();
         var descriptor = fullBuilder.BuildDescriptor("agentweaver-workflow-full", "full");
 
-        return (wf, descriptor);
+        return (wf, descriptor, fullBuilder.BuildExecutorMetaMap());
     }
 
     /// <summary>
@@ -590,7 +595,10 @@ public sealed class RunWorkflowFactory
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false)
     {
-        var (workflow, descriptor) = BuildWorkflow(isChild);
+        var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild);
+        // Capture the executorId -> render-metadata map so the watch loop can translate MAF executor
+        // lifecycle events into workflow.step UI events for nodes without a dedicated self-emitter.
+        _runExecutorMeta[runId] = executorMeta;
         // Emit the per-run workflow graph snapshot at run start so the SSE stream carries the
         // descriptor; it is persisted alongside other RunEvents at terminal states so the REST
         // seed path (/api/runs/{id}/events) and /api/runs/{id}/graph work for finished runs.
@@ -612,7 +620,19 @@ public sealed class RunWorkflowFactory
     /// reflect the built MAF graph (ReflectExecutors/ReflectEdges) and assert the descriptor stays in
     /// sync with the wired executors. Reflection is used ONLY by that build-time test, never at runtime.
     /// </summary>
-    internal (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflowForTest(bool isChild) => BuildWorkflow(isChild);
+    internal (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflowForTest(bool isChild)
+    {
+        var (workflow, descriptor, _) = BuildWorkflow(isChild);
+        return (workflow, descriptor);
+    }
+
+    /// <summary>
+    /// Test seam: the executorId -> render-metadata map the watch loop uses to translate MAF executor
+    /// lifecycle events into <c>workflow.step</c> UI events. Lets tests assert the gap-node mapping
+    /// (e.g. <c>child-assemble-ready</c> -&gt; <c>assemble-ready</c>) without running a workflow.
+    /// </summary>
+    internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(bool isChild) =>
+        BuildWorkflow(isChild).ExecutorMeta;
 
     /// <summary>
     /// Resumes a workflow run from checkpoint. The pipeline shape (full vs trimmed child)
@@ -627,10 +647,30 @@ public sealed class RunWorkflowFactory
             var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
             isChild = run?.ParentRunId is not null;
         }
-        var (workflow, _) = BuildWorkflow(isChild);
+        var (workflow, _, executorMeta) = BuildWorkflow(isChild);
+        _runExecutorMeta[checkpointInfo.SessionId] = executorMeta;
         return await InProcessExecution.ResumeStreamingAsync(
             workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Resolves the render metadata for a live MAF executor id within a run, if the run's workflow
+    /// was built through this factory (StartAsync/ResumeAsync). Used by the watch loop to translate
+    /// MAF executor lifecycle events into <c>workflow.step</c> UI events.
+    /// </summary>
+    public bool TryGetExecutorMeta(string runId, string executorId, out ExecutorNodeMeta meta)
+    {
+        meta = null!;
+        return _runExecutorMeta.TryGetValue(runId, out var map)
+            && map.TryGetValue(executorId, out meta!);
+    }
+
+    /// <summary>
+    /// Drops the cached executor metadata for a run. Called on genuine terminal cleanup so the
+    /// per-run map cannot leak. Not called on the non-terminal blocked/abandoned path — a revision
+    /// restart repopulates the map via <see cref="StartAsync"/>.
+    /// </summary>
+    public void ClearRunExecutorMeta(string runId) => _runExecutorMeta.TryRemove(runId, out _);
 
     /// <summary>
     /// Deletes checkpoint files for a given run (Guardrail 8: cleanup on terminal state).

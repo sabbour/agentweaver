@@ -40,7 +40,8 @@ public static class WorkflowStepEvents
         string status,
         string label,
         int sequence = 0,
-        string? agentName = null)
+        string? agentName = null,
+        string? message = null)
     {
         // Update per-run state.
         var runState = _runStates.GetOrAdd(runId, _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
@@ -58,9 +59,13 @@ public static class WorkflowStepEvents
 
         // Emit to the run stream for the web UI.
         var timestampUtc = DateTimeOffset.UtcNow.ToString("O");
-        object payload = agentName is not null
-            ? new { step, status, label, agent_name = agentName, timestamp_utc = timestampUtc }
-            : new { step, status, label, timestamp_utc = timestampUtc };
+        object payload = (agentName, message) switch
+        {
+            (not null, not null) => new { step, status, label, agent_name = agentName, message, timestamp_utc = timestampUtc },
+            (not null, null)     => new { step, status, label, agent_name = agentName, timestamp_utc = timestampUtc },
+            (null, not null)     => new { step, status, label, message, timestamp_utc = timestampUtc },
+            _                    => new { step, status, label, timestamp_utc = timestampUtc },
+        };
         stream?.TryWrite(new RunEvent(sequence, EventTypes.WorkflowStep, payload));
 
         // Clean up completed runs so the dictionary doesn't grow unbounded.

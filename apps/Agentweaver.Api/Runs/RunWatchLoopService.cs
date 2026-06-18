@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
 
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -95,6 +96,23 @@ public sealed class RunWatchLoopService
         {
             switch (evt)
             {
+                // Per-executor lifecycle (MAF) -> live workflow.step events. This makes the graph
+                // dynamic for nodes WITHOUT a dedicated self-emitter (e.g. the child assemble-ready
+                // terminal). Nodes with richer dedicated emissions (agent/rai/merge/scribe self-emit
+                // from their executors; review is HITL-driven) are skipped by TryBuildExecutorStepEvent
+                // so we never double-emit or clobber their statuses.
+                case ExecutorInvokedEvent invoked:
+                    EmitExecutorStep(runId, entry, invoked.ExecutorId, "started");
+                    break;
+
+                case ExecutorCompletedEvent completed:
+                    EmitExecutorStep(runId, entry, completed.ExecutorId, "completed");
+                    break;
+
+                case ExecutorFailedEvent failed:
+                    EmitExecutorStep(runId, entry, failed.ExecutorId, "failed");
+                    break;
+
                 case RequestInfoEvent rie:
                     // Guard: if PendingRequestStore already has this run (e.g., restored by
                     // WorkflowRestartService before this consumer reads the event), skip to
@@ -131,6 +149,7 @@ public sealed class RunWatchLoopService
                         {
                             _registry.Abandon(runId);
                             _factory.DeleteCheckpoints(runId);
+                            _factory.ClearRunExecutorMeta(runId);
                             return;
                         }
                         // Non-terminal (e.g. leaked blocked output): preserve registry + checkpoints
@@ -138,6 +157,56 @@ public sealed class RunWatchLoopService
                         break;
             }
         }
+    }
+
+    /// <summary>
+    /// Logical nodes whose <c>workflow.step</c> lifecycle is owned by a dedicated, richer emitter, so
+    /// the generic MAF-event translator must NOT also emit for them (double-emit / status clobber):
+    /// agent, rai, merge, scribe self-emit from their executors (including revise/skipped/failed
+    /// nuances MAF lifecycle cannot express); review is driven by the HITL RequestInfoEvent + the
+    /// terminal handlers below.
+    /// </summary>
+    private static readonly HashSet<string> DedicatedStepNodes =
+        new(StringComparer.Ordinal) { "agent", "rai", "merge", "scribe", "review" };
+
+    private void EmitExecutorStep(string runId, RunStreamEntry entry, string executorId, string status)
+    {
+        if (!_factory.TryGetExecutorMeta(runId, executorId, out var meta))
+            return;
+
+        // Cheap, optional human-readable context for the one node this currently lights up. Never
+        // do expensive work to compute a message (the frontend handles its absence).
+        string? message = meta.LogicalNodeId == "assemble-ready"
+            ? status switch
+            {
+                "started" => "Preparing child result for assembly",
+                "completed" => "Child result ready for assembly",
+                _ => null,
+            }
+            : null;
+
+        var payload = TryBuildExecutorStepEvent(meta, status, message);
+        if (payload is not null)
+            entry.RecordNext(EventTypes.WorkflowStep, payload);
+    }
+
+    /// <summary>
+    /// Pure translation of a MAF executor lifecycle transition into a <c>workflow.step</c> payload
+    /// (or <c>null</c> when no event should be emitted). Returns <c>null</c> for unknown/hidden
+    /// executors and for <see cref="DedicatedStepNodes"/> (owned by richer dedicated emitters).
+    /// Extracted as a static method so the mapping is unit-testable without driving a workflow.
+    /// </summary>
+    internal static object? TryBuildExecutorStepEvent(ExecutorNodeMeta? meta, string status, string? message = null)
+    {
+        if (meta is null || meta.Hidden)
+            return null;
+        if (DedicatedStepNodes.Contains(meta.LogicalNodeId))
+            return null;
+
+        var timestampUtc = DateTimeOffset.UtcNow.ToString("O");
+        return message is null
+            ? new { step = meta.LogicalNodeId, status, label = meta.DisplayLabel, timestamp_utc = timestampUtc }
+            : new { step = meta.LogicalNodeId, status, label = meta.DisplayLabel, timestamp_utc = timestampUtc, message };
     }
 
     /// <summary>
@@ -344,6 +413,7 @@ public sealed class RunWatchLoopService
         finally
         {
             _registry.Abandon(runId);
+            _factory.ClearRunExecutorMeta(runId);
         }
     }
 }

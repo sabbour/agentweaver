@@ -33,7 +33,7 @@ Clients should order and deduplicate events by `sequence`.
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
-| `workflow.step` | When each workflow executor stage transitions | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only) |
+| `workflow.step` | When each workflow executor stage transitions (start/complete/fail/skip), for every node in both the full and child pipelines | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only), `message` (optional) |
 | `run.workflow_graph` | Once at run start, carrying the full workflow graph descriptor for rendering the run topology | `GraphDescriptor` (see below) |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
 | `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |
@@ -164,21 +164,24 @@ Emitted when a tool call is paused waiting for human approval. `request_id` iden
 
 ### `workflow.step`
 
-Emitted by each workflow executor stage when it starts, completes, fails, or is skipped. The `step` field identifies the stage:
+Emitted by each workflow executor stage when it starts, completes, fails, or is skipped — for every executor node in BOTH the full and the trimmed coordinator-child pipelines, so the graph updates live (no node stays "Pending" while it is actually running). The `step` field identifies the stage:
 
-| Step | Executor |
-|------|----------|
-| `agent` | AI agent turn (task execution) |
-| `rai` | RAI safety review |
-| `review` | Human review gate |
-| `merge` | Branch merge |
-| `scribe` | Session logger |
+| Step | Executor | Emitter |
+|------|----------|---------|
+| `agent` | AI agent turn (task execution) | executor self-emit |
+| `rai` | RAI safety review | executor self-emit |
+| `review` | Human review gate | HITL (`review.requested` / decision endpoints) |
+| `merge` | Branch merge | executor self-emit |
+| `scribe` | Session logger | executor self-emit |
+| `assemble-ready` | Coordinator child assemble-ready terminal | watch loop (MAF executor-lifecycle translation) |
+
+Lifecycle (`started` / `completed` / `failed`) is translated from the MAF `ExecutorInvoked` / `ExecutorCompleted` / `ExecutorFailed` events by the run watch loop for nodes that do not already self-emit (currently the child `assemble-ready` terminal); the agent/rai/merge/scribe executors self-emit their own lifecycle plus the richer branch statuses.
 
 Possible `status` values: `started`, `completed`, `failed`, `skipped`, `revise` (RAI step only).
 
-The `label` field is a short human-readable description (e.g. `"Agent turn"`, `"RAI review"`). `timestamp_utc` is an ISO 8601 timestamp. The `agent` step includes `agent_name` (the team member running the turn). The `review` step includes `reviewer` (GitHub username) when a human review decision is recorded.
+The `step` value always equals the descriptor node id the frontend keys on (`run.workflow_graph` `nodes[].id`). The `label` field is a short human-readable description (e.g. `"Agent turn"`, `"RAI review"`, `"Assemble-ready"`). `timestamp_utc` is an ISO 8601 (`"O"`) timestamp; the `timestamp_utc` on the `started` event drives the per-node live elapsed timer. The `agent` step includes `agent_name` (the team member running the turn). The `review` step includes `reviewer` (GitHub username) when a human review decision is recorded. An optional `message` field carries a short human-readable status note when available (e.g. on the assemble-ready node); consumers must tolerate its absence.
 
-The web UI uses `workflow.step` events to drive the workflow diagram — each card in the Agent → Rai → Review → Merge → Scribe pipeline updates live as these events arrive.
+The web UI uses `workflow.step` events to drive the workflow diagram — each card in the Agent → Rai → Review → Merge → Scribe pipeline (or Agent → Rai → Assemble-ready for a child) updates live as these events arrive.
 
 ### `run.workflow_graph`
 

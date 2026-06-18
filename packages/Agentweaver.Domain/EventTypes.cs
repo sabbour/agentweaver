@@ -51,8 +51,15 @@ public static class EventTypes
     public const string RunCancelled           = "run.cancelled";
 
     /// <summary>
-    /// Emitted at each major MAF workflow executor transition.
-    /// Payload: { step: string, status: "started"|"completed"|"skipped"|"failed", label: string }
+    /// Emitted at each major MAF workflow executor transition, as it starts and completes, for every
+    /// executor node in both the full and trimmed child pipelines (agent, rai, assemble-ready, merge,
+    /// scribe, review). The agent/rai/merge/scribe nodes self-emit from their executors (with extra
+    /// "revise"/"skipped" statuses); the child assemble-ready terminal is emitted by the watch loop's
+    /// MAF executor-lifecycle translation; review is HITL-driven. <c>step</c> equals the descriptor
+    /// node id the frontend keys on, and <c>timestamp_utc</c> on the "started" event drives the live
+    /// elapsed timer.
+    /// Payload: { step: string, status: "started"|"completed"|"skipped"|"failed", label: string,
+    ///            timestamp_utc: string (ISO 8601 "O"), agent_name?: string, message?: string }
     /// </summary>
     public const string WorkflowStep = "workflow.step";
 
