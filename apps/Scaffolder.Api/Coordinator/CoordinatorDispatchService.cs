@@ -15,6 +15,17 @@ using RunStatus = Scaffolder.Domain.RunStatus;
 namespace Scaffolder.Api.Coordinator;
 
 /// <summary>
+/// Re-dispatch seam used by Phase 3 collective assembly when a reviewer requests changes (D6). The
+/// assembly service resolves this lazily (avoiding a constructor DI cycle) and re-runs the dispatch
+/// engine over the reset frontier.
+/// </summary>
+public interface ICoordinatorDispatch
+{
+    /// <summary>Launches dispatch + observe for a coordinator run (fire-and-forget; idempotent).</summary>
+    void StartDispatch(CoordinatorDispatchContext context);
+}
+
+/// <summary>
 /// Feature 008 Phase 2 DISPATCH + OBSERVE engine. After the human confirms a coordinator outcome
 /// spec and <see cref="CoordinatorOrchestratorExecutor"/> persists the work plan,
 /// <see cref="CoordinatorRunService"/> hands the coordinator run off here. This service:
@@ -34,20 +45,21 @@ namespace Scaffolder.Api.Coordinator;
 /// transition) so the live topology view renders with no client-side computation.</item>
 /// </list>
 ///
-/// Phase 2 advances <see cref="WorkPlan.Status"/> planned -&gt; dispatching while children run;
-/// assembling / in_review / complete are owned by Phase 3, so when all subtasks reach a terminal
-/// state the coordinator run is left in progress awaiting collective assembly.
+/// Phase 2 advances <see cref="WorkPlan.Status"/> planned -&gt; dispatching while children run; when
+/// all subtasks reach a terminal state the plan moves to awaiting_assembly and hands off to Phase 3
+/// collective assembly (<see cref="ICoordinatorAssembly"/>).
 ///
 /// All EF writes happen on the single dispatch-loop task using a scoped
 /// <see cref="MemoryDbContext"/> (the <see cref="IServiceScopeFactory"/> pattern), so parallel
 /// child dispatch + observation never corrupt EF state. Observation tasks only READ the stream.
 /// </summary>
-public sealed class CoordinatorDispatchService
+public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 {
     private readonly SqliteRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunOrchestrator _orchestrator;
     private readonly CoordinatorSteeringQueue _steering;
+    private readonly ICoordinatorAssembly _assembly;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<CoordinatorDispatchService> _logger;
     private readonly CancellationToken _appStopping;
@@ -59,6 +71,7 @@ public sealed class CoordinatorDispatchService
         RunStreamStore streamStore,
         RunOrchestrator orchestrator,
         CoordinatorSteeringQueue steering,
+        ICoordinatorAssembly assembly,
         IServiceScopeFactory scopeFactory,
         IHostApplicationLifetime lifetime,
         ILogger<CoordinatorDispatchService> logger)
@@ -67,6 +80,7 @@ public sealed class CoordinatorDispatchService
         _streamStore = streamStore;
         _orchestrator = orchestrator;
         _steering = steering;
+        _assembly = assembly;
         _scopeFactory = scopeFactory;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
@@ -188,15 +202,12 @@ public sealed class CoordinatorDispatchService
     }
 
     /// <summary>
-    /// Defect D: every child subtask is now terminal. Phase 3 (collective assembly / merge) is
-    /// intentionally NOT built yet, so we must NOT leave the coordinator run silently InProgress with
-    /// an open stream — that made the run look hung (user issue #5). This emits an explicit
-    /// children-complete signal, moves the work plan to the terminal-ish
-    /// <see cref="WorkPlanStatus.AwaitingAssembly"/> status, publishes a final topology snapshot
-    /// reflecting it, and closes the coordinator stream so the UI shows a clear "all children done,
-    /// awaiting collective assembly (Phase 3)" state instead of an in-flight one. The coordinator Run
-    /// row's final lifecycle (assembly, merge, completion) is owned by Phase 3 and is deliberately
-    /// left untouched here.
+    /// Every child subtask is now terminal. This emits an explicit children-complete signal, moves
+    /// the work plan to <see cref="WorkPlanStatus.AwaitingAssembly"/>, publishes a snapshot reflecting
+    /// it, then HANDS OFF to Phase 3 collective assembly (<see cref="CoordinatorAssemblyService"/>).
+    /// The coordinator stream is intentionally LEFT OPEN — the assembly pipeline continues to emit
+    /// <c>coordinator.assembly_*</c> events on it and closes it at its own terminal (complete /
+    /// blocked / failed / declined), or it is re-opened by a re-dispatch wave on request_changes.
     /// </summary>
     internal async Task FinalizeDispatchAsync(
         CoordinatorDispatchContext context,
@@ -210,7 +221,7 @@ public sealed class CoordinatorDispatchService
             .GroupBy(s => s)
             .ToDictionary(g => g.Key, g => g.Count());
         _logger.LogInformation(
-            "Coordinator dispatch complete for run {RunId}: {Summary}. Awaiting Phase 3 assembly.",
+            "Coordinator dispatch complete for run {RunId}: {Summary}. Handing off to Phase 3 assembly.",
             context.CoordinatorRunId,
             string.Join(", ", terminalCounts.Select(kv => $"{kv.Key}={kv.Value}")));
 
@@ -233,17 +244,17 @@ public sealed class CoordinatorDispatchService
                 total = statusById.Count,
             });
 
-            // Final FULL snapshot so the graph stops looking in-flight: every node + the terminal
-            // AwaitingAssembly work-plan status, no client-side computation required.
+            // FULL snapshot so the graph reflects the AwaitingAssembly hand-off point.
             var finalSubtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
             finalEntry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
                 context.CoordinatorRunId, workPlanId, WorkPlanStatus.AwaitingAssembly,
                 finalSubtasks, edges, seq.Next()));
             await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-
-            // Close the coordinator stream so SSE clients receive a terminal [DONE] and stop polling.
-            _streamStore.Complete(context.CoordinatorRunId);
         }
+
+        // Phase 3 hand-off: drive the ONE collective pipeline over the combined child output. The DB
+        // CAS inside StartAssembly guarantees exactly-once even across re-dispatch waves.
+        _assembly.StartAssembly(context);
     }
 
     private async Task<string?> DispatchOneAsync(
@@ -577,7 +588,12 @@ public sealed class CoordinatorDispatchService
             .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
             .ToList();
 
-        var descriptor = CoordinatorGraphDescriptor.Build(coordinatorRunId, subtasks, deps);
+        var assemblyStage = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.AssemblyStage)
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+
+        var descriptor = CoordinatorGraphDescriptor.Build(coordinatorRunId, subtasks, deps, assemblyStage);
         entry.RecordNext(EventTypes.CoordinatorGraph, descriptor);
     }
 
@@ -686,6 +702,44 @@ public static class WorkPlanStatus
     /// cref="Complete"/>. The UI renders this as "all children done, awaiting collective assembly".
     /// </summary>
     public const string AwaitingAssembly = "awaiting_assembly";
+
+    // ── Phase 3 collective-assembly terminal / parked states ──────────────────────────────────
+    /// <summary>Assembly stopped with NO partial assembly: a subtask was not eligible, or merging
+    /// child branches into the integration branch conflicted. Terminal/parked.</summary>
+    public const string AssemblyBlocked = "assembly_blocked";
+
+    /// <summary>The collective merge of the integration branch into origin failed. Terminal.</summary>
+    public const string AssemblyFailed = "assembly_failed";
+
+    /// <summary>The reviewer declined the collective output (not request-changes). Terminal.</summary>
+    public const string AssemblyDeclined = "assembly_declined";
+}
+
+/// <summary>
+/// Canonical <see cref="WorkPlan.AssemblyStage"/> values (Phase 3). Drives the coordinator graph
+/// node-flip: each planned collective-assembly node (<c>planned:assembly-{stage}</c>) renders with
+/// kind="live" once its stage has started, computed from the persisted stage. A stage is sticky —
+/// it only advances forward (rai -&gt; review -&gt; merge -&gt; scribe -&gt; done) so every node up to and
+/// including the current stage renders live.
+/// </summary>
+public static class AssemblyStage
+{
+    public const string Rai = "rai";
+    public const string Review = "review";
+    public const string Merge = "merge";
+    public const string Scribe = "scribe";
+    public const string Done = "done";
+
+    /// <summary>Forward ordinal of a stage (0 = not started). Used for the sticky node-flip.</summary>
+    public static int Ordinal(string? stage) => stage switch
+    {
+        Rai => 1,
+        Review => 2,
+        Merge => 3,
+        Scribe => 4,
+        Done => 5,
+        _ => 0,
+    };
 }
 
 /// <summary>

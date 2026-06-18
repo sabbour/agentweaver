@@ -12,12 +12,13 @@ using Scaffolder.Domain;
 namespace Scaffolder.Tests.Coordinator;
 
 /// <summary>
-/// Unit tests for the Feature 008 Defect D dispatch finalization
+/// Unit tests for the Feature 008 dispatch finalization
 /// (<see cref="CoordinatorDispatchService.FinalizeDispatchAsync"/>). After every child subtask is
-/// terminal, the coordinator run must NOT silently stay in-flight (it looked hung). Finalization must
-/// emit <see cref="EventTypes.CoordinatorChildrenComplete"/>, move the work plan to the terminal-ish
-/// <see cref="WorkPlanStatus.AwaitingAssembly"/> status, publish a final topology snapshot, and close
-/// the coordinator stream. Real service + real EF <see cref="MemoryDbContext"/> (no mocks).
+/// terminal, finalization must emit <see cref="EventTypes.CoordinatorChildrenComplete"/>, move the
+/// work plan to <see cref="WorkPlanStatus.AwaitingAssembly"/>, publish a final topology snapshot, and
+/// HAND OFF to Phase 3 collective assembly (the stream is left open for the assembly pipeline). Real
+/// service + real EF <see cref="MemoryDbContext"/> (no mocks); a fake <see cref="ICoordinatorAssembly"/>
+/// records the hand-off without launching the real pipeline.
 /// </summary>
 public sealed class CoordinatorDispatchFinalizationTests : IDisposable
 {
@@ -25,6 +26,7 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
     private readonly ServiceProvider _provider;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RunStreamStore _streamStore = new();
+    private readonly RecordingAssembly _assembly = new();
     private readonly CoordinatorDispatchService _sut;
 
     public CoordinatorDispatchFinalizationTests()
@@ -45,13 +47,14 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
             _streamStore,
             orchestrator: null!,
             steering: null!,
+            _assembly,
             _scopeFactory,
             new TestHostApplicationLifetime(),
             NullLogger<CoordinatorDispatchService>.Instance);
     }
 
     [Fact]
-    public async Task FinalizeDispatch_AllChildrenTerminal_EmitsChildrenComplete_AndAwaitingAssembly()
+    public async Task FinalizeDispatch_AllChildrenTerminal_EmitsChildrenComplete_AndHandsOffToAssembly()
     {
         const string coordinatorRunId = "coord-final-1";
         var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId);
@@ -69,7 +72,7 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
         await _sut.FinalizeDispatchAsync(
             context, workPlanId, statusById, edges: [], new CoordinatorDispatchService.SeqCounter(), default);
 
-        // The work plan reached the terminal-ish AwaitingAssembly status.
+        // The work plan reached the AwaitingAssembly hand-off status.
         await using (var scope = _provider.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -77,14 +80,22 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
             plan.Status.Should().Be(WorkPlanStatus.AwaitingAssembly);
         }
 
-        // The coordinator stream carries the explicit children-complete signal and a final snapshot,
-        // and is now completed so SSE clients stop polling (no longer looks hung).
+        // The coordinator stream carries the explicit children-complete signal and a final snapshot.
         var entry = _streamStore.Get(coordinatorRunId)!;
         var events = entry.GetSnapshotSince(0).Events;
         events.Should().Contain(e => e.Type == EventTypes.CoordinatorChildrenComplete);
         events.Should().Contain(e => e.Type == EventTypes.CoordinatorTopology,
-            "a final topology snapshot must reflect the terminal status");
-        entry.IsCompleted.Should().BeTrue("the coordinator stream must close so the run is not hung");
+            "a final topology snapshot must reflect the hand-off status");
+
+        // Phase 3 hand-off: assembly was triggered for this run (stream stays open for it).
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
+        entry.IsCompleted.Should().BeFalse("the assembly pipeline now owns closing the coordinator stream");
+    }
+
+    private sealed class RecordingAssembly : ICoordinatorAssembly
+    {
+        public List<CoordinatorDispatchContext> Started { get; } = [];
+        public void StartAssembly(CoordinatorDispatchContext context) => Started.Add(context);
     }
 
     private async Task<(int WorkPlanId, List<int> SubtaskIds)> SeedPlanAsync(string coordinatorRunId)

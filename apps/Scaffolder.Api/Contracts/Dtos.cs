@@ -257,6 +257,30 @@ public sealed record ReviewRequest
     public string? Feedback { get; init; }
 }
 
+/// <summary>
+/// Request body for POST /api/runs/{coordinatorRunId}/assembly/review — the ONE collective human
+/// review gate (Feature 008 Phase 3, D5). Mirrors <see cref="ReviewRequest"/> and adds the optional
+/// explicit <c>target_files</c> list (D6 step a) used, alongside path tokens parsed from
+/// <see cref="Feedback"/>, to infer which children to re-dispatch on request_changes.
+/// </summary>
+public sealed record AssemblyReviewRequest
+{
+    [JsonPropertyName("approved")]
+    public required bool Approved { get; init; }
+
+    /// <summary>When true the reviewer wants the affected children re-dispatched rather than declining.</summary>
+    [JsonPropertyName("request_changes")]
+    public bool RequestChanges { get; init; }
+
+    /// <summary>Free-text reviewer feedback; path-like tokens are parsed for rejection inference.</summary>
+    [JsonPropertyName("feedback")]
+    public string? Feedback { get; init; }
+
+    /// <summary>Optional explicit list of files the changes should target (augments parsed tokens).</summary>
+    [JsonPropertyName("target_files")]
+    public IReadOnlyList<string>? TargetFiles { get; init; }
+}
+
 /// <summary>Response body for POST /api/runs/{id}/review.</summary>
 public sealed record ReviewResponse
 {

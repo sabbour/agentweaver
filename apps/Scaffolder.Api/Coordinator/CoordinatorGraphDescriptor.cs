@@ -36,13 +36,14 @@ public static class CoordinatorGraphDescriptor
     public static GraphDescriptor Build(
         string coordinatorRunId,
         IReadOnlyList<Subtask> subtasks,
-        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies)
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
+        string? assemblyStage = null)
     {
         var projected = subtasks
             .Select(s => new SubtaskNode(
                 s.Id, s.Title, s.AssignedAgent, s.SelectedModelId, s.Phase, s.IsolationStrategy, s.ChildRunId))
             .ToList();
-        return BuildCore(coordinatorRunId, projected, dependencies);
+        return BuildCore(coordinatorRunId, projected, dependencies, assemblyStage);
     }
 
     /// <summary>Builds the descriptor from the <see cref="CoordinatorWorkPlanView"/> projection.</summary>
@@ -55,13 +56,14 @@ public static class CoordinatorGraphDescriptor
         var deps = plan.Dependencies
             .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
             .ToList();
-        return BuildCore(plan.CoordinatorRunId, projected, deps);
+        return BuildCore(plan.CoordinatorRunId, projected, deps, plan.AssemblyStage);
     }
 
     private static GraphDescriptor BuildCore(
         string coordinatorRunId,
         IReadOnlyList<SubtaskNode> subtasks,
-        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies)
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
+        string? assemblyStage)
     {
         var nodes = new List<GraphNode>(subtasks.Count + 5)
         {
@@ -86,11 +88,15 @@ public static class CoordinatorGraphDescriptor
                 ChildRunId: s.ChildRunId));
         }
 
-        // PLANNED collective-assembly stage (Phase 3, not yet built).
-        nodes.Add(new GraphNode(AssemblyRaiNodeId, "RAI", "rai", "planned", "agent", ChildGraphRef: null));
-        nodes.Add(new GraphNode(AssemblyReviewNodeId, "Human Review", "review", "planned", "gate", ChildGraphRef: null));
-        nodes.Add(new GraphNode(AssemblyMergeNodeId, "Merge", "merge", "planned", "action", ChildGraphRef: null));
-        nodes.Add(new GraphNode(AssemblyScribeNodeId, "Scribe", "scribe", "planned", "agent", ChildGraphRef: null));
+        // Collective-assembly stage (Phase 3). Each node flips planned -> live once its stage has
+        // started, computed from the persisted work-plan AssemblyStage (sticky/forward-only): a node
+        // renders "live" when its stage ordinal is <= the current stage ordinal, else "planned".
+        var stageOrd = AssemblyStage.Ordinal(assemblyStage);
+        string Kind(int nodeStageOrd) => stageOrd >= nodeStageOrd ? "live" : "planned";
+        nodes.Add(new GraphNode(AssemblyRaiNodeId, "RAI", "rai", Kind(AssemblyStage.Ordinal(AssemblyStage.Rai)), "agent", ChildGraphRef: null));
+        nodes.Add(new GraphNode(AssemblyReviewNodeId, "Human Review", "review", Kind(AssemblyStage.Ordinal(AssemblyStage.Review)), "gate", ChildGraphRef: null));
+        nodes.Add(new GraphNode(AssemblyMergeNodeId, "Merge", "merge", Kind(AssemblyStage.Ordinal(AssemblyStage.Merge)), "action", ChildGraphRef: null));
+        nodes.Add(new GraphNode(AssemblyScribeNodeId, "Scribe", "scribe", Kind(AssemblyStage.Ordinal(AssemblyStage.Scribe)), "agent", ChildGraphRef: null));
 
         // ── Edges ────────────────────────────────────────────────────────────
         var subtaskIds = subtasks.Select(s => s.Id).ToHashSet();

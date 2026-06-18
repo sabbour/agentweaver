@@ -51,6 +51,16 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.graph` | When the unified coordinator graph shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot) | a shape-only `GraphDescriptor` (variant `coordinator`) |
 | `subtask.dispatched` / `subtask.running` / `subtask.assemble_ready` / `subtask.rai_flagged` / `subtask.completed` / `subtask.failed` | As a subtask's child run advances through its lifecycle | `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status` |
 | `coordinator.steering` | When a steering directive is created or changes state | `directiveId`, `kind`, `targetChildRunId`, `status`, `instruction` |
+| `coordinator.children_complete` | When every child subtask has reached a terminal status and the work plan moves to `awaiting_assembly` | `workPlanId` |
+| `coordinator.assembly_started` | When the collective-assembly pipeline claims the plan (`awaiting_assembly → assembling`, exactly-once) | `workPlanId`, `integrationBranch`, `subtaskCount` |
+| `coordinator.assembly_blocked` | When assembly stops with NO partial work — an ineligible subtask, or a conflict building the integration branch | `workPlanId`, `reason`, and (conflict only) `conflictingBranch`, `conflictingFiles` |
+| `coordinator.assembly_rai_started` / `coordinator.assembly_rai_completed` | The ONE collective RAI pass over the aggregate diff (advisory; never hard-blocks) | `workPlanId`, `integrationBranch` / `raiSafetyFlagged` |
+| `coordinator.assembly_review_requested` | When the pipeline suspends at the ONE collective human-review gate | `workPlanId`, `integrationBranch`, `raiSafetyFlagged`, `hasChanges` |
+| `coordinator.assembly_review_approved` | When the reviewer approves the combined output | `workPlanId` |
+| `coordinator.assembly_changes_requested` | When the reviewer requests changes; the coordinator re-dispatches the inferred children | `workPlanId`, `redispatchSubtaskIds`, `inferredFiles`, `fellBackToAll`, `feedback` |
+| `coordinator.assembly_merge_started` / `coordinator.assembly_merge_completed` / `coordinator.assembly_merge_failed` | The ONE collective merge of the integration branch into the originating branch | `workPlanId`, `integrationBranch` / `commitHash` / `reason`, `conflictingFiles` |
+| `coordinator.assembly_scribe_started` / `coordinator.assembly_scribe_completed` | The ONE collective scribe pass after a successful merge (best-effort) | `workPlanId` |
+| `coordinator.assembly_completed` | When collective assembly finishes and the work plan reaches `complete` | `workPlanId`, `integrationBranch`, `commitHash` |
 
 ## Tool event pairing
 
@@ -240,6 +250,24 @@ The `subtask.dispatched`, `subtask.running`, `subtask.assemble_ready`, `subtask.
 ### `coordinator.steering`
 
 Emitted when a steering directive is created through `POST /api/runs/{id}/steer` and as it changes state. `directiveId` identifies the directive; `kind` is `stop`, `redirect`, or `amend`; `targetChildRunId` is the targeted child run, or null for a broadcast to every active child; `instruction` is the direction relayed to the subagent(s); `status` advances `pending -> queued -> relayed -> applied`. A `stop` collapses to `applied` essentially immediately because it cancels the in-flight turn's token. A `redirect` or `amend` reaches `applied` only at the targeted subagent's next turn boundary, so observers should surface it as queued until then. Pause is not supported in Phase 2.
+
+### `coordinator.children_complete` and `coordinator.assembly_*`
+
+Phase 3 collective assembly runs ONE pipeline over the COMBINED output of all child runs, then flows back to the coordinator. Child output is git state, not in-memory text: each child commits to its own worktree branch. When every child subtask reaches a terminal status, the coordinator emits `coordinator.children_complete` and moves the work plan to `awaiting_assembly`.
+
+A single background pipeline then drives the collective stages, each emitting a paired `coordinator.graph` so its planned assembly node flips to `kind: "live"`:
+
+1. **Exactly-once claim** — a DB compare-and-swap transitions `awaiting_assembly → assembling`; only the winner proceeds. `coordinator.assembly_started` carries the `integrationBranch` name (`scaffolder/integration/{coordinatorRunId}`) and `subtaskCount`.
+2. **Eligibility gate (no partial assembly)** — every subtask must be assembly-eligible (`assemble_ready`, or `completed` with no changes). If any is failed / rai_flagged / pending / blocked, or merging the eligible child branches into the integration branch conflicts, the pipeline emits `coordinator.assembly_blocked` (with `reason`, and `conflictingBranch`/`conflictingFiles` on a conflict) and STOPS — no RAI, no merge.
+3. **Integration branch** — the eligible child branches are merged in dependency (topological) order off the coordinator's originating branch, producing one aggregate diff + tree hash.
+4. **Collective RAI** (`coordinator.assembly_rai_started` → `coordinator.assembly_rai_completed`) — one RAI pass over the aggregate diff. It is advisory: it never hard-blocks, but `raiSafetyFlagged` is surfaced to the human reviewer.
+5. **One human review gate** (`coordinator.assembly_review_requested`) — the pipeline suspends until a decision arrives via `POST /api/runs/{coordinatorRunId}/assembly/review`. Approve → `coordinator.assembly_review_approved`. Request changes → `coordinator.assembly_changes_requested` (the coordinator infers the affected children from the reviewer's `target_files` ∪ path tokens in `feedback`, intersected with each child's touched-files and expanded to dependents — `redispatchSubtaskIds`, `inferredFiles`, `fellBackToAll`), resets those subtasks to `pending`, returns the plan to `dispatching`, and re-dispatches. A pure decline is the terminal `assembly_declined` status.
+6. **One merge** (`coordinator.assembly_merge_started` → `coordinator.assembly_merge_completed` with `commitHash`, or `coordinator.assembly_merge_failed` with `reason`/`conflictingFiles`).
+7. **One scribe** (`coordinator.assembly_scribe_started` → `coordinator.assembly_scribe_completed`) — best-effort; a scribe failure does not fail the already-merged assembly.
+8. **Completion** — `coordinator.assembly_completed` with the `integrationBranch` and `commitHash`; the work plan reaches `complete`.
+
+Work-plan status flows `dispatching → awaiting_assembly → assembling → in_review → assembling` (during merge/scribe after approval) `→ complete`, plus the parked/terminal states `assembly_blocked`, `assembly_failed`, and `assembly_declined`. The per-child `subtask.rai_flagged` events and the collective `coordinator.assembly_rai_*` events are DISTINCT: the former is each agent stream's own RAI, the latter is the single RAI over the combined output. All events carry a monotonic `seq` on the coordinator stream.
+
 
 ## Model-assisted casting
 

@@ -898,7 +898,7 @@ Response `200 OK`:
 | `workPlanId` | string | Persisted work plan id. |
 | `coordinatorRunId` | string | The coordinator run that owns the plan. |
 | `outcomeSpecId` | string | The confirmed outcome spec the plan was decomposed from. |
-| `status` | string | `planned`, `dispatching`, `assembling`, `in_review`, or `complete`. |
+| `status` | string | `planned`, `dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, or a parked/terminal state `assembly_blocked` / `assembly_failed` / `assembly_declined`. |
 | `subtasks` | array | Decomposed units of work; each has `subtaskId`, `title`, `scope`, `assignedAgent`, `selectedModelId`, `phase`, `isolation`, `status`, and `childRunId` (null until dispatched). |
 | `dependencies` | array | `{ subtaskId, dependsOnSubtaskId }` edges; a subtask dispatches only once every dependency reaches `assemble_ready`/`completed`. |
 
@@ -983,7 +983,46 @@ A `stop` takes effect immediately: it cancels the targeted child run's in-flight
 `404 Not Found` when the run does not exist.
 `409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
 
-GitHub authentication allows the GitHub Copilot provider to use a token obtained through the OAuth device flow rather than a static API key.
+### POST /api/runs/{id}/assembly/review
+
+The ONE collective human-review gate for Phase 3 collective assembly (Feature 008). After every child subtask finishes, the coordinator builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs a collective RAI pass over the aggregate diff, then suspends here for one human decision over the **combined** output of all agents. Mirrors `POST /api/runs/{id}/review` (owner-scoped, at-most-once) but `{id}` is the **coordinator** run id, and the decision is delivered to the service-driven gate the collective pipeline is awaiting. Owner-scoped.
+
+Request:
+
+```json
+{
+  "approved": false,
+  "request_changes": true,
+  "feedback": "The change in src/auth/login.ts breaks logout",
+  "target_files": ["src/auth/login.ts"]
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `approved` | bool | Yes | `true` continues to the ONE collective merge → ONE collective scribe → `complete`. |
+| `request_changes` | bool | No | When `true` (and `approved` is `false`), the coordinator re-dispatches the affected children rather than declining. |
+| `feedback` | string | No | Free-text reviewer feedback; path-like tokens are parsed to infer which children to redo. |
+| `target_files` | string[] | No | Explicit list of files the changes should target; augments the tokens parsed from `feedback`. |
+
+**Decision routing**
+
+- **Approve** (`approved: true`) → the pipeline merges the integration branch into the originating branch and runs the collective scribe, emitting `coordinator.assembly_merge_*`, `coordinator.assembly_scribe_*`, then `coordinator.assembly_completed`; the work plan reaches `complete`.
+- **Request changes** (`approved: false`, `request_changes: true`) → the coordinator infers the affected children from `target_files` ∪ path tokens in `feedback`, intersects them with each child's persisted touched-files, expands to include dependents, resets those subtasks to `pending` (leaving the rest intact), returns the plan to `dispatching`, and re-dispatches. If no file can be inferred or no child matches, it falls back to re-dispatching **all** children. Emits `coordinator.assembly_changes_requested`.
+- **Decline** (`approved: false`, `request_changes: false`) → terminal `assembly_declined`; the coordinator stream closes.
+
+Response `200 OK`:
+
+```json
+{ "runId": "f36800fd-...", "accepted": true }
+```
+
+`400 Bad Request` when `id` is not a valid run id.
+`403 Forbidden` when the caller does not own the run, or does not own the pending review request.
+`404 Not Found` when the run does not exist.
+`409 Conflict` with `error: "no_assembly_review_pending"` when no collective review is currently awaited for the run (the pipeline has not reached the gate yet, or the decision was already consumed by a concurrent POST).
+
+
 
 ### POST /api/auth/github/device
 

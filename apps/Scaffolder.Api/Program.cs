@@ -60,7 +60,16 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorAssemblyStore>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.AssemblyReviewGate>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.ICollectiveAssemblyPipeline,
+    Scaffolder.Api.Coordinator.CollectiveAssemblyPipeline>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorAssemblyService>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.ICoordinatorAssembly>(
+    sp => sp.GetRequiredService<Scaffolder.Api.Coordinator.CoordinatorAssemblyService>());
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorDispatchService>();
+builder.Services.AddSingleton<Scaffolder.Api.Coordinator.ICoordinatorDispatch>(
+    sp => sp.GetRequiredService<Scaffolder.Api.Coordinator.CoordinatorDispatchService>());
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorSteeringQueue>();
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorSteeringService>();
 builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorWorkflowFactory>();
@@ -2542,9 +2551,60 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
     }
 });
 
-// -----------------------------------------------------------------------
-// Casting & Team endpoints
-// -----------------------------------------------------------------------
+// POST /api/runs/{coordinatorRunId}/assembly/review — the ONE collective human-review gate
+// (Feature 008 Phase 3, D5). Mirrors POST /api/runs/{id}/review (owner-scoped, at-most-once) but
+// delivers the decision to the service-driven AssemblyReviewGate the collective pipeline is awaiting.
+// Body: { approved, request_changes?, feedback?, target_files? }. approve -> merge/scribe/complete;
+// request_changes -> rejection inference + re-dispatch (D6); decline -> assembly_declined.
+app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
+    HttpContext httpContext,
+    string coordinatorRunId,
+    AssemblyReviewRequest request,
+    SqliteRunStore runStore,
+    Scaffolder.Api.Coordinator.AssemblyReviewGate reviewGate,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(coordinatorRunId, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for assembly review", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+    var decision = new Scaffolder.Api.Coordinator.AssemblyReviewDecision(
+        Approved: request.Approved,
+        RequestChanges: request.RequestChanges,
+        Feedback: request.Feedback,
+        TargetFiles: request.TargetFiles,
+        Reviewer: caller.User);
+
+    var result = reviewGate.TrySubmit(coordinatorRunId, caller.User, decision);
+
+    logger.LogInformation(
+        "Assembly review decision: {Decision}. RunId={RunId} Reviewer={Reviewer} Result={Result}",
+        request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+        coordinatorRunId, caller.User, result);
+
+    return result switch
+    {
+        Scaffolder.Api.Coordinator.AssemblyReviewSubmitResult.Accepted =>
+            Results.Json(new { runId = coordinatorRunId, accepted = true }),
+        Scaffolder.Api.Coordinator.AssemblyReviewSubmitResult.Forbidden =>
+            Results.StatusCode(StatusCodes.Status403Forbidden),
+        // NotArmed: no collective review is currently awaited (not yet at the gate, or already consumed).
+        _ => Results.Conflict(new { error = "no_assembly_review_pending" }),
+    };
+});
 
 // GET /api/casting/templates — list all team templates from the catalog
 app.MapGet("/api/casting/templates", (CastingService castingService, CatalogReader catalog) =>

@@ -412,7 +412,8 @@ public sealed class CoordinatorRunService
             subtasks.Select(s => new CoordinatorSubtaskView(
                 s.Id, s.Title, s.Scope, s.AssignedAgent, s.SelectedModelId,
                 s.Phase, s.IsolationStrategy, s.Status, s.ChildRunId)).ToList(),
-            edges.Select(e => new CoordinatorDependencyView(e.SubtaskId, e.DependsOnSubtaskId)).ToList());
+            edges.Select(e => new CoordinatorDependencyView(e.SubtaskId, e.DependsOnSubtaskId)).ToList(),
+            plan.AssemblyStage);
     }
 
     /// <summary>
@@ -513,7 +514,8 @@ public sealed record CoordinatorWorkPlanView(
     string Status,
     string? IsolationSummary,
     IReadOnlyList<CoordinatorSubtaskView> Subtasks,
-    IReadOnlyList<CoordinatorDependencyView> Dependencies);
+    IReadOnlyList<CoordinatorDependencyView> Dependencies,
+    string? AssemblyStage = null);
 
 /// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>
 public sealed record CoordinatorSubtaskView(

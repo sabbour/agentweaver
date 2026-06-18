@@ -198,4 +198,62 @@ public static class EventTypes
     /// Payload: { workPlanId, completed, assembleReady, failed, total }.
     /// </summary>
     public const string CoordinatorChildrenComplete = "coordinator.children_complete";
+
+    // -----------------------------------------------------------------------
+    // Coordinator collective assembly (Feature 008 Phase 3). Emitted on the COORDINATOR run's
+    // stream once every child subtask is terminal and the work plan enters collective assembly:
+    // ONE pipeline (integration branch -> collective RAI -> ONE human review -> ONE merge -> ONE
+    // scribe) over the COMBINED output of all children. These are DISTINCT from the per-child
+    // subtask.* / rai events — they describe the single collective stage. snake_case types,
+    // monotonic seq, emitted through the same coordinator event-emit path as coordinator.graph /
+    // coordinator.topology.
+    // -----------------------------------------------------------------------
+
+    /// <summary>Collective assembly claimed the work plan (awaiting_assembly -> assembling).
+    /// Payload: { workPlanId, integrationBranch }.</summary>
+    public const string CoordinatorAssemblyStarted = "coordinator.assembly_started";
+
+    /// <summary>Collective RAI review of the aggregate diff began. Payload: { workPlanId }.</summary>
+    public const string CoordinatorAssemblyRaiStarted = "coordinator.assembly_rai_started";
+
+    /// <summary>Collective RAI review of the aggregate diff finished (advisory; never hard-blocks).
+    /// Payload: { workPlanId, raiSafetyFlagged }.</summary>
+    public const string CoordinatorAssemblyRaiCompleted = "coordinator.assembly_rai_completed";
+
+    /// <summary>The ONE collective human-review gate was armed and is awaiting a decision.
+    /// Payload: { workPlanId, integrationBranch, treeHash, raiSafetyFlagged }.</summary>
+    public const string CoordinatorAssemblyReviewRequested = "coordinator.assembly_review_requested";
+
+    /// <summary>The collective human-review gate was approved. Payload: { workPlanId, reviewer }.</summary>
+    public const string CoordinatorAssemblyReviewApproved = "coordinator.assembly_review_approved";
+
+    /// <summary>The reviewer requested changes; selected children are re-dispatched (review flows
+    /// back to the coordinator). Payload: { workPlanId, reviewer, redispatchedSubtaskIds, inferredFiles }.</summary>
+    public const string CoordinatorAssemblyChangesRequested = "coordinator.assembly_changes_requested";
+
+    /// <summary>The single collective merge of the integration branch into origin began.
+    /// Payload: { workPlanId, integrationBranch }.</summary>
+    public const string CoordinatorAssemblyMergeStarted = "coordinator.assembly_merge_started";
+
+    /// <summary>The single collective merge succeeded. Payload: { workPlanId, commitHash }.</summary>
+    public const string CoordinatorAssemblyMergeCompleted = "coordinator.assembly_merge_completed";
+
+    /// <summary>The single collective merge failed (conflict/error). Payload: { workPlanId, reason,
+    /// conflictingFiles }.</summary>
+    public const string CoordinatorAssemblyMergeFailed = "coordinator.assembly_merge_failed";
+
+    /// <summary>The single collective scribe pass began. Payload: { workPlanId }.</summary>
+    public const string CoordinatorAssemblyScribeStarted = "coordinator.assembly_scribe_started";
+
+    /// <summary>The single collective scribe pass finished. Payload: { workPlanId }.</summary>
+    public const string CoordinatorAssemblyScribeCompleted = "coordinator.assembly_scribe_completed";
+
+    /// <summary>Collective assembly completed end-to-end (merged + scribed); work plan is complete.
+    /// Payload: { workPlanId, commitHash }.</summary>
+    public const string CoordinatorAssemblyCompleted = "coordinator.assembly_completed";
+
+    /// <summary>Collective assembly was blocked and stopped with NO partial assembly: either a
+    /// subtask was not assembly-eligible, or merging child branches into the integration branch
+    /// conflicted. Payload: { workPlanId, reason, ineligibleSubtaskIds?, conflictingFiles? }.</summary>
+    public const string CoordinatorAssemblyBlocked = "coordinator.assembly_blocked";
 }

@@ -115,6 +115,89 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
+    /// Phase 3 (D1): builds the COLLECTIVE integration branch. Creates (or resets)
+    /// <paramref name="integrationBranch"/> at the originating branch tip, then merges each eligible
+    /// child branch in <paramref name="childBranchesInOrder"/> (already dependency/topologically
+    /// ordered) into it using HEADLESS tree merges (<see cref="ObjectDatabase.MergeCommits"/>) — no
+    /// working directory or worktree is checked out, so this is safe to run from the coordinator's
+    /// background loop. On the FIRST conflict it stops with NO partial assembly and returns the
+    /// conflicting branch + files (D2). On success it returns the aggregate tree hash and the
+    /// aggregate diff vs the originating branch. An empty <paramref name="childBranchesInOrder"/>
+    /// (every child was a no-change <c>completed</c>) yields an empty-diff success.
+    /// <para>Branch-ref only: the originating branch is never modified here; that happens later in the
+    /// single collective merge.</para>
+    /// </summary>
+    public IntegrationBranchResult BuildIntegrationBranch(
+        string repositoryPath,
+        string originatingBranch,
+        string integrationBranch,
+        IReadOnlyList<string> childBranchesInOrder)
+    {
+        using var repo = new Repository(repositoryPath);
+
+        var origin = repo.Branches[originatingBranch]
+            ?? throw new InvalidOperationException($"Originating branch '{originatingBranch}' was not found.");
+
+        // Create/reset the integration branch ref at the originating branch tip.
+        var existing = repo.Branches[integrationBranch];
+        if (existing is not null)
+            repo.Branches.Remove(existing);
+        var intBranch = repo.CreateBranch(integrationBranch, origin.Tip);
+
+        var integrationCommit = origin.Tip;
+
+        foreach (var childBranch in childBranchesInOrder)
+        {
+            var child = repo.Branches[childBranch];
+            if (child?.Tip is null)
+            {
+                _logger.LogWarning(
+                    "Integration build: child branch '{Branch}' not found or empty — skipping", childBranch);
+                continue;
+            }
+
+            var mergeBase = repo.ObjectDatabase.FindMergeBase(integrationCommit, child.Tip);
+
+            // Child is already contained in the integration branch — no-op.
+            if (mergeBase is not null && string.Equals(mergeBase.Sha, child.Tip.Sha, StringComparison.Ordinal))
+                continue;
+
+            // Fast-forward: integration is an ancestor of the child tip.
+            if (mergeBase is not null && string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal))
+            {
+                integrationCommit = child.Tip;
+                continue;
+            }
+
+            // 3-way headless tree merge.
+            var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, child.Tip, new MergeTreeOptions());
+            if (merge.Status == MergeTreeStatus.Conflicts)
+            {
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch,
+                    childBranch,
+                    ExtractConflictingFiles(merge),
+                    $"Child branch conflicts with the integration branch and requires human resolution.");
+            }
+
+            var signature = WithTimestamp();
+            integrationCommit = repo.ObjectDatabase.CreateCommit(
+                signature,
+                signature,
+                $"Assemble {childBranch} into {integrationBranch}",
+                merge.Tree,
+                new[] { integrationCommit, child.Tip },
+                prettifyMessage: true);
+        }
+
+        // Point the integration branch ref at the final assembled commit.
+        repo.Refs.UpdateTarget(repo.Refs[intBranch.CanonicalName], integrationCommit.Id);
+
+        using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
+        return IntegrationBranchResult.Success(integrationBranch, integrationCommit.Tree.Sha, patch.Content);
+    }
+
+    /// <summary>
     /// Returns files that differ between the originating branch tip and the worktree branch tip
     /// (committed changes in this run). Results are cached for <see cref="CommittedCacheTtl"/>.
     /// </summary>
