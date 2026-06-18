@@ -1,0 +1,237 @@
+using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
+using Agentweaver.Domain;
+
+namespace Agentweaver.Tests.Coordinator;
+
+/// <summary>
+/// Focused unit tests for the Feature 008 Phase 2 steering surface
+/// (<see cref="CoordinatorSteeringService"/>). They exercise the real service against a real EF
+/// <see cref="MemoryDbContext"/> (in-memory SQLite, no mocks — Principle VII) and assert the honest
+/// directive lifecycle: <c>pause</c> is rejected, <c>stop</c> applies immediately (real
+/// cancellation), and <c>redirect</c>/<c>amend</c> are queued for the next turn boundary.
+/// </summary>
+public sealed class CoordinatorSteeringServiceTests : IDisposable
+{
+    private readonly SqliteConnection _connection;
+    private readonly ServiceProvider _provider;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly RunStreamStore _streamStore = new();
+    private readonly RunWorkflowRegistry _registry = new();
+    private readonly CoordinatorSteeringQueue _queue = new();
+    private readonly CoordinatorSteeringService _sut;
+
+    public CoordinatorSteeringServiceTests()
+    {
+        _connection = new SqliteConnection("DataSource=:memory:");
+        _connection.Open();
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_connection));
+        _provider = services.BuildServiceProvider();
+
+        using (var scope = _provider.CreateScope())
+            scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
+
+        _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
+        _sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _queue, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance);
+    }
+
+    [Fact]
+    public async Task Pause_IsRejected_AndNothingPersisted()
+    {
+        var act = async () => await _sut.SteerAsync("coord-1", "pause", null, "hold", "alice", default);
+
+        (await act.Should().ThrowAsync<SteeringValidationException>())
+            .Which.Message.Should().Contain("pause");
+
+        (await CountDirectivesAsync()).Should().Be(0, "a rejected verb must not persist a directive");
+    }
+
+    [Theory]
+    [InlineData("halt")]
+    [InlineData("")]
+    [InlineData("PAUSE ")] // normalized to pause -> still rejected
+    public async Task UnsupportedOrDescopedVerb_IsRejected(string kind)
+    {
+        var act = async () => await _sut.SteerAsync("coord-1", kind, null, "do something", "alice", default);
+        await act.Should().ThrowAsync<SteeringValidationException>();
+        (await CountDirectivesAsync()).Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("redirect")]
+    [InlineData("amend")]
+    public async Task NextBoundaryVerb_RequiresInstruction(string kind)
+    {
+        var act = async () => await _sut.SteerAsync("coord-1", kind, "child-1", "   ", "alice", default);
+        await act.Should().ThrowAsync<SteeringValidationException>();
+        (await CountDirectivesAsync()).Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("redirect")]
+    [InlineData("amend")]
+    public async Task RedirectOrAmend_IsQueuedForNextTurnBoundary(string kind)
+    {
+        _streamStore.Create("coord-1", "alice");
+
+        var view = await _sut.SteerAsync("coord-1", kind, "child-7", "use the v2 API", "alice", default);
+
+        view.Kind.Should().Be(kind);
+        view.Status.Should().Be(SteeringStatus.Queued, "redirect/amend never interrupt mid-turn; they queue");
+        view.RelayedAt.Should().BeNull("a queued directive has not been relayed yet");
+        view.TargetChildRunId.Should().Be("child-7");
+
+        // Persisted as queued.
+        var persisted = await GetDirectiveAsync(view.Id);
+        persisted!.Status.Should().Be(SteeringStatus.Queued);
+        persisted.CreatedBy.Should().Be("alice");
+
+        // Parked in the cross-thread queue for the dispatch loop to drain at the boundary.
+        var taken = _queue.TryTakeForChild("coord-1", "child-7");
+        taken.Should().NotBeNull();
+        taken!.DirectiveId.Should().Be(view.Id);
+        taken.Instruction.Should().Be("use the v2 API");
+
+        // A coordinator.steering event reflects the queued state.
+        var events = _streamStore.Get("coord-1")!.GetSnapshotSince(0).Events;
+        events.Should().Contain(e => e.Type == EventTypes.CoordinatorSteering);
+    }
+
+    [Fact]
+    public async Task Stop_AppliesImmediately_AndDoesNotQueue()
+    {
+        _streamStore.Create("coord-1", "alice");
+
+        // Register a real child run with a real CTS so we can assert true cancellation.
+        var cts = new CancellationTokenSource();
+        _streamStore.Create("child-9", "alice");
+        _registry.Register("child-9", null!, cts);
+
+        var view = await _sut.SteerAsync("coord-1", "stop", "child-9", "stop now", "alice", default);
+
+        view.Kind.Should().Be(SteeringKind.Stop);
+        view.Status.Should().Be(SteeringStatus.Applied, "stop collapses relayed->applied immediately");
+        view.RelayedAt.Should().NotBeNull("an applied stop records when it was relayed");
+
+        cts.IsCancellationRequested.Should().BeTrue("stop must really cancel the child run's token");
+
+        // The child stream carries a terminal run.cancelled so the dispatch observer resolves it.
+        var childEvents = _streamStore.Get("child-9")!.GetSnapshotSince(0).Events;
+        childEvents.Should().Contain(e => e.Type == EventTypes.RunCancelled);
+        _streamStore.Get("child-9")!.IsCompleted.Should().BeTrue();
+
+        // stop never goes through the next-turn-boundary queue.
+        _queue.TryTakeForChild("coord-1", "child-9").Should().BeNull();
+
+        var persisted = await GetDirectiveAsync(view.Id);
+        persisted!.Status.Should().Be(SteeringStatus.Applied);
+        persisted.RelayedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Stop_Broadcast_CancelsAllActiveChildren()
+    {
+        _streamStore.Create("coord-1", "alice");
+        await SeedActiveChildAsync("coord-1", "child-A", SubtaskStatus.Running);
+        await SeedActiveChildAsync("coord-1", "child-B", SubtaskStatus.Dispatched);
+
+        var ctsA = new CancellationTokenSource();
+        var ctsB = new CancellationTokenSource();
+        _streamStore.Create("child-A", "alice");
+        _streamStore.Create("child-B", "alice");
+        _registry.Register("child-A", null!, ctsA);
+        _registry.Register("child-B", null!, ctsB);
+
+        var view = await _sut.SteerAsync("coord-1", "stop", targetChildRunId: null, "abort all", "alice", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+        view.TargetChildRunId.Should().BeNull("a broadcast stop targets every active child");
+        ctsA.IsCancellationRequested.Should().BeTrue();
+        ctsB.IsCancellationRequested.Should().BeTrue();
+    }
+
+    // -----------------------------------------------------------------------
+
+    private async Task SeedActiveChildAsync(string coordinatorRunId, string childRunId, string status)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var plan = await db.WorkPlans.FirstOrDefaultAsync(w => w.CoordinatorRunId == coordinatorRunId);
+        if (plan is null)
+        {
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "proj-1",
+                CoordinatorRunId = coordinatorRunId,
+                Goal = "g",
+                DesiredOutcome = "o",
+                Scope = "s",
+                Assumptions = "a",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+
+            plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "proj-1",
+                CoordinatorRunId = coordinatorRunId,
+                Status = WorkPlanStatus.Dispatching,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+        }
+
+        db.Subtasks.Add(new Subtask
+        {
+            WorkPlanId = plan.Id,
+            Title = "t",
+            Scope = "s",
+            AssignedAgent = "morpheus",
+            SelectedModelId = "gpt",
+            Phase = "execution",
+            IsolationStrategy = "worktree",
+            Status = status,
+            ChildRunId = childRunId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<int> CountDirectivesAsync()
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.CountAsync();
+    }
+
+    private async Task<SteeringDirective?> GetDirectiveAsync(int id)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.AsNoTracking().FirstOrDefaultAsync(d => d.Id == id);
+    }
+
+    public void Dispose()
+    {
+        _provider.Dispose();
+        _connection.Dispose();
+    }
+}

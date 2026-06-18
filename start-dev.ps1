@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Start the Scaffolders development environment.
+    Start the Agentweavers development environment.
 
 .DESCRIPTION
     Starts two processes:
-      - Scaffolder.Api  — runs inside WSL2 using the Linux .NET 10 runtime
+      - Agentweaver.Api  — runs inside WSL2 using the Linux .NET 10 runtime
                           (picks up the bwrap sandbox executor automatically)
       - Web UI          — runs on Windows via Vite dev server
 
@@ -30,7 +30,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot   = $PSScriptRoot
-$apiProject = "apps/Scaffolder.Api"
+$apiProject = "apps/Agentweaver.Api"
 $webDir     = Join-Path $repoRoot "apps\web"
 $apiUrl     = "http://localhost:5000"
 $webUrl     = "http://localhost:8080"
@@ -39,7 +39,7 @@ $webUrl     = "http://localhost:8080"
 $wslRepoRoot = ($repoRoot -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
 
 Write-Host ""
-Write-Host "  Scaffolders Dev" -ForegroundColor Cyan
+Write-Host "  Agentweavers Dev" -ForegroundColor Cyan
 Write-Host "  API  $apiUrl  (WSL2 / Linux .NET)" -ForegroundColor DarkCyan
 Write-Host "  Web  $webUrl  (Windows / Vite)" -ForegroundColor DarkCyan
 Write-Host ""
@@ -49,7 +49,7 @@ Write-Host ""
 # If a previous instance is still running (e.g. from an earlier dev session),
 # the new one will crash immediately with "store already in use".
 Write-Host "Stopping any existing API processes in WSL..." -ForegroundColor DarkGray
-wsl --exec bash -c "pkill -f 'dotnet.*Scaffolder.Api' 2>/dev/null || true; sleep 1"
+wsl --exec bash -c "pkill -f 'dotnet.*Agentweaver.Api' 2>/dev/null || true; sleep 1"
 
 # ── 2. Optional build (Windows) so WSL picks up the latest IL ────────────────
 if (-not $SkipBuild) {
@@ -79,7 +79,7 @@ echo "API process exited (code: \$?). Press Enter to close."
 read
 "@
 
-$tmpSh    = Join-Path $env:TEMP "scaffolder-start-api.sh"
+$tmpSh    = Join-Path $env:TEMP "agentweaver-start-api.sh"
 $wslTmpSh = ($tmpSh -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
 # Write with LF-only line endings — PowerShell here-strings use CRLF on Windows
 # and bash treats the \r as part of directory names, breaking cd.
@@ -184,7 +184,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot   = $PSScriptRoot
-$apiProject = "apps/Scaffolder.Api"
+$apiProject = "apps/Agentweaver.Api"
 $webDir     = Join-Path $repoRoot "apps\web"
 $apiUrl     = "http://localhost:5000"
 $webUrl     = "http://localhost:8080"
@@ -193,7 +193,7 @@ $webUrl     = "http://localhost:8080"
 $wslRepoRoot = ($repoRoot -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
 
 Write-Host ""
-Write-Host "  Scaffolders Dev" -ForegroundColor Cyan
+Write-Host "  Agentweavers Dev" -ForegroundColor Cyan
 Write-Host "  API  $apiUrl  (WSL2 / Linux .NET)" -ForegroundColor DarkCyan
 Write-Host "  Web  $webUrl  (Windows / Vite)" -ForegroundColor DarkCyan
 Write-Host ""

@@ -25,14 +25,14 @@ apps/*/obj/
 packages/*/bin/
 packages/*/obj/
 # Un-ignore bundled mxc executor source binaries (MIT-licensed, ships with the package)
-!packages/Scaffolder.SandboxExec/bin/
-!packages/Scaffolder.SandboxExec/bin/arm64/
-!packages/Scaffolder.SandboxExec/bin/arm64/**
-!packages/Scaffolder.SandboxExec/bin/x64/
-!packages/Scaffolder.SandboxExec/bin/x64/**
+!packages/Agentweaver.SandboxExec/bin/
+!packages/Agentweaver.SandboxExec/bin/arm64/
+!packages/Agentweaver.SandboxExec/bin/arm64/**
+!packages/Agentweaver.SandboxExec/bin/x64/
+!packages/Agentweaver.SandboxExec/bin/x64/**
 # Re-ignore .NET build output subdirectories inside the SandboxExec bin/ folder
-packages/Scaffolder.SandboxExec/bin/Debug/
-packages/Scaffolder.SandboxExec/bin/Release/
+packages/Agentweaver.SandboxExec/bin/Debug/
+packages/Agentweaver.SandboxExec/bin/Release/
 tests/*/bin/
 tests/*/obj/
 
@@ -52,7 +52,7 @@ apps/web/dist/
 # Environment
 .env
 .env.local
-apps/Scaffolder.Api/appsettings.Development.json
+apps/Agentweaver.Api/appsettings.Development.json
 
 obj/
 
