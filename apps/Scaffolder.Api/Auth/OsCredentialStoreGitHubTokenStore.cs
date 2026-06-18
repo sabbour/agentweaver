@@ -43,6 +43,29 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         return new GitHubTokenEntry(GitHubTokenStatus.NeverSignedIn, null);
     }
 
+    public async Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return await _fallback.GetTokenAsync(scope, ct).ConfigureAwait(false);
+
+        var json = ReadCredential(TargetName(scope));
+        if (json is null) return null;
+        try
+        {
+            var stored = JsonSerializer.Deserialize<StoredCredential>(json);
+            if (stored?.Status == "signed-in" && !string.IsNullOrEmpty(stored.AccessToken))
+                return new GitHubToken(
+                    stored.AccessToken,
+                    stored.RefreshToken,
+                    stored.ExpiresAt,
+                    stored.Login ?? "unknown",
+                    stored.AvatarUrl,
+                    stored.Scopes ?? []);
+        }
+        catch (JsonException) { /* malformed — treat as no token */ }
+        return null;
+    }
+
     public async Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -52,8 +75,11 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         {
             Status = "signed-in",
             AccessToken = token.AccessToken,
+            RefreshToken = token.RefreshToken,
+            ExpiresAt = token.ExpiresAt,
             Login = token.Login,
-            AvatarUrl = token.AvatarUrl
+            AvatarUrl = token.AvatarUrl,
+            Scopes = token.Scopes
         };
         WriteCredential(TargetName(scope), token.Login, JsonSerializer.Serialize(stored));
     }
@@ -140,8 +166,11 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
     {
         public string? Status { get; init; }
         public string? AccessToken { get; init; }
+        public string? RefreshToken { get; init; }
+        public DateTimeOffset? ExpiresAt { get; init; }
         public string? Login { get; init; }
         public string? AvatarUrl { get; init; }
+        public string[]? Scopes { get; init; }
     }
 
     private static class NativeMethods

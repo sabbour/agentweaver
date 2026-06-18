@@ -131,8 +131,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
         var token = new GitHubToken(
             body.AccessToken!,
             body.RefreshToken,
-            string.IsNullOrWhiteSpace(body.RefreshTokenExpiresIn) ? null
-                : DateTimeOffset.UtcNow.AddSeconds(double.Parse(body.RefreshTokenExpiresIn)),
+            body.ExpiresIn is > 0 ? DateTimeOffset.UtcNow.AddSeconds(body.ExpiresIn.Value) : null,
             login,
             avatarUrl,
             (_scopes ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -175,7 +174,15 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
     {
         [JsonPropertyName("access_token")] public string? AccessToken { get; set; }
         [JsonPropertyName("refresh_token")] public string? RefreshToken { get; set; }
-        [JsonPropertyName("refresh_token_expires_in")] public string? RefreshTokenExpiresIn { get; set; }
+
+        [JsonPropertyName("expires_in")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long? ExpiresIn { get; set; }
+
+        [JsonPropertyName("refresh_token_expires_in")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long? RefreshTokenExpiresIn { get; set; }
+
         [JsonPropertyName("error")] public string? Error { get; set; }
     }
 

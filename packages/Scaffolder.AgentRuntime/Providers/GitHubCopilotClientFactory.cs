@@ -13,11 +13,13 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     private readonly string? _configFallbackToken;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
+    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
 
     public GitHubCopilotClientFactory(
         IConfiguration configuration,
         IGitHubTokenStore tokenStore,
-        IGitHubTokenScopeProvider scopeProvider)
+        IGitHubTokenScopeProvider scopeProvider,
+        IGitHubAccessTokenProvider? accessTokenProvider = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(tokenStore);
@@ -28,6 +30,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
             ?? section.GetValue<string>("ApiKey");
         _tokenStore = tokenStore;
         _scopeProvider = scopeProvider;
+        _accessTokenProvider = accessTokenProvider;
     }
 
     /// <summary>
@@ -55,7 +58,12 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         var entry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
         var token = entry.Status switch
         {
-            GitHubTokenStatus.SignedIn      => entry.AccessToken,
+            // Route signed-in tokens through the refresh-aware provider so an expired access
+            // token is transparently rotated; fall back to the raw token when no provider is wired.
+            GitHubTokenStatus.SignedIn      => _accessTokenProvider is not null
+                                                   ? await _accessTokenProvider
+                                                       .GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false)
+                                                   : entry.AccessToken,
             GitHubTokenStatus.SignedOut     => null,                   // fail closed after explicit sign-out
             GitHubTokenStatus.NeverSignedIn => _configFallbackToken,   // config MAY be used locally
             _ => null

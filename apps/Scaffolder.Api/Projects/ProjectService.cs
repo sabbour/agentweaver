@@ -19,6 +19,7 @@ public sealed class ProjectService
     private readonly ProjectGitInitializer _gitInit;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
+    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     private readonly ILogger<ProjectService> _logger;
 
     public ProjectService(
@@ -27,13 +28,15 @@ public sealed class ProjectService
         ProjectGitInitializer gitInit,
         IGitHubTokenStore tokenStore,
         IGitHubTokenScopeProvider scopeProvider,
-        ILogger<ProjectService> logger)
+        ILogger<ProjectService> logger,
+        IGitHubAccessTokenProvider? accessTokenProvider = null)
     {
         _store = store;
         _workspace = workspace;
         _gitInit = gitInit;
         _tokenStore = tokenStore;
         _scopeProvider = scopeProvider;
+        _accessTokenProvider = accessTokenProvider;
         _logger = logger;
     }
 
@@ -124,10 +127,19 @@ public sealed class ProjectService
             .ConfigureAwait(false);
         EnsureEmptyOrCreatable(workingDir);
 
-        // Resolve GitHub token (fail closed if signed out)
+        // Resolve a valid GitHub access token (refresh-aware; fail closed if signed out)
         var scope = _scopeProvider.Resolve(owner);
-        var tokenEntry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
-        if (tokenEntry.Status != GitHubTokenStatus.SignedIn || string.IsNullOrWhiteSpace(tokenEntry.AccessToken))
+        string? accessToken;
+        if (_accessTokenProvider is not null)
+        {
+            accessToken = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            var tokenEntry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
+            accessToken = tokenEntry.Status == GitHubTokenStatus.SignedIn ? tokenEntry.AccessToken : null;
+        }
+        if (string.IsNullOrWhiteSpace(accessToken))
             throw new InvalidOperationException(
                 "GitHub sign-in is required to create a project from a GitHub repository. Sign in with 'scaffolder github sign-in'.");
 
@@ -140,7 +152,7 @@ public sealed class ProjectService
         bool dirWasCreated = appCreatedDir;
         try
         {
-            defaultBranch = _gitInit.Clone(workingDir, sourceRepository, tokenEntry.AccessToken!);
+            defaultBranch = _gitInit.Clone(workingDir, sourceRepository, accessToken!);
         }
         catch
         {

@@ -78,6 +78,7 @@ builder.Services.AddSingleton<Scaffolder.Api.Coordinator.CoordinatorRunService>(
 // GitHub auth (token store + scope provider + device flow service)
 builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
 builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
+builder.Services.AddSingleton<IGitHubAccessTokenProvider, GitHubTokenRefreshService>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
@@ -3340,17 +3341,17 @@ app.MapGet("/api/auth/github", async (
 // GET /api/github/repos — list authenticated user's GitHub repositories
 app.MapGet("/api/github/repos", async (
     HttpContext httpContext,
-    IGitHubTokenStore tokenStore,
     IGitHubTokenScopeProvider scopeProvider,
+    IGitHubAccessTokenProvider accessTokenProvider,
     IHttpClientFactory httpClientFactory,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     var scope = scopeProvider.Resolve(caller.User);
-    var entry = await tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
+    var accessToken = await accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
 
-    if (entry.Status != GitHubTokenStatus.SignedIn || string.IsNullOrWhiteSpace(entry.AccessToken))
+    if (string.IsNullOrWhiteSpace(accessToken))
         return Results.Unauthorized();
 
     try
@@ -3364,7 +3365,7 @@ app.MapGet("/api/github/repos", async (
         {
             using var request = new HttpRequestMessage(HttpMethod.Get,
                 $"https://api.github.com/user/repos?sort=pushed&per_page={perPage}&page={page}&affiliation=owner");
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", entry.AccessToken);
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
             request.Headers.UserAgent.ParseAdd("Scaffolder/1.0");
             request.Headers.Accept.ParseAdd("application/vnd.github+json");
 

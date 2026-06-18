@@ -24,6 +24,13 @@ public sealed class InMemoryGitHubTokenStore : IGitHubTokenStore
         return Task.FromResult(new GitHubTokenEntry(GitHubTokenStatus.NeverSignedIn, null));
     }
 
+    public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default)
+    {
+        if (_entries.TryGetValue(scope.Key, out var entry) && entry.Status == GitHubTokenStatus.SignedIn)
+            return Task.FromResult(entry.Token);
+        return Task.FromResult<GitHubToken?>(null);
+    }
+
     public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default)
     {
         _entries[scope.Key] = new StoreEntry(GitHubTokenStatus.SignedIn, token);

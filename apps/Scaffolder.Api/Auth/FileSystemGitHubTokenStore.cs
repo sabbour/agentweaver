@@ -42,14 +42,40 @@ public sealed class FileSystemGitHubTokenStore : IGitHubTokenStore
         return Task.FromResult(new GitHubTokenEntry(GitHubTokenStatus.NeverSignedIn, null));
     }
 
+    public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default)
+    {
+        var path = FilePath(scope);
+        if (!File.Exists(path))
+            return Task.FromResult<GitHubToken?>(null);
+
+        try
+        {
+            var stored = JsonSerializer.Deserialize<StoredCredential>(File.ReadAllText(path), _json);
+            if (stored?.Status == "signed-in" && !string.IsNullOrEmpty(stored.AccessToken))
+                return Task.FromResult<GitHubToken?>(new GitHubToken(
+                    stored.AccessToken,
+                    stored.RefreshToken,
+                    stored.ExpiresAt,
+                    stored.Login ?? "unknown",
+                    stored.AvatarUrl,
+                    stored.Scopes ?? []));
+        }
+        catch (Exception) { /* malformed — treat as no token */ }
+
+        return Task.FromResult<GitHubToken?>(null);
+    }
+
     public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default)
     {
         var stored = new StoredCredential
         {
             Status = "signed-in",
             AccessToken = token.AccessToken,
+            RefreshToken = token.RefreshToken,
+            ExpiresAt = token.ExpiresAt,
             Login = token.Login,
             AvatarUrl = token.AvatarUrl,
+            Scopes = token.Scopes,
         };
         WriteFile(FilePath(scope), JsonSerializer.Serialize(stored, _json));
         return Task.CompletedTask;
@@ -103,7 +129,10 @@ public sealed class FileSystemGitHubTokenStore : IGitHubTokenStore
     {
         public string? Status { get; init; }
         public string? AccessToken { get; init; }
+        public string? RefreshToken { get; init; }
+        public DateTimeOffset? ExpiresAt { get; init; }
         public string? Login { get; init; }
         public string? AvatarUrl { get; init; }
+        public string[]? Scopes { get; init; }
     }
 }
