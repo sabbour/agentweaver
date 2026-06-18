@@ -114,13 +114,36 @@ When the spec is awaiting confirmation, two actions appear:
 
 The confirm/revise gate is the safety property of the Phase 1 flow: no dispatch occurs before a human confirms.
 
-### Coordinator orchestration and topology view
+### Coordinator orchestration and unified graph view
 
-Once the outcome spec is confirmed, the coordinator run page switches from the outcome-spec gate to a live orchestration view. For coordinator runs this dynamic topology graph stands in for the generic five-stage pipeline used by single-agent runs: rather than a fixed Agent → Rai → Review → Merge → Scribe row, it renders the coordinator node and one node per subtask, with edges drawn from each dependency to its dependent.
+Once the outcome spec is confirmed, the coordinator run page renders a **unified dynamic graph** using the same generic `WorkflowNode` renderer as the workflow run page. This single graph shows the coordinator node, all subtask nodes, and the planned assembly pipeline in one React Flow canvas — replacing the previous separate topology view.
 
-The graph is driven entirely by stream events, with no client-side topology computation. It seeds from the `coordinator.topology` snapshot (`version: 1`, `seq: 0`) and applies each `coordinator.topology` delta by replacing the changed node(s) by id; `subtask.*` events update per-subtask status badges in step. Each node shows its assigned agent, selected model, status, and a link to the child run's own timeline for read-only observation.
+#### Graph data flow
 
-Inline steering controls sit on the graph: selecting a subagent node exposes **Stop**, **Redirect**, and **Amend** actions that call `POST /api/runs/{id}/steer`. Stop is presented as an immediate cancel; redirect and amend are presented as queued, applying at the subagent's next turn boundary, and their directives surface as `coordinator.steering` events. Pause is not offered in Phase 2.
+The graph seeds from `GET /api/runs/{coordinatorRunId}/graph`, which returns a `GraphDescriptor` with `variant: "coordinator"`. Live `coordinator.graph` SSE snapshots (highest `seq` wins) are applied on top; the REST snapshot is used as-is for finished/parked runs where the SSE stream is closed.
+
+The coordinator-variant descriptor contains:
+- **Coordinator node** (`id: "coordinator"`, `node_type: "agent"`, `role: "coordinator"`) — the orchestrator itself
+- **Subtask nodes** (`id: "plan:subtask-{n}"`, `node_type: "subtask"`) — one per dispatched subtask; carries optional `agent`, `model`, `phase`, `child_graph_ref`, and `child_run_id` fields
+- **Planned assembly nodes** (`id: "planned:assembly-{rai|review|merge|scribe}"`, `kind: "planned"`) — the fixed post-subtask pipeline; always rendered muted/dashed, never show a running or pending spinner
+
+Subtask status is projected from topology and run events by mapping the subtask node id (`plan:subtask-{n}`) to the topology node id (`subtask-{n}`) by stripping the `plan:` prefix.
+
+#### Subtask node expansion
+
+Subtask nodes (`node_type: "subtask"`) are expandable cards. Each shows the assigned agent, selected model, phase, and a status badge. When a subtask has a `child_graph_ref` (i.e. the coordinator has dispatched that subtask to a child run), clicking **Expand** fetches the child run's `GraphDescriptor` from `GET /api/runs/{childRunId}/graph` and renders the child pipeline inline (Agent → Rai → Assemble-ready) beneath the subtask card in an inset panel. Subtask nodes are collapsed by default.
+
+A **View run** link navigates to the child run's workflow page for the full timeline.
+
+#### Steering bar
+
+A page-level steering bar sits above the React Flow canvas. Three buttons are always available while the coordinator run is active:
+
+- **Stop** — sends `{ kind: "stop" }` to `POST /api/runs/{id}/steer`
+- **Redirect** — opens a dialog to enter an instruction; sends `{ kind: "redirect", instruction: "..." }`
+- **Amend** — opens a dialog to enter an instruction; sends `{ kind: "amend", instruction: "..." }`
+
+The steering bar is always visible on the coordinator run page even for finished runs (buttons remain rendered; the API will reject the call if the run is not active).
 
 ### Watch a run
 
@@ -224,11 +247,16 @@ The descriptor shape (snake_case JSON from the backend):
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | string | Logical step key matching the status reducer (`agent`, `rai`, `review`, `merge`, `scribe`, `assemble-ready`) |
+| `id` | string | Logical step key matching the status reducer (`agent`, `rai`, `review`, `merge`, `scribe`, `assemble-ready`, `coordinator`, `plan:subtask-{n}`, `planned:assembly-*`) |
 | `label` | string | Card title shown in the UI |
 | `role` | string | Drives icon and color (`agent`/`rai`/`review`/`merge`/`scribe`/`coordinator`/`subtask`/`assembly`) |
 | `kind` | `"live"` \| `"planned"` | `planned` nodes render with a dashed border and muted opacity; they never show a pending spinner |
-| `child_graph_ref` | string? | Optional reference to a child descriptor |
+| `node_type` | `"agent"` \| `"action"` \| `"gate"` \| `"terminal"` \| `"subtask"` (optional) | Structural category that drives card shape and size (see below) |
+| `child_graph_ref` | string? | Reference to child descriptor in the form `"run:{childRunId}"` (subtask nodes) |
+| `child_run_id` | string? | Child run ID (flat optional field, same value as the id suffix in `child_graph_ref`) |
+| `agent` | string? | Assigned agent name (subtask nodes) |
+| `model` | string? | Selected model ID (subtask nodes) |
+| `phase` | string? | Execution phase (subtask nodes) |
 
 **`GraphEdge`**
 
@@ -240,6 +268,23 @@ The descriptor shape (snake_case JSON from the backend):
 | `loopback` | boolean | `true` = back-edge excluded from dagre layout, drawn as a loopback arc above/below the row |
 
 **Status projection** — node `id` equals the logical step key the existing status reducer uses, so status is a direct lookup by id. `planned` nodes are always rendered as "Planned" regardless of any events.
+
+#### node_type → card shape and size
+
+The `node_type` field on `GraphNode` drives card dimensions and visual shape in the `WorkflowNode` renderer. Color remains driven by `role`; `node_type` only controls size and shape.
+
+| `node_type` | Card width | Card height | Visual treatment |
+| --- | --- | --- | --- |
+| `agent` | 220 px | 160 px | Largest card; primary importance |
+| `subtask` | 220 px | 180 px | Expandable card (see coordinator view); taller to show agent/model/phase |
+| `gate` | 180 px | 130 px | Decision-point shape with dashed border |
+| `action` | 170 px | 130 px | Smaller secondary card (Merge, Scribe) |
+| `terminal` | 150 px | 110 px | Smallest card; endpoint/checkpoint (Assemble-ready) |
+| *(absent)* | 200 px | 145 px | Default size |
+
+`planned` nodes always use the default width class regardless of `node_type`, since planned assembly nodes are intentionally muted.
+
+The `data-node-type` HTML attribute on each rendered card card reflects the node's `node_type` value (or `"default"` when absent), enabling CSS-based targeting in tests and tooling.
 
 **Fallback** — when the descriptor endpoint returns 404 or is unavailable, the page falls back to the hardcoded five-stage pipeline (`Agent → Rai → Review → Merge → Scribe`) for a normal run or the trimmed three-stage pipeline (`Agent → Rai → Assemble-ready`) for a coordinator child run, so nothing regresses until the backend ships.
 
@@ -344,6 +389,8 @@ src/
     GitHubSignIn.tsx    header component: device-flow sign-in, polling, sign-out
     StartOrchestrationDialog.tsx  goal entry that starts a coordinator run
     OutcomeSpecPanel.tsx  outcome-spec review with confirm/revise gate
+    WorkflowGraphPanel.tsx  shared generic graph renderer: WorkflowNode, LoopbackEdge,
+                            styles (node_type → card size), helpers, contexts
   timeline/
     types.ts            discriminated union types for reducer state
     reducer.ts          pure grouping reducer (turns, steps, streaming state)
@@ -355,7 +402,8 @@ src/
     TeamPage.tsx            team roster, member management, charter dialogs, sync panel
     CastingWizardPage.tsx   Single-page casting wizard (Formulate / Template / Analyze tabs)
     WatchPage.tsx
-    CoordinatorRunPage.tsx  coordinator run page: live outcome-spec gate
+    WorkflowRunPage.tsx     live workflow graph (descriptor-driven or fallback hardcoded)
+    CoordinatorRunPage.tsx  coordinator run page: outcome-spec gate + unified graph + steering
     SettingsPage.tsx        API connection settings
     HomePage.tsx            legacy submit form (not the default route)
   App.tsx               Fluent provider and routing

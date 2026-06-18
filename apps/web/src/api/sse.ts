@@ -96,6 +96,7 @@ export type EventType =
   | 'coordinator.work_plan'
   | 'coordinator.topology'
   | 'coordinator.steering'
+  | 'coordinator.graph'
   | 'subtask.dispatched'
   | 'subtask.running'
   | 'subtask.assemble_ready'

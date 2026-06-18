@@ -294,7 +294,7 @@ Replays persisted Copilot SDK session events for a terminal run. The session is 
 
 ### GET /api/runs/{id}/graph
 
-Returns the workflow graph descriptor for the run, describing the node/edge topology so a client can render the live workflow without hardcoding it. The descriptor is built from the same code that wires the MAF workflow (no runtime reflection). Owner-scoped Bearer auth. Child runs (`parent_run_id != null`) return the `child` variant; all others return the `full` variant.
+Returns the workflow graph descriptor for the run, describing the node/edge topology so a client can render the live workflow without hardcoding it. The descriptor is built from the same code that wires the MAF workflow (no runtime reflection). Owner-scoped Bearer auth. Coordinator runs (`parent_run_id == null`, driven by the built-in Coordinator agent, with a persisted work plan) return the `coordinator` variant (see below); child runs (`parent_run_id != null`) return the `child` variant; all others return the `full` variant.
 
 Response `200 OK` — a `GraphDescriptor`:
 
@@ -304,7 +304,7 @@ Response `200 OK` — a `GraphDescriptor`:
   "variant": "full",
   "start_node_id": "agent",
   "nodes": [
-    { "id": "agent", "label": "Agent", "role": "agent", "kind": "live", "child_graph_ref": null }
+    { "id": "agent", "label": "Agent", "role": "agent", "kind": "live", "node_type": "agent", "child_graph_ref": null }
   ],
   "edges": [
     { "from": "agent", "to": "rai", "cardinality": "direct", "loopback": false }
@@ -314,7 +314,32 @@ Response `200 OK` — a `GraphDescriptor`:
 
 - `variant`: `"full"` | `"child"` | `"coordinator"`.
 - `nodes[].id`: the logical node id (matches the step key in `workflow.step` events). `kind`: `"live"` | `"planned"`. `child_graph_ref`: optional reference to a nested graph.
+- `nodes[].node_type`: self-declared category that drives the frontend's rendered shape/size — one of `"agent"` (an AI agent turn), `"action"` (a deterministic system op), `"gate"` (a human-in-the-loop decision/approval), `"terminal"` (a workflow endpoint/checkpoint), or `"subtask"` (a coordinator fan-out child reference). Required on every node.
 - `edges[].cardinality`: `"direct"` | `"fanout"` | `"fanin"`. `loopback`: `true` when the edge targets an ancestor (a revision cycle back-edge).
+
+#### Coordinator variant
+
+When the run is a coordinator run, the descriptor is built from its work plan (`graph_id` = `coordinator:{coordinatorRunId}`, `start_node_id` = `coordinator`) so the same generic renderer can draw the coordinator, its fan-out subtask children, and the PLANNED Phase 3 collective-assembly stage. It is shape-only — runtime status is NOT baked in (project it from the `subtask.*` / `coordinator.topology` streams).
+
+- Node `coordinator` (`node_type: "agent"`, `role: "coordinator"`, `kind: "live"`).
+- One node per subtask, id `plan:subtask-{id}` (`node_type: "subtask"`, `role: "subtask"`, `kind: "live"`). Subtask nodes carry rich display fields as OPTIONAL snake_case properties (omitted when null): `agent`, `model`, `phase`, `isolation`, `child_run_id`. Once the subtask's child run is dispatched, `child_graph_ref` is `run:{childRunId}` so the client can expand the child's own graph via `GET /api/runs/{childRunId}/graph`; it is `null` until dispatched.
+- PLANNED collective-assembly nodes (`kind: "planned"`): `planned:assembly-rai` (`node_type: "agent"`, `role: "rai"`), `planned:assembly-review` (`node_type: "gate"`, `role: "review"`), `planned:assembly-merge` (`node_type: "action"`, `role: "merge"`), `planned:assembly-scribe` (`node_type: "agent"`, `role: "scribe"`).
+- Edges: `coordinator` → each root subtask; dependency edges `plan:subtask-{dependsOn}` → `plan:subtask-{dependent}`; each terminal (leaf) subtask → `planned:assembly-rai`; then the assembly chain `assembly-rai` → `assembly-review` → `assembly-merge` → `assembly-scribe`. The coordinator graph is a DAG (`loopback` always `false`); `cardinality` is `fanout`/`fanin` by forward degree.
+
+```json
+{
+  "graph_id": "coordinator:run_abc",
+  "variant": "coordinator",
+  "start_node_id": "coordinator",
+  "nodes": [
+    { "id": "coordinator", "label": "Coordinator", "role": "coordinator", "kind": "live", "node_type": "agent", "child_graph_ref": null },
+    { "id": "plan:subtask-1", "label": "Build API", "role": "subtask", "kind": "live", "node_type": "subtask", "child_graph_ref": "run:run_child1", "agent": "morpheus", "model": "gpt-5.3-codex", "phase": "execution", "isolation": "worktree", "child_run_id": "run_child1" }
+  ],
+  "edges": [
+    { "from": "coordinator", "to": "plan:subtask-1", "cardinality": "fanout", "loopback": false }
+  ]
+}
+```
 
 The same descriptor is emitted once at run start as a `run.workflow_graph` event on the stream (see [events.md](events.md)).
 

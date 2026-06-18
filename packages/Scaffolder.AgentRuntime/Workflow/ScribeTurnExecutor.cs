@@ -23,6 +23,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     /// <inheritdoc />
     public string Role => "scribe";
     /// <inheritdoc />
+    public string NodeType => "agent";
+    /// <inheritdoc />
     public bool Hidden => false;
     /// <inheritdoc />
     public string NodeKind => "live";

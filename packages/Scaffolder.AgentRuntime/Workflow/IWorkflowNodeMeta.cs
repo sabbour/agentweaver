@@ -29,6 +29,16 @@ public interface IWorkflowNodeMeta
     string Role { get; }
 
     /// <summary>
+    /// Self-declared node category that drives the frontend's rendered shape/size. One of
+    /// <c>agent</c> (an AI agent turn), <c>action</c> (a deterministic system op),
+    /// <c>gate</c> (a human-in-the-loop decision/approval), <c>terminal</c> (a workflow
+    /// endpoint/checkpoint), or <c>subtask</c> (a coordinator fan-out child reference).
+    /// REQUIRED on every emitted descriptor node. Hidden plumbing still declares one (it is
+    /// dropped from the descriptor regardless).
+    /// </summary>
+    string NodeType { get; }
+
+    /// <summary>
     /// When true, the executor is plumbing (adapter/storer/terminal) that emits no status and is
     /// DROPPED from the descriptor; its edges are transitively re-stitched through it.
     /// </summary>

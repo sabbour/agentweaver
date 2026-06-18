@@ -161,6 +161,22 @@ public static class EventTypes
     public const string CoordinatorTopology = "coordinator.topology";
 
     /// <summary>
+    /// Unified coordinator graph in the shared <c>GraphDescriptor</c> contract (variant
+    /// <c>"coordinator"</c>, graph_id <c>coordinator:{coordinatorRunId}</c>), emitted on the
+    /// coordinator run stream as a FULL shape-only snapshot whenever the topology changes (e.g. a
+    /// subtask child run is dispatched). Built from the work plan (no reflection). Unlike
+    /// <see cref="CoordinatorTopology"/>, runtime status is NOT baked into the descriptor — it is
+    /// shape only, consistent with the per-run <see cref="WorkflowGraph"/>; status is projected
+    /// separately via the <c>subtask.*</c> / <c>coordinator.topology</c> streams. Nodes: the
+    /// <c>coordinator</c> node, one <c>plan:subtask-{id}</c> node per subtask (node_type=subtask,
+    /// child_graph_ref=<c>run:{childRunId}</c> once dispatched, carrying agent/model/phase/
+    /// isolation/child_run_id), and the PLANNED collective-assembly chain
+    /// (<c>planned:assembly-rai</c> -> <c>planned:assembly-review</c> -> <c>planned:assembly-merge</c>
+    /// -> <c>planned:assembly-scribe</c>). Payload: a <c>GraphDescriptor</c>.
+    /// </summary>
+    public const string CoordinatorGraph = "coordinator.graph";
+
+    /// <summary>
     /// Emitted on the COORDINATOR run's stream whenever a human steering directive
     /// (Feature 008 Phase 2) changes state, so the topology view can surface steering. Phase 2
     /// supports <c>stop</c>, <c>redirect</c>, and <c>amend</c> only (<c>pause</c> is descoped).

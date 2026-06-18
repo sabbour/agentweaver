@@ -210,7 +210,7 @@ public sealed class RunWorkflowFactory
         // data in workflow state so it survives the checkpoint/resume cycle.
         // RaiSafetyFlagged is passed through so the reviewer sees Rai's verdict as context.
         ExecutorBinding reviewAdapter = new VisualFunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
-            "review-adapter", "review-adapter", "Review adapter", "plumbing", true,
+            "review-adapter", "review-adapter", "Review adapter", "plumbing", "action", true,
             async (input, ctx, ct) =>
             {
                 await ctx.QueueStateUpdateAsync(MergeDataKey, input, MergeDataScope, ct)
@@ -223,7 +223,7 @@ public sealed class RunWorkflowFactory
         // Adapter: maps WorkflowReviewDecision -> MergeInput by reading the stored
         // AgentTurnOutput from workflow state.
         ExecutorBinding mergeAdapter = new VisualFunctionExecutor<WorkflowReviewDecision, MergeInput>(
-            "merge-adapter", "merge-adapter", "Merge adapter", "plumbing", true,
+            "merge-adapter", "merge-adapter", "Merge adapter", "plumbing", "action", true,
             async (decision, ctx, ct) =>
             {
                 var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
@@ -238,7 +238,7 @@ public sealed class RunWorkflowFactory
             });
 
         ExecutorBinding terminalNoOp = new VisualFunctionExecutor<AgentTurnOutput, NoChangesOutput>(
-            "terminal-no-op", "terminal-no-op", "No changes", "plumbing", true,
+            "terminal-no-op", "terminal-no-op", "No changes", "plumbing", "terminal", true,
             (input, ctx, ct) => new ValueTask<NoChangesOutput>(new NoChangesOutput(input.RunId)));
 
         // Child assemble-ready terminal (coordinator child runs only). Short-circuits the per-child
@@ -247,7 +247,7 @@ public sealed class RunWorkflowFactory
         // Empty-diff (no-op) children terminalize here too — a valid assemble-ready outcome with
         // HasChanges == false.
         ExecutorBinding childAssembleReady = new VisualFunctionExecutor<AgentTurnOutput, AssembleReadyOutput>(
-            "child-assemble-ready", "assemble-ready", "Assemble-ready", "assembly", false,
+            "child-assemble-ready", "assemble-ready", "Assemble-ready", "assembly", "terminal", false,
             (input, ctx, ct) => new ValueTask<AssembleReadyOutput>(new AssembleReadyOutput(
                 RunId: input.RunId,
                 WorktreeBranch: input.WorktreeBranch,
@@ -258,7 +258,7 @@ public sealed class RunWorkflowFactory
                 RaiSafetyFlagged: input.ContentSafetyFlagged)));
 
         ExecutorBinding terminalDeclined = new VisualFunctionExecutor<WorkflowReviewDecision, DeclinedOutput>(
-            "terminal-declined", "terminal-declined", "Declined", "plumbing", true,
+            "terminal-declined", "terminal-declined", "Declined", "plumbing", "terminal", true,
             async (input, ctx, ct) =>
             {
                 var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
@@ -268,21 +268,21 @@ public sealed class RunWorkflowFactory
 
         // Iteration cap: review requested changes but max iterations reached.
         ExecutorBinding terminalIterationCapped = new VisualFunctionExecutor<AgentTurnInput, DeclinedOutput>(
-            "terminal-iteration-capped", "terminal-iteration-capped", "Iteration capped", "plumbing", true,
+            "terminal-iteration-capped", "terminal-iteration-capped", "Iteration capped", "plumbing", "terminal", true,
             (input, ctx, ct) => new ValueTask<DeclinedOutput>(new DeclinedOutput(input.RunId)));
 
         ExecutorBinding terminalSafetyFailed = new VisualFunctionExecutor<AgentTurnOutput, ContentSafetyFailedOutput>(
-            "terminal-safety-failed", "terminal-safety-failed", "Safety failed", "plumbing", true,
+            "terminal-safety-failed", "terminal-safety-failed", "Safety failed", "plumbing", "terminal", true,
             (input, ctx, ct) => new ValueTask<ContentSafetyFailedOutput>(new ContentSafetyFailedOutput(input.RunId)));
 
         ExecutorBinding terminalMerge = new VisualFunctionExecutor<MergeOutput, MergeOutput>(
-            "terminal-merge", "terminal-merge", "Merge result", "plumbing", true,
+            "terminal-merge", "terminal-merge", "Merge result", "plumbing", "terminal", true,
             (input, ctx, ct) => new ValueTask<MergeOutput>(input));
 
         // Blocked adapter: on a retriable block, re-enter the review gate via HITL
         // so the workflow stays alive and the user can re-approve once the blocker clears.
         ExecutorBinding blockedAdapter = new VisualFunctionExecutor<MergeOutput, WorkflowReviewRequest>(
-            "blocked-adapter", "blocked-adapter", "Blocked adapter", "plumbing", true,
+            "blocked-adapter", "blocked-adapter", "Blocked adapter", "plumbing", "action", true,
             async (output, ctx, ct) =>
             {
                 var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
@@ -295,7 +295,7 @@ public sealed class RunWorkflowFactory
         // Store AgentTurnInput in workflow state at workflow start so Scribe adapters
         // can read project/agent context after the review-gate checkpoint/resume cycle.
         ExecutorBinding agentInputStorer = new VisualFunctionExecutor<AgentTurnInput, AgentTurnInput>(
-            "agent-input-storer", "agent-input-storer", "Agent input", "plumbing", true,
+            "agent-input-storer", "agent-input-storer", "Agent input", "plumbing", "action", true,
             async (input, ctx, ct) =>
             {
                 await ctx.QueueStateUpdateAsync("agent-input", input, "run-context", ct).ConfigureAwait(false);
@@ -330,7 +330,7 @@ public sealed class RunWorkflowFactory
         // Previously used ctx.ReadStateAsync("agent-input", "run-context") but QueueStateUpdateAsync
         // is a deferred/queued write that may not be visible across checkpoint boundaries.
         ExecutorBinding scribeInputMerge = new VisualFunctionExecutor<MergeOutput, ScribeTurnInput>(
-            "scribe-input-merge", "scribe", "Scribe", "scribe", false,
+            "scribe-input-merge", "scribe", "Scribe", "scribe", "agent", false,
             async (output, ctx, ct) =>
             {
                 var log = _loggerFactory.CreateLogger<RunWorkflowFactory>();
@@ -383,7 +383,7 @@ public sealed class RunWorkflowFactory
             });
 
         ExecutorBinding scribeInputNoChanges = new VisualFunctionExecutor<NoChangesOutput, ScribeTurnInput>(
-            "scribe-input-no-changes", "scribe", "Scribe", "scribe", false,
+            "scribe-input-no-changes", "scribe", "Scribe", "scribe", "agent", false,
             async (output, ctx, ct) =>
             {
                 var log = _loggerFactory.CreateLogger<RunWorkflowFactory>();
@@ -435,12 +435,12 @@ public sealed class RunWorkflowFactory
 
         // Scribe output adapters: reconstruct terminal output types from pass-through.
         ExecutorBinding scribeOutputMerge = new VisualFunctionExecutor<ScribeTurnInput, MergeOutput>(
-            "scribe-output-merge", "scribe", "Scribe", "scribe", false,
+            "scribe-output-merge", "scribe", "Scribe", "scribe", "agent", false,
             (input, ctx, ct) => new ValueTask<MergeOutput>(
                 new MergeOutput(input.RunId, input.TerminalStatus ?? "merged", input.MergeResult, input.MergeMode)));
 
         ExecutorBinding scribeOutputNoChanges = new VisualFunctionExecutor<ScribeTurnInput, NoChangesOutput>(
-            "scribe-output-no-changes", "scribe", "Scribe", "scribe", false,
+            "scribe-output-no-changes", "scribe", "Scribe", "scribe", "agent", false,
             (input, ctx, ct) => new ValueTask<NoChangesOutput>(new NoChangesOutput(input.RunId)));
 
         ExecutorBinding agentBinding = agentTurnExecutor;
@@ -450,7 +450,7 @@ public sealed class RunWorkflowFactory
         // Rai REVISE adapter: reads stored agent-input, appends Rai feedback to Task,
         // increments Iteration so the agent knows it's a revision pass.
         ExecutorBinding raiRevisionAdapter = new VisualFunctionExecutor<AgentTurnOutput, AgentTurnInput>(
-            "rai-revision-adapter", "rai-revision-adapter", "RAI revision", "plumbing", true,
+            "rai-revision-adapter", "rai-revision-adapter", "RAI revision", "plumbing", "action", true,
             async (raiOutput, ctx, ct) =>
             {
                 var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
@@ -476,7 +476,7 @@ public sealed class RunWorkflowFactory
         // Review RequestChanges adapter: reads stored agent-input, appends review feedback,
         // increments Iteration. No cap — reviewers can request as many changes as needed.
         ExecutorBinding reviewChangesAdapter = new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnInput>(
-            "review-changes-adapter", "review-changes-adapter", "Review changes", "plumbing", true,
+            "review-changes-adapter", "review-changes-adapter", "Review changes", "plumbing", "action", true,
             async (decision, ctx, ct) =>
             {
                 var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)

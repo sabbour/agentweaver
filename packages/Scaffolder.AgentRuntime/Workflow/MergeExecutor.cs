@@ -18,6 +18,8 @@ public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>, IWorkflow
     /// <inheritdoc />
     public string Role => "merge";
     /// <inheritdoc />
+    public string NodeType => "action";
+    /// <inheritdoc />
     public bool Hidden => false;
     /// <inheritdoc />
     public string NodeKind => "live";

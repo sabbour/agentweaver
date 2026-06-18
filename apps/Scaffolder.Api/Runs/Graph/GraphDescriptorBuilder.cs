@@ -91,11 +91,11 @@ public sealed class GraphDescriptorBuilder
     private static RawMeta Resolve(ExecutorBinding b)
     {
         if (b.RawValue is IWorkflowNodeMeta m)
-            return new RawMeta(m.LogicalNodeId, m.DisplayLabel, m.Role, m.NodeKind, m.Hidden);
+            return new RawMeta(m.LogicalNodeId, m.DisplayLabel, m.Role, m.NodeType, m.NodeKind, m.Hidden);
 
         // ONLY allowed fallback: the framework RequestPort review gate.
         if (string.Equals(b.Id, ReviewGatePortId, StringComparison.Ordinal))
-            return new RawMeta("review", "Human Review", "review", "live", Hidden: false);
+            return new RawMeta("review", "Human Review", "review", "gate", "live", Hidden: false);
 
         throw new InvalidOperationException(
             $"Executor '{b.Id}' does not implement IWorkflowNodeMeta and is not the known " +
@@ -195,7 +195,7 @@ public sealed class GraphDescriptorBuilder
             .Select(id =>
             {
                 var meta = _rawNodes.Values.First(m => m.LogicalNodeId == id && !m.Hidden);
-                return new GraphNode(id, meta.Label, meta.Role, meta.Kind, ChildGraphRef: null);
+                return new GraphNode(id, meta.Label, meta.Role, meta.Kind, meta.NodeType, ChildGraphRef: null);
             })
             .ToArray();
 
@@ -242,5 +242,5 @@ public sealed class GraphDescriptorBuilder
     }
 
     private readonly record struct RawMeta(
-        string LogicalNodeId, string Label, string Role, string Kind, bool Hidden);
+        string LogicalNodeId, string Label, string Role, string NodeType, string Kind, bool Hidden);
 }

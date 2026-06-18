@@ -51,6 +51,12 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         // All nodes are live and self-describing.
         d.Nodes.Should().OnlyContain(n => n.Kind == "live");
         d.Nodes.Should().OnlyContain(n => n.ChildGraphRef == null);
+        // node_type taxonomy is required on every node and drives the rendered shape.
+        d.Nodes.Single(n => n.Id == "agent").NodeType.Should().Be("agent");
+        d.Nodes.Single(n => n.Id == "rai").NodeType.Should().Be("agent");
+        d.Nodes.Single(n => n.Id == "review").NodeType.Should().Be("gate");
+        d.Nodes.Single(n => n.Id == "merge").NodeType.Should().Be("action");
+        d.Nodes.Single(n => n.Id == "scribe").NodeType.Should().Be("agent");
         // Review gate uses the explicit known-port fallback label.
         d.Nodes.Single(n => n.Id == "review").Label.Should().Be("Human Review");
         d.Nodes.Single(n => n.Id == "review").Role.Should().Be("review");
@@ -124,6 +130,11 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         var assemble = d.Nodes.Single(n => n.Id == "assemble-ready");
         assemble.Label.Should().Be("Assemble-ready");
         assemble.Role.Should().Be("assembly");
+
+        // node_type taxonomy: agent turns are "agent", the assemble-ready checkpoint is "terminal".
+        d.Nodes.Single(n => n.Id == "agent").NodeType.Should().Be("agent");
+        d.Nodes.Single(n => n.Id == "rai").NodeType.Should().Be("agent");
+        assemble.NodeType.Should().Be("terminal");
     }
 
     [Fact]

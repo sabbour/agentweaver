@@ -48,6 +48,7 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.outcome_spec.confirmed` | When a human confirms the drafted OutcomeSpec and the coordinator run proceeds | `specId`, `confirmedBy` |
 | `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
 | `coordinator.topology` | When the orchestration graph is first dispatched (snapshot) and on every subsequent subtask lifecycle transition (delta) | `version`, `kind`, `seq`, `nodes` (snapshot) / `changed` (delta), `edges` (snapshot) |
+| `coordinator.graph` | When the unified coordinator graph shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot) | a shape-only `GraphDescriptor` (variant `coordinator`) |
 | `subtask.dispatched` / `subtask.running` / `subtask.assemble_ready` / `subtask.rai_flagged` / `subtask.completed` / `subtask.failed` | As a subtask's child run advances through its lifecycle | `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status` |
 | `coordinator.steering` | When a steering directive is created or changes state | `directiveId`, `kind`, `targetChildRunId`, `status`, `instruction` |
 
@@ -181,7 +182,7 @@ Emitted once at run start, carrying a full snapshot of the run's workflow topolo
   "variant": "full",
   "start_node_id": "agent",
   "nodes": [
-    { "id": "agent", "label": "Agent", "role": "agent", "kind": "live", "child_graph_ref": null }
+    { "id": "agent", "label": "Agent", "role": "agent", "kind": "live", "node_type": "agent", "child_graph_ref": null }
   ],
   "edges": [
     { "from": "agent", "to": "rai", "cardinality": "direct", "loopback": false }
@@ -191,6 +192,7 @@ Emitted once at run start, carrying a full snapshot of the run's workflow topolo
 
 - `variant`: `"full"` | `"child"` | `"coordinator"`.
 - `nodes[].id`: the logical node id (equals the `step` key in `workflow.step` events for live business nodes). `kind`: `"live"` | `"planned"`. `child_graph_ref`: optional reference to a nested graph.
+- `nodes[].node_type`: self-declared category that drives the frontend's rendered shape — one of `"agent"` (an AI agent turn), `"action"` (a deterministic system op), `"gate"` (a human-in-the-loop decision/approval), `"terminal"` (a workflow endpoint/checkpoint), or `"subtask"` (a coordinator fan-out child reference). Required on every node. In the `full` variant: `agent`/`rai`/`scribe` are `agent`, `review` is `gate`, `merge` is `action`; in the `child` variant `assemble-ready` is `terminal`.
 - `edges[].cardinality`: `"direct"` | `"fanout"` | `"fanin"`. `loopback`: `true` for revision-cycle back-edges (the target is an ancestor of the source).
 
 Plumbing executors (input storers, adapters, terminals) are collapsed or hidden: hidden nodes are dropped and their edges are transitively re-stitched, and the scribe-path executors collapse into the single `scribe` node. The `full` variant nodes are `agent`, `rai`, `review`, `merge`, `scribe`; the `child` variant nodes are `agent`, `rai`, `assemble-ready`.
@@ -219,6 +221,17 @@ Emitted to describe the orchestration graph as it executes. The payload is versi
 - A `delta` (`kind: "delta"`, `seq > 0`) fires on every subtask lifecycle transition. It carries a `changed` array of the node(s) whose state moved (replace by `id`); `edges` never change after the snapshot, so deltas omit them. A delta may carry the `coordinator` node when the work plan's own status transitions.
 
 Clients render directly from these events and never compute topology themselves. Edge direction is always dependency to dependent.
+
+### `coordinator.graph`
+
+The unified coordinator view in the shared `GraphDescriptor` contract (the same shape returned by `GET /api/runs/{id}/graph` and emitted per-run as `run.workflow_graph`), so the frontend's generic renderer draws the coordinator, its fan-out subtask children, and the PLANNED Phase 3 collective-assembly stage with one code path. Emitted on the coordinator stream as a FULL, shape-only snapshot whenever the topology shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot). It is built from the work plan (no reflection).
+
+Unlike `coordinator.topology`, runtime status is NOT baked into the descriptor — it is shape only (consistent with `run.workflow_graph`); project status separately from the `subtask.*` / `coordinator.topology` streams. The payload is a `GraphDescriptor` with `variant: "coordinator"`, `graph_id: "coordinator:{coordinatorRunId}"`, `start_node_id: "coordinator"`:
+
+- Node `coordinator` (`node_type: "agent"`, `role: "coordinator"`, `kind: "live"`).
+- One `plan:subtask-{id}` node per subtask (`node_type: "subtask"`, `kind: "live"`) carrying optional `agent`, `model`, `phase`, `isolation`, `child_run_id` fields (omitted when null) and a `child_graph_ref` of `run:{childRunId}` once dispatched (null until then) so the child's own graph can be expanded via `GET /api/runs/{childRunId}/graph`.
+- PLANNED collective-assembly chain (`kind: "planned"`): `planned:assembly-rai` (`agent`) → `planned:assembly-review` (`gate`) → `planned:assembly-merge` (`action`) → `planned:assembly-scribe` (`agent`).
+- Edges: `coordinator` → each root subtask; dependency edges between subtasks; each terminal (leaf) subtask → `planned:assembly-rai`; then the assembly chain. The coordinator graph is a DAG (`loopback` always false). `coordinator.topology` remains emitted alongside for existing consumers; `coordinator.graph` is the unified-contract event.
 
 ### `subtask.*`
 

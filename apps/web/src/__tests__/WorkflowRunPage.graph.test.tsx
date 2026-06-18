@@ -95,6 +95,19 @@ describe('WorkflowRunPage — descriptor-driven graph renderer', () => {
     expect(text).not.toContain('Assemble-ready');
   });
 
+  it('fixture has correct node_type values: agent=agent, merge/scribe=action (action nodes are visually smaller)', async () => {
+    // The DOM rendering of node_type is tested directly in WorkflowGraphPanel.test.tsx.
+    // Here we verify the fixture node_type values that drive shape+size in the renderer.
+    const agentNode = FULL_GRAPH_DESCRIPTOR.nodes.find(n => n.id === 'agent');
+    const raiNode   = FULL_GRAPH_DESCRIPTOR.nodes.find(n => n.id === 'rai');
+    const mergeNode = FULL_GRAPH_DESCRIPTOR.nodes.find(n => n.id === 'merge');
+    const scribeNode = FULL_GRAPH_DESCRIPTOR.nodes.find(n => n.id === 'scribe');
+    expect(agentNode?.node_type).toBe('agent');  // primary/largest card
+    expect(raiNode?.node_type).toBe('gate');     // gate/decision shape
+    expect(mergeNode?.node_type).toBe('action'); // visually smaller secondary node
+    expect(scribeNode?.node_type).toBe('action'); // visually smaller secondary node
+  });
+
   it('renders child-variant node labels (Agent/Rai/Assemble-ready) and excludes Human Review/Merge/Scribe', async () => {
     vi.mocked(apiClient.getRun).mockResolvedValue({
       run_id: 'exec-1',
@@ -118,6 +131,9 @@ describe('WorkflowRunPage — descriptor-driven graph renderer', () => {
     expect(text).not.toContain('Human Review');
     expect(text).not.toContain('Merge Coordinator');
     expect(text).not.toContain('Session Logger');
+    // Verify the fixture has correct node_type for the terminal node
+    const terminalNode = CHILD_GRAPH_DESCRIPTOR.nodes.find(n => n.id === 'assemble-ready');
+    expect(terminalNode?.node_type).toBe('terminal');
   });
 
   it('falls back to hardcoded graph when getRunGraph returns null (404)', async () => {

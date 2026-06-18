@@ -23,6 +23,8 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
     /// <inheritdoc />
     public string Role => "rai";
     /// <inheritdoc />
+    public string NodeType => "agent";
+    /// <inheritdoc />
     public bool Hidden => false;
     /// <inheritdoc />
     public string NodeKind => "live";

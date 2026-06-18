@@ -20,6 +20,8 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     /// <inheritdoc />
     public string Role => "agent";
     /// <inheritdoc />
+    public string NodeType => "agent";
+    /// <inheritdoc />
     public bool Hidden => false;
     /// <inheritdoc />
     public string NodeKind => "live";

@@ -252,12 +252,25 @@ export type GraphNodeKind = 'live' | 'planned';
 export type GraphEdgeCardinality = 'direct' | 'fanout' | 'fanin';
 export type GraphVariant = 'full' | 'child' | 'coordinator';
 
+// node_type — self-declared structural category separate from `role` and `kind`.
+// Drives card shape and size in the generic renderer.
+export type GraphNodeType = 'agent' | 'action' | 'gate' | 'terminal' | 'subtask';
+
 export interface GraphNode {
   id: string;              // logical step key; also the status reducer lookup key
   label: string;           // display label shown on the card
   role: string;            // drives icon + color: agent|rai|review|merge|scribe|coordinator|subtask|assembly
   kind: GraphNodeKind;     // 'planned' nodes render dashed/muted; never show a pending spinner
-  child_graph_ref?: string;
+  node_type?: GraphNodeType; // drives card shape + size (agent=largest, action/gate=medium, terminal=small, subtask=expandable)
+  child_graph_ref?: string;  // coordinator subtask nodes: ref to child run graph, e.g. "run:{childRunId}"
+  // Optional display fields emitted by coordinator subtask nodes (may be flat fields OR nested in a `data` map —
+  // read defensively from both locations).
+  agent?: string;
+  model?: string;
+  phase?: string;
+  isolation?: string;
+  child_run_id?: string;
+  data?: Record<string, unknown>;
 }
 
 export interface GraphEdge {

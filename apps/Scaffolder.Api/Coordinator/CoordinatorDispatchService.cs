@@ -131,6 +131,7 @@ public sealed class CoordinatorDispatchService
         var snapshotSubtasks = await ReloadSubtasksAsync(workPlanId.Value, ct).ConfigureAwait(false);
         entry?.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
             context.CoordinatorRunId, workPlanId.Value, WorkPlanStatus.Dispatching, snapshotSubtasks, edges, seq.Current));
+        await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId.Value, ct).ConfigureAwait(false);
 
         if (subtasks.Count == 0)
         {
@@ -238,6 +239,7 @@ public sealed class CoordinatorDispatchService
             finalEntry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
                 context.CoordinatorRunId, workPlanId, WorkPlanStatus.AwaitingAssembly,
                 finalSubtasks, edges, seq.Next()));
+            await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
 
             // Close the coordinator stream so SSE clients receive a terminal [DONE] and stop polling.
             _streamStore.Complete(context.CoordinatorRunId);
@@ -260,6 +262,9 @@ public sealed class CoordinatorDispatchService
         if (subtask is null) return null;
         statusById[subtaskId] = SubtaskStatus.Dispatched;
         EmitSubtask(context, workPlanId, subtask, EventTypes.SubtaskDispatched, seq.Next());
+        // A child run id is now assigned, so the unified coordinator graph SHAPE changed
+        // (child_graph_ref appears) — re-emit the full shape-only snapshot.
+        await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
 
         var childRun = new Run
         {
@@ -548,6 +553,32 @@ public sealed class CoordinatorDispatchService
             .Where(s => s.WorkPlanId == workPlanId)
             .OrderBy(s => s.Id)
             .ToListAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Emits the UNIFIED <c>coordinator.graph</c> event (shape-only <see cref="GraphDescriptor"/>,
+    /// variant <c>coordinator</c>) on the coordinator stream. Called whenever the topology SHAPE
+    /// changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot), in
+    /// addition to the legacy <c>coordinator.topology</c> snapshot/delta which other consumers use.
+    /// </summary>
+    private async Task EmitCoordinatorGraphAsync(string coordinatorRunId, int workPlanId, CancellationToken ct)
+    {
+        var entry = _streamStore.Get(coordinatorRunId);
+        if (entry is null) return;
+
+        var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var ids = subtasks.Select(s => s.Id).ToHashSet();
+        var deps = (await db.SubtaskDependencies.AsNoTracking()
+            .Where(d => ids.Contains(d.SubtaskId))
+            .ToListAsync(ct).ConfigureAwait(false))
+            .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
+            .ToList();
+
+        var descriptor = CoordinatorGraphDescriptor.Build(coordinatorRunId, subtasks, deps);
+        entry.RecordNext(EventTypes.CoordinatorGraph, descriptor);
     }
 
     private async Task<Subtask?> UpdateSubtaskAsync(

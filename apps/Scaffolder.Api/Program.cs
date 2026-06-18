@@ -646,6 +646,7 @@ app.MapGet("/api/runs/{id}/graph", async (
     string id,
     SqliteRunStore runStore,
     RunWorkflowFactory workflowFactory,
+    CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -662,6 +663,17 @@ app.MapGet("/api/runs/{id}/graph", async (
 
     if (run is null) return Results.NotFound();
     if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    // Coordinator runs (ParentRunId == null, driven by the built-in Coordinator agent) return the
+    // unified coordinator-variant descriptor built from the work plan, so the same generic renderer
+    // draws the coordinator + fan-out children + the planned collective-assembly stage. A coordinator
+    // run without a persisted work plan yet falls through to the per-run variant.
+    if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+    {
+        var plan = await coordinator.GetWorkPlanAsync(id, ct);
+        if (plan is not null)
+            return Results.Ok(CoordinatorGraphDescriptor.Build(plan));
+    }
 
     var descriptor = workflowFactory.GetGraphDescriptor(isChild: run.ParentRunId is not null);
     return Results.Ok(descriptor);

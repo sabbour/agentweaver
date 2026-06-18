@@ -21,6 +21,8 @@ public sealed class VisualFunctionExecutor<TInput, TOutput> : FunctionExecutor<T
     /// <inheritdoc />
     public string Role { get; }
     /// <inheritdoc />
+    public string NodeType { get; }
+    /// <inheritdoc />
     public bool Hidden { get; }
     /// <inheritdoc />
     public string NodeKind { get; }
@@ -30,6 +32,7 @@ public sealed class VisualFunctionExecutor<TInput, TOutput> : FunctionExecutor<T
         string logicalNodeId,
         string displayLabel,
         string role,
+        string nodeType,
         bool hidden,
         Func<TInput, IWorkflowContext, CancellationToken, ValueTask<TOutput>> handler,
         string nodeKind = "live")
@@ -38,6 +41,7 @@ public sealed class VisualFunctionExecutor<TInput, TOutput> : FunctionExecutor<T
         LogicalNodeId = logicalNodeId;
         DisplayLabel = displayLabel;
         Role = role;
+        NodeType = nodeType;
         Hidden = hidden;
         NodeKind = nodeKind;
     }
