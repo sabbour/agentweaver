@@ -26,7 +26,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     /// <inheritdoc />
     public string NodeKind => "live";
 
-    private readonly CopilotAIAgent _agent;
+    private readonly IWorkflowTurnAgent _agent;
     private readonly IWorktreeOperations _worktreeOps;
     private readonly ILogger<AgentTurnExecutor> _logger;
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
@@ -34,7 +34,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     private readonly string? _apiKey;
 
     public AgentTurnExecutor(
-        CopilotAIAgent agent,
+        IWorkflowTurnAgent agent,
         IWorktreeOperations worktreeOps,
         Func<string, ChannelWriter<RunEvent>?> getRecordingWriter,
         ILogger<AgentTurnExecutor> logger,
@@ -74,11 +74,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 _apiKey,
                 ct).ConfigureAwait(false);
 
-            var session = input.IsRevision
-                ? await _agent.ResumeSessionAsync(ct).ConfigureAwait(false)
-                : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
-
-            await _agent.ExecuteStreamingLoopAsync(input.Task, session, ct).ConfigureAwait(false);
+            await _agent.RunTurnAsync(input.Task, input.IsRevision, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsContentSafetyViolation(ex))
         {

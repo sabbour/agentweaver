@@ -34,6 +34,7 @@ public sealed class RunWorkflowFactory
     private readonly SqliteRunStore _runStore;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IWorkflowAgentFactory _agentFactory;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
     private readonly string? _apiBaseUrl;
@@ -56,9 +57,10 @@ public sealed class RunWorkflowFactory
         SqliteRunStore runStore,
         ILoggerFactory loggerFactory,
         IServiceScopeFactory scopeFactory,
+        IWorkflowAgentFactory agentFactory,
         IConfiguration configuration)
     {
-        _ = agentRunner; // retained for DI/test compatibility; Scribe now uses ScribeAIAgent
+        _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
@@ -71,6 +73,7 @@ public sealed class RunWorkflowFactory
         _runStore = runStore;
         _loggerFactory = loggerFactory;
         _scopeFactory = scopeFactory;
+        _agentFactory = agentFactory;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -179,17 +182,11 @@ public sealed class RunWorkflowFactory
 
     private (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflow(bool isChild = false)
     {
-        // A fresh CopilotAIAgent per workflow build (per run). It is an AIAgent the MAF
-        // checkpoint manager can serialize, so the Copilot SDK session is persisted into the
-        // FileSystem checkpoint alongside the workflow state.
-        var copilotAgent = new CopilotAIAgent(
-            _copilotClientFactory,
-            _scopeProvider,
-            _sandboxExecutor,
-            _sandboxPolicyStore,
-            _approvalStore,
-            _toolApprovalGate,
-            _loggerFactory.CreateLogger<CopilotAIAgent>());
+        // A fresh worker agent per workflow build (per run), resolved through the injectable
+        // IWorkflowAgentFactory seam. In production this builds a CopilotAIAgent — an AIAgent the
+        // MAF checkpoint manager can serialize, so the Copilot SDK session is persisted into the
+        // FileSystem checkpoint alongside the workflow state. Tests substitute a fake agent.
+        var copilotAgent = _agentFactory.CreateWorkerAgent();
 
         var agentTurnExecutor = new AgentTurnExecutor(
             copilotAgent,
@@ -308,12 +305,12 @@ public sealed class RunWorkflowFactory
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
-            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey);
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
         var scribeNoChangesExec = new ScribeTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
-            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey);
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
         ExecutorBinding scribeBindingMerge = scribeMergeExec;
         ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
 
@@ -323,7 +320,8 @@ public sealed class RunWorkflowFactory
         var raiTurnExec = new RaiTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "rai-turn",
-            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream);
+            createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
+            agentFactory: _agentFactory);
         ExecutorBinding raiBinding = raiTurnExec;
 
         // Scribe input adapters: read run context from DB (reliable) to build ScribeTurnInput.
@@ -533,9 +531,16 @@ public sealed class RunWorkflowFactory
             .AddEdge<AgentTurnOutput>(raiBinding, raiRevisionAdapter,
                 output => output is not null && output.RaiRevisionRequired && output.Iteration < MaxIterations)
             .AddEdge(raiRevisionAdapter, agentBinding, idempotent: true)
+            // Content safety: the agent turn itself was flagged (empty diff, ContentSafetyFlagged)
+            // -> fail immediately, never reaching review. Note Rai RED keeps a non-empty diff and
+            // therefore routes to the review gate below (human has final say), unchanged.
+            .AddEdge<AgentTurnOutput>(raiBinding, terminalSafetyFailed,
+                output => output is not null && !output.RaiRevisionRequired
+                    && string.IsNullOrEmpty(output.Diff) && output.ContentSafetyFlagged)
             // No changes -> no-op -> scribe path
             .AddEdge<AgentTurnOutput>(raiBinding, terminalNoOp,
-                output => output is not null && !output.RaiRevisionRequired && string.IsNullOrEmpty(output.Diff))
+                output => output is not null && !output.RaiRevisionRequired
+                    && string.IsNullOrEmpty(output.Diff) && !output.ContentSafetyFlagged)
             .AddEdge(terminalNoOp, scribeInputNoChanges)
             .AddEdge(scribeInputNoChanges, scribeBindingNoChanges)
             .AddEdge(scribeBindingNoChanges, scribeOutputNoChanges)
@@ -569,6 +574,7 @@ public sealed class RunWorkflowFactory
             // Outputs
             .WithOutputFrom(scribeOutputMerge)
             .WithOutputFrom(scribeOutputNoChanges)
+            .WithOutputFrom(terminalSafetyFailed)
             .WithOutputFrom(terminalDeclined);
 
         var wf = fullBuilder.Build();

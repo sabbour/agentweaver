@@ -68,6 +68,14 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
                 services.Remove(descriptor);
 
             services.AddSingleton<IAgentRunner>(TestAgentRunner);
+
+            var agentFactoryDescriptor = services.FirstOrDefault(
+                d => d.ServiceType == typeof(Scaffolder.AgentRuntime.Workflow.IWorkflowAgentFactory));
+            if (agentFactoryDescriptor is not null)
+                services.Remove(agentFactoryDescriptor);
+
+            services.AddSingleton<Scaffolder.AgentRuntime.Workflow.IWorkflowAgentFactory>(
+                new FakeWorkflowAgentFactory(TestAgentRunner));
         });
     }
 

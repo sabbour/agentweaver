@@ -1,0 +1,98 @@
+using System.Threading.Channels;
+using Scaffolder.AgentRuntime.Workflow;
+using Scaffolder.Domain;
+
+namespace Scaffolder.Tests.Helpers;
+
+/// <summary>
+/// Test <see cref="IWorkflowAgentFactory"/> that produces fake workflow agents which never
+/// touch the GitHub Copilot SDK. The worker agent funnels into the supplied
+/// <see cref="TestFileEditAgentRunner"/> so tests can drive its <c>Mode</c> and observe
+/// <c>InvocationCount</c>/<c>LastTask</c>. Rai and Scribe agents are inert (Rai always returns
+/// a GREEN verdict, Scribe is a no-op) so the end-to-end workflow completes deterministically
+/// without their turns interfering with the worker-agent assertions.
+/// </summary>
+public sealed class FakeWorkflowAgentFactory : IWorkflowAgentFactory
+{
+    private readonly TestFileEditAgentRunner _runner;
+
+    public FakeWorkflowAgentFactory(TestFileEditAgentRunner runner) => _runner = runner;
+
+    public IWorkflowTurnAgent CreateWorkerAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Worker, _runner);
+
+    public IWorkflowTurnAgent CreateRaiAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Rai, _runner);
+
+    public IWorkflowTurnAgent CreateScribeAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Scribe, _runner);
+}
+
+internal enum FakeAgentRole
+{
+    Worker,
+    Rai,
+    Scribe,
+}
+
+/// <summary>
+/// A fake <see cref="IWorkflowTurnAgent"/> used by integration/security tests. The worker role
+/// delegates to <see cref="TestFileEditAgentRunner"/> (real file/git operations in the worktree);
+/// Rai returns a GREEN verdict; Scribe returns an empty result.
+/// </summary>
+internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
+{
+    private readonly FakeAgentRole _role;
+    private readonly TestFileEditAgentRunner _runner;
+
+    private string _workingDirectory = "";
+    private string _repositoryPath = "";
+    private string _runId = "";
+    private string? _modelId;
+    private string? _systemPromptContext;
+    private ChannelWriter<RunEvent>? _stream;
+
+    public FakeWorkflowTurnAgent(FakeAgentRole role, TestFileEditAgentRunner runner)
+    {
+        _role = role;
+        _runner = runner;
+    }
+
+    public Task SetupAsync(
+        string workingDirectory,
+        string repositoryPath,
+        string runId,
+        string? modelId,
+        string? systemPromptContext,
+        ChannelWriter<RunEvent>? streamWriter,
+        string? projectId,
+        string? agentName,
+        string? apiBaseUrl,
+        string? apiKey,
+        CancellationToken ct)
+    {
+        _workingDirectory = workingDirectory;
+        _repositoryPath = repositoryPath;
+        _runId = runId;
+        _modelId = modelId;
+        _systemPromptContext = systemPromptContext;
+        _stream = streamWriter;
+        return Task.CompletedTask;
+    }
+
+    public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) => _role switch
+    {
+        // Worker funnels into the shared TestFileEditAgentRunner so Mode/InvocationCount/LastTask
+        // behave exactly as before the AIAgent migration. A ContentSafety mode throws here, which
+        // AgentTurnExecutor catches via IsContentSafetyViolation.
+        FakeAgentRole.Worker => _runner.ExecuteAsync(
+            task, _workingDirectory, _repositoryPath, ModelSource.GitHubCopilot,
+            _runId, _modelId, _stream, ct, _systemPromptContext),
+
+        // Rai must NOT touch the shared runner (it would corrupt LastTask/InvocationCount). A GREEN
+        // verdict lets the workflow proceed to the review gate.
+        FakeAgentRole.Rai => Task.FromResult("GREEN — no issues, safe to ship."),
+
+        // Scribe is a silent no-op in tests.
+        _ => Task.FromResult(string.Empty),
+    };
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}

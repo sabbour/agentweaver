@@ -68,6 +68,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     private readonly Action<string>? _completeSubStream;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
+    private readonly IWorkflowAgentFactory? _agentFactory;
 
     public ScribeTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -82,7 +83,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
         Action<string>? completeSubStream = null,
         string? apiBaseUrl = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        IWorkflowAgentFactory? agentFactory = null)
         : base(name)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -98,6 +100,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         _completeSubStream = completeSubStream;
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
+        _agentFactory = agentFactory;
     }
 
     public override async ValueTask<ScribeTurnInput> HandleAsync(
@@ -136,7 +139,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         var subRunId = input.RunId + "-scribe";
         var subWriter = _createSubStream?.Invoke(subRunId, "scribe");
 
-        ScribeAIAgent? agent = null;
+        IWorkflowTurnAgent? agent = null;
         try
         {
             var task = $$"""
@@ -161,14 +164,15 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
             var charter = (BuiltInCharterResolver.Resolve(input.RepositoryPath, "scribe") ?? FallbackCharter)
                           + MemoryToolsRuntimeNote;
 
-            agent = new ScribeAIAgent(
-                _copilotClientFactory,
-                _scopeProvider,
-                _sandboxExecutor,
-                _sandboxPolicyStore,
-                _approvalStore,
-                _toolApprovalGate,
-                _loggerFactory.CreateLogger<CopilotAIAgent>());
+            agent = _agentFactory?.CreateScribeAgent()
+                ?? new ScribeAIAgent(
+                    _copilotClientFactory,
+                    _scopeProvider,
+                    _sandboxExecutor,
+                    _sandboxPolicyStore,
+                    _approvalStore,
+                    _toolApprovalGate,
+                    _loggerFactory.CreateLogger<CopilotAIAgent>());
 
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
@@ -183,8 +187,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 apiKey: _apiKey,
                 ct).ConfigureAwait(false);
 
-            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
+            await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

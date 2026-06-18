@@ -63,6 +63,17 @@ public sealed class WorkflowWebApplicationFactory : WebApplicationFactory<Progra
                 services.Remove(descriptor);
 
             services.AddSingleton<IAgentRunner>(TestAgentRunner);
+
+            // Replace the production workflow agent factory with a fake that funnels the worker
+            // agent into TestAgentRunner and short-circuits Rai/Scribe — so the MAF workflow runs
+            // end-to-end without hitting the real GitHub Copilot SDK.
+            var agentFactoryDescriptor = services.FirstOrDefault(
+                d => d.ServiceType == typeof(Scaffolder.AgentRuntime.Workflow.IWorkflowAgentFactory));
+            if (agentFactoryDescriptor is not null)
+                services.Remove(agentFactoryDescriptor);
+
+            services.AddSingleton<Scaffolder.AgentRuntime.Workflow.IWorkflowAgentFactory>(
+                new FakeWorkflowAgentFactory(TestAgentRunner));
         });
     }
 

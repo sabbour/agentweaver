@@ -45,6 +45,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
     private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
     private readonly Action<string>? _completeSubStream;
+    private readonly IWorkflowAgentFactory? _agentFactory;
 
     public RaiTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -57,7 +58,8 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null,
         string name = "rai-turn",
         Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
-        Action<string>? completeSubStream = null)
+        Action<string>? completeSubStream = null,
+        IWorkflowAgentFactory? agentFactory = null)
         : base(name)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -71,6 +73,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         _getRecordingWriter = getRecordingWriter ?? (_ => null);
         _createSubStream = createSubStream;
         _completeSubStream = completeSubStream;
+        _agentFactory = agentFactory;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -90,7 +93,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         var subRunId = input.RunId + "-rai";
         var subWriter = _createSubStream?.Invoke(subRunId, "rai");
 
-        RaiAIAgent? agent = null;
+        IWorkflowTurnAgent? agent = null;
         try
         {
             var reviewPath = !string.IsNullOrEmpty(input.WorktreePath)
@@ -120,14 +123,15 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 If your verdict is REVISE, provide actionable feedback the agent can act on.
                 """;
 
-            agent = new RaiAIAgent(
-                _copilotClientFactory,
-                _scopeProvider,
-                _sandboxExecutor,
-                _sandboxPolicyStore,
-                _approvalStore,
-                _toolApprovalGate,
-                _loggerFactory.CreateLogger<CopilotAIAgent>());
+            agent = _agentFactory?.CreateRaiAgent()
+                ?? new RaiAIAgent(
+                    _copilotClientFactory,
+                    _scopeProvider,
+                    _sandboxExecutor,
+                    _sandboxPolicyStore,
+                    _approvalStore,
+                    _toolApprovalGate,
+                    _loggerFactory.CreateLogger<CopilotAIAgent>());
 
             await agent.SetupAsync(
                 workingDirectory: reviewPath,
@@ -142,8 +146,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 apiKey: null,
                 ct).ConfigureAwait(false);
 
-            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
+            var response = await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
 
             if (IsRedVerdict(response))
             {

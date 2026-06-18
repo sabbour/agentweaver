@@ -37,7 +37,7 @@ namespace Scaffolder.AgentRuntime;
 /// disposes them via <see cref="DisposeAsync"/>.
 /// </para>
 /// </summary>
-public class CopilotAIAgent : AIAgent, IAsyncDisposable
+public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnAgent
 {
     /// <summary>
     /// Scaffolder API tool names that are auto-approved without sandbox governance.
@@ -271,6 +271,19 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable
         // SessionId is already set in SessionConfig ("scaffolder-run-{runId}") so the SDK
         // resumes the persisted session automatically — no raw overload needed.
         return await _inner.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs a single agent turn: creates (or, for a revision, resumes) the SDK session and
+    /// drives the streaming loop, returning the accumulated assistant text. This is the
+    /// <see cref="Workflow.IWorkflowTurnAgent"/> seam used by the workflow turn executors.
+    /// </summary>
+    public async Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct)
+    {
+        var session = isRevision
+            ? await ResumeSessionAsync(ct).ConfigureAwait(false)
+            : await CreateSessionAsync(ct).ConfigureAwait(false);
+        return await ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
     }
 
     /// <summary>Runs the agent for a turn (non-streaming). Delegates to the inner agent.</summary>

@@ -260,6 +260,14 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             .GetRequiredService<IServiceScopeFactory>();
         var copilotClientFactory = new Scaffolder.AgentRuntime.Providers.GitHubCopilotClientFactory(
             config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        var agentFactory = new Scaffolder.AgentRuntime.Workflow.WorkflowAgentFactory(
+            copilotClientFactory,
+            new FixedInstallationScopeStub(),
+            new Scaffolder.SandboxExec.PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new Scaffolder.AgentRuntime.InMemoryShellApprovalStore(),
+            new Scaffolder.AgentRuntime.InMemoryToolApprovalGate(),
+            loggerFactory);
         var factory = new RunWorkflowFactory(
             new TestFileEditAgentRunner(),
             copilotClientFactory,
@@ -274,6 +282,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             runStore,
             loggerFactory,
             scopeFactory,
+            agentFactory,
             config);
 
         var watchLoop = new RunWatchLoopService(
