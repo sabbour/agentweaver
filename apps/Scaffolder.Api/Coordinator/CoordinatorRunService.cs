@@ -172,10 +172,17 @@ public sealed class CoordinatorRunService
             .ConfigureAwait(false);
     }
 
+    // After a draft/re-draft, the spec is persisted as awaiting_confirmation and
+    // coordinator.outcome_spec is emitted (so the UI enables Confirm) BEFORE the MAF runtime
+    // suspends at the request port and the watch loop arms _pendingStore. A fast confirm in that
+    // window finds no pending gate even though one is imminent. We poll for the gate to arm for a
+    // bounded interval before reporting NoPendingGate.
+    private const int GateArmWaitTimeoutMs = 3000;
+    private const int GateArmPollIntervalMs = 50;
+
     private async Task<CoordinatorGateOutcome> SubmitDecisionAsync(
         string runId, CoordinatorOutcomeSpecDecision decision, CancellationToken ct)
     {
-        _ = ct;
         var streamingRun = _registry.Get(runId);
         if (streamingRun is null)
             return CoordinatorGateOutcome.RunNotActive;
@@ -183,7 +190,16 @@ public sealed class CoordinatorRunService
         // Atomic consume for replay/double-POST protection (mirrors the review endpoint).
         var pending = _pendingStore.TryRemove(runId);
         if (pending is null)
-            return CoordinatorGateOutcome.NoPendingGate;
+        {
+            // The gate may simply not be armed YET (the ordering race described above). Wait for it
+            // to arm — but ONLY while the persisted spec is still awaiting_confirmation. If the spec
+            // is already confirmed/declined (a genuine double-submit, or a drained gate after the
+            // dispatch hand-off), there is no gate coming, so we return NoPendingGate immediately and
+            // preserve replay/double-POST protection.
+            pending = await WaitForGateToArmAsync(runId, ct).ConfigureAwait(false);
+            if (pending is null)
+                return CoordinatorGateOutcome.NoPendingGate;
+        }
 
         if (decision.Revise)
         {
@@ -205,6 +221,44 @@ public sealed class CoordinatorRunService
         }
 
         return CoordinatorGateOutcome.Accepted;
+    }
+
+    /// <summary>
+    /// Bounded wait for the confirmation gate to arm, closing the ordering race where the spec is
+    /// already persisted/emitted as <c>awaiting_confirmation</c> but the MAF runtime has not yet
+    /// suspended at the request port (so the watch loop has not yet called
+    /// <see cref="PendingRequestStore.Set"/>). Returns the pending entry if it arms within
+    /// <see cref="GateArmWaitTimeoutMs"/>, otherwise <c>null</c>.
+    ///
+    /// We only wait while the persisted spec is still <c>awaiting_confirmation</c>: a spec that has
+    /// already advanced to <c>confirmed</c>/<c>declined</c> means the gate was genuinely consumed
+    /// (double-submit / drained gate after dispatch hand-off), so there is no gate coming and we
+    /// fall through to NoPendingGate immediately — preserving replay/double-POST protection.
+    /// </summary>
+    private async Task<PendingEntry?> WaitForGateToArmAsync(string runId, CancellationToken ct)
+    {
+        var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
+        if (spec is null || spec.Status != "awaiting_confirmation")
+            return null;
+
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(GateArmWaitTimeoutMs);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                await Task.Delay(GateArmPollIntervalMs, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+
+            var pending = _pendingStore.TryRemove(runId);
+            if (pending is not null)
+                return pending;
+        }
+
+        return null;
     }
 
     // -----------------------------------------------------------------------

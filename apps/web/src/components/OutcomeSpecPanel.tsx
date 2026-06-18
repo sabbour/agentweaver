@@ -220,10 +220,26 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
   const handleConfirm = async () => {
     setActing(true);
     setActionError(null);
+    // Defense-in-depth for the gate-arming race: after a revise re-draft, the spec can be
+    // emitted as `awaiting_confirmation` (enabling this button) a moment before the backend
+    // re-arms its in-memory confirmation gate. A fast Confirm click in that window gets a
+    // 409 `no_pending_gate`. Auto-retry only that case a few times; surface everything else.
+    const maxAttempts = 5;
+    const backoffMs = 400;
     try {
-      const updated = await apiClient.confirmOutcomeSpec(runId);
-      if (updated) setSpecFromApi(updated);
-      else await fetchSpec();
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const updated = await apiClient.confirmOutcomeSpec(runId);
+          if (updated) setSpecFromApi(updated);
+          else await fetchSpec();
+          return;
+        } catch (err) {
+          const isGateArming =
+            err instanceof ApiError && err.status === 409 && err.body.includes('no_pending_gate');
+          if (!isGateArming || attempt >= maxAttempts) throw err;
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        }
+      }
     } catch (err) {
       setActionError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {

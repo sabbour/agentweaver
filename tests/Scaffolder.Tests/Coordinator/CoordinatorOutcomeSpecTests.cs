@@ -1,11 +1,14 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Scaffolder.Api.Contracts;
 using Scaffolder.Api.Coordinator;
 using Scaffolder.Api.Infrastructure;
+using Scaffolder.Api.Memory;
 using Scaffolder.Api.Runs;
 using Scaffolder.Domain;
 using Scaffolder.Tests.Helpers;
@@ -182,6 +185,92 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
 
         outcome.Should().Be(CoordinatorGateOutcome.NoPendingGate,
             "an active run whose gate has been consumed must report NoPendingGate, not RunNotActive");
+    }
+
+    // =========================================================================
+    // Confirm-gate ordering race (regression for the revise -> confirm bug):
+    // after a re-draft the spec is persisted/emitted as awaiting_confirmation (UI enables
+    // Confirm) BEFORE the MAF runtime suspends and the watch loop arms the pending gate. A fast
+    // confirm in that window finds an empty gate. The fix is a bounded wait: while the spec is
+    // still awaiting_confirmation, confirm must WAIT for the gate to arm and then SUCCEED — never
+    // return NoPendingGate prematurely.
+    // =========================================================================
+    [Fact]
+    public async Task Confirm_GateArmsAfterClick_WaitsAndSucceeds_NotNoPendingGate()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Confirm must wait for the gate to arm");
+        await WaitForGateAsync(runId);
+
+        // The persisted spec is awaiting_confirmation at this point.
+        (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be("awaiting_confirmation");
+
+        // Simulate the not-yet-armed window: drain the real pending entry, then re-arm it after a
+        // short delay (the watch loop would do this once the MAF runtime suspends). We re-arm with
+        // the very same ExternalRequest so SendResponseAsync drives a real confirmation.
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var drained = pendingStore.TryRemove(runId);
+        drained.Should().NotBeNull("the gate must be pending before draining");
+
+        const int reArmDelayMs = 350;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(reArmDelayMs);
+            pendingStore.Set(runId, drained!.Request, drained.OwnerUser);
+        });
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        var sw = Stopwatch.StartNew();
+        var outcome = await coordinator.ConfirmOutcomeSpecAsync(
+            runId, CoordinatorWebApplicationFactory.OwnerUser, CancellationToken.None);
+        sw.Stop();
+
+        outcome.Should().Be(CoordinatorGateOutcome.Accepted,
+            "confirm must wait for the imminent gate to arm and then succeed, not return NoPendingGate");
+        sw.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(reArmDelayMs - 100,
+            "confirm must have actually waited for the gate to arm rather than consuming it instantly");
+
+        // The confirmation went through end to end.
+        await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+    }
+
+    // =========================================================================
+    // Fast path: when the gate is empty AND the spec is NOT awaiting_confirmation (already
+    // confirmed/declined — a genuine double-submit or a drained gate after dispatch hand-off),
+    // confirm must return NoPendingGate PROMPTLY without burning the bounded wait. This preserves
+    // replay/double-POST protection.
+    // =========================================================================
+    [Fact]
+    public async Task Confirm_DrainedGate_SpecNotAwaiting_ReturnsNoPendingGatePromptly()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Drained gate with non-awaiting spec is fast");
+        await WaitForGateAsync(runId);
+
+        // Drain the gate (no re-arm) and advance the persisted spec out of awaiting_confirmation,
+        // exactly as a completed confirm / dispatch hand-off would leave it.
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        pendingStore.TryRemove(runId).Should().NotBeNull("the gate must be pending before draining");
+
+        var scopeFactory = _factory.Services.GetRequiredService<IServiceScopeFactory>();
+        using (var scope = scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = await db.OutcomeSpecs.FirstAsync(s => s.CoordinatorRunId == runId);
+            spec.Status = "confirmed";
+            await db.SaveChangesAsync();
+        }
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        var sw = Stopwatch.StartNew();
+        var outcome = await coordinator.ConfirmOutcomeSpecAsync(
+            runId, CoordinatorWebApplicationFactory.OwnerUser, CancellationToken.None);
+        sw.Stop();
+
+        outcome.Should().Be(CoordinatorGateOutcome.NoPendingGate,
+            "a drained gate whose spec already advanced past awaiting_confirmation must report NoPendingGate");
+        sw.ElapsedMilliseconds.Should().BeLessThan(1000,
+            "the fast path must not burn the bounded gate-arm wait when the spec is not awaiting_confirmation");
     }
 
     // =========================================================================
