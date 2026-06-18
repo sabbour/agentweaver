@@ -14,9 +14,9 @@ const modelTiers = {
 export default defineSquad({
   modelTiers,
   team: defineTeam({
-    name: "scaffolders-core",
+    name: "agentweaver-core",
     description:
-      "Squad for the scaffolders-core team, single-agent file-editing vertical slice (specs/001-single-agent-run).",
+      "Squad for the agentweaver-core team, single-agent file-editing vertical slice (specs/001-single-agent-run).",
   }),
   agents: [
     defineAgent({

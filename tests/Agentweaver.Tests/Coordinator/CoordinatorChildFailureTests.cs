@@ -105,7 +105,7 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
     [Theory]
     [InlineData(@"could not create worktree at C:\Users\asabbour\.local\share\agentweaver\worktrees\abc")]
     [InlineData("path /home/asabbour/.copilot/session-state/x rejected")]
-    [InlineData("path /Users/asabbour/Git/scaffolders/y outside sandbox")]
+    [InlineData("path /Users/asabbour/Git/agentweaver/y outside sandbox")]
     public void RedactFailureReason_MasksUserHomePaths(string message)
     {
         var reason = RunOrchestrator.RedactFailureReason(new InvalidOperationException(message));

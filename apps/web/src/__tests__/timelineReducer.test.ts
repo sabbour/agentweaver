@@ -168,7 +168,7 @@ describe('timelineReducer', () => {
   });
 
   it('deriveHumanTitle: strips home prefix from path', () => {
-    const result = deriveHumanTitle('write_file', { path: '/home/runner/work/scaffolders/src/x.ts' });
+    const result = deriveHumanTitle('write_file', { path: '/home/runner/work/agentweaver/src/x.ts' });
     expect(result).not.toContain('/home/runner');
     expect(result).toContain('src/x.ts');
   });
