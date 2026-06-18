@@ -18,6 +18,7 @@ vi.mock('../api/apiClient', () => ({
     getTeam: vi.fn(),
     getRun: vi.fn(),
     getRunEvents: vi.fn(),
+    getRunGraph: vi.fn(),
   },
 }));
 
@@ -70,6 +71,8 @@ beforeEach(() => {
     { sequence: 2, type: 'workflow.step', payload: { step: 'rai', status: 'completed' } },
     { sequence: 3, type: 'run.assemble_ready', payload: {} },
   ]);
+  // null → 404 → page falls back to hardcoded CHILD_EXECUTORS (agent/rai/assemble-ready)
+  vi.mocked(apiClient.getRunGraph).mockResolvedValue(null);
 });
 
 afterEach(() => cleanup());

@@ -204,13 +204,52 @@ The sync panel at the bottom of the page shows the pending uncommitted changes f
 
 ### Workflow run page
 
-The workflow run page (`/projects/:projectId/runs/:runId/workflow`) is the primary screen for monitoring a run. It renders the five-stage pipeline as a horizontal React Flow diagram:
+The workflow run page (`/projects/:projectId/runs/:runId/workflow`) is the primary screen for monitoring a run. It renders the pipeline stages as a horizontal React Flow diagram.
+
+#### Dynamic graph descriptor
+
+The page fetches a graph descriptor from `GET /api/runs/{id}/graph` on load and applies any `run.workflow_graph` SSE snapshot (highest `seq` wins). When the descriptor is available it drives all rendering; when the endpoint returns 404 or is not yet deployed, the page falls back to the hardcoded executor lists below.
+
+The descriptor shape (snake_case JSON from the backend):
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `graph_id` | string | Opaque identifier |
+| `variant` | `"full"` \| `"child"` \| `"coordinator"` | Graph variant |
+| `start_node_id` | string | Id of the first node |
+| `nodes` | `GraphNode[]` | Ordered list of pipeline stage nodes |
+| `edges` | `GraphEdge[]` | Directed edges (forward and loopback) |
+
+**`GraphNode`**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | string | Logical step key matching the status reducer (`agent`, `rai`, `review`, `merge`, `scribe`, `assemble-ready`) |
+| `label` | string | Card title shown in the UI |
+| `role` | string | Drives icon and color (`agent`/`rai`/`review`/`merge`/`scribe`/`coordinator`/`subtask`/`assembly`) |
+| `kind` | `"live"` \| `"planned"` | `planned` nodes render with a dashed border and muted opacity; they never show a pending spinner |
+| `child_graph_ref` | string? | Optional reference to a child descriptor |
+
+**`GraphEdge`**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `from` | string | Source node id |
+| `to` | string | Target node id |
+| `cardinality` | `"direct"` \| `"fanout"` \| `"fanin"` | Edge multiplicity |
+| `loopback` | boolean | `true` = back-edge excluded from dagre layout, drawn as a loopback arc above/below the row |
+
+**Status projection** — node `id` equals the logical step key the existing status reducer uses, so status is a direct lookup by id. `planned` nodes are always rendered as "Planned" regardless of any events.
+
+**Fallback** — when the descriptor endpoint returns 404 or is unavailable, the page falls back to the hardcoded five-stage pipeline (`Agent → Rai → Review → Merge → Scribe`) for a normal run or the trimmed three-stage pipeline (`Agent → Rai → Assemble-ready`) for a coordinator child run, so nothing regresses until the backend ships.
+
+#### Pipeline stages (hardcoded fallback / full variant)
 
 **Agent → Rai → Review → Merge → Scribe**
 
 Each card shows:
 - **Stage name and role description** — Agent (AI Assistant), Rai (RAI Reviewer), Review (Human Review), Merge (Merge Coordinator), Scribe (Session Logger)
-- **Status badge** — Pending, In Progress, Awaiting, Complete, Skipped, Failed, or Revise (Rai only)
+- **Status badge** — Pending, Planned, In Progress, Awaiting, Complete, Skipped, Failed, or Revise (Rai only)
 - **Elapsed timer** — running clock while the stage is active; freezes on completion
 - **Description text** — current activity (e.g. "Working on task...", the latest `agent.intent` text, "Passed", "Skipped")
 - **Agent identicon** — circular avatar for the agent executor, matching the identicon on the team page

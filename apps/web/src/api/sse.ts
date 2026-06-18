@@ -103,6 +103,7 @@ export type EventType =
   | 'subtask.completed'
   | 'subtask.failed'
   | 'run.assemble_ready'
+  | 'run.workflow_graph'
   | 'done'
   | 'error';
 

@@ -14,8 +14,19 @@ namespace Scaffolder.AgentRuntime.Workflow;
 /// Its charter is read dynamically from <c>.squad/agents/scribe/charter.md</c>.
 /// Best-effort: exceptions never abort the workflow.
 /// </summary>
-public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInput>
+public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInput>, IWorkflowNodeMeta
 {
+    /// <inheritdoc />
+    public string LogicalNodeId => "scribe";
+    /// <inheritdoc />
+    public string DisplayLabel => "Scribe";
+    /// <inheritdoc />
+    public string Role => "scribe";
+    /// <inheritdoc />
+    public bool Hidden => false;
+    /// <inheritdoc />
+    public string NodeKind => "live";
+
     private const string FallbackCharter =
         "You are Scribe — the silent memory keeper for this agent team. " +
         "You do not write code or make design decisions. " +

@@ -10,6 +10,7 @@ using Scaffolder.AgentRuntime.Providers;
 using Scaffolder.AgentRuntime.Workflow;
 using Scaffolder.Api.Infrastructure;
 using Scaffolder.Api.Memory;
+using Scaffolder.Api.Runs.Graph;
 using Scaffolder.Domain;
 using Scaffolder.SandboxExec;
 
@@ -176,7 +177,7 @@ public sealed class RunWorkflowFactory
     /// <summary>Maximum revision iterations before capping (Rai or Review).</summary>
     private const int MaxIterations = 3;
 
-    private Workflow BuildWorkflow(bool isChild = false)
+    private (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflow(bool isChild = false)
     {
         // A fresh CopilotAIAgent per workflow build (per run). It is an AIAgent the MAF
         // checkpoint manager can serialize, so the Copilot SDK session is persisted into the
@@ -208,8 +209,8 @@ public sealed class RunWorkflowFactory
         // Adapter: maps AgentTurnOutput -> WorkflowReviewRequest and stores merge
         // data in workflow state so it survives the checkpoint/resume cycle.
         // RaiSafetyFlagged is passed through so the reviewer sees Rai's verdict as context.
-        ExecutorBinding reviewAdapter = new FunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
-            "review-adapter",
+        ExecutorBinding reviewAdapter = new VisualFunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
+            "review-adapter", "review-adapter", "Review adapter", "plumbing", true,
             async (input, ctx, ct) =>
             {
                 await ctx.QueueStateUpdateAsync(MergeDataKey, input, MergeDataScope, ct)
@@ -221,8 +222,8 @@ public sealed class RunWorkflowFactory
 
         // Adapter: maps WorkflowReviewDecision -> MergeInput by reading the stored
         // AgentTurnOutput from workflow state.
-        ExecutorBinding mergeAdapter = new FunctionExecutor<WorkflowReviewDecision, MergeInput>(
-            "merge-adapter",
+        ExecutorBinding mergeAdapter = new VisualFunctionExecutor<WorkflowReviewDecision, MergeInput>(
+            "merge-adapter", "merge-adapter", "Merge adapter", "plumbing", true,
             async (decision, ctx, ct) =>
             {
                 var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
@@ -236,8 +237,8 @@ public sealed class RunWorkflowFactory
                     agentOutput.OriginatingBranch);
             });
 
-        ExecutorBinding terminalNoOp = new FunctionExecutor<AgentTurnOutput, NoChangesOutput>(
-            "terminal-no-op",
+        ExecutorBinding terminalNoOp = new VisualFunctionExecutor<AgentTurnOutput, NoChangesOutput>(
+            "terminal-no-op", "terminal-no-op", "No changes", "plumbing", true,
             (input, ctx, ct) => new ValueTask<NoChangesOutput>(new NoChangesOutput(input.RunId)));
 
         // Child assemble-ready terminal (coordinator child runs only). Short-circuits the per-child
@@ -245,8 +246,8 @@ public sealed class RunWorkflowFactory
         // worktree branch + produced tree hash as the hand-off contract the coordinator collects.
         // Empty-diff (no-op) children terminalize here too — a valid assemble-ready outcome with
         // HasChanges == false.
-        ExecutorBinding childAssembleReady = new FunctionExecutor<AgentTurnOutput, AssembleReadyOutput>(
-            "child-assemble-ready",
+        ExecutorBinding childAssembleReady = new VisualFunctionExecutor<AgentTurnOutput, AssembleReadyOutput>(
+            "child-assemble-ready", "assemble-ready", "Assemble-ready", "assembly", false,
             (input, ctx, ct) => new ValueTask<AssembleReadyOutput>(new AssembleReadyOutput(
                 RunId: input.RunId,
                 WorktreeBranch: input.WorktreeBranch,
@@ -256,8 +257,8 @@ public sealed class RunWorkflowFactory
                 StepCount: input.StepCount,
                 RaiSafetyFlagged: input.ContentSafetyFlagged)));
 
-        ExecutorBinding terminalDeclined = new FunctionExecutor<WorkflowReviewDecision, DeclinedOutput>(
-            "terminal-declined",
+        ExecutorBinding terminalDeclined = new VisualFunctionExecutor<WorkflowReviewDecision, DeclinedOutput>(
+            "terminal-declined", "terminal-declined", "Declined", "plumbing", true,
             async (input, ctx, ct) =>
             {
                 var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
@@ -266,22 +267,22 @@ public sealed class RunWorkflowFactory
             });
 
         // Iteration cap: review requested changes but max iterations reached.
-        ExecutorBinding terminalIterationCapped = new FunctionExecutor<AgentTurnInput, DeclinedOutput>(
-            "terminal-iteration-capped",
+        ExecutorBinding terminalIterationCapped = new VisualFunctionExecutor<AgentTurnInput, DeclinedOutput>(
+            "terminal-iteration-capped", "terminal-iteration-capped", "Iteration capped", "plumbing", true,
             (input, ctx, ct) => new ValueTask<DeclinedOutput>(new DeclinedOutput(input.RunId)));
 
-        ExecutorBinding terminalSafetyFailed = new FunctionExecutor<AgentTurnOutput, ContentSafetyFailedOutput>(
-            "terminal-safety-failed",
+        ExecutorBinding terminalSafetyFailed = new VisualFunctionExecutor<AgentTurnOutput, ContentSafetyFailedOutput>(
+            "terminal-safety-failed", "terminal-safety-failed", "Safety failed", "plumbing", true,
             (input, ctx, ct) => new ValueTask<ContentSafetyFailedOutput>(new ContentSafetyFailedOutput(input.RunId)));
 
-        ExecutorBinding terminalMerge = new FunctionExecutor<MergeOutput, MergeOutput>(
-            "terminal-merge",
+        ExecutorBinding terminalMerge = new VisualFunctionExecutor<MergeOutput, MergeOutput>(
+            "terminal-merge", "terminal-merge", "Merge result", "plumbing", true,
             (input, ctx, ct) => new ValueTask<MergeOutput>(input));
 
         // Blocked adapter: on a retriable block, re-enter the review gate via HITL
         // so the workflow stays alive and the user can re-approve once the blocker clears.
-        ExecutorBinding blockedAdapter = new FunctionExecutor<MergeOutput, WorkflowReviewRequest>(
-            "blocked-adapter",
+        ExecutorBinding blockedAdapter = new VisualFunctionExecutor<MergeOutput, WorkflowReviewRequest>(
+            "blocked-adapter", "blocked-adapter", "Blocked adapter", "plumbing", true,
             async (output, ctx, ct) =>
             {
                 var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
@@ -293,8 +294,8 @@ public sealed class RunWorkflowFactory
 
         // Store AgentTurnInput in workflow state at workflow start so Scribe adapters
         // can read project/agent context after the review-gate checkpoint/resume cycle.
-        ExecutorBinding agentInputStorer = new FunctionExecutor<AgentTurnInput, AgentTurnInput>(
-            "agent-input-storer",
+        ExecutorBinding agentInputStorer = new VisualFunctionExecutor<AgentTurnInput, AgentTurnInput>(
+            "agent-input-storer", "agent-input-storer", "Agent input", "plumbing", true,
             async (input, ctx, ct) =>
             {
                 await ctx.QueueStateUpdateAsync("agent-input", input, "run-context", ct).ConfigureAwait(false);
@@ -328,8 +329,8 @@ public sealed class RunWorkflowFactory
         // Scribe input adapters: read run context from DB (reliable) to build ScribeTurnInput.
         // Previously used ctx.ReadStateAsync("agent-input", "run-context") but QueueStateUpdateAsync
         // is a deferred/queued write that may not be visible across checkpoint boundaries.
-        ExecutorBinding scribeInputMerge = new FunctionExecutor<MergeOutput, ScribeTurnInput>(
-            "scribe-input-merge",
+        ExecutorBinding scribeInputMerge = new VisualFunctionExecutor<MergeOutput, ScribeTurnInput>(
+            "scribe-input-merge", "scribe", "Scribe", "scribe", false,
             async (output, ctx, ct) =>
             {
                 var log = _loggerFactory.CreateLogger<RunWorkflowFactory>();
@@ -381,8 +382,8 @@ public sealed class RunWorkflowFactory
                     MergeMode: output.MergeMode);
             });
 
-        ExecutorBinding scribeInputNoChanges = new FunctionExecutor<NoChangesOutput, ScribeTurnInput>(
-            "scribe-input-no-changes",
+        ExecutorBinding scribeInputNoChanges = new VisualFunctionExecutor<NoChangesOutput, ScribeTurnInput>(
+            "scribe-input-no-changes", "scribe", "Scribe", "scribe", false,
             async (output, ctx, ct) =>
             {
                 var log = _loggerFactory.CreateLogger<RunWorkflowFactory>();
@@ -433,13 +434,13 @@ public sealed class RunWorkflowFactory
             });
 
         // Scribe output adapters: reconstruct terminal output types from pass-through.
-        ExecutorBinding scribeOutputMerge = new FunctionExecutor<ScribeTurnInput, MergeOutput>(
-            "scribe-output-merge",
+        ExecutorBinding scribeOutputMerge = new VisualFunctionExecutor<ScribeTurnInput, MergeOutput>(
+            "scribe-output-merge", "scribe", "Scribe", "scribe", false,
             (input, ctx, ct) => new ValueTask<MergeOutput>(
                 new MergeOutput(input.RunId, input.TerminalStatus ?? "merged", input.MergeResult, input.MergeMode)));
 
-        ExecutorBinding scribeOutputNoChanges = new FunctionExecutor<ScribeTurnInput, NoChangesOutput>(
-            "scribe-output-no-changes",
+        ExecutorBinding scribeOutputNoChanges = new VisualFunctionExecutor<ScribeTurnInput, NoChangesOutput>(
+            "scribe-output-no-changes", "scribe", "Scribe", "scribe", false,
             (input, ctx, ct) => new ValueTask<NoChangesOutput>(new NoChangesOutput(input.RunId)));
 
         ExecutorBinding agentBinding = agentTurnExecutor;
@@ -448,8 +449,8 @@ public sealed class RunWorkflowFactory
 
         // Rai REVISE adapter: reads stored agent-input, appends Rai feedback to Task,
         // increments Iteration so the agent knows it's a revision pass.
-        ExecutorBinding raiRevisionAdapter = new FunctionExecutor<AgentTurnOutput, AgentTurnInput>(
-            "rai-revision-adapter",
+        ExecutorBinding raiRevisionAdapter = new VisualFunctionExecutor<AgentTurnOutput, AgentTurnInput>(
+            "rai-revision-adapter", "rai-revision-adapter", "RAI revision", "plumbing", true,
             async (raiOutput, ctx, ct) =>
             {
                 var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
@@ -474,8 +475,8 @@ public sealed class RunWorkflowFactory
 
         // Review RequestChanges adapter: reads stored agent-input, appends review feedback,
         // increments Iteration. No cap — reviewers can request as many changes as needed.
-        ExecutorBinding reviewChangesAdapter = new FunctionExecutor<WorkflowReviewDecision, AgentTurnInput>(
-            "review-changes-adapter",
+        ExecutorBinding reviewChangesAdapter = new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnInput>(
+            "review-changes-adapter", "review-changes-adapter", "Review changes", "plumbing", true,
             async (decision, ctx, ct) =>
             {
                 var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
@@ -507,7 +508,7 @@ public sealed class RunWorkflowFactory
         // (OK / RED / empty-diff no-op / revise-at-cap).
         if (isChild)
         {
-            var childWf = new WorkflowBuilder(agentInputStorer)
+            var childBuilder = new GraphDescriptorBuilder(agentInputStorer)
                 .AddEdge(agentInputStorer, agentBinding)
                 .AddEdge(agentBinding, raiBinding)
                 // RAI REVISE (iteration < cap) -> revision adapter -> loop back to agent
@@ -517,12 +518,13 @@ public sealed class RunWorkflowFactory
                 // Everything else (OK, RED, empty-diff no-op, revise-at-cap) -> assemble-ready terminal
                 .AddEdge<AgentTurnOutput>(raiBinding, childAssembleReady,
                     output => output is not null && !(output.RaiRevisionRequired && output.Iteration < MaxIterations))
-                .WithOutputFrom(childAssembleReady)
-                .Build()!;
-            return childWf;
+                .WithOutputFrom(childAssembleReady);
+            var childWf = childBuilder.Build();
+            var childDescriptor = childBuilder.BuildDescriptor("scaffolder-workflow-child", "child");
+            return (childWf, childDescriptor);
         }
 
-        var wf = new WorkflowBuilder(agentInputStorer)
+        var fullBuilder = new GraphDescriptorBuilder(agentInputStorer)
             // storer -> agent turn (unconditional)
             .AddEdge(agentInputStorer, agentBinding)
             // agent turn -> Rai RAI gate (unconditional)
@@ -567,10 +569,12 @@ public sealed class RunWorkflowFactory
             // Outputs
             .WithOutputFrom(scribeOutputMerge)
             .WithOutputFrom(scribeOutputNoChanges)
-            .WithOutputFrom(terminalDeclined)
-            .Build()!;
+            .WithOutputFrom(terminalDeclined);
 
-        return wf;
+        var wf = fullBuilder.Build();
+        var descriptor = fullBuilder.BuildDescriptor("scaffolder-workflow-full", "full");
+
+        return (wf, descriptor);
     }
 
     /// <summary>
@@ -580,10 +584,29 @@ public sealed class RunWorkflowFactory
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false)
     {
-        var workflow = BuildWorkflow(isChild);
+        var (workflow, descriptor) = BuildWorkflow(isChild);
+        // Emit the per-run workflow graph snapshot at run start so the SSE stream carries the
+        // descriptor; it is persisted alongside other RunEvents at terminal states so the REST
+        // seed path (/api/runs/{id}/events) and /api/runs/{id}/graph work for finished runs.
+        _streamStore.Get(runId)?.RecordNext(EventTypes.WorkflowGraph, descriptor);
         return await InProcessExecution.RunStreamingAsync(
             workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Build the per-run workflow graph descriptor (the dynamic visualization). Deterministic and
+    /// side-effect free: it constructs the executors and wires the graph but does not run it. The
+    /// <c>GET /api/runs/{id}/graph</c> endpoint uses this; pass <paramref name="isChild"/>
+    /// = true for coordinator child runs (run.ParentRunId != null), false for the full pipeline.
+    /// </summary>
+    public GraphDescriptor GetGraphDescriptor(bool isChild) => BuildWorkflow(isChild).Descriptor;
+
+    /// <summary>
+    /// Test seam (drift-guard): builds the workflow AND its descriptor for a variant so the test can
+    /// reflect the built MAF graph (ReflectExecutors/ReflectEdges) and assert the descriptor stays in
+    /// sync with the wired executors. Reflection is used ONLY by that build-time test, never at runtime.
+    /// </summary>
+    internal (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflowForTest(bool isChild) => BuildWorkflow(isChild);
 
     /// <summary>
     /// Resumes a workflow run from checkpoint. The pipeline shape (full vs trimmed child)
@@ -598,7 +621,7 @@ public sealed class RunWorkflowFactory
             var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
             isChild = run?.ParentRunId is not null;
         }
-        var workflow = BuildWorkflow(isChild);
+        var (workflow, _) = BuildWorkflow(isChild);
         return await InProcessExecution.ResumeStreamingAsync(
             workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
     }

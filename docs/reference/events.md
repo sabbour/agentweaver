@@ -34,6 +34,7 @@ Clients should order and deduplicate events by `sequence`.
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
 | `workflow.step` | When each workflow executor stage transitions | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only) |
+| `run.workflow_graph` | Once at run start, carrying the full workflow graph descriptor for rendering the run topology | `GraphDescriptor` (see below) |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
 | `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |
 | `review.declined` | When the owner declines the run | *(none)* |
@@ -167,6 +168,32 @@ Possible `status` values: `started`, `completed`, `failed`, `skipped`, `revise` 
 The `label` field is a short human-readable description (e.g. `"Agent turn"`, `"RAI review"`). `timestamp_utc` is an ISO 8601 timestamp. The `agent` step includes `agent_name` (the team member running the turn). The `review` step includes `reviewer` (GitHub username) when a human review decision is recorded.
 
 The web UI uses `workflow.step` events to drive the workflow diagram — each card in the Agent → Rai → Review → Merge → Scribe pipeline updates live as these events arrive.
+
+### `run.workflow_graph`
+
+Emitted once at run start, carrying a full snapshot of the run's workflow topology as a `GraphDescriptor`. It is built from the same code that wires the MAF workflow (no runtime reflection), so the rendered graph never drifts from the executors that actually run. The descriptor is persisted with the run's other events, so it is also available for terminal runs via replay and through `GET /api/runs/{id}/graph`. Child runs (`parent_run_id != null`) carry the `child` variant; all others carry the `full` variant.
+
+`GraphDescriptor` shape (snake_case JSON):
+
+```json
+{
+  "graph_id": "scaffolder-workflow-full",
+  "variant": "full",
+  "start_node_id": "agent",
+  "nodes": [
+    { "id": "agent", "label": "Agent", "role": "agent", "kind": "live", "child_graph_ref": null }
+  ],
+  "edges": [
+    { "from": "agent", "to": "rai", "cardinality": "direct", "loopback": false }
+  ]
+}
+```
+
+- `variant`: `"full"` | `"child"` | `"coordinator"`.
+- `nodes[].id`: the logical node id (equals the `step` key in `workflow.step` events for live business nodes). `kind`: `"live"` | `"planned"`. `child_graph_ref`: optional reference to a nested graph.
+- `edges[].cardinality`: `"direct"` | `"fanout"` | `"fanin"`. `loopback`: `true` for revision-cycle back-edges (the target is an ancestor of the source).
+
+Plumbing executors (input storers, adapters, terminals) are collapsed or hidden: hidden nodes are dropped and their edges are transitively re-stitched, and the scribe-path executors collapse into the single `scribe` node. The `full` variant nodes are `agent`, `rai`, `review`, `merge`, `scribe`; the `child` variant nodes are `agent`, `rai`, `assemble-ready`.
 
 ### `coordinator.started`
 

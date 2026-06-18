@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -274,6 +274,17 @@ export class ScaffolderApiClient {
 
   getCoordinatorChildren(coordinatorRunId: string): Promise<CoordinatorChildResponse[]> {
     return this.request<CoordinatorChildResponse[]>('GET', `/api/runs/${encodeURIComponent(coordinatorRunId)}/children`);
+  }
+
+  // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller
+  // can fall back to the hardcoded executor graph until the backend endpoint ships.
+  async getRunGraph(runId: string): Promise<GraphDescriptor | null> {
+    try {
+      return await this.request<GraphDescriptor>('GET', `/api/runs/${encodeURIComponent(runId)}/graph`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

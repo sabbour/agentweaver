@@ -57,6 +57,15 @@ public static class EventTypes
     public const string WorkflowStep = "workflow.step";
 
     /// <summary>
+    /// Emitted once at run start with a full snapshot of the run's workflow graph descriptor
+    /// (the dynamic per-run visualization). Built from the same code that wires the MAF workflow,
+    /// so plumbing nodes are already collapsed/dropped. Persisted like other RunEvents so the
+    /// REST seed path (/api/runs/{id}/events) and /api/runs/{id}/graph work for finished runs.
+    /// Payload: GraphDescriptor { graph_id, variant, start_node_id, nodes[], edges[] }.
+    /// </summary>
+    public const string WorkflowGraph = "run.workflow_graph";
+
+    /// <summary>
     /// Emitted when the sandbox blocks at least one tool call during a run.
     /// Non-terminal — the run continues, but the outcome is degraded.
     /// Payload: { toolName: string, reason: string }

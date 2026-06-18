@@ -11,8 +11,19 @@ namespace Scaffolder.AgentRuntime.Workflow;
 /// AgentTurnOutput. Token deltas stream through the existing side-channel
 /// (RecordingChannelWriter) and are invisible to MAF.
 /// </summary>
-public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput>
+public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput>, IWorkflowNodeMeta
 {
+    /// <inheritdoc />
+    public string LogicalNodeId => "agent";
+    /// <inheritdoc />
+    public string DisplayLabel => "Agent";
+    /// <inheritdoc />
+    public string Role => "agent";
+    /// <inheritdoc />
+    public bool Hidden => false;
+    /// <inheritdoc />
+    public string NodeKind => "live";
+
     private readonly CopilotAIAgent _agent;
     private readonly IWorktreeOperations _worktreeOps;
     private readonly ILogger<AgentTurnExecutor> _logger;

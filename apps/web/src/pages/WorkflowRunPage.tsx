@@ -46,7 +46,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent, type EventType } from '../api/sse';
 import { apiClient } from '../api/apiClient';
-import type { TeamDto } from '../api/types';
+import type { TeamDto, GraphDescriptor } from '../api/types';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
@@ -101,12 +101,45 @@ const CHILD_EXECUTORS: ExecutorDef[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Role → description / icon helpers for descriptor-driven rendering
+// ---------------------------------------------------------------------------
+
+function roleDescForRole(role: string): string {
+  const map: Record<string, string> = {
+    agent:       'AI Assistant',
+    rai:         'RAI Reviewer',
+    review:      'Human Review',
+    merge:       'Merge Coordinator',
+    scribe:      'Session Logger',
+    coordinator: 'Coordinator',
+    subtask:     'Subtask Agent',
+    assembly:    'Awaiting collective assembly',
+  };
+  return map[role] ?? role;
+}
+
+function iconForRole(role: string): FluentIcon {
+  const map: Record<string, FluentIcon> = {
+    agent:       BotRegular,
+    rai:         ShieldRegular,
+    review:      PersonRegular,
+    merge:       MergeRegular,
+    scribe:      NotebookRegular,
+    coordinator: BotRegular,
+    subtask:     BotRegular,
+    assembly:    CheckmarkCircleRegular,
+  };
+  return map[role] ?? CircleRegular;
+}
+
+// ---------------------------------------------------------------------------
 // Node data shape passed into React Flow custom nodes
 // ---------------------------------------------------------------------------
 
 interface WorkflowNodeData extends Record<string, unknown> {
   def: ExecutorDef;
   state: ExecutorState;
+  isPlanned?: boolean;     // true when descriptor node kind === 'planned'
   agentName?: string;
   agentRoleTitle?: string;   // actual team role title for the agent executor
   modelId?: string;          // model used for the agent executor
@@ -185,6 +218,10 @@ const useNodeStyles = makeStyles({
   cardActionRequired: {
     border: `2px solid ${tokens.colorPaletteMarigoldBorderActive}`,
     backgroundColor: tokens.colorPaletteMarigoldBackground2,
+  },
+  cardPlanned: {
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    opacity: 0.6,
   },
   cardHeader: {
     display: 'flex',
@@ -285,8 +322,11 @@ function statusLabel(s: StepStatus) {
   return s;
 }
 
-function StatusBadge({ status, isAwaiting, label: labelOverride }: { status: StepStatus; isAwaiting?: boolean; label?: string }) {
+function StatusBadge({ status, isAwaiting, isPlanned, label: labelOverride }: { status: StepStatus; isAwaiting?: boolean; isPlanned?: boolean; label?: string }) {
   const s = useNodeStyles();
+  if (isPlanned) {
+    return <span className={`${s.statusBadge} ${s.badgePending}`}>Planned</span>;
+  }
   if (isAwaiting) {
     return (
       <span className={`${s.statusBadge} ${s.badgeAwaiting}`}>
@@ -398,7 +438,7 @@ function ElapsedTimer({ startedAt, completedAt }: { startedAt?: number; complete
 
 function WorkflowNode({ data }: NodeProps) {
   const s = useNodeStyles();
-  const { def, state, agentName, agentRoleTitle, modelId, executionId, projectId, reviewedBy, runOutcome, runDegraded } = data as WorkflowNodeData;
+  const { def, state, agentName, agentRoleTitle, modelId, executionId, projectId, reviewedBy, runOutcome, runDegraded, isPlanned } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent } = state;
 
@@ -422,6 +462,7 @@ function WorkflowNode({ data }: NodeProps) {
     s.card,
     isActive        ? s.cardActive         : '',
     isHumanWaiting  ? s.cardActionRequired : '',
+    isPlanned       ? s.cardPlanned        : '',
   ].filter(Boolean).join(' ');
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
@@ -443,6 +484,7 @@ function WorkflowNode({ data }: NodeProps) {
         <StatusBadge
           status={effectiveStatus}
           isAwaiting={isHumanWaiting}
+          isPlanned={!!isPlanned}
           label={key === 'agent' && effectiveStatus === 'revise' ? 'Incomplete' : undefined}
         />
       </div>
@@ -469,21 +511,21 @@ function WorkflowNode({ data }: NodeProps) {
       </div>
 
       {/* Action buttons — nopan/nodrag prevents React Flow from swallowing clicks */}
-      {key === 'agent' && (
+      {key === 'agent' && !isPlanned && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>
             View execution
           </Button>
         </div>
       )}
-      {key === 'rai' && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
+      {key === 'rai' && !isPlanned && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>
             View execution
           </Button>
         </div>
       )}
-      {key === 'scribe' && (
+      {key === 'scribe' && !isPlanned && (
         <div className={`${s.cardActions} nopan nodrag`}>
           {(status === 'started' || status === 'completed' || status === 'failed') && startedAt !== undefined && (
             <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-scribe`)}>
@@ -495,21 +537,21 @@ function WorkflowNode({ data }: NodeProps) {
           </Link>
         </div>
       )}
-      {key === 'merge' && status === 'completed' && (
+      {key === 'merge' && !isPlanned && status === 'completed' && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => openModal?.(executionId as string)}>
             Browse files
           </Button>
         </div>
       )}
-      {key === 'review' && status === 'started' && (
+      {key === 'review' && !isPlanned && status === 'started' && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>
             Review now
           </Button>
         </div>
       )}
-      {key === 'review' && (status === 'completed' || status === 'revise') && reviewedBy && (
+      {key === 'review' && !isPlanned && (status === 'completed' || status === 'revise') && reviewedBy && (
         <div className={`${s.reviewerRow} nopan nodrag`}>
           <img
             src={`https://github.com/${reviewedBy}.png?size=28`}
@@ -797,6 +839,8 @@ export function WorkflowRunPage() {
   const [modalExecId,    setModalExecId]    = useState<string | undefined>(undefined);
   const [team,           setTeam]           = useState<TeamDto | undefined>(undefined);
   const [seedEvents,     setSeedEvents]     = useState<RunStreamEvent[]>([]);
+  // REST-seeded graph descriptor (null = 404 or not yet resolved → hardcoded fallback).
+  const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
 
   // A run is a coordinator CHILD when GET /api/runs/{id} returns a non-null parent_run_id.
   const isChild = parentRunId !== undefined && parentRunId !== null && parentRunId !== '';
@@ -868,6 +912,16 @@ export function WorkflowRunPage() {
       .catch(() => { /* endpoint may 404 if the durable log is absent — fall back to SSE */ });
     return () => { cancelled = true; };
   }, [executionId, runStatus]);
+
+  // Fetch the graph descriptor for this execution; 404 → null → hardcoded fallback.
+  useEffect(() => {
+    if (!executionId) return;
+    let cancelled = false;
+    apiClient.getRunGraph(executionId)
+      .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
+      .catch(() => { /* non-fatal; null remains → hardcoded fallback */ });
+    return () => { cancelled = true; };
+  }, [executionId]);
 
   // Fold the REST seed under the live SSE deltas: persisted events first, then any live
   // event not already present (dedupe by sequence; singleton seq-0 events by type).
@@ -1038,35 +1092,108 @@ export function WorkflowRunPage() {
     return undefined;
   }, [executorStates]);
 
-  // Select the graph shape from the child flag: a coordinator child renders the trimmed
-  // agent → RAI → assemble-ready pipeline with no revise/request-changes loopbacks; a
-  // normal run keeps the full 5-stage graph. Derived (not mutated) from the shared consts.
-  const executors    = isChild ? CHILD_EXECUTORS : EXECUTORS;
-  const forwardEdges = isChild ? CHILD_FORWARD_EDGES : FORWARD_EDGES;
-  const displayEdges = isChild ? CHILD_EDGES : ALL_EDGES;
+  // SSE run.workflow_graph snapshot: highest-seq-wins over REST seed.
+  const sseDescriptor = useMemo<GraphDescriptor | undefined>(() => {
+    let best: { seq: number; desc: GraphDescriptor } | undefined;
+    for (const evt of events) {
+      if (evt.type === 'run.workflow_graph') {
+        const seq = typeof evt.payload['seq'] === 'number' ? evt.payload['seq'] : 0;
+        if (!best || seq >= best.seq) {
+          best = { seq, desc: evt.payload as unknown as GraphDescriptor };
+        }
+      }
+    }
+    return best?.desc;
+  }, [events]);
 
-  // Build React Flow nodes; run dagre on forward edges only for LR layout.
-  const rfNodes: Node[] = useMemo(() => {
-    const raw: Node[] = executors.map((def) => ({
-      id: def.key,
+  // SSE wins over REST; null/undefined → hardcoded fallback.
+  const effectiveDescriptor: GraphDescriptor | null | undefined = sseDescriptor ?? restDescriptor;
+
+  // Build React Flow nodes + edges. When a descriptor is available, use it; otherwise fall
+  // back to the hardcoded executor lists. Only non-loopback edges are fed to dagre so it
+  // never tries to rank a cycle; loopback edges are drawn as back-arcs separately.
+  const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
+    if (effectiveDescriptor) {
+      const fwdEdges: Edge[] = [];
+      const allEdges: Edge[] = [];
+      for (const edge of effectiveDescriptor.edges) {
+        const edgeId = `${edge.from}-${edge.to}`;
+        if (edge.loopback) {
+          const lbLabel =
+            edge.from === 'rai'    && edge.to === 'agent' ? 'Revise'
+          : edge.from === 'review' && edge.to === 'agent' ? 'Request changes'
+          : '';
+          allEdges.push(loopbackEdge(edgeId, edge.from, edge.to, lbLabel));
+        } else {
+          const e = forwardEdge(edgeId, edge.from, edge.to);
+          fwdEdges.push(e);
+          allEdges.push(e);
+        }
+      }
+      const raw: Node[] = effectiveDescriptor.nodes.map((node) => {
+        const planned = node.kind === 'planned';
+        const st: ExecutorState = planned
+          ? { status: 'pending' }
+          : (executorStates[node.id] ?? { status: 'pending' });
+        const def: ExecutorDef = {
+          key:             node.id as ExecutorKey,
+          label:           node.label,
+          roleDescription: roleDescForRole(node.role),
+          Icon:            iconForRole(node.role),
+        };
+        return {
+          id:   node.id,
+          type: 'workflow',
+          data: {
+            def,
+            state:          st,
+            isPlanned:      planned,
+            agentName:      node.id === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
+            agentRoleTitle: node.id === 'agent' ? agentRoleTitle : undefined,
+            modelId:        node.id === 'agent' ? modelId : undefined,
+            runId:          runId      ?? '',
+            executionId:    executionId ?? '',
+            projectId:      projectId  ?? '',
+            reviewedBy:     node.id === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
+            runOutcome:     node.id === 'agent' ? runOutcome : undefined,
+            runDegraded:    node.id === 'agent' ? runDegraded : undefined,
+          } as WorkflowNodeData,
+          position: { x: 0, y: 0 },
+        };
+      });
+      return {
+        rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 60, nodeSep: 30 }),
+        displayEdges: allEdges,
+      };
+    }
+
+    // --- Fallback: hardcoded executor lists (full or child variant) ---
+    const fallbackDefs  = isChild ? CHILD_EXECUTORS    : EXECUTORS;
+    const fallbackFwd   = isChild ? CHILD_FORWARD_EDGES : FORWARD_EDGES;
+    const fallbackEdges = isChild ? CHILD_EDGES         : ALL_EDGES;
+    const raw: Node[] = fallbackDefs.map((def) => ({
+      id:   def.key,
       type: 'workflow',
       data: {
         def,
-        state:           executorStates[def.key] ?? { status: 'pending' },
-        agentName:       def.key === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
-        agentRoleTitle:  def.key === 'agent' ? agentRoleTitle : undefined,
-        modelId:         def.key === 'agent' ? modelId : undefined,
-        runId:           runId      ?? '',
-        executionId:     executionId ?? '',
-        projectId:       projectId  ?? '',
-        reviewedBy:      def.key === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
-        runOutcome:      def.key === 'agent' ? runOutcome : undefined,
-        runDegraded:     def.key === 'agent' ? runDegraded : undefined,
+        state:          executorStates[def.key] ?? { status: 'pending' },
+        agentName:      def.key === 'agent' ? (executorStates['agent']?.agentName ?? agentName) : undefined,
+        agentRoleTitle: def.key === 'agent' ? agentRoleTitle : undefined,
+        modelId:        def.key === 'agent' ? modelId : undefined,
+        runId:          runId      ?? '',
+        executionId:    executionId ?? '',
+        projectId:      projectId  ?? '',
+        reviewedBy:     def.key === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
+        runOutcome:     def.key === 'agent' ? runOutcome : undefined,
+        runDegraded:    def.key === 'agent' ? runDegraded : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
-    return layoutDag(raw, forwardEdges, { rankdir: 'LR', rankSep: 60, nodeSep: 30 });
-  }, [executors, forwardEdges, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded]);
+    return {
+      rfNodes:      layoutDag(raw, fallbackFwd, { rankdir: 'LR', rankSep: 60, nodeSep: 30 }),
+      displayEdges: fallbackEdges,
+    };
+  }, [effectiveDescriptor, isChild, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;

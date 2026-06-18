@@ -243,6 +243,38 @@ export interface RunDto {
   workflow_run_id?: string;
 }
 
+// --- Feature 008 Phase 3 — Dynamic graph descriptor ---
+// GET /api/runs/{id}/graph returns a descriptor that replaces the hardcoded executor
+// lists in WorkflowRunPage. The client renders it as-is; node ids equal the logical
+// step keys already used by the status reducer (agent/rai/review/merge/scribe/assemble-ready).
+
+export type GraphNodeKind = 'live' | 'planned';
+export type GraphEdgeCardinality = 'direct' | 'fanout' | 'fanin';
+export type GraphVariant = 'full' | 'child' | 'coordinator';
+
+export interface GraphNode {
+  id: string;              // logical step key; also the status reducer lookup key
+  label: string;           // display label shown on the card
+  role: string;            // drives icon + color: agent|rai|review|merge|scribe|coordinator|subtask|assembly
+  kind: GraphNodeKind;     // 'planned' nodes render dashed/muted; never show a pending spinner
+  child_graph_ref?: string;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  cardinality: GraphEdgeCardinality;
+  loopback: boolean;       // true = back-edge excluded from dagre input, drawn as loopback arc
+}
+
+export interface GraphDescriptor {
+  graph_id: string;
+  variant: GraphVariant;
+  start_node_id: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 // GitHub auth
 export type GitHubAuthStatus = 'signed_in' | 'signed_out' | 'never_signed_in';
 

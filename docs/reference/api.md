@@ -40,6 +40,7 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `POST` | `/api/runs/{id}/review` | Record an approve or decline decision |
 | `POST` | `/api/runs/{id}/shell-approvals` | Approve a pending destructive shell command |
 | `GET` | `/api/runs/{id}/history` | Replay persisted session events for terminal runs |
+| `GET` | `/api/runs/{id}/graph` | Get the workflow graph descriptor for rendering the run topology |
 | `POST` | `/api/runs/{id}/commit` | Commit worktree changes and merge into originating branch |
 | `POST` | `/api/runs/{id}/request-changes` | Request a revision cycle: agent rewrites in place |
 | `GET` | `/api/runs/{id}/workspace` | List workspace files with change status and line counts |
@@ -290,6 +291,32 @@ See [events.md](events.md) for the event types emitted on the stream for each ou
 ### GET /api/runs/{id}/history
 
 Replays persisted Copilot SDK session events for a terminal run. The session is identified by `scaffolder-run-{runId}`. Returns a JSON array of run events in stream order. Only available for terminal runs. Returns `404` if the run is not terminal or the session is not found.
+
+### GET /api/runs/{id}/graph
+
+Returns the workflow graph descriptor for the run, describing the node/edge topology so a client can render the live workflow without hardcoding it. The descriptor is built from the same code that wires the MAF workflow (no runtime reflection). Owner-scoped Bearer auth. Child runs (`parent_run_id != null`) return the `child` variant; all others return the `full` variant.
+
+Response `200 OK` — a `GraphDescriptor`:
+
+```json
+{
+  "graph_id": "scaffolder-workflow-full",
+  "variant": "full",
+  "start_node_id": "agent",
+  "nodes": [
+    { "id": "agent", "label": "Agent", "role": "agent", "kind": "live", "child_graph_ref": null }
+  ],
+  "edges": [
+    { "from": "agent", "to": "rai", "cardinality": "direct", "loopback": false }
+  ]
+}
+```
+
+- `variant`: `"full"` | `"child"` | `"coordinator"`.
+- `nodes[].id`: the logical node id (matches the step key in `workflow.step` events). `kind`: `"live"` | `"planned"`. `child_graph_ref`: optional reference to a nested graph.
+- `edges[].cardinality`: `"direct"` | `"fanout"` | `"fanin"`. `loopback`: `true` when the edge targets an ancestor (a revision cycle back-edge).
+
+The same descriptor is emitted once at run start as a `run.workflow_graph` event on the stream (see [events.md](events.md)).
 
 ### POST /api/runs/{id}/commit
 

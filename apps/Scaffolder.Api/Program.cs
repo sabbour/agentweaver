@@ -636,6 +636,37 @@ app.MapGet("/api/runs/{id}/events", async (
     return Results.Ok(result);
 });
 
+// GET /api/runs/{id}/graph — return the run's dynamic workflow graph descriptor (the per-run
+// visualization). Built from the same code that wires the MAF workflow (no runtime reflection):
+// plumbing adapters/storers/terminals are collapsed/dropped and edges transitively re-stitched.
+// The child (trimmed) variant is returned when the run is a coordinator child (ParentRunId != null);
+// otherwise the full pipeline variant. Auth mirrors the other /api/runs endpoints (owner-scoped Bearer key).
+app.MapGet("/api/runs/{id}/graph", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    RunWorkflowFactory workflowFactory,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for graph", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var descriptor = workflowFactory.GetGraphDescriptor(isChild: run.ParentRunId is not null);
+    return Results.Ok(descriptor);
+});
+
 // GET /api/runs/{id}/history — replay persisted session events for terminal runs.
 // Uses Copilot SDK session resumption (SessionId="scaffolder-run-{runId}") to reconstruct
 // the event timeline without re-executing the agent.

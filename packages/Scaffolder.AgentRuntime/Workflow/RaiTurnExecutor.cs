@@ -14,8 +14,19 @@ namespace Scaffolder.AgentRuntime.Workflow;
 /// from <c>.squad/agents/rai/charter.md</c>.
 /// Best-effort: exceptions log a warning and pass the original output through unchanged.
 /// </summary>
-public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
+public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>, IWorkflowNodeMeta
 {
+    /// <inheritdoc />
+    public string LogicalNodeId => "rai";
+    /// <inheritdoc />
+    public string DisplayLabel => "Rai";
+    /// <inheritdoc />
+    public string Role => "rai";
+    /// <inheritdoc />
+    public bool Hidden => false;
+    /// <inheritdoc />
+    public string NodeKind => "live";
+
     private const string FallbackCharter =
         "You are Rai — the Responsible AI reviewer. Review the provided diff for security " +
         "vulnerabilities, harmful content, PII exposure, and ethical concerns. Issue a verdict: " +

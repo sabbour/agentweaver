@@ -9,8 +9,19 @@ namespace Scaffolder.AgentRuntime.Workflow;
 /// Executor that performs the merge of the worktree branch into the originating branch.
 /// Delegates to IMergeCoordinator.ExecuteMergeAsync and maps the result to MergeOutput.
 /// </summary>
-public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>
+public sealed class MergeExecutor : Executor<MergeInput, MergeOutput>, IWorkflowNodeMeta
 {
+    /// <inheritdoc />
+    public string LogicalNodeId => "merge";
+    /// <inheritdoc />
+    public string DisplayLabel => "Merge";
+    /// <inheritdoc />
+    public string Role => "merge";
+    /// <inheritdoc />
+    public bool Hidden => false;
+    /// <inheritdoc />
+    public string NodeKind => "live";
+
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly ILogger<MergeExecutor> _logger;
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
