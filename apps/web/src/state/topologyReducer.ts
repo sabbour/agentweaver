@@ -9,10 +9,12 @@
  */
 import type { RunStreamEvent } from '../api/sse';
 import type {
+  CoordinatorChildResponse,
   CoordinatorWorkPlan,
   SteerKind,
   TopologyEdge,
   TopologyNode,
+  WorkPlanResponse,
 } from '../api/types';
 
 export interface NodeSteering {
@@ -238,9 +240,87 @@ export function topologyReducer(
   }
 }
 
-/** Fold the accumulated SSE event list into topology state. */
-export function buildTopologyState(events: RunStreamEvent[]): CoordinatorTopologyState {
-  let state = initialTopologyState;
+/** Fold the accumulated SSE event list into topology state, starting from `seed`. */
+export function buildTopologyState(
+  events: RunStreamEvent[],
+  seed: CoordinatorTopologyState = initialTopologyState,
+): CoordinatorTopologyState {
+  let state = seed;
   for (const evt of events) state = topologyReducer(state, evt);
   return state;
+}
+
+// Backend node id scheme (CoordinatorTopology.cs): the coordinator is the single node
+// "coordinator"; each subtask is "subtask-{id}". The REST seed below mirrors it exactly so
+// the later SSE snapshot/deltas reconcile by id with no duplicated nodes.
+const COORDINATOR_NODE_ID = 'coordinator';
+const subtaskNodeId = (id: number | string): string => `subtask-${id}`;
+
+/**
+ * Seed topology state from the REST work-plan (+ optional children) so the graph populates
+ * immediately on page load. The one-time SSE `coordinator.topology` snapshot is emitted before
+ * the stream connects; without this seed the page stays empty until a manual reconnect.
+ *
+ * The seed deliberately leaves `hasSnapshot` false: SSE deltas (and the authoritative snapshot,
+ * if/when it arrives) merge by id on top of it. `topoSeq` stays -1 so no early delta is dropped.
+ */
+export function seedTopologyFromWorkPlan(
+  workPlan: WorkPlanResponse | null | undefined,
+  children?: CoordinatorChildResponse[] | null,
+): CoordinatorTopologyState {
+  if (!workPlan) return initialTopologyState;
+
+  const nodes: Record<string, TopologyNodeState> = {};
+  const nodeOrder: string[] = [];
+
+  nodes[COORDINATOR_NODE_ID] = {
+    id: COORDINATOR_NODE_ID,
+    kind: 'coordinator',
+    title: 'Coordinator',
+    status: workPlan.status ?? 'running',
+  };
+  nodeOrder.push(COORDINATOR_NODE_ID);
+
+  for (const s of workPlan.subtasks ?? []) {
+    const id = subtaskNodeId(s.subtaskId);
+    nodes[id] = {
+      id,
+      kind: 'subtask',
+      title: s.title ?? id,
+      status: s.status ?? 'pending',
+      assignedAgent: s.assignedAgent || undefined,
+      selectedModelId: s.selectedModelId || undefined,
+      childRunId: s.childRunId || undefined,
+    };
+    nodeOrder.push(id);
+  }
+
+  // Overlay dispatched-child details (childRunId / live status) keyed by subtaskId.
+  for (const c of children ?? []) {
+    const id = subtaskNodeId(c.subtaskId);
+    const prev = nodes[id];
+    if (!prev) continue;
+    nodes[id] = {
+      ...prev,
+      status: c.subtaskStatus ?? prev.status,
+      childRunId: c.childRunId ?? prev.childRunId,
+      assignedAgent: c.assignedAgent || prev.assignedAgent,
+      selectedModelId: c.selectedModelId || prev.selectedModelId,
+    };
+  }
+
+  // from = dependency (dependsOnSubtaskId), to = dependent (subtaskId).
+  const edges: TopologyEdge[] = (workPlan.dependencies ?? []).map((d) => ({
+    from: subtaskNodeId(d.dependsOnSubtaskId),
+    to: subtaskNodeId(d.subtaskId),
+  }));
+
+  return {
+    hasSnapshot: false,
+    version: 0,
+    topoSeq: -1,
+    nodeOrder,
+    nodes,
+    edges,
+  };
 }

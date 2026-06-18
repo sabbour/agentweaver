@@ -183,6 +183,28 @@ public sealed class CoordinatorDispatchService
                 context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
         }
 
+        await FinalizeDispatchAsync(context, workPlanId.Value, statusById, edges, seq, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Defect D: every child subtask is now terminal. Phase 3 (collective assembly / merge) is
+    /// intentionally NOT built yet, so we must NOT leave the coordinator run silently InProgress with
+    /// an open stream — that made the run look hung (user issue #5). This emits an explicit
+    /// children-complete signal, moves the work plan to the terminal-ish
+    /// <see cref="WorkPlanStatus.AwaitingAssembly"/> status, publishes a final topology snapshot
+    /// reflecting it, and closes the coordinator stream so the UI shows a clear "all children done,
+    /// awaiting collective assembly (Phase 3)" state instead of an in-flight one. The coordinator Run
+    /// row's final lifecycle (assembly, merge, completion) is owned by Phase 3 and is deliberately
+    /// left untouched here.
+    /// </summary>
+    internal async Task FinalizeDispatchAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        Dictionary<int, string> statusById,
+        IReadOnlyCollection<(int, int)> edges,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
         var terminalCounts = statusById.Values
             .GroupBy(s => s)
             .ToDictionary(g => g.Key, g => g.Count());
@@ -190,6 +212,36 @@ public sealed class CoordinatorDispatchService
             "Coordinator dispatch complete for run {RunId}: {Summary}. Awaiting Phase 3 assembly.",
             context.CoordinatorRunId,
             string.Join(", ", terminalCounts.Select(kv => $"{kv.Key}={kv.Value}")));
+
+        await SetWorkPlanStatusAsync(workPlanId, WorkPlanStatus.AwaitingAssembly, ct).ConfigureAwait(false);
+
+        var finalEntry = _streamStore.Get(context.CoordinatorRunId);
+        if (finalEntry is not null)
+        {
+            var completed = terminalCounts.GetValueOrDefault(SubtaskStatus.Completed, 0);
+            var assembleReady = terminalCounts.GetValueOrDefault(SubtaskStatus.AssembleReady, 0);
+            var failedCount = terminalCounts.GetValueOrDefault(SubtaskStatus.Failed, 0)
+                + terminalCounts.GetValueOrDefault(SubtaskStatus.RaiFlagged, 0);
+
+            finalEntry.RecordNext(EventTypes.CoordinatorChildrenComplete, new
+            {
+                workPlanId,
+                completed,
+                assembleReady,
+                failed = failedCount,
+                total = statusById.Count,
+            });
+
+            // Final FULL snapshot so the graph stops looking in-flight: every node + the terminal
+            // AwaitingAssembly work-plan status, no client-side computation required.
+            var finalSubtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+            finalEntry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
+                context.CoordinatorRunId, workPlanId, WorkPlanStatus.AwaitingAssembly,
+                finalSubtasks, edges, seq.Next()));
+
+            // Close the coordinator stream so SSE clients receive a terminal [DONE] and stop polling.
+            _streamStore.Complete(context.CoordinatorRunId);
+        }
     }
 
     private async Task<string?> DispatchOneAsync(
@@ -235,6 +287,14 @@ public sealed class CoordinatorDispatchService
             _logger.LogError(ex,
                 "Coordinator dispatch: failed to start child run for subtask {SubtaskId} (run {RunId})",
                 subtaskId, context.CoordinatorRunId);
+
+            // Defect B: StartChildRunAsync can throw before it persists the child run row (e.g. worktree
+            // creation fails), which would leave the subtask pointing at a childRunId that GET
+            // /api/runs/{childRunId} cannot find — an empty execution log. Persist a terminal FAILED run
+            // + RunFailed event FIRST (defensive: never throws), so the failed child is retrievable,
+            // THEN mark the subtask failed.
+            await _orchestrator.MarkChildRunFailedAsync(childRun, ex, ct).ConfigureAwait(false);
+
             var failed = await UpdateSubtaskAsync(subtaskId, SubtaskStatus.Failed, childRunId.ToString(), ct)
                 .ConfigureAwait(false);
             statusById[subtaskId] = SubtaskStatus.Failed;
@@ -571,7 +631,7 @@ public sealed class CoordinatorDispatchService
     private sealed record ChildResult(int SubtaskId, string ChildRunId, ChildOutcome Outcome);
 
     /// <summary>Monotonic topology sequence: snapshot is <c>Current</c> (0), each delta is <c>Next()</c>.</summary>
-    private sealed class SeqCounter
+    internal sealed class SeqCounter
     {
         private long _value;
         public long Current => _value;
@@ -587,6 +647,14 @@ public static class WorkPlanStatus
     public const string Assembling = "assembling";
     public const string InReview = "in_review";
     public const string Complete = "complete";
+
+    /// <summary>
+    /// Phase 2 terminal-ish status: every child subtask reached a terminal state and the work plan
+    /// now awaits Phase 3 collective assembly (merge). Distinct from <see cref="Dispatching"/> (work
+    /// in flight) and from the Phase-3-owned <see cref="Assembling"/>/<see cref="InReview"/>/<see
+    /// cref="Complete"/>. The UI renders this as "all children done, awaiting collective assembly".
+    /// </summary>
+    public const string AwaitingAssembly = "awaiting_assembly";
 }
 
 /// <summary>

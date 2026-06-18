@@ -27,6 +27,7 @@ import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
+import { isCoordinatorRun } from '../utils/runKind';
 import type { CreateRunRequest, Project, WorkflowRunDto, TeamMemberDto } from '../api/types';
 
 const useStyles = makeStyles({
@@ -266,9 +267,15 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
       </Badge>
       <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
       <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
-      <Link to={`/projects/${projectId}/runs/${run.workflow_run_id ?? run.execution_id}/workflow`} style={{ textDecoration: 'none' }}>
-        <Button appearance="secondary">Workflow</Button>
-      </Link>
+      {isCoordinatorRun(run) ? (
+        <Link to={`/projects/${projectId}/orchestrations/${run.workflow_run_id ?? run.execution_id}`} style={{ textDecoration: 'none' }}>
+          <Button appearance="secondary">Topology</Button>
+        </Link>
+      ) : (
+        <Link to={`/projects/${projectId}/runs/${run.workflow_run_id ?? run.execution_id}/workflow`} style={{ textDecoration: 'none' }}>
+          <Button appearance="secondary">Workflow</Button>
+        </Link>
+      )}
       {isAbandonable && (
         <>
           <Button appearance="subtle" icon={<DismissCircleRegular />} disabled={acting} onClick={() => setConfirmOpen(true)} aria-label="Abandon run">

@@ -1983,7 +1983,7 @@ app.MapGet("/api/projects/{id}/runs", async (
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
 
-    var runs = await runStore.GetRunsByProjectAsync(projectId, ct);
+    var runs = await runStore.GetRunsByProjectAsync(projectId, ct: ct);
     return Results.Ok(runs.Select(r => new WorkflowRunSummary
     {
         WorkflowRunId = r.WorkflowRunId ?? r.Id.ToString(),

@@ -163,4 +163,14 @@ public static class EventTypes
     ///   instruction: string }.
     /// </summary>
     public const string CoordinatorSteering = "coordinator.steering";
+
+    /// <summary>
+    /// Emitted on the COORDINATOR run's stream once EVERY child subtask has reached a terminal
+    /// state (completed / assemble_ready / failed) and the dispatch + observe loop has drained.
+    /// The coordinator run now awaits Phase 3 collective assembly (merge), which is NOT yet built —
+    /// this event is the explicit, non-hanging signal that dispatch is done so the UI stops showing
+    /// the run as in-flight.
+    /// Payload: { workPlanId, completed, assembleReady, failed, total }.
+    /// </summary>
+    public const string CoordinatorChildrenComplete = "coordinator.children_complete";
 }

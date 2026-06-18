@@ -475,6 +475,48 @@ export interface SubtaskEvent {
   status: SubtaskStatus;
 }
 
+// GET /api/runs/{coordinatorRunId}/work-plan — the persisted plan (subtasks + dependency edges).
+// Used to seed the topology view on page load before SSE deltas arrive (snapshot-race fix).
+export interface WorkPlanSubtaskResponse {
+  subtaskId: number;
+  title: string;
+  scope: string;
+  assignedAgent: string;
+  selectedModelId: string;
+  phase: string;
+  isolation: string;
+  status: string;
+  childRunId?: string;
+}
+
+export interface WorkPlanDependencyResponse {
+  subtaskId: number;
+  dependsOnSubtaskId: number;
+}
+
+export interface WorkPlanResponse {
+  workPlanId: number;
+  coordinatorRunId: string;
+  outcomeSpecId: number;
+  status: string;
+  isolationSummary?: string;
+  subtasks: WorkPlanSubtaskResponse[];
+  dependencies: WorkPlanDependencyResponse[];
+}
+
+// GET /api/runs/{coordinatorRunId}/children — dispatched child runs paired with subtask status.
+export interface CoordinatorChildResponse {
+  subtaskId: number;
+  childRunId: string;
+  subtaskStatus: string;
+  assignedAgent: string;
+  selectedModelId: string;
+  childRunStatus?: string;
+  worktreeBranch?: string;
+  treeHash?: string;
+  stepCount: number;
+}
+
 export type SteerKind = 'stop' | 'redirect' | 'amend';
 
 // POST /api/runs/{coordinatorRunId}/steer body.

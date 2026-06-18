@@ -23,9 +23,9 @@ import {
   ArrowRoutingRegular,
   ArrowSyncRegular,
   BotRegular,
-  BoxRegular,
   CheckmarkCircleRegular,
   CircleRegular,
+  ClockRegular,
   DismissCircleRegular,
   EditRegular,
   FlowRegular,
@@ -159,6 +159,13 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground2,
   },
+  assembleNote: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorPaletteLavenderForeground2,
+  },
   actions: {
     marginTop: tokens.spacingVerticalXS,
     display: 'flex',
@@ -190,7 +197,7 @@ function statusMeta(status: string, styles: ReturnType<typeof useStyles>): { lab
     pending: { label: 'Pending', badgeClass: 'badgePending', Icon: CircleRegular },
     dispatched: { label: 'Dispatched', badgeClass: 'badgeDispatched', Icon: SendRegular },
     running: { label: 'Running', badgeClass: 'badgeRunning', Icon: ArrowSyncRegular },
-    assemble_ready: { label: 'Assemble ready', badgeClass: 'badgeAssemble', Icon: BoxRegular },
+    assemble_ready: { label: 'Awaiting assembly', badgeClass: 'badgeAssemble', Icon: ClockRegular },
     rai_flagged: { label: 'RAI flagged', badgeClass: 'badgeFlagged', Icon: AlertRegular },
     completed: { label: 'Completed', badgeClass: 'badgeCompleted', Icon: CheckmarkCircleRegular },
     failed: { label: 'Failed', badgeClass: 'badgeFailed', Icon: DismissCircleRegular },
@@ -265,6 +272,13 @@ function TopologyNodeCard({ data }: NodeProps) {
         <span className={styles.steeringNote}>
           <ArrowRoutingRegular fontSize={12} aria-hidden="true" />
           {steerKindLabel(node.steering.kind)} · {node.steering.status}
+        </span>
+      )}
+
+      {node.kind === 'subtask' && node.status === 'assemble_ready' && (
+        <span className={styles.assembleNote}>
+          <ClockRegular fontSize={12} aria-hidden="true" />
+          Finished its part — waiting for collective assembly
         </span>
       )}
 

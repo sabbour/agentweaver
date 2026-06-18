@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest } from './types';
+import type { RetriableReviewErrorBody, RunDetail, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -256,6 +256,17 @@ export class ScaffolderApiClient {
   // backend team in parallel; this codes against the agreed contract.
   steerCoordinator(coordinatorRunId: string, req: SteerCoordinatorRequest): Promise<void> {
     return this.request<void>('POST', `/api/runs/${encodeURIComponent(coordinatorRunId)}/steer`, req);
+  }
+
+  // Coordinator topology REST seed (Feature 008 Phase 2). The SSE topology snapshot is
+  // emitted before the stream connects, so the page seeds nodes/edges from these on mount,
+  // then applies SSE deltas on top (snapshot-race fix). 404 when the run has no plan yet.
+  getWorkPlan(coordinatorRunId: string): Promise<WorkPlanResponse> {
+    return this.request<WorkPlanResponse>('GET', `/api/runs/${encodeURIComponent(coordinatorRunId)}/work-plan`);
+  }
+
+  getCoordinatorChildren(coordinatorRunId: string): Promise<CoordinatorChildResponse[]> {
+    return this.request<CoordinatorChildResponse[]>('GET', `/api/runs/${encodeURIComponent(coordinatorRunId)}/children`);
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

@@ -375,11 +375,22 @@ public sealed class SqliteRunStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    public async Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, CancellationToken ct = default)
+    /// <summary>
+    /// Lists the runs for a project. Coordinator CHILD runs (those with a non-null
+    /// <see cref="Run.ParentRunId"/>) are EXCLUDED by default: per the "children-as-nodes"
+    /// directive a coordinator's children are nodes inside the single coordinator topology, not
+    /// separate top-level workflows, so they must not surface in the project-wide runs list. The
+    /// child rows themselves are retained (they still execute, stream, and are reachable by id for
+    /// drill-down). Pass <paramref name="includeChildren"/> = true to include them (internal callers
+    /// that genuinely need the full set).
+    /// </summary>
+    public async Task<IReadOnlyList<Run>> GetRunsByProjectAsync(
+        ProjectId projectId, bool includeChildren = false, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = SelectSql + " WHERE project_id = $projectId ORDER BY started_at DESC;";
+        var childFilter = includeChildren ? string.Empty : " AND parent_run_id IS NULL";
+        command.CommandText = SelectSql + " WHERE project_id = $projectId" + childFilter + " ORDER BY started_at DESC;";
         command.Parameters.AddWithValue("$projectId", projectId.ToString());
         var results = new List<Run>();
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);

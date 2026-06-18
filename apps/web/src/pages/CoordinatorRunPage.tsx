@@ -1,11 +1,18 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Spinner, Text, Title2, Title3, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
+import { apiClient } from '../api/apiClient';
 import { API_KEY, API_URL } from '../config';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { CoordinatorTopologyGraph } from '../components/CoordinatorTopologyGraph';
-import { buildTopologyState, type TopologyNodeState } from '../state/topologyReducer';
+import {
+  buildTopologyState,
+  initialTopologyState,
+  seedTopologyFromWorkPlan,
+  type CoordinatorTopologyState,
+  type TopologyNodeState,
+} from '../state/topologyReducer';
 
 const useStyles = makeStyles({
   root: {
@@ -65,6 +72,27 @@ export function CoordinatorRunPage() {
 
   const { events, status: streamStatus } = useRunStream(runId ?? '', API_KEY, API_URL);
 
+  // Seed the topology from a REST fetch so the graph populates immediately on load.
+  // The one-time SSE `coordinator.topology` snapshot (seq 0) is emitted before the stream
+  // connects, so without this seed the page stays empty until a manual reconnect. SSE deltas
+  // are folded on top of the seed; a later snapshot reconciles by node id.
+  const [seed, setSeed] = useState<CoordinatorTopologyState>(initialTopologyState);
+
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    setSeed(initialTopologyState);
+    void (async () => {
+      const [workPlan, children] = await Promise.all([
+        apiClient.getWorkPlan(runId).catch(() => null),
+        apiClient.getCoordinatorChildren(runId).catch(() => null),
+      ]);
+      if (cancelled) return;
+      if (workPlan) setSeed(seedTopologyFromWorkPlan(workPlan, children));
+    })();
+    return () => { cancelled = true; };
+  }, [runId]);
+
   // Goal is carried by the coordinator.started event (Principle III — read it from the stream).
   const goal = useMemo<string | undefined>(() => {
     for (const evt of events) {
@@ -75,8 +103,8 @@ export function CoordinatorRunPage() {
     return undefined;
   }, [events]);
 
-  // Fold the SSE stream into topology state (snapshot + deltas + subtask/steering).
-  const topology = useMemo(() => buildTopologyState(events), [events]);
+  // Fold the SSE stream over the REST seed (snapshot + deltas + subtask/steering).
+  const topology = useMemo(() => buildTopologyState(events, seed), [events, seed]);
   const topologyNodes = useMemo<TopologyNodeState[]>(
     () => topology.nodeOrder.map((id) => topology.nodes[id]).filter(Boolean),
     [topology],
