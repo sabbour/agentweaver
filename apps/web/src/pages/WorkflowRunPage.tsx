@@ -325,8 +325,9 @@ export function WorkflowRunPage() {
         const evtReviewer = evt.payload['reviewer'] != null ? String(evt.payload['reviewer']) : undefined;
         const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
         const tsMs = tsStr ? new Date(tsStr).getTime() : NaN;
+        const evtMessage = evt.payload['message'] != null ? String(evt.payload['message']) : undefined;
         const prev = map[step];
-        const newState: ExecutorState = { status: evtStatus, agentName: evtAgent ?? prev?.agentName, reviewer: evtReviewer ?? prev?.reviewer };
+        const newState: ExecutorState = { status: evtStatus, agentName: evtAgent ?? prev?.agentName, reviewer: evtReviewer ?? prev?.reviewer, message: evtMessage };
         if (evtStatus === 'started') {
           newState.startedAt = !isNaN(tsMs) ? tsMs : undefined;
         } else {
@@ -475,7 +476,10 @@ export function WorkflowRunPage() {
   // back to the hardcoded executor lists. Only non-loopback edges are fed to dagre so it
   // never tries to rank a cycle; loopback edges are drawn as back-arcs separately.
   const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
-    if (effectiveDescriptor) {
+    // Defensive guard: for a child run, only use the descriptor when it has the child variant.
+    // A stale full-variant descriptor arriving here would show the complete pipeline instead
+    // of the trimmed agent → RAI → assemble-ready child pipeline.
+    if (effectiveDescriptor && (!isChild || effectiveDescriptor.variant === 'child')) {
       const fwdEdges: Edge[] = [];
       const allEdges: Edge[] = [];
       for (const edge of effectiveDescriptor.edges) {

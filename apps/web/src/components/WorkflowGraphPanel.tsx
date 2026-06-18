@@ -65,6 +65,8 @@ export interface ExecutorState {
   reviewer?: string;
   startedAt?: number;
   completedAt?: number;
+  /** Short human-readable status line from the backend workflow.step payload.message field. */
+  message?: string;
 }
 
 /** Data passed into every React Flow WorkflowNode.  Optional fields are ignored when
@@ -423,7 +425,7 @@ export function WorkflowNode({ data }: NodeProps) {
     runDegraded,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
-  const { status, startedAt, completedAt, intent } = state;
+  const { status, startedAt, completedAt, intent, message } = state;
 
   const openModal = useContext(ExecutionModalContext);
 
@@ -460,7 +462,8 @@ export function WorkflowNode({ data }: NodeProps) {
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
   const rawSubText = statusDescription(key, effectiveStatus);
-  const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : rawSubText);
+  // message (from workflow.step payload) takes priority over the hardcoded statusDescription fallback.
+  const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
   const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
 
   return (

@@ -29,6 +29,7 @@ vi.mock('../api/sse', () => ({
 
 import { apiClient } from '../api/apiClient';
 import { WorkflowRunPage } from '../pages/WorkflowRunPage';
+import { FULL_GRAPH_DESCRIPTOR } from './fixtures/graphDescriptor';
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -59,7 +60,7 @@ beforeEach(() => {
     project_name: 'Demo',
     members: [],
   } as unknown as Awaited<ReturnType<typeof apiClient.getTeam>>);
-  // Non-null parent_run_id ⇒ this run is a coordinator child.
+  // Non-null parent_run_id => this run is a coordinator child.
   vi.mocked(apiClient.getRun).mockResolvedValue({
     run_id: 'exec-1',
     status: 'parked',
@@ -71,7 +72,7 @@ beforeEach(() => {
     { sequence: 2, type: 'workflow.step', payload: { step: 'rai', status: 'completed' } },
     { sequence: 3, type: 'run.assemble_ready', payload: {} },
   ]);
-  // null → 404 → page falls back to hardcoded CHILD_EXECUTORS (agent/rai/assemble-ready)
+  // null -> 404 -> page falls back to hardcoded CHILD_EXECUTORS (agent/rai/assemble-ready)
   vi.mocked(apiClient.getRunGraph).mockResolvedValue(null);
 });
 
@@ -79,6 +80,26 @@ afterEach(() => cleanup());
 
 describe('WorkflowRunPage child run graph', () => {
   it('renders only the trimmed agent -> RAI -> assemble-ready pipeline for a coordinator child', async () => {
+    render(<Wrapper><WorkflowRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Assemble-ready'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Awaiting collective assembly');
+    expect(text).not.toContain('Merge Coordinator');
+    expect(text).not.toContain('Human Review');
+    expect(text).not.toContain('Session Logger');
+  });
+
+  it('still shows the trimmed child pipeline when a full-variant descriptor arrives for a child run (defensive guard)', async () => {
+    // A stale or misrouted full-variant descriptor must not show the complete pipeline
+    // for a coordinator child run. The guard rejects it and falls back to the hardcoded
+    // CHILD_EXECUTORS (agent -> RAI -> assemble-ready).
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(FULL_GRAPH_DESCRIPTOR);
+
     render(<Wrapper><WorkflowRunPage /></Wrapper>);
 
     await waitFor(

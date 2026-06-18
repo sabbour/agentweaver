@@ -161,3 +161,51 @@ describe('WorkflowNode — node_type drives data-node-type attribute', () => {
     expect(document.body.innerHTML).toContain('data-node-type="gate"');
   });
 });
+
+describe('WorkflowNode — message field display', () => {
+  it('renders the message from ExecutorState as a status line on the card', async () => {
+    const nodes = [
+      {
+        id: 'n1',
+        type: 'workflow',
+        position: { x: 0, y: 0 },
+        data: {
+          def: { key: 'agent', label: 'Agent', roleDescription: 'AI Assistant', Icon: BotRegular },
+          state: { status: 'started', message: 'Analyzing the codebase...' },
+          runId: 'run-1',
+          executionId: 'exec-1',
+          projectId: 'p1',
+        },
+      },
+    ];
+    render(<Wrapper nodes={nodes} />);
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Analyzing the codebase...'),
+      { timeout: 4000 },
+    );
+  });
+
+  it('shows message over hardcoded statusDescription when both are present', async () => {
+    const nodes = [
+      {
+        id: 'n1',
+        type: 'workflow',
+        position: { x: 0, y: 0 },
+        data: {
+          def: { key: 'rai', label: 'Rai', roleDescription: 'RAI Reviewer', Icon: ShieldRegular },
+          state: { status: 'started', message: 'Custom backend message' },
+          runId: 'run-1',
+          executionId: 'exec-1',
+          projectId: 'p1',
+        },
+      },
+    ];
+    render(<Wrapper nodes={nodes} />);
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Custom backend message'),
+      { timeout: 4000 },
+    );
+    // The hardcoded 'Reviewing safety...' should NOT appear — message takes priority.
+    expect(document.body.textContent).not.toContain('Reviewing safety');
+  });
+});

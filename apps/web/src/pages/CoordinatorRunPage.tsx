@@ -51,6 +51,8 @@ import {
   iconForRole,
   useNodeStyles,
   StatusBadge,
+  ElapsedTimer,
+  statusDescription,
   type ExecutorDef,
   type ExecutorState,
   type StepStatus,
@@ -130,23 +132,113 @@ interface SubtaskNodeData extends Record<string, unknown> {
   projectId: string;
 }
 
+// Fallback child pipeline defs (used when a child run's graph descriptor is not yet available).
+const INLINE_CHILD_FALLBACK: ExecutorDef[] = [
+  { key: 'agent',          label: 'Agent',          roleDescription: 'AI Assistant',                Icon: iconForRole('agent')    },
+  { key: 'rai',            label: 'Rai',             roleDescription: 'RAI Reviewer',                Icon: iconForRole('rai')      },
+  { key: 'assemble-ready', label: 'Assemble-ready',  roleDescription: 'Awaiting collective assembly', Icon: iconForRole('assembly') },
+];
+
+// A compact pipeline node card rendered inline inside a SubtaskNode expansion panel.
+// Does not use React Flow Handles (rendered outside a ReactFlow canvas).
+function ChildNodeMiniCard({ def, state }: { def: ExecutorDef; state: ExecutorState }) {
+  const s = useNodeStyles();
+  const { key, label, Icon } = def;
+  const { status, startedAt, completedAt, message } = state;
+  const subText = message ?? statusDescription(key, status);
+  return (
+    <div
+      className={`${s.card} ${s.cardDefault} ${status === 'started' ? s.cardActive : ''}`}
+      role="article"
+      aria-label={`${label}: ${status}`}
+      data-testid={`child-node-${key}`}
+    >
+      <div className={s.cardHeader}>
+        <StatusBadge status={status} />
+      </div>
+      <div className={s.cardMain}>
+        <span className={s.cardIcon} aria-hidden="true">
+          <Icon fontSize={20} />
+        </span>
+        <div className={s.cardTitleGroup}>
+          <span className={s.cardTitle}>{label}</span>
+          <span className={s.cardRole}>{def.roleDescription}</span>
+          {subText && <span className={s.cardSubText}>{subText}</span>}
+          {startedAt !== undefined && (
+            <span className={s.cardTimer}>
+              <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SubtaskNode({ data }: NodeProps) {
   const s = useNodeStyles();
   const d = data as SubtaskNodeData;
   const [expanded, setExpanded] = useState(false);
-  const [childLabels, setChildLabels] = useState<string[]>([]);
+  const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
 
+  // Fetch the child run's graph descriptor only when expanded.
   useEffect(() => {
     if (!expanded || !d.childRunId) return;
     let cancelled = false;
     apiClient.getRunGraph(d.childRunId as string)
-      .then((desc) => {
-        if (!cancelled && desc) setChildLabels(desc.nodes.map((n) => n.label));
-      })
+      .then((desc) => { if (!cancelled) setChildDescriptor(desc); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [expanded, d.childRunId]);
+
+  // Subscribe to the child run's live SSE events only while expanded; tear down on collapse.
+  const childStreamRunId = expanded && d.childRunId ? (d.childRunId as string) : '';
+  const { events: childEvents } = useRunStream(childStreamRunId, API_KEY, API_URL);
+
+  // Map workflow.step events from the child run to executor states.
+  const childStepStates = useMemo<Record<string, ExecutorState>>(() => {
+    const map: Record<string, ExecutorState> = {};
+    for (const evt of childEvents) {
+      if (evt.type === 'workflow.step') {
+        const step      = String(evt.payload['step'] ?? '');
+        const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
+        const tsStr     = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
+        const tsMs      = tsStr ? new Date(tsStr).getTime() : NaN;
+        const evtMsg    = evt.payload['message'] != null ? String(evt.payload['message']) : undefined;
+        const prev      = map[step];
+        map[step] = {
+          status:      evtStatus,
+          agentName:   prev?.agentName,
+          message:     evtMsg,
+          startedAt:   evtStatus === 'started' ? (!isNaN(tsMs) ? tsMs : undefined) : prev?.startedAt,
+          completedAt: evtStatus !== 'started' && !isNaN(tsMs) ? tsMs : prev?.completedAt,
+        };
+      } else if (evt.type === 'run.assemble_ready' || evt.type === 'subtask.assemble_ready') {
+        const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
+        const tsMs  = tsStr ? new Date(tsStr).getTime() : NaN;
+        map['assemble-ready'] = { status: 'completed', completedAt: !isNaN(tsMs) ? tsMs : Date.now() };
+      }
+    }
+    return map;
+  }, [childEvents]);
+
+  // Build the ordered list of child pipeline nodes: from the descriptor when available,
+  // or from the hardcoded fallback while the fetch is in-flight or unavailable.
+  const childNodes = useMemo<Array<{ def: ExecutorDef; state: ExecutorState }>>(() => {
+    const defs = childDescriptor
+      ? childDescriptor.nodes.map((n) => ({
+          key:             n.id,
+          label:           n.label,
+          roleDescription: roleDescForRole(n.role),
+          Icon:            iconForRole(n.role),
+        }))
+      : INLINE_CHILD_FALLBACK;
+    return defs.map((def) => ({
+      def,
+      state: childStepStates[def.key] ?? { status: 'pending' },
+    }));
+  }, [childDescriptor, childStepStates]);
 
   const stepStatus = topoStatusToStepStatus(d.topoStatus as string);
   const statusLabel = topoStatusToLabel(d.topoStatus as string);
@@ -201,9 +293,38 @@ function SubtaskNode({ data }: NodeProps) {
         </div>
       )}
 
-      {expanded && childLabels.length > 0 && (
-        <div style={{ marginTop: 8, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
-          {childLabels.join(' → ')}
+      {/* Inline child pipeline — live node cards with status badges, elapsed timers, and messages. */}
+      {expanded && (
+        <div
+          className="nopan nodrag"
+          style={{
+            marginTop: 10,
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            flexWrap: 'wrap',
+            gap: 0,
+          }}
+        >
+          {childNodes.map((node, i) => (
+            <span key={node.def.key} style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
+              <ChildNodeMiniCard def={node.def} state={node.state} />
+              {i < childNodes.length - 1 && (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    alignSelf: 'center',
+                    color: 'var(--colorNeutralForeground3)',
+                    padding: '0 4px',
+                    fontSize: 'var(--fontSizeBase300)',
+                    userSelect: 'none',
+                  }}
+                >
+                  →
+                </span>
+              )}
+            </span>
+          ))}
         </div>
       )}
     </div>
