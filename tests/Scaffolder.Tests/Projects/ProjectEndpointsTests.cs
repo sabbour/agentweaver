@@ -239,7 +239,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var runs = await response.Content.ReadFromJsonAsync<JsonElement[]>();
         runs.Should().NotBeNull();
-        runs!.Any(r => r.GetProperty("run_id").GetString() == run.Id.ToString())
+        runs!.Any(r => r.GetProperty("execution_id").GetString() == run.Id.ToString())
              .Should().BeTrue();
     }
 

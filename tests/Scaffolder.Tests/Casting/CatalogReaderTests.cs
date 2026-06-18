@@ -25,8 +25,8 @@ public sealed class CatalogReaderTests
 
         Assert.Contains("product-feature-delivery", ids);
         Assert.Contains("quick-software-development", ids);
-        Assert.Contains("content-authoring", ids);
-        Assert.Contains("research", ids);
+        Assert.Contains("content-authoring-and-research", ids);
+        Assert.Contains("azure-feature-delivery", ids);
     }
 
     [Fact]

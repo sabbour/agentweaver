@@ -82,7 +82,7 @@ public sealed class SquadReaderWriterTests : IDisposable
 
         new SquadWriter(dir).EnsureGitAttributes();
 
-        var gitattrsPath = Path.Combine(dir, ".squad", ".gitattributes");
+        var gitattrsPath = Path.Combine(dir, ".gitattributes");
         Assert.True(File.Exists(gitattrsPath));
         var content = File.ReadAllText(gitattrsPath);
         Assert.Contains("merge=union", content);
