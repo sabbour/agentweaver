@@ -188,7 +188,7 @@ Emitted once at run start, carrying a full snapshot of the run's workflow topolo
 
 ```json
 {
-  "graph_id": "scaffolder-workflow-full",
+  "graph_id": "agentweaver-workflow-full",
   "variant": "full",
   "start_node_id": "agent",
   "nodes": [
@@ -257,7 +257,7 @@ Phase 3 collective assembly runs ONE pipeline over the COMBINED output of all ch
 
 A single background pipeline then drives the collective stages, each emitting a paired `coordinator.graph` so its planned assembly node flips to `kind: "live"`:
 
-1. **Exactly-once claim** — a DB compare-and-swap transitions `awaiting_assembly → assembling`; only the winner proceeds. `coordinator.assembly_started` carries the `integrationBranch` name (`scaffolder/integration/{coordinatorRunId}`) and `subtaskCount`.
+1. **Exactly-once claim** — a DB compare-and-swap transitions `awaiting_assembly → assembling`; only the winner proceeds. `coordinator.assembly_started` carries the `integrationBranch` name (`agentweaver/integration/{coordinatorRunId}`) and `subtaskCount`.
 2. **Eligibility gate (no partial assembly)** — every subtask must be assembly-eligible (`assemble_ready`, or `completed` with no changes). If any is failed / rai_flagged / pending / blocked, or merging the eligible child branches into the integration branch conflicts, the pipeline emits `coordinator.assembly_blocked` (with `reason`, and `conflictingBranch`/`conflictingFiles` on a conflict) and STOPS — no RAI, no merge.
 3. **Integration branch** — the eligible child branches are merged in dependency (topological) order off the coordinator's originating branch, producing one aggregate diff + tree hash.
 4. **Collective RAI** (`coordinator.assembly_rai_started` → `coordinator.assembly_rai_completed`) — one RAI pass over the aggregate diff. It is advisory: it never hard-blocks, but `raiSafetyFlagged` is surfaced to the human reviewer.
@@ -271,7 +271,7 @@ Work-plan status flows `dispatching → awaiting_assembly → assembling → in_
 
 ## Model-assisted casting
 
-Creating a casting proposal in `free_text` or `analysis` mode starts a MAF run on GitHub Copilot. That run emits events under the same event model as a regular scaffolder run — the same envelope, the same event types, and the same SSE endpoint.
+Creating a casting proposal in `free_text` or `analysis` mode starts a MAF run on GitHub Copilot. That run emits events under the same event model as a regular agentweaver run — the same envelope, the same event types, and the same SSE endpoint.
 
 The `run_id` returned in the `POST /api/projects/{id}/casting/proposals` response identifies that run. Stream its events from `GET /api/runs/{run_id}/stream` to observe the model's reasoning as it builds the proposal.
 

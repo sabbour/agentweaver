@@ -12,7 +12,7 @@ import type {
   ProjectOrigin,
   ProjectState,
 } from '../types';
-import { ScaffolderApiClient } from '../client';
+import { AgentweaverApiClient } from '../client';
 
 // =============================================================================
 // Type shape tests: verify that the TypeScript types are correctly defined
@@ -165,71 +165,71 @@ describe('GitHub auth type shapes', () => {
   });
 });
 
-describe('ScaffolderApiClient project methods', () => {
+describe('AgentweaverApiClient project methods', () => {
   it('client has listProjects method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.listProjects).toBe('function');
   });
 
   it('client has getProject method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.getProject).toBe('function');
   });
 
   it('client has createProject method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.createProject).toBe('function');
   });
 
   it('client has renameProject method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.renameProject).toBe('function');
   });
 
   it('client has updateProjectProviderSettings method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.updateProjectProviderSettings).toBe('function');
   });
 
   it('client has relinkProject method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.relinkProject).toBe('function');
   });
 
   it('client has deleteProject method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.deleteProject).toBe('function');
   });
 
   it('client has startProjectRun method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.startProjectRun).toBe('function');
   });
 
   it('client has listProjectRuns method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.listProjectRuns).toBe('function');
   });
 });
 
-describe('ScaffolderApiClient GitHub auth methods', () => {
+describe('AgentweaverApiClient GitHub auth methods', () => {
   it('client has startGitHubDeviceFlow method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.startGitHubDeviceFlow).toBe('function');
   });
 
   it('client has pollGitHubAuth method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.pollGitHubAuth).toBe('function');
   });
 
   it('client has getGitHubAuthStatus method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.getGitHubAuthStatus).toBe('function');
   });
 
   it('client has signOutGitHub method', () => {
-    const client = new ScaffolderApiClient('http://localhost:5000', 'key');
+    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.signOutGitHub).toBe('function');
   });
 });

@@ -1,6 +1,6 @@
-# Scaffolder API Reference
+# Agentweaver API Reference
 
-The Scaffolder backend is the single source of truth for run lifecycle,
+The Agentweaver backend is the single source of truth for run lifecycle,
 streaming, review, and merge. Every client is a thin layer over these endpoints.
 
 Base path: `/api`. All endpoints require a bearer API key.
@@ -36,7 +36,7 @@ request is unauthorized.
 ### POST /api/runs
 
 Submits a task and starts a run. The run is created with its own branch
-(`scaffolder/{runId}`) and worktree checked out from the originating branch; the
+(`agentweaver/{runId}`) and worktree checked out from the originating branch; the
 agent loop runs in the background.
 
 Request:
@@ -195,7 +195,7 @@ to SQLite. After a process restart, the granular event history is unavailable â€
 only the final `result` text survives in the `runs` table. A durable append-only
 event log (`run_events`) is specified (FR-022) but not yet implemented.
 
-The database path defaults to `scaffolder.db` in the application data directory
+The database path defaults to `agentweaver.db` in the application data directory
 and is overridable with `Database:Path`. Worktrees default to a `worktrees`
 subfolder there, overridable with `Worktrees:BasePath`. Neither uses the system
 temp directory. The same build runs locally and in the cloud; all locations and
@@ -205,10 +205,10 @@ keys come from configuration.
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `Database:Path` | `scaffolder.db` in app data dir | SQLite database file |
+| `Database:Path` | `agentweaver.db` in app data dir | SQLite database file |
 | `Worktrees:BasePath` | `worktrees` in app data dir | Worktree root |
-| `Git:Author:Name` | `Scaffolder` | Commit and merge author name |
-| `Git:Author:Email` | `scaffolder@localhost` | Commit and merge author email |
+| `Git:Author:Name` | `Agentweaver` | Commit and merge author name |
+| `Git:Author:Email` | `agentweaver@localhost` | Commit and merge author email |
 | `Auth:Keys` | none | Array of `{ Token, User }` API keys |
 | `Auth:ApiKey` / `Auth:User` | none | Single-key alternative |
 | `Runs:AllowedRepositoryRoots` | `[]` (permissive) | String array of allowed parent directories for `repository_path`. When empty, any local absolute path is accepted. Shared or exposed deployments MUST configure this to restrict which repositories can be targeted. |

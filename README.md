@@ -7,8 +7,8 @@ Read the docs: [docs/index.md](docs/index.md)
 ## Quick start
 
 ```powershell
-dotnet run --project apps/Scaffolder.Api
-dotnet run --project apps/Scaffolder.Cli -- run submit
+dotnet run --project apps/Agentweaver.Api
+dotnet run --project apps/Agentweaver.Cli -- run submit
 npm --prefix apps/web install
 npm --prefix apps/web run dev
 ```

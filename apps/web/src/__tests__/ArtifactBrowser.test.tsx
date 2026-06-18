@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
@@ -8,7 +8,7 @@ import type { WorkspaceFileEntry, WorkspaceFileDiff } from '../api/types';
 
 // Mock apiClient so no real HTTP calls are made.
 // getRunFiles and getRunFileDiff correspond to the methods Tank added to
-// ScaffolderApiClient for the artifact-browser feature.
+// AgentweaverApiClient for the artifact-browser feature.
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getRunFiles: vi.fn(),

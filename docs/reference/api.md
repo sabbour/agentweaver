@@ -1,6 +1,6 @@
 # API reference
 
-The Scaffolder backend is the single source of truth for run lifecycle, streaming, review, and merge. Every client is a thin layer over these endpoints.
+The Agentweaver backend is the single source of truth for run lifecycle, streaming, review, and merge. Every client is a thin layer over these endpoints.
 
 - Base path: `/api`
 - Authentication: bearer API key on every request
@@ -144,7 +144,7 @@ Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case
 
 ### POST /api/runs
 
-Submits a task and starts a run. The API creates a dedicated branch (`scaffolder/{runId}`), provisions a git worktree from the originating branch, and starts the agent loop in the background.
+Submits a task and starts a run. The API creates a dedicated branch (`agentweaver/{runId}`), provisions a git worktree from the originating branch, and starts the agent loop in the background.
 
 Request:
 
@@ -290,7 +290,7 @@ See [events.md](events.md) for the event types emitted on the stream for each ou
 
 ### GET /api/runs/{id}/history
 
-Replays persisted Copilot SDK session events for a terminal run. The session is identified by `scaffolder-run-{runId}`. Returns a JSON array of run events in stream order. Only available for terminal runs. Returns `404` if the run is not terminal or the session is not found.
+Replays persisted Copilot SDK session events for a terminal run. The session is identified by `agentweaver-run-{runId}`. Returns a JSON array of run events in stream order. Only available for terminal runs. Returns `404` if the run is not terminal or the session is not found.
 
 ### GET /api/runs/{id}/graph
 
@@ -300,7 +300,7 @@ Response `200 OK` — a `GraphDescriptor`:
 
 ```json
 {
-  "graph_id": "scaffolder-workflow-full",
+  "graph_id": "agentweaver-workflow-full",
   "variant": "full",
   "start_node_id": "agent",
   "nodes": [
@@ -406,11 +406,11 @@ Response: `200 OK`.
 
 ## Sandbox policy endpoints
 
-These endpoints read and write the per-project sandbox execution policy stored at `.scaffolder/settings.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
+These endpoints read and write the per-project sandbox execution policy stored at `.agentweaver/settings.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
 
 ### GET /api/sandbox-policy
 
-Returns the sandbox policy for the given repository path by reading `{repository_path}/.scaffolder/settings.yml`. If the file does not exist, returns the default policy.
+Returns the sandbox policy for the given repository path by reading `{repository_path}/.agentweaver/settings.yml`. If the file does not exist, returns the default policy.
 
 Query parameters:
 
@@ -439,7 +439,7 @@ Missing or malformed `repository_path` returns `400 Bad Request`.
 
 ### PUT /api/sandbox-policy
 
-Creates or replaces the sandbox policy for a repository path by writing `{repository_path}/.scaffolder/settings.yml`. The entire policy is replaced on each PUT; there is no partial-update merge. After a PUT, the operator should commit the updated file to the project repository to record the change in version history.
+Creates or replaces the sandbox policy for a repository path by writing `{repository_path}/.agentweaver/settings.yml`. The entire policy is replaced on each PUT; there is no partial-update merge. After a PUT, the operator should commit the updated file to the project repository to record the change in version history.
 
 Request body (all fields required):
 
@@ -1439,7 +1439,7 @@ SQLite tables are created on startup with WAL enabled:
 | `projects` | Project records with name, origin, working directory, default branch, owner, provider settings, and state |
 | `github_tokens` | Per-user GitHub tokens stored by the OS credential store (not a SQLite table — managed by `OsCredentialStoreGitHubTokenStore`) |
 
-The run's event stream is held in memory by `RunStreamStore` and is not persisted to SQLite. After a process restart, the granular event history is unavailable — only the final `result` text survives. Completed runs are persisted via the Copilot SDK session store (session ID = `scaffolder-run-{runId}`). The `GET /api/runs/{id}/history` endpoint replays persisted session events for terminal runs.
+The run's event stream is held in memory by `RunStreamStore` and is not persisted to SQLite. After a process restart, the granular event history is unavailable — only the final `result` text survives. Completed runs are persisted via the Copilot SDK session store (session ID = `agentweaver-run-{runId}`). The `GET /api/runs/{id}/history` endpoint replays persisted session events for terminal runs.
 
 ## Configuration keys
 
@@ -1447,10 +1447,10 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Database:Path` | `scaffolder.db` in the app data directory | SQLite database file |
+| `Database:Path` | `agentweaver.db` in the app data directory | SQLite database file |
 | `Worktrees:BasePath` | `worktrees` in the app data directory | Root folder for run worktrees |
-| `Git:Author:Name` | `Scaffolder` | Author name for commits and merges |
-| `Git:Author:Email` | `scaffolder@localhost` | Author email for commits and merges |
+| `Git:Author:Name` | `Agentweaver` | Author name for commits and merges |
+| `Git:Author:Email` | `agentweaver@localhost` | Author email for commits and merges |
 | `RunBounds:MaxSteps` | `50` | Maximum tool-call steps before `run.bounded` |
 | `RunBounds:MaxMinutes` | `10` | Maximum wall-clock duration in minutes |
 

@@ -67,7 +67,7 @@ The YAML policy loaded into the governance kernel has an explicit `deny-native-s
 
 ## Sandbox policy
 
-Each project stores its `SandboxPolicy` as `.scaffolder/settings.yml` in the project repository root (GitOps). The file is version-controlled alongside the code: policy changes are reviewable via PR and auditable via `git log`. When the file does not exist, `SandboxPolicy.Default(repositoryPath)` applies automatically.
+Each project stores its `SandboxPolicy` as `.agentweaver/settings.yml` in the project repository root (GitOps). The file is version-controlled alongside the code: policy changes are reviewable via PR and auditable via `git log`. When the file does not exist, `SandboxPolicy.Default(repositoryPath)` applies automatically.
 
 The API (`GET /api/sandbox-policy`, `PUT /api/sandbox-policy`) reads and writes this file. `PUT` writes the YAML file; the operator should commit and push the change to record it in the project history. No database row is required.
 

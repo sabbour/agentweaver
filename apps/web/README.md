@@ -1,6 +1,6 @@
-# Scaffolder Web
+# Agentweaver Web
 
-A React 19 and Fluent 2 client over the Scaffolder backend API. It submits runs,
+A React 19 and Fluent 2 client over the Agentweaver backend API. It submits runs,
 streams a run's steps live, shows run details, and records your review decision
 before any change is merged. The web client holds no run logic of its own; every
 action goes through `src/api/client.ts`.

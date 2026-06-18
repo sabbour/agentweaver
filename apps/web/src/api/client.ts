@@ -24,7 +24,7 @@ export class RetriableReviewError extends Error {
   }
 }
 
-export class ScaffolderApiClient {
+export class AgentweaverApiClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
 

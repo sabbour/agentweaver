@@ -53,9 +53,9 @@ Install `lxc-exec` at one of those paths before starting the server. No environm
 
 ## Configuring sandbox policy
 
-Each project's sandbox policy lives at `.scaffolder/settings.yml` in the project repository root. This file is version-controlled alongside the code: changes are reviewable via PR and auditable via `git log`. When the file does not exist, default values apply.
+Each project's sandbox policy lives at `.agentweaver/settings.yml` in the project repository root. This file is version-controlled alongside the code: changes are reviewable via PR and auditable via `git log`. When the file does not exist, default values apply.
 
-### Example `.scaffolder/settings.yml`
+### Example `.agentweaver/settings.yml`
 
 ```yaml
 # Settings are organized by group. Each group is independent — adding a new
@@ -88,7 +88,7 @@ sandbox:
 
 The file is optional — default values apply when absent. Changes take effect on the next run; no server restart is needed.
 
-The API endpoints `GET /api/sandbox-policy` and `PUT /api/sandbox-policy` read and write this file. After a `PUT`, the operator should `git add .scaffolder/settings.yml && git commit` to record the change in the project history.
+The API endpoints `GET /api/sandbox-policy` and `PUT /api/sandbox-policy` read and write this file. After a `PUT`, the operator should `git add .agentweaver/settings.yml && git commit` to record the change in the project history.
 
 ### Read the current policy
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
-import { ScaffolderApiClient } from './client';
+import { AgentweaverApiClient } from './client';
 
 export type PollStatus = 'polling' | 'done' | 'error';
 
@@ -29,7 +29,7 @@ export function useRunPoll(runId: string, apiKey: string, baseUrl: string): Poll
 
   useEffect(() => {
     stopRef.current = false;
-    const client = new ScaffolderApiClient(baseUrl, apiKey);
+    const client = new AgentweaverApiClient(baseUrl, apiKey);
 
     const poll = async () => {
       while (!stopRef.current) {

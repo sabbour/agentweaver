@@ -13,13 +13,13 @@ You need these tools before you start:
 
 ## 1. Configure the API
 
-The API reads settings from `appsettings.json` plus the environment-specific file for `ASPNETCORE_ENVIRONMENT`. If you want to use `apps/Scaffolder.Api/appsettings.Local.json`, set the environment to `Local` before you start the API.
+The API reads settings from `appsettings.json` plus the environment-specific file for `ASPNETCORE_ENVIRONMENT`. If you want to use `apps/Agentweaver.Api/appsettings.Local.json`, set the environment to `Local` before you start the API.
 
 ```powershell
 $env:ASPNETCORE_ENVIRONMENT = "Local"
 ```
 
-Use `apps/Scaffolder.Api/appsettings.Local.json` to define an API key and your model provider settings. Replace the placeholders with your own values.
+Use `apps/Agentweaver.Api/appsettings.Local.json` to define an API key and your model provider settings. Replace the placeholders with your own values.
 
 ```json
 {
@@ -47,7 +47,7 @@ Use `apps/Scaffolder.Api/appsettings.Local.json` to define an API key and your m
 From the repository root, start the backend:
 
 ```powershell
-dotnet run --project apps/Scaffolder.Api
+dotnet run --project apps/Agentweaver.Api
 ```
 
 The API listens on the default ASP.NET Core development URL unless you override it through standard host settings.

@@ -10,10 +10,10 @@ The API reads standard ASP.NET Core configuration sources. In local development,
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Database:Path` | `scaffolder.db` in the app data directory | SQLite database file for runs, event log, and operational records |
+| `Database:Path` | `agentweaver.db` in the app data directory | SQLite database file for runs, event log, and operational records |
 | `Worktrees:BasePath` | `worktrees` under the app data directory | Root folder for per-run git worktrees |
-| `Git:Author:Name` | `Scaffolder` | Author name for run commits and merge commits |
-| `Git:Author:Email` | `scaffolder@localhost` | Author email for run commits and merge commits |
+| `Git:Author:Name` | `Agentweaver` | Author name for run commits and merge commits |
+| `Git:Author:Email` | `agentweaver@localhost` | Author email for run commits and merge commits |
 | `RunBounds:MaxSteps` | `50` | Maximum tool-call loop iterations before the run is bounded |
 | `RunBounds:MaxMinutes` | `10` | Maximum wall-clock run duration in minutes |
 

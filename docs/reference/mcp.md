@@ -7,13 +7,13 @@ The Agentweaver MCP server exposes all Agentweaver operations as structured tool
 Set the required environment variable before starting any MCP host that uses the server:
 
 ```
-SCAFFOLDER_API_KEY=<your-api-key>
+AGENTWEAVER_API_KEY=<your-api-key>
 ```
 
 Optionally override the API base URL (defaults to `http://localhost:5000`):
 
 ```
-SCAFFOLDER_API_URL=http://localhost:5000
+AGENTWEAVER_API_URL=http://localhost:5000
 ```
 
 The `.mcp.json` at the repository root registers the server automatically for MCP hosts that support auto-discovery (Copilot CLI ≥1.0.59 and equivalents). No manual registration is required beyond setting the environment variable.
