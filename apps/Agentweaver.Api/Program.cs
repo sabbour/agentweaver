@@ -75,6 +75,8 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorDispatch>(
     sp => sp.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorDispatchService>());
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringQueue>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringService>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter,
+    Agentweaver.Api.Coordinator.CopilotCoordinatorSpecDrafter>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();

@@ -16,9 +16,11 @@ namespace Agentweaver.Tests.Helpers;
 /// hermetic — both of which are real components, not mocks (Principle VII):
 ///
 /// <list type="bullet">
-/// <item>A <see cref="SignedOutGitHubTokenStore"/> so the coordinator's drafting agent turn
-/// fails closed immediately (no live model call, no network) and the workflow falls back to
-/// the deterministic draft that Morpheus built into <c>CoordinatorWorkflowFactory</c>.</item>
+/// <item>A <see cref="FakeCoordinatorSpecDrafter"/> in place of the production Copilot drafter, so
+/// the drafting step produces a deterministic outcome spec with no live model call or network — the
+/// hermetic seam that keeps the draft -> gate -> confirm/revise lifecycle stable.</item>
+/// <item>A <see cref="SignedOutGitHubTokenStore"/> so any other agent path fails closed (no live
+/// model call, no network) without a real GitHub session.</item>
 /// <item>A no-op <see cref="ProjectGitInitializer"/> so a blank project can be created without
 /// touching real git, mirroring <see cref="ProjectsWebApplicationFactory"/>.</item>
 /// </list>
@@ -107,9 +109,15 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
 
         builder.ConfigureServices(services =>
         {
-            // Force the coordinator's drafting agent turn to fail closed (signed out) so it
-            // never makes a live model call and deterministically falls back to the built-in
-            // deterministic draft. This is a real IGitHubTokenStore, not a mock.
+            // Replace the production Copilot drafter with a deterministic, hermetic fake so the
+            // drafting step never makes a live model call. The boilerplate spec lives in the test
+            // project, not production (production fails the run when the model is unavailable).
+            RemoveService<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(services);
+            services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(
+                new FakeCoordinatorSpecDrafter());
+
+            // Any other agent path still fails closed (signed out) so it never reaches the network.
+            // This is a real IGitHubTokenStore, not a mock.
             RemoveService<IGitHubTokenStore>(services);
             services.AddSingleton<IGitHubTokenStore>(new SignedOutGitHubTokenStore());
 
@@ -145,9 +153,9 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
 /// <summary>
 /// Real <see cref="IGitHubTokenStore"/> that reports an explicit signed-out state for every
 /// scope. With this state <c>GitHubCopilotClientFactory.CreateClientAsync</c> fails closed and
-/// throws before any network call, which is exactly what drives the coordinator's deterministic
-/// draft fallback in tests. Distinct from <see cref="NullGitHubTokenStore"/> (NeverSignedIn),
-/// which would let the config fallback token through and attempt a real client connection.
+/// throws before any network call, keeping any non-drafting agent path hermetic in tests. Distinct
+/// from <see cref="NullGitHubTokenStore"/> (NeverSignedIn), which would let the config fallback
+/// token through and attempt a real client connection.
 /// </summary>
 public sealed class SignedOutGitHubTokenStore : IGitHubTokenStore
 {
