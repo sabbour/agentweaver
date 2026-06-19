@@ -130,6 +130,19 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     expect(text).toContain('+integration');
   });
 
+  it('marks the Human Review topology gate as action-required ("Awaiting your review") when review is requested', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: {} },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Awaiting your review'),
+      { timeout: 4000 },
+    );
+  });
+
   it('shows a human-readable reason (not a bare Failed) when assembly fails', async () => {
     currentEvents = [
       { sequence: 1, type: 'coordinator.assembly_failed', payload: { reason: 'merge conflict in src/app.ts' } },

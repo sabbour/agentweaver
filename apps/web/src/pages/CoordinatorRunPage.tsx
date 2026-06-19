@@ -218,6 +218,30 @@ function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
   }
 }
 
+// Collective-assembly stage node status, derived from the orchestration phase. Assembly is
+// automated EXCEPT the Human Review gate, which waits on the user: during `in_review` the review
+// node becomes 'started' so WorkflowNode renders it action-required ("Awaiting your review").
+// Returns undefined for stages not yet reached so the backend planned/live kind is preserved.
+// role ∈ {rai, review, merge, scribe}.
+function assemblyNodeStatus(role: string, phase: OrchPhase): StepStatus | undefined {
+  switch (phase) {
+    case 'assembling':
+      return role === 'rai' ? 'started' : undefined;
+    case 'in_review':
+      if (role === 'rai')    return 'completed';
+      if (role === 'review') return 'started';
+      return undefined;
+    case 'complete':
+      return 'completed';
+    case 'declined':
+      if (role === 'review') return 'failed';
+      if (role === 'rai')    return 'completed';
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
 function orchPhaseLabel(phase: OrchPhase): string {
   switch (phase) {
     case 'dispatching':       return 'Dispatching';
@@ -1033,18 +1057,35 @@ export function CoordinatorRunPage() {
         };
       }
 
-      // Coordinator or planned assembly node — use generic WorkflowNode.
+      // Coordinator or collective-assembly node — use generic WorkflowNode. def.key MUST be the
+      // node ROLE (not node.id), so WorkflowNode's role-based logic fires: the review gate becomes
+      // action-required ("Awaiting your review") and the coordinator keeps its "View session" button.
+      const roleKey = node.role;
       const coordTopoNode = topology.nodes['coordinator'];
-      const coordStatus: StepStatus = node.id === 'coordinator'
-        ? topoStatusToStepStatus(coordNodeStatusOverride ?? coordTopoNode?.status ?? 'running')
-        : 'pending';
 
-      const st: ExecutorState = planned
+      // Collective-assembly stage status is driven by the orchestration phase. Assembly itself is
+      // automated; only the Human Review gate requires the user.
+      const assemblyStatus = (roleKey === 'rai' || roleKey === 'review' || roleKey === 'merge' || roleKey === 'scribe')
+        ? assemblyNodeStatus(roleKey, orch.phase)
+        : undefined;
+
+      let nodePlanned = planned;
+      let stepStatus: StepStatus;
+      if (node.id === 'coordinator') {
+        stepStatus = topoStatusToStepStatus(coordNodeStatusOverride ?? coordTopoNode?.status ?? 'running');
+      } else if (assemblyStatus !== undefined) {
+        stepStatus = assemblyStatus;
+        nodePlanned = false; // the phase has reached this stage; it is live, not planned
+      } else {
+        stepStatus = 'pending';
+      }
+
+      const st: ExecutorState = nodePlanned
         ? { status: 'pending' }
-        : { status: coordStatus };
+        : { status: stepStatus };
 
       const def: ExecutorDef = {
-        key:             node.id,
+        key:             roleKey,
         label:           node.label,
         roleDescription: roleDescForRole(node.role),
         Icon:            iconForRole(node.role),
@@ -1056,7 +1097,7 @@ export function CoordinatorRunPage() {
         data: {
           def,
           state:     st,
-          isPlanned: planned,
+          isPlanned: nodePlanned,
           nodeType:  nt,
           runId:     runId      ?? '',
           executionId: '',
@@ -1070,7 +1111,7 @@ export function CoordinatorRunPage() {
       rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 60, nodeSep: 30 }, nodeSizeHints),
       displayEdges: allEdges,
     };
-  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride]);
+  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase]);
 
   // ---------------------------------------------------------------------------
   // Steering dialog
