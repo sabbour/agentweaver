@@ -164,7 +164,16 @@ The coordinator node also carries a **View session** button that scrolls to the 
 The right column hosts an all-up **Coordinator session** panel:
 
 - A **timeline** derived from the coordinator's own event stream — `coordinator.started` (goal), outcome spec confirmed, work plan ready, each `subtask.*` transition, `coordinator.children_complete`, and the `coordinator.assembly_*` milestones — each with a relative elapsed offset from the first timestamped milestone.
+- An **Action required** block (above the timeline) that surfaces bubbled child questions and tool-approval requests re-projected onto the coordinator stream (see below).
 - A persistent **steering chat box** (a text area + **Send** button, plus quick **Redirect** and **Stop** affordances) that submits free-form steering via `POST /api/runs/{id}/steer` (default `kind: "amend"`) **without** opening a dialog. Queued/applied steering directives from `coordinator.steering` events are listed below the box.
+
+##### Bubbled child questions and approvals (routing)
+
+A child run can ask a question or request tool approval; the coordinator re-projects these onto its own stream as `coordinator.child_question` `{ childRunId, subtaskId, requestId, question }` and `coordinator.child_approval_required` `{ childRunId, subtaskId, requestId, toolName, url?, message? }`. The **Action required** block renders each as an actionable item labelled with its source subtask (`Subtask {n}`):
+
+- A child **question** renders the same answer card used on the run page, but the answer is POSTed against the **`childRunId`** from the payload (`apiClient.answerQuestion(childRunId, requestId, value)`), **not** the coordinator run id — the child is the run that is blocked.
+- A child **approval** reuses the existing HITL tool-approval card (`LifecycleEventCard` with a synthetic `tool.approval_required` event) targeted at the **`childRunId`**, so Allow/Deny POST against the child's `tool-approvals`/`tool-denials` endpoints. The tool name, URL, and message are shown.
+- Each item collapses once resolved (a question on `agent.question_answered` for the same `requestId`, or optimistically on submit; an approval on the card's own allow/deny action).
 
 #### Assembly-review affordance
 
@@ -210,6 +219,15 @@ Without this fallback the child "View run" link previously left `executionId` un
 #### Run header
 
 A header bar shows the shortened run ID alongside a status indicator: a spinner while connecting or streaming, a success badge when done, or an error badge on failure.
+
+#### Bubbled questions (answer affordance)
+
+When a worker (or any agent) blocks awaiting an answer, the backend emits `agent.question_asked` `{ requestId, question }` on the run stream (and persists it). Below the run header the page renders one **answer card** per `requestId` that has no matching `agent.question_answered`:
+
+- An unanswered question shows a prominent, brand-stroked card (matching the HITL tool-approval card treatment) with the question text, a textarea, and a **Submit answer** button that calls `apiClient.answerQuestion(runId, requestId, value)` → `POST /api/runs/{id}/questions/{requestId}/answer`.
+- On submit the card optimistically collapses to a muted answered state; it also collapses when the matching `agent.question_answered` `{ answer, timedOut }` arrives, showing the answer (or a **"Question timed out"** hint with the auto-resolved value when `timedOut` is true).
+
+Payload keys are read defensively (`requestId`/`request_id`, `timedOut`/`timed_out`) so minor backend casing differences degrade gracefully.
 
 #### Timeline
 

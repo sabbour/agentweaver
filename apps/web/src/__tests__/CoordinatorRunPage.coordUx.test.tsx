@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup } from '@testing-library/react';
+import { render, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
@@ -23,6 +23,7 @@ vi.mock('../api/apiClient', () => ({
     getCoordinatorChildren: vi.fn(),
     steerCoordinator: vi.fn(),
     reviewAssembly: vi.fn(),
+    answerQuestion: vi.fn(),
     getRun: vi.fn(),
     getOutcomeSpec: vi.fn(),
   },
@@ -62,6 +63,7 @@ beforeEach(() => {
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
+  vi.mocked(apiClient.answerQuestion).mockResolvedValue({ run_id: 'child-run-2', request_id: 'q-1', answered: true });
 });
 
 afterEach(() => cleanup());
@@ -201,3 +203,87 @@ describe('CoordinatorRunPage — coordinator topology loopback labels', () => {
     expect(loopbacks).toHaveLength(0);
   });
 });
+
+describe('CoordinatorRunPage — bubbled child questions & approvals', () => {
+  it('renders a child question answer box and routes the answer to the childRunId', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.child_question',
+        payload: { childRunId: 'child-run-2', subtaskId: '2', requestId: 'q-1', question: 'Which database should I target?' },
+      },
+    ];
+
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Which database should I target?'),
+      { timeout: 4000 },
+    );
+    // Provenance label identifies the source subtask.
+    expect(document.body.textContent).toContain('Subtask 2');
+
+    const textarea = container.querySelector('textarea[placeholder="Type your answer…"]') as HTMLTextAreaElement;
+    expect(textarea).toBeTruthy();
+    fireEvent.change(textarea, { target: { value: 'Use Postgres' } });
+
+    const submit = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Submit answer'));
+    expect(submit).toBeTruthy();
+    submit!.click();
+
+    await waitFor(
+      () => expect(vi.mocked(apiClient.answerQuestion)).toHaveBeenCalled(),
+      { timeout: 4000 },
+    );
+    // The answer is POSTed against the CHILD run id, not the coordinator run id.
+    expect(vi.mocked(apiClient.answerQuestion)).toHaveBeenCalledWith('child-run-2', 'q-1', 'Use Postgres');
+  });
+
+  it('collapses an already-answered child question to a muted state', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.child_question',
+        payload: { childRunId: 'child-run-2', subtaskId: '2', requestId: 'q-1', question: 'Which database?' },
+      },
+      {
+        sequence: 2,
+        type: 'agent.question_answered',
+        payload: { requestId: 'q-1', answer: 'Postgres', timedOut: false },
+      },
+    ];
+
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Question answered'),
+      { timeout: 4000 },
+    );
+    // Collapsed: no answer input remains.
+    expect(container.querySelector('textarea[placeholder="Type your answer…"]')).toBeNull();
+    expect(document.body.textContent).toContain('Postgres');
+  });
+
+  it('renders a child approval request as a tool-approval card scoped to the child', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.child_approval_required',
+        payload: { childRunId: 'child-run-1', subtaskId: '1', requestId: 'a-1', toolName: 'fetch_url', url: 'https://example.com', message: 'Worker wants to fetch a URL.' },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Tool Approval Required'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Subtask 1');
+    expect(text).toContain('fetch_url');
+    expect(text).toContain('Allow once');
+  });
+});
+

@@ -45,6 +45,8 @@ import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/da
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
+import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
+import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import {
   workflowNodeTypes,
   forwardEdge,
@@ -688,6 +690,17 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
   },
+  actionRequired: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  actionSource: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
   feedItem: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
@@ -855,6 +868,65 @@ export function CoordinatorRunPage() {
       else out.push(rec);
     }
     return out;
+  }, [events]);
+
+  // Bubbled child questions + tool-approval requests re-projected onto the coordinator stream
+  // (issue: make it easy to answer/approve from the all-up view). Each item records the source
+  // childRunId + subtaskId so the answer/grant is routed to the CHILD that asked, not the
+  // coordinator run. Questions collapse once an agent.question_answered for the same requestId is
+  // re-projected (or optimistically, inside QuestionAnswerCard). Defensive payload key reads.
+  const childRequests = useMemo<Array<
+    | { type: 'question'; requestId: string; childRunId: string; subtaskId?: string; question: string; answer?: string; timedOut?: boolean; seq: number }
+    | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; seq: number }
+  >>(() => {
+    const questions = new Map<string, { childRunId: string; subtaskId?: string; question: string; seq: number }>();
+    const approvals = new Map<string, { childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; seq: number }>();
+    const answered = new Map<string, { answer: string; timedOut: boolean }>();
+    for (const evt of events) {
+      const p = evt.payload;
+      if (evt.type === 'coordinator.child_question') {
+        const requestId = readStr(p, ['requestId', 'request_id']);
+        const childRunId = readStr(p, ['childRunId', 'child_run_id']);
+        if (!requestId || !childRunId) continue;
+        questions.set(requestId, {
+          childRunId,
+          subtaskId: readStr(p, ['subtaskId', 'subtask_id']),
+          question: readStr(p, ['question']) ?? '',
+          seq: evt.sequence,
+        });
+      } else if (evt.type === 'coordinator.child_approval_required') {
+        const requestId = readStr(p, ['requestId', 'request_id']);
+        const childRunId = readStr(p, ['childRunId', 'child_run_id']);
+        if (!requestId || !childRunId) continue;
+        approvals.set(requestId, {
+          childRunId,
+          subtaskId: readStr(p, ['subtaskId', 'subtask_id']),
+          toolName: readStr(p, ['toolName', 'tool_name']) ?? 'unknown',
+          url: readStr(p, ['url']),
+          message: readStr(p, ['message']),
+          seq: evt.sequence,
+        });
+      } else if (evt.type === 'agent.question_answered') {
+        const requestId = readStr(p, ['requestId', 'request_id']);
+        if (!requestId) continue;
+        answered.set(requestId, {
+          answer: readStr(p, ['answer']) ?? '',
+          timedOut: Boolean(p['timedOut'] ?? p['timed_out'] ?? false),
+        });
+      }
+    }
+    const out: Array<
+      | { type: 'question'; requestId: string; childRunId: string; subtaskId?: string; question: string; answer?: string; timedOut?: boolean; seq: number }
+      | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; seq: number }
+    > = [];
+    for (const [requestId, q] of questions) {
+      const ans = answered.get(requestId);
+      out.push({ type: 'question', requestId, ...q, answer: ans?.answer, timedOut: ans?.timedOut });
+    }
+    for (const [requestId, a] of approvals) {
+      out.push({ type: 'approval', requestId, ...a });
+    }
+    return out.sort((x, y) => x.seq - y.seq);
   }, [events]);
 
   // Topology state for subtask status projection.
@@ -1260,6 +1332,51 @@ export function CoordinatorRunPage() {
             <Text className={styles.hint}>
               All-up orchestration timeline from the coordinator&apos;s own event stream.
             </Text>
+
+            {/* Action required — bubbled child questions + tool-approval requests. Answers/grants
+                target the CHILD that asked (childRunId), not the coordinator run. Each item
+                collapses once resolved. */}
+            {childRequests.length > 0 && (
+              <div className={styles.actionRequired} aria-label="Child actions awaiting a response">
+                {childRequests.map((item) => {
+                  const label = item.subtaskId ? `Subtask ${item.subtaskId}` : `Child ${item.childRunId.slice(0, 8)}`;
+                  if (item.type === 'question') {
+                    return (
+                      <QuestionAnswerCard
+                        key={`q-${item.requestId}`}
+                        runId={item.childRunId}
+                        requestId={item.requestId}
+                        question={item.question}
+                        answer={item.answer}
+                        timedOut={item.timedOut}
+                        sourceLabel={label}
+                      />
+                    );
+                  }
+                  // Reuse the existing HITL tool-approval card via a synthetic event, targeted at
+                  // the childRunId so allow/deny POST against the child's tool-approval endpoints.
+                  return (
+                    <div key={`a-${item.requestId}`}>
+                      <Text className={styles.actionSource}>{label} · approval required</Text>
+                      <LifecycleEventCard
+                        event={{
+                          sequence: item.seq,
+                          type: 'tool.approval_required',
+                          payload: {
+                            requestId: item.requestId,
+                            toolName: item.toolName,
+                            url: item.url,
+                            intention: item.message,
+                          },
+                        }}
+                        runId={item.childRunId}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {timeline.length === 0 ? (
               <Text className={styles.hint}>No milestones yet.</Text>
             ) : (

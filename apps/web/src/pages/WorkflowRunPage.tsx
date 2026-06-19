@@ -35,6 +35,7 @@ import type { TeamDto, GraphDescriptor } from '../api/types';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
+import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import {
   workflowNodeTypes,
   workflowEdgeTypes,
@@ -337,6 +338,35 @@ export function WorkflowRunPage() {
     return undefined;
   }, [events]);
 
+  // Bubbled questions (agent.question_asked / agent.question_answered). Pair by requestId so an
+  // unanswered question renders a prominent answer box and an answered one collapses to a muted
+  // state. Defensive payload key reads (requestId|request_id, etc.) tolerate backend casing.
+  const questionItems = useMemo<Array<{ requestId: string; question: string; answer?: string; timedOut?: boolean; seq: number }>>(() => {
+    const asked = new Map<string, { question: string; seq: number }>();
+    const answered = new Map<string, { answer: string; timedOut: boolean }>();
+    for (const evt of events) {
+      const p = evt.payload;
+      if (evt.type === 'agent.question_asked') {
+        const requestId = String(p['requestId'] ?? p['request_id'] ?? '');
+        if (!requestId) continue;
+        asked.set(requestId, { question: String(p['question'] ?? ''), seq: evt.sequence });
+      } else if (evt.type === 'agent.question_answered') {
+        const requestId = String(p['requestId'] ?? p['request_id'] ?? '');
+        if (!requestId) continue;
+        answered.set(requestId, {
+          answer: String(p['answer'] ?? ''),
+          timedOut: Boolean(p['timedOut'] ?? p['timed_out'] ?? false),
+        });
+      }
+    }
+    return Array.from(asked.entries())
+      .map(([requestId, a]) => {
+        const ans = answered.get(requestId);
+        return { requestId, question: a.question, answer: ans?.answer, timedOut: ans?.timedOut, seq: a.seq };
+      })
+      .sort((x, y) => x.seq - y.seq);
+  }, [events]);
+
   // Extract the first run.degraded event — sandbox blocked at least one tool call.
   const runDegraded = useMemo<{ toolName: string; reason: string } | undefined>(() => {
     for (const evt of events) {
@@ -630,6 +660,24 @@ export function WorkflowRunPage() {
         <span className={styles.runIdLabel}>{shortId}</span>
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
       </div>
+
+      {/* Bubbled questions — a blocked worker awaiting an answer renders a prominent inline
+          answer card; once answered (or optimistically applied) it collapses to a muted state.
+          Answers POST against this run id (apiClient.answerQuestion). */}
+      {questionItems.length > 0 && (
+        <div aria-label="Questions awaiting an answer">
+          {questionItems.map((q) => (
+            <QuestionAnswerCard
+              key={q.requestId}
+              runId={runId}
+              requestId={q.requestId}
+              question={q.question}
+              answer={q.answer}
+              timedOut={q.timedOut}
+            />
+          ))}
+        </div>
+      )}
 
       {/* React Flow diagram wrapped in contexts so WorkflowNode can open the modal and arc highlighting works */}
       <ExecutionModalContext.Provider value={openExecutionModal}>

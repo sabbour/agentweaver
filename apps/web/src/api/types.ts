@@ -613,3 +613,12 @@ export interface AssemblyReviewRequest {
   decision: AssemblyReviewDecision;
   comment?: string;
 }
+
+// POST /api/runs/{id}/questions/{requestId}/answer — answer a worker's bubbled question
+// (agent.question_asked). For a coordinator child question/approval the answer is routed to the
+// childRunId (the run that asked), not the coordinator run id.
+export interface AnswerQuestionResponse {
+  run_id: string;
+  request_id: string;
+  answered: boolean;
+}

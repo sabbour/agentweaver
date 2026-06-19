@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewRequest } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewRequest, AnswerQuestionResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -281,6 +281,18 @@ export class AgentweaverApiClient {
   // contract (approve / request_changes / decline + optional comment).
   reviewAssembly(coordinatorRunId: string, req: AssemblyReviewRequest): Promise<void> {
     return this.request<void>('POST', `/api/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, req);
+  }
+
+  // Answer a worker's bubbled question (agent.question_asked). The answer must be POSTed against
+  // the run that ASKED the question: for a coordinator child question/approval that means the
+  // childRunId from the event payload, NOT the coordinator run id. 404 = no pending question,
+  // 409 = run not InProgress.
+  answerQuestion(runId: string, requestId: string, answer: string): Promise<AnswerQuestionResponse> {
+    return this.request<AnswerQuestionResponse>(
+      'POST',
+      `/api/runs/${encodeURIComponent(runId)}/questions/${encodeURIComponent(requestId)}/answer`,
+      { answer },
+    );
   }
 
   // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller
