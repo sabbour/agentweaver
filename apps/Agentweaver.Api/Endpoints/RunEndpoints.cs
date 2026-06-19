@@ -34,6 +34,7 @@ app.MapPost("/api/runs", async (
     CreateRunRequest request,
     RunOrchestrator orchestrator,
     RepositoryRootValidator repoValidator,
+    IRunOptionsStore runOptions,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -73,6 +74,11 @@ app.MapPost("/api/runs", async (
         AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
     };
 
+    // Seed the per-run options (auto-approve-tools) before the run starts so the runner's
+    // permission handler reads the launch value on its first tool call. Autopilot is a
+    // coordinator-only option, so a standalone run only carries the auto-approve flag.
+    runOptions.Set(run.Id.ToString(), new RunOptions(AutoApproveTools: request.AutoApproveTools));
+
     try
     {
         await orchestrator.StartRunAsync(run, ct);
@@ -96,6 +102,7 @@ app.MapGet("/api/runs/{id}", async (
     SqliteRunStore runStore,
     RunStreamStore streamStore,
     CoordinatorStatusReader coordinator,
+    IRunOptionsStore runOptions,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -210,6 +217,8 @@ app.MapGet("/api/runs/{id}", async (
         SubtaskId = run.SubtaskId,
         CoordinatorStatus = coordinatorStatus,
         CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
+        AutoApproveTools = runOptions.Get(run.Id.ToString()).AutoApproveTools,
+        Autopilot = runOptions.Get(run.Id.ToString()).Autopilot,
     });
 });
 
@@ -1397,6 +1406,48 @@ app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
         return Results.Conflict(new { error = "No pending question found for this request_id. It may have already been answered or timed out." });
 
     return Results.Ok(new { run_id = id, request_id = requestId, answered = true });
+});
+
+app.MapPost("/api/runs/{id}/auto-approve", async (
+    HttpContext httpContext,
+    string id,
+    EnableFlagRequest body,
+    SqliteRunStore runStore,
+    IRunOptionsStore runOptions,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run.Status != RunStatus.InProgress)
+        return Results.Conflict(new { error = "Run is not active." });
+
+    runOptions.SetAutoApproveTools(id, body.Enabled);
+    return Results.Ok(new { run_id = id, auto_approve_tools = body.Enabled });
+});
+
+app.MapPost("/api/runs/{id}/autopilot", async (
+    HttpContext httpContext,
+    string id,
+    EnableFlagRequest body,
+    SqliteRunStore runStore,
+    IRunOptionsStore runOptions,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run.Status != RunStatus.InProgress)
+        return Results.Conflict(new { error = "Run is not active." });
+
+    runOptions.SetAutopilot(id, body.Enabled);
+    return Results.Ok(new { run_id = id, autopilot = body.Enabled });
 });
 
 app.MapGet("/api/sandbox-policy", async (

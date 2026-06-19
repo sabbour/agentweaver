@@ -46,6 +46,7 @@ public sealed class CoordinatorRunService
     private readonly RunWorkflowFactory _runWorkflowFactory;
     private readonly CoordinatorDispatchService _dispatchService;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRunOptionsStore _runOptions;
     private readonly ILogger<CoordinatorRunService> _logger;
     private readonly bool _autoDispatch;
     private readonly CancellationToken _appStopping;
@@ -59,6 +60,7 @@ public sealed class CoordinatorRunService
         RunWorkflowFactory runWorkflowFactory,
         CoordinatorDispatchService dispatchService,
         IServiceScopeFactory scopeFactory,
+        IRunOptionsStore runOptions,
         IHostApplicationLifetime lifetime,
         IConfiguration configuration,
         ILogger<CoordinatorRunService> logger)
@@ -71,6 +73,7 @@ public sealed class CoordinatorRunService
         _runWorkflowFactory = runWorkflowFactory;
         _dispatchService = dispatchService;
         _scopeFactory = scopeFactory;
+        _runOptions = runOptions;
         _logger = logger;
         // Auto-dispatch is ON in production: confirming a spec launches and tracks child runs.
         // Hermetic web tests (non-git workspaces, signed-out tokens) disable it so the Phase 1
@@ -93,6 +96,8 @@ public sealed class CoordinatorRunService
         string repositoryPath,
         string originatingBranch,
         string? modelId,
+        bool autoApproveTools,
+        bool autopilot,
         CancellationToken ct)
     {
         var runId = RunId.New();
@@ -116,6 +121,11 @@ public sealed class CoordinatorRunService
         };
 
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
+
+        // Seed the per-run options so the coordinator's own model turns (and the cascade to child
+        // runs) honor the launch flags. Auto-approve covers the coordinator's allow-with-approval
+        // tools; Autopilot drives clarifying-question auto-answers.
+        _runOptions.Set(runId.ToString(), new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot));
 
         var entry = _streamStore.Create(runId.ToString(), submittingUser);
         entry.RecordNext(EventTypes.CoordinatorStarted, new { goal });

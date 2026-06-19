@@ -28,6 +28,7 @@ Clients should order and deduplicate events by `sequence`.
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
 | `tool.error` | After a tool is denied by the sandbox policy, or fails for any other reason such as a missing file or I/O failure | `callId`, `errorMessage` |
 | `tool.approval_required` | When a tool call is paused awaiting human approval | `request_id`, `tool_name`, `url` (optional), `intention` (optional) |
+| `tool.auto_approved` | When the per-run auto-approve-tools option is ON and an allow-with-approval tool request is auto-granted at the gate instead of waiting for a human; audit-only (the tool then runs) | `requestId`, `toolName`, `url` (optional) |
 | `agent.question_asked` | When an agent calls `ask_question` to bubble a clarifying question or permission request; the run suspends inside the tool call until answered or timed out | `requestId`, `question` |
 | `agent.question_answered` | When a pending `ask_question` request is answered (or resolved by timeout) and the agent resumes | `requestId`, `answer`, `timedOut` |
 | `run.completed` | When the watch loop determines the run is terminal with no file changes (watch-loop only; never emitted by the runner) | `result` |
@@ -67,6 +68,7 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable `assembly_error: <message>` result | `workPlanId`, `reason`, `phase` |
 | `coordinator.child_question` | When a coordinator child run bubbles a question via `ask_question`; re-projected onto the coordinator stream so the operator can answer the child run | `childRunId`, `subtaskId`, `requestId`, `question` |
 | `coordinator.child_approval_required` | When a coordinator child run pauses on a tool-approval gate; re-projected onto the coordinator stream so the operator can grant/deny on the child run | `childRunId`, `subtaskId`, `requestId`, `toolName`, `url` (optional), `message` (optional) |
+| `coordinator.autopilot_answered` | When the coordinator's Autopilot option is ON and the coordinator model auto-answers a clarifying question (its own or one bubbled from a child); the answer is also resolved on the child's question gate, so the normal `agent.question_answered` still surfaces | `runId`, `childRunId` (optional), `requestId`, `question`, `answer` |
 
 ## Tool event pairing
 

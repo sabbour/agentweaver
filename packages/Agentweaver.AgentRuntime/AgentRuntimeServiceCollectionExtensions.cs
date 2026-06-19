@@ -31,6 +31,7 @@ public static class AgentRuntimeServiceCollectionExtensions
         services.AddSingleton<IShellApprovalStore, InMemoryShellApprovalStore>();
         services.AddSingleton<IToolApprovalGate, InMemoryToolApprovalGate>();
         services.AddSingleton<IQuestionGate, InMemoryQuestionGate>();
+        services.AddSingleton<IRunOptionsStore, InMemoryRunOptionsStore>();
         services.AddSingleton<Workflow.IWorkflowAgentFactory, Workflow.WorkflowAgentFactory>();
         return services;
     }

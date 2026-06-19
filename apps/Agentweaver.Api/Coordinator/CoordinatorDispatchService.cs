@@ -61,6 +61,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly CoordinatorSteeringQueue _steering;
     private readonly ICoordinatorAssembly _assembly;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRunOptionsStore? _runOptions;
+    private readonly ICoordinatorAutopilot? _autopilot;
     private readonly ILogger<CoordinatorDispatchService> _logger;
     private readonly CancellationToken _appStopping;
 
@@ -74,7 +76,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         ICoordinatorAssembly assembly,
         IServiceScopeFactory scopeFactory,
         IHostApplicationLifetime lifetime,
-        ILogger<CoordinatorDispatchService> logger)
+        ILogger<CoordinatorDispatchService> logger,
+        IRunOptionsStore? runOptions = null,
+        ICoordinatorAutopilot? autopilot = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -82,6 +86,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _steering = steering;
         _assembly = assembly;
         _scopeFactory = scopeFactory;
+        _runOptions = runOptions;
+        _autopilot = autopilot;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
     }
@@ -294,6 +300,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             SubtaskId = subtaskId.ToString(),
         };
 
+        // Cascade the coordinator's per-run options (auto-approve-tools + Autopilot) to the child so
+        // the child's runner honors auto-approve and the child's bubbled questions are eligible for
+        // Autopilot. Seeded before the child run starts so its first tool call reads the inherited value.
+        CascadeOptionsToChild(context.CoordinatorRunId, childRunId.ToString());
+
         try
         {
             await _orchestrator.StartChildRunAsync(childRun, ct).ConfigureAwait(false);
@@ -499,14 +510,28 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     {
         if (evt.Type == EventTypes.AgentQuestionAsked)
         {
+            var requestId = ReadString(evt.Payload, "requestId");
+            var question = ReadString(evt.Payload, "question");
+
             var entry = _streamStore.Get(coordinatorRunId);
             entry?.RecordNext(EventTypes.CoordinatorChildQuestion, new
             {
                 childRunId,
                 subtaskId,
-                requestId = ReadString(evt.Payload, "requestId"),
-                question = ReadString(evt.Payload, "question"),
+                requestId,
+                question,
             });
+
+            // Autopilot (questions only): if the coordinator's Autopilot option is ON, auto-answer
+            // the bubbled question via the coordinator model on a supervised background task so the
+            // observe loop is never blocked on a model call. Permissions are never auto-answered.
+            if (_autopilot is not null
+                && _runOptions?.Get(coordinatorRunId).Autopilot == true
+                && !string.IsNullOrEmpty(requestId))
+            {
+                _ = Task.Run(() => _autopilot.TryAnswerChildQuestionAsync(
+                    coordinatorRunId, childRunId, subtaskId, requestId, question ?? "", _appStopping));
+            }
         }
         else if (evt.Type == EventTypes.ToolApprovalRequired)
         {
@@ -521,6 +546,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 message = ReadString(evt.Payload, "message"),
             });
         }
+    }
+
+    /// <summary>
+    /// Copies the coordinator run's per-run options (auto-approve-tools + Autopilot) onto a freshly
+    /// dispatched child run so both flags inherit. No-op when no options store is wired.
+    /// </summary>
+    internal void CascadeOptionsToChild(string coordinatorRunId, string childRunId)
+    {
+        if (_runOptions is null) return;
+        _runOptions.Set(childRunId, _runOptions.Get(coordinatorRunId));
     }
 
     private static bool TryMapTerminalEvent(RunEvent evt, out ChildOutcome outcome)

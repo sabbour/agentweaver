@@ -482,6 +482,8 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
         project.WorkingDirectory,
         project.DefaultBranch,
         modelId,
+        request.AutoApproveTools,
+        request.Autopilot,
         ct);
 
     return Results.Created(

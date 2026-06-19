@@ -19,6 +19,14 @@ public sealed record CreateRunRequest
 
     [JsonPropertyName("agent_name")]
     public string? AgentName { get; init; }
+
+    /// <summary>
+    /// When true, allow-with-approval tool requests (e.g. <c>web_fetch</c>) are auto-granted at the
+    /// HITL gate for this run instead of stalling for an operator. Policy-denied tools stay denied.
+    /// Defaults to false. (Feature 008)
+    /// </summary>
+    [JsonPropertyName("auto_approve_tools")]
+    public bool AutoApproveTools { get; init; }
 }
 
 /// <summary>Response body for POST /api/runs.</summary>
@@ -147,6 +155,22 @@ public sealed record RunResponse
     /// </summary>
     [JsonPropertyName("coordinator_status_reason")]
     public string? CoordinatorStatusReason { get; init; }
+
+    /// <summary>
+    /// Current value of the per-run <c>auto-approve-tools</c> option (allow-with-approval tool
+    /// requests are auto-granted at the HITL gate; policy denies are unaffected). Reflects launch
+    /// value and any live toggle. (Feature 008)
+    /// </summary>
+    [JsonPropertyName("auto_approve_tools")]
+    public bool AutoApproveTools { get; init; }
+
+    /// <summary>
+    /// Current value of the coordinator-run Autopilot option (clarifying questions are auto-answered
+    /// by the coordinator model; permissions are NOT auto-granted). Reflects launch value and any
+    /// live toggle. (Feature 008)
+    /// </summary>
+    [JsonPropertyName("autopilot")]
+    public bool Autopilot { get; init; }
 }
 
 /// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>
@@ -740,6 +764,21 @@ public sealed record StartOrchestrationRequest
 {
     [JsonPropertyName("goal")] public string? Goal { get; init; }
     [JsonPropertyName("modelId")] public string? ModelId { get; init; }
+
+    /// <summary>When true, the coordinator run and its children auto-grant allow-with-approval tool
+    /// requests at the HITL gate (policy denies still apply). Defaults to false. (Feature 008)</summary>
+    [JsonPropertyName("autoApproveTools")] public bool AutoApproveTools { get; init; }
+
+    /// <summary>When true, the coordinator auto-answers clarifying questions (its own and bubbled
+    /// child questions) using the coordinator model. Permissions are NOT auto-granted. Cascades to
+    /// children. Defaults to false. (Feature 008)</summary>
+    [JsonPropertyName("autopilot")] public bool Autopilot { get; init; }
+}
+
+/// <summary>Request body for POST /api/runs/{id}/auto-approve and POST /api/runs/{id}/autopilot.</summary>
+public sealed record EnableFlagRequest
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; init; }
 }
 
 /// <summary>Response body for POST /api/projects/{id}/orchestrations.</summary>

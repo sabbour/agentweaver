@@ -49,6 +49,8 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `POST` | `/api/runs/{id}/tool-approvals` | Approve a pending tool call |
 | `POST` | `/api/runs/{id}/tool-denials` | Deny a pending tool call |
 | `POST` | `/api/runs/{id}/questions/{requestId}/answer` | Answer a pending `ask_question` request |
+| `POST` | `/api/runs/{id}/auto-approve` | Toggle the per-run auto-approve-tools option |
+| `POST` | `/api/runs/{id}/autopilot` | Toggle the coordinator Autopilot option |
 
 ### Projects
 
@@ -160,6 +162,8 @@ Request:
 
 `model_source` must be `github-copilot`. Any other value returns `400 Bad Request`. The submitting user comes from the bearer key, not the request body.
 
+An optional `"auto_approve_tools": true` may be set to launch the run with the auto-approve-tools option ON (see `POST /api/runs/{id}/auto-approve`). It defaults to `false`.
+
 `repository_path` must be an absolute local filesystem path. The server canonicalizes it with `Path.GetFullPath` before storing it on the run record. UNC paths (`\\server\share`, `//server/share`), device paths (`\\?\`, `\\.\`), drive-relative paths (`C:foo`), relative paths, and NTFS Alternate Data Streams are rejected with `400`.
 
 When `Runs:AllowedRepositoryRoots` is configured (non-empty string array), the server resolves the canonical path through symlinks and junctions and verifies that the resolved location is inside one of the allowed roots. Paths outside the allowlist return `400`. By default no allowlist is configured and any valid local absolute path is accepted. Shared, exposed, or multi-tenant deployments MUST set an allowlist to prevent users from targeting arbitrary repositories on the server filesystem.
@@ -194,6 +198,8 @@ Response `200 OK`:
 Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `merge_failed`, `failed`, and `completed`. `completed` is reached when the agent turn produced no file changes (no review gate is entered on that path).
 
 For a **coordinator** run (`agent_name: "Coordinator"`, no parent), the response also carries `coordinator_status`: the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`). It is `null` for normal runs and for coordinator runs that have no work plan yet. Because a coordinator run stays `in_progress` while it dispatches children and runs collective assembly, `coordinator_status` is what the UI should render (for example "Awaiting assembly" or "Failed: <result>") instead of the bare `status`. On a terminal assembly failure the `result` — also surfaced as `coordinator_status_reason` on this response (scoped to coordinator runs) — carries the human-readable reason (for example `assembly_blocked: <reason>`, `assembly_merge_failed: <reason>`, `assembly_error: <message>`).
+
+The response also carries `auto_approve_tools` and `autopilot` (booleans) reflecting the current per-run option state (launch value plus any live toggle). Both are `false` unless explicitly enabled. The frontend uses these to render the toggle controls; see `POST /api/runs/{id}/auto-approve` and `POST /api/runs/{id}/autopilot`.
 
 ### GET /api/runs/{id}/stream
 
@@ -420,6 +426,34 @@ Request:
 Response: `200 OK` `{ "run_id", "request_id", "answered": true }`.
 
 Errors: `400` invalid run id / missing `answer`; `404` run not found; `409` no pending question for this `request_id` (already answered, timed out, or never asked); `403` caller is not the run owner. The run must be `InProgress`.
+
+### POST /api/runs/{id}/auto-approve
+
+Toggles the per-run **auto-approve-tools** option. When enabled, an allow-with-approval tool request (e.g. `web_fetch`) is auto-granted at the human-in-the-loop gate instead of stalling for an operator. Every auto-grant is logged on the timeline as a `tool.auto_approved` event. This NEVER overrides a policy deny: dangerous tools are rejected upstream by sandbox governance before the gate is reached. The flag is settable at launch (`auto_approve_tools` on `POST /api/runs`; `autoApproveTools` on `POST /api/projects/{id}/orchestrations`) and cascades from a coordinator run to its dispatched children. Defaults to OFF.
+
+Request:
+
+```json
+{ "enabled": true }
+```
+
+Response: `200 OK` `{ "run_id", "auto_approve_tools": true }`.
+
+Errors: `400` invalid run id; `404` run not found; `403` caller is not the run owner; `409` run is not active (`InProgress`).
+
+### POST /api/runs/{id}/autopilot
+
+Toggles the coordinator **Autopilot** option. When enabled, CLARIFYING QUESTIONS ONLY (the coordinator's own and those bubbled by child workers as `coordinator.child_question`) are auto-answered by the coordinator model from the outcome spec + subtask context, then resolved on the child's question gate. Each auto-answer is logged as `coordinator.autopilot_answered`, and the normal `agent.question_answered` resolution still surfaces on the child stream. Autopilot does NOT auto-grant tool approvals/permissions (that is the separate auto-approve-tools opt-in). Settable at launch (`autopilot` on `POST /api/projects/{id}/orchestrations`) and cascades to children. Defaults to OFF.
+
+Request:
+
+```json
+{ "enabled": true }
+```
+
+Response: `200 OK` `{ "run_id", "autopilot": true }`.
+
+Errors: `400` invalid run id; `404` run not found; `403` caller is not the run owner; `409` run is not active (`InProgress`).
 
 ## Sandbox policy endpoints
 
@@ -797,6 +831,8 @@ Request:
 | --- | --- | --- | --- |
 | `goal` | string | Yes | The outcome the coordinator should draft a spec for. |
 | `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
+| `autoApproveTools` | bool | No | Launch with auto-approve-tools ON for the coordinator and its children. Defaults to `false`. |
+| `autopilot` | bool | No | Launch with Autopilot ON (auto-answer clarifying questions only). Cascades to children. Defaults to `false`. |
 
 Response `201 Created` (with `Location: /api/runs/{runId}`):
 

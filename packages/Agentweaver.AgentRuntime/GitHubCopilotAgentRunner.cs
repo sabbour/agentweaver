@@ -49,6 +49,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IQuestionGate? _questionGate;
+    private readonly IRunOptionsStore? _runOptions;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
     public GitHubCopilotAgentRunner(
@@ -59,7 +60,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
         ILogger<GitHubCopilotAgentRunner> logger,
-        IQuestionGate? questionGate = null)
+        IQuestionGate? questionGate = null,
+        IRunOptionsStore? runOptions = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
@@ -69,6 +71,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _toolApprovalGate = toolApprovalGate ?? throw new ArgumentNullException(nameof(toolApprovalGate));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _questionGate = questionGate;
+        _runOptions = runOptions;
     }
 
     public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct, string? systemPromptContext = null)
@@ -371,6 +374,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             _approvalStore.Clear(runId);
             _toolApprovalGate.Clear(runId);
             _questionGate?.Clear(runId);
+            _runOptions?.Clear(runId);
             // Dispose (not delete) the agent so the SDK persists session events for history replay.
             // Cast to IAsyncDisposable since AIAgent base class does not declare it,
             // but the concrete GitHubCopilotAgent implementation does.
@@ -423,6 +427,19 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     _logger.LogInformation(
                         "Tool HITL auto-approved (policy) — url={Url} runId={RunId}",
                         rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
+                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                }
+
+                // Auto-approve-tools run option: grant the allow-with-approval request without an
+                // operator. SAFETY: this branch is only reached for PermissionRequestUrl (web_fetch),
+                // an allow-with-approval tool. Policy-DENIED tools are rejected in the custom/native
+                // governance branches below and never reach this gate, so auto-approve can never
+                // override a deny. Every auto-grant is logged on the timeline for audit.
+                if (_runOptions?.Get(runId).AutoApproveTools == true)
+                {
+                    emit(EventTypes.ToolAutoApproved, new { requestId, toolName = "web_fetch", url = SanitizeUrl(rawUrl) });
+                    _logger.LogInformation(
+                        "Tool HITL auto-approved (run option) — requestId={RequestId} runId={RunId}", displayId, runId);
                     return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
                 }
 

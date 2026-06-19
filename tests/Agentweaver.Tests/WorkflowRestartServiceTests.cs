@@ -304,6 +304,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new Agentweaver.AgentRuntime.InMemoryShellApprovalStore(),
             new Agentweaver.AgentRuntime.InMemoryToolApprovalGate(),
             new Agentweaver.AgentRuntime.InMemoryQuestionGate(),
+            new Agentweaver.AgentRuntime.InMemoryRunOptionsStore(),
             loggerFactory);
         var factory = new RunWorkflowFactory(
             new TestFileEditAgentRunner(),

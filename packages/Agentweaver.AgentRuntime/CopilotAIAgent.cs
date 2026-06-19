@@ -67,6 +67,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IQuestionGate? _questionGate;
+    private readonly IRunOptionsStore? _runOptions;
     protected readonly ILogger<CopilotAIAgent> _logger;
 
     // --- Per-run config — set by the workflow executor before CreateSessionAsync ---
@@ -124,7 +125,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
         ILogger<CopilotAIAgent> logger,
-        IQuestionGate? questionGate = null)
+        IQuestionGate? questionGate = null,
+        IRunOptionsStore? runOptions = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
@@ -134,6 +136,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _toolApprovalGate = toolApprovalGate ?? throw new ArgumentNullException(nameof(toolApprovalGate));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _questionGate = questionGate;
+        _runOptions = runOptions;
     }
 
     /// <summary>
@@ -625,6 +628,19 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
                 }
 
+                // Auto-approve-tools run option: grant the allow-with-approval request without an
+                // operator. SAFETY: this branch is only reached for PermissionRequestUrl (web_fetch),
+                // an allow-with-approval tool. Policy-DENIED tools are rejected in the custom/native
+                // governance branches below and never reach this gate, so auto-approve can never
+                // override a deny. Every auto-grant is logged on the timeline for audit.
+                if (_runOptions?.Get(runId).AutoApproveTools == true)
+                {
+                    emit(EventTypes.ToolAutoApproved, new { requestId, toolName = "web_fetch", url = SanitizeUrl(rawUrl) });
+                    _logger.LogInformation(
+                        "Tool HITL auto-approved (run option) — requestId={RequestId} runId={RunId}", displayId, runId);
+                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                }
+
                 // Atomically register context and gate in one call so GrantAsync can record
                 // scope-based allow policies even if approval arrives immediately after registration.
                 var approvalTask = _toolApprovalGate.WaitForApprovalAsync(runId, requestId, "web_fetch", rawUrl, TimeSpan.FromMinutes(5), runCt);
@@ -1024,6 +1040,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             _approvalStore.Clear(_runId);
             _toolApprovalGate.Clear(_runId);
             _questionGate?.Clear(_runId);
+            _runOptions?.Clear(_runId);
         }
         // Dispose (not delete) the inner agent so the SDK persists session events for history replay.
         if (_inner is IAsyncDisposable disposableAgent)

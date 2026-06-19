@@ -307,4 +307,21 @@ public static class EventTypes
     /// Payload: { childRunId, subtaskId, requestId, toolName, url?, message? }.
     /// </summary>
     public const string CoordinatorChildApprovalRequired = "coordinator.child_approval_required";
+
+    /// <summary>
+    /// Audit event emitted on a run's own stream when the per-run <c>auto-approve-tools</c> option
+    /// auto-grants an allow-with-approval tool request (e.g. <c>web_fetch</c>) at the HITL gate,
+    /// instead of stalling for an operator. NEVER emitted for a policy-denied tool (those are
+    /// rejected upstream by governance and never reach the gate). Payload: { requestId, toolName, url? }.
+    /// </summary>
+    public const string ToolAutoApproved = "tool.auto_approved";
+
+    /// <summary>
+    /// Audit event emitted on the COORDINATOR run's stream when Autopilot auto-answers a clarifying
+    /// question (one bubbled by a child worker, or asked on the coordinator run) using the
+    /// coordinator model. The child's own <see cref="AgentQuestionAnswered"/> still surfaces on the
+    /// child stream. Autopilot NEVER answers tool-approval/permission requests.
+    /// Payload: { runId, childRunId?, requestId, question, answer }.
+    /// </summary>
+    public const string CoordinatorAutopilotAnswered = "coordinator.autopilot_answered";
 }
