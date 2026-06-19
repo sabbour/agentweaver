@@ -34,6 +34,7 @@ $apiProject = "apps/Agentweaver.Api"
 $webDir     = Join-Path $repoRoot "apps\web"
 $apiUrl     = "http://localhost:5000"
 $webUrl     = "http://localhost:8080"
+$apiPort    = ([Uri]$apiUrl).Port
 
 # Convert Windows repo root to WSL path (C:\... -> /mnt/c/...)
 $wslRepoRoot = ($repoRoot -replace '^([A-Za-z]):\\', { "/mnt/$($_.Groups[1].Value.ToLower())/" }) -replace '\\', '/'
@@ -44,12 +45,25 @@ Write-Host "  API  $apiUrl  (WSL2 / Linux .NET)" -ForegroundColor DarkCyan
 Write-Host "  Web  $webUrl  (Windows / Vite)" -ForegroundColor DarkCyan
 Write-Host ""
 
-# ── 1. Kill any stale API processes in WSL ────────────────────────────────────
-# The MAF FileSystemJsonCheckpointStore holds an exclusive lock on its directory.
-# If a previous instance is still running (e.g. from an earlier dev session),
-# the new one will crash immediately with "store already in use".
+# ── 1. Kill any stale API processes/session in WSL ───────────────────────────
+# The MAF FileSystemJsonCheckpointStore holds an exclusive lock on its directory,
+# and the API binds port $apiPort. If a previous instance is still running (e.g.
+# from an earlier dev session), the new one crashes immediately with
+# "store already in use" (or the port is taken).
+#
+# `dotnet run --no-build` execs the Linux apphost (bin/.../Agentweaver.Api) as a
+# CHILD process whose argv has NO "dotnet" prefix, so the old narrow pattern
+# 'dotnet.*Agentweaver.Api' missed it and left the real API alive. Match the
+# assembly name broadly (covers both the `dotnet run` parent and the apphost),
+# then free the port directly as a fallback (fuser may be absent on minimal
+# distros — the leading pkill handles those).
+#
+# The pattern is written '[A]gentweaver.Api' (a one-char regex class) so it still
+# matches the running processes but NOT this very `bash -c` launcher line — that
+# line contains '[A]gentweaver.Api' literally, not the substring 'Agentweaver.Api',
+# so pkill won't SIGTERM its own shell before fuser/sleep run.
 Write-Host "Stopping any existing API processes in WSL..." -ForegroundColor DarkGray
-wsl --exec bash -c "pkill -f 'dotnet.*Agentweaver.Api' 2>/dev/null || true; sleep 1"
+wsl --exec bash -c "pkill -f '[A]gentweaver.Api' 2>/dev/null; fuser -k ${apiPort}/tcp 2>/dev/null; sleep 1; true"
 
 # ── 2. Build API inside WSL so the Linux apphost (ELF binary) is produced ────
 # A Windows build produces Agentweaver.Api.exe but NOT the Linux apphost that
