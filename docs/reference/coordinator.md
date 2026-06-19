@@ -93,6 +93,13 @@ An in-flight agent turn cannot be interrupted mid-turn under the run model, so o
 
 **Pause is not supported in Phase 2.** No hold-before-next-turn primitive exists in the run model; the steering surface is `stop`, `redirect`, and `amend` only. Pause is deferred to a later phase.
 
+### Asking the human: ask_question
+
+Agents do not silently guess when they hit a material decision or an action that needs permission. They call the `ask_question(question)` tool, which suspends the agent and bubbles the question to a human (see [events.md](events.md#ask_question-bubbling) for the event/endpoint mechanics).
+
+- **During decomposition**, the coordinator itself calls `ask_question` to clarify ambiguous scope or plan details with the user before finalizing the work plan, then proceeds once it has the answer.
+- **For running children**, the coordinator's child watcher re-projects each child's `agent.question_asked` onto the coordinator stream as `coordinator.child_question`, and each child's `tool.approval_required` as `coordinator.child_approval_required`, attributing both to the originating `childRunId` and `subtaskId`. The accountable human answers the question against the child run (`POST /api/runs/{childRunId}/questions/{requestId}/answer`) and grants/denies the gated action via the child run's tool-approval endpoints. Re-projection runs alongside the terminal-event mapping and does not change it.
+
 ## Phase 3 collective assembly and terminal status
 
 After every child subtask finishes, the coordinator runs ONE collective assembly: it builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs ONE collective RAI pass over the aggregate diff, and arms ONE human review gate (`POST /api/runs/{coordinatorRunId}/assembly/review`). On approve it merges, runs the collective scribe, and completes; on request_changes it re-dispatches the inferred children; on decline, conflict, or RAI block it parks terminal. The full event sequence is documented in the [events reference](./events.md).

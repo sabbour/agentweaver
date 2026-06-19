@@ -20,7 +20,12 @@ public sealed class FoundryAgentRunner : IAgentRunner
         report_intent does NOT write files — always follow it with the actual tool call in the same response.
 
         Work step by step. Do not produce a final summary until ALL writes are done.
-        Do not ask clarifying questions — proceed with your best judgement.
+
+        Prefer to proceed using the task and the workspace. If you hit a genuine blocker — a
+        material decision you cannot infer, or an action that needs the user's permission — do
+        NOT silently guess and do NOT stop without surfacing it. Call ask_question(question) to
+        bubble the question or permission request up to the coordinator (which may answer on
+        your behalf when Autopilot is on) or the user, then continue once you receive the answer.
         """;
 
     private const int MaxTurns = 30;
@@ -30,6 +35,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
+    private readonly IQuestionGate? _questionGate;
     private readonly ILogger<FoundryAgentRunner> _logger;
 
     public FoundryAgentRunner(
@@ -37,13 +43,15 @@ public sealed class FoundryAgentRunner : IAgentRunner
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
-        ILogger<FoundryAgentRunner> logger)
+        ILogger<FoundryAgentRunner> logger,
+        IQuestionGate? questionGate = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _questionGate = questionGate;
     }
 
     /// <summary>Internal constructor for unit tests — injects a pre-built IChatClient directly.</summary>
@@ -137,7 +145,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
             EmitEvent: Emit,
             RunId: runId,
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
-            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash));
+            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
+            QuestionGate: _questionGate);
         var toolFunctions = SandboxToolRegistry.Build(toolContext);
         var tools = toolFunctions.Cast<AITool>().ToList();
 
@@ -329,6 +338,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
         finally
         {
             _approvalStore.Clear(runId);
+            _questionGate?.Clear(runId);
         }
     }
 

@@ -46,6 +46,21 @@ public static class EventTypes
     /// </summary>
     public const string ToolApprovalRequired = "tool.approval_required";
 
+    /// <summary>
+    /// Emitted on a run's own stream when an agent calls the <c>ask_question</c> tool to bubble a
+    /// clarifying question or permission request to the operator (or, for a coordinator child, to
+    /// the coordinator watcher). The run suspends inside the tool call until the question is
+    /// answered via POST /api/runs/{id}/questions/{requestId}/answer or the wait times out.
+    /// Payload: { requestId, question }.
+    /// </summary>
+    public const string AgentQuestionAsked = "agent.question_asked";
+
+    /// <summary>
+    /// Emitted on a run's own stream once a pending <c>ask_question</c> request has been answered
+    /// (or resolved by timeout) and the agent resumes. Payload: { requestId, answer, timedOut }.
+    /// </summary>
+    public const string AgentQuestionAnswered = "agent.question_answered";
+
     public const string ReviewChangesRequested = "review.changes_requested";
     public const string RevisionStarted        = "revision.started";
     public const string RunCancelled           = "run.cancelled";
@@ -273,4 +288,23 @@ public static class EventTypes
     /// signals the pipeline faulted so subtasks are never left parked with no signal.
     /// Payload: { workPlanId?, reason, phase }.</summary>
     public const string CoordinatorAssemblyFailed = "coordinator.assembly_failed";
+
+    /// <summary>
+    /// Emitted on the COORDINATOR run's stream when a coordinator CHILD run bubbles a clarifying
+    /// question via <c>ask_question</c>. The coordinator watcher re-projects the child's
+    /// <see cref="AgentQuestionAsked"/> event so the operator (and, later, Autopilot) can answer.
+    /// The answer flows back to the CHILD run's question gate via
+    /// POST /api/runs/{childRunId}/questions/{requestId}/answer.
+    /// Payload: { childRunId, subtaskId, requestId, question }.
+    /// </summary>
+    public const string CoordinatorChildQuestion = "coordinator.child_question";
+
+    /// <summary>
+    /// Emitted on the COORDINATOR run's stream when a coordinator CHILD run pauses on a tool
+    /// approval gate. The coordinator watcher re-projects the child's
+    /// <see cref="ToolApprovalRequired"/> event so the operator can grant/deny. The decision
+    /// flows back to the CHILD run via the tool-approvals/tool-denials endpoints.
+    /// Payload: { childRunId, subtaskId, requestId, toolName, url?, message? }.
+    /// </summary>
+    public const string CoordinatorChildApprovalRequired = "coordinator.child_approval_required";
 }

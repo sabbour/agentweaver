@@ -30,4 +30,10 @@ public sealed record SandboxToolContext(
     /// Returns true if the given command hash has been denied for this run.
     /// Null in test contexts (treated as not denied).
     /// </summary>
-    Func<string, bool>? IsCommandDenied = null);
+    Func<string, bool>? IsCommandDenied = null,
+    /// <summary>
+    /// Optional blocking question gate used by the <c>ask_question</c> tool to suspend
+    /// until the operator answers. Null in test/CLI contexts (ask_question returns a
+    /// proceed-with-best-judgement fallback when absent).
+    /// </summary>
+    Agentweaver.Domain.IQuestionGate? QuestionGate = null);

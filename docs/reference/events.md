@@ -28,6 +28,8 @@ Clients should order and deduplicate events by `sequence`.
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
 | `tool.error` | After a tool is denied by the sandbox policy, or fails for any other reason such as a missing file or I/O failure | `callId`, `errorMessage` |
 | `tool.approval_required` | When a tool call is paused awaiting human approval | `request_id`, `tool_name`, `url` (optional), `intention` (optional) |
+| `agent.question_asked` | When an agent calls `ask_question` to bubble a clarifying question or permission request; the run suspends inside the tool call until answered or timed out | `requestId`, `question` |
+| `agent.question_answered` | When a pending `ask_question` request is answered (or resolved by timeout) and the agent resumes | `requestId`, `answer`, `timedOut` |
 | `run.completed` | When the watch loop determines the run is terminal with no file changes (watch-loop only; never emitted by the runner) | `result` |
 | `run.outcome` | Agent self-assessment of task completion, emitted just before `run.completed` | `achieved` (bool), `reason` |
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
@@ -63,6 +65,8 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.assembly_completed` | When collective assembly finishes and the work plan reaches `complete` | `workPlanId`, `integrationBranch`, `commitHash` |
 | `coordinator.assembly_declined` | When the reviewer declines the combined output (terminal); the coordinator run ends `declined` | `workPlanId`, `reason`, `reviewer` |
 | `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable `assembly_error: <message>` result | `workPlanId`, `reason`, `phase` |
+| `coordinator.child_question` | When a coordinator child run bubbles a question via `ask_question`; re-projected onto the coordinator stream so the operator can answer the child run | `childRunId`, `subtaskId`, `requestId`, `question` |
+| `coordinator.child_approval_required` | When a coordinator child run pauses on a tool-approval gate; re-projected onto the coordinator stream so the operator can grant/deny on the child run | `childRunId`, `subtaskId`, `requestId`, `toolName`, `url` (optional), `message` (optional) |
 
 ## Tool event pairing
 
@@ -283,5 +287,14 @@ The `run_id` returned in the `POST /api/projects/{id}/casting/proposals` respons
 The casting wizard in the web UI streams these events during the review step using the same timeline rendering as the watch screen. MCP clients receive them as progress notifications during a `team_cast` tool call.
 
 No `.squad/` files are written during this run. The run produces a proposal, not a commit. Files are only written after the user confirms the proposal through `POST /api/projects/{id}/casting/proposals/{pid}/confirm`.
+
+## ask_question bubbling
+
+Any agent (a worker, or the coordinator during decomposition) can call the `ask_question` tool to surface a clarifying question or permission request instead of silently guessing. On invoke the tool emits `agent.question_asked` (carrying a generated `requestId` and the `question`) on the run's own stream, then suspends inside the tool call on the per-run question gate.
+
+The wait is resolved by `POST /api/runs/{id}/questions/{requestId}/answer` with body `{ "answer": "..." }`. When an answer arrives (or the wait times out after 30 minutes), the tool emits `agent.question_answered` (`requestId`, `answer`, `timedOut`) and returns the answer text to the model so it can continue. On timeout the model receives a proceed-with-best-judgement instruction rather than hanging. The question gate is cleared on run completion alongside the tool-approval gate; any still-pending wait resolves to a proceed instruction.
+
+For a coordinator CHILD run, the coordinator's child watcher (`CoordinatorDispatchService.ObserveChildAsync`) re-projects the child's `agent.question_asked` onto the COORDINATOR stream as `coordinator.child_question`, and the child's `tool.approval_required` as `coordinator.child_approval_required`, each carrying `childRunId` + `subtaskId` + `requestId`. The answer/approval flows back to the CHILD run: answer via `POST /api/runs/{childRunId}/questions/{requestId}/answer`, approval via the existing `POST /api/runs/{childRunId}/tool-approvals` / `tool-denials`. Re-projection does not affect terminal-event mapping.
+
 
 Scenario-mode proposals resolve without a model run. The `run_id` field in their proposal response is `null`.

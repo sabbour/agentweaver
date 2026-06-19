@@ -66,6 +66,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
+    private readonly IQuestionGate? _questionGate;
     protected readonly ILogger<CopilotAIAgent> _logger;
 
     // --- Per-run config — set by the workflow executor before CreateSessionAsync ---
@@ -122,7 +123,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
-        ILogger<CopilotAIAgent> logger)
+        ILogger<CopilotAIAgent> logger,
+        IQuestionGate? questionGate = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
@@ -131,6 +133,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
         _toolApprovalGate = toolApprovalGate ?? throw new ArgumentNullException(nameof(toolApprovalGate));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _questionGate = questionGate;
     }
 
     /// <summary>
@@ -221,7 +224,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             EmitEvent: Emit,
             RunId: runId,
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
-            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash));
+            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
+            QuestionGate: _questionGate);
         _toolContext = toolContext;
 
         var sessionConfig = new SessionConfig
@@ -944,6 +948,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             new CopilotOverrideAIFunction(outcomeFn),
         };
 
+        // ask_question blocks on the question gate; only present it when a gate is wired so the
+        // model never calls a tool that cannot resolve.
+        if (context.QuestionGate is not null)
+        {
+            var askFn = all.First(f => string.Equals(f.Name, "ask_question", StringComparison.Ordinal));
+            tools.Add(new CopilotOverrideAIFunction(askFn));
+        }
+
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
         {
             var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
@@ -1011,6 +1023,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         {
             _approvalStore.Clear(_runId);
             _toolApprovalGate.Clear(_runId);
+            _questionGate?.Clear(_runId);
         }
         // Dispose (not delete) the inner agent so the SDK persists session events for history replay.
         if (_inner is IAsyncDisposable disposableAgent)

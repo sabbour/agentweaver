@@ -48,6 +48,7 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `GET` | `/api/runs/{id}/files/{path}` | Get diff or content for a specific file |
 | `POST` | `/api/runs/{id}/tool-approvals` | Approve a pending tool call |
 | `POST` | `/api/runs/{id}/tool-denials` | Deny a pending tool call |
+| `POST` | `/api/runs/{id}/questions/{requestId}/answer` | Answer a pending `ask_question` request |
 
 ### Projects
 
@@ -405,6 +406,20 @@ Request:
 ```
 
 Response: `200 OK`.
+
+### POST /api/runs/{id}/questions/{requestId}/answer
+
+Answers a pending `ask_question` request, resuming the agent that called the `ask_question` tool. The `requestId` is the value carried by the `agent.question_asked` event. For a coordinator child run, answer against the CHILD run id (carried by `coordinator.child_question`).
+
+Request:
+
+```json
+{ "answer": "string" }
+```
+
+Response: `200 OK` `{ "run_id", "request_id", "answered": true }`.
+
+Errors: `400` invalid run id / missing `answer`; `404` run not found; `409` no pending question for this `request_id` (already answered, timed out, or never asked); `403` caller is not the run owner. The run must be `InProgress`.
 
 ## Sandbox policy endpoints
 

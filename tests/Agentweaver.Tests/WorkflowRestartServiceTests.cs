@@ -303,6 +303,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new StubPolicyStore(),
             new Agentweaver.AgentRuntime.InMemoryShellApprovalStore(),
             new Agentweaver.AgentRuntime.InMemoryToolApprovalGate(),
+            new Agentweaver.AgentRuntime.InMemoryQuestionGate(),
             loggerFactory);
         var factory = new RunWorkflowFactory(
             new TestFileEditAgentRunner(),

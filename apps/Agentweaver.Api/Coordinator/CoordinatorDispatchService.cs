@@ -167,7 +167,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     context, workPlanId.Value, subtaskId, statusById, seq, ct).ConfigureAwait(false);
 
                 if (dispatched is { } childRunId)
-                    inFlight[subtaskId] = ObserveChildAsync(subtaskId, childRunId, ct);
+                    inFlight[subtaskId] = ObserveChildAsync(context.CoordinatorRunId, subtaskId, childRunId, ct);
             }
 
             if (inFlight.Count == 0)
@@ -189,7 +189,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false))
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(result.SubtaskId, result.ChildRunId, ct);
+                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, result.SubtaskId, result.ChildRunId, ct);
                     continue;
                 }
             }
@@ -445,7 +445,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     // Observation — read the child's existing run stream (no double-consume).
     // -----------------------------------------------------------------------
 
-    private async Task<ChildResult> ObserveChildAsync(int subtaskId, string childRunId, CancellationToken ct)
+    private async Task<ChildResult> ObserveChildAsync(string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
     {
         var entry = _streamStore.Get(childRunId);
         var lastSeq = 0;
@@ -467,6 +467,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             foreach (var evt in snapshot.Events)
             {
                 lastSeq = evt.Sequence;
+
+                // Bubble mid-run child questions / approval gates onto the coordinator stream so
+                // the operator (and, later, Autopilot) can resolve them. The answer/approval flows
+                // back to the CHILD run's gate, so we carry childRunId + requestId verbatim.
+                BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
+
                 if (TryMapTerminalEvent(evt, out var outcome))
                     return new ChildResult(subtaskId, childRunId, outcome);
             }
@@ -481,6 +487,40 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
 
         return new ChildResult(subtaskId, childRunId, ChildOutcome.Failed);
+    }
+
+    /// <summary>
+    /// Re-projects a child run's mid-run question (<see cref="EventTypes.AgentQuestionAsked"/>) or
+    /// tool-approval gate (<see cref="EventTypes.ToolApprovalRequired"/>) onto the COORDINATOR run's
+    /// stream. The re-emitted event carries the childRunId + subtaskId + requestId so a resolver can
+    /// answer/approve against the child run. Terminal-event mapping is unaffected.
+    /// </summary>
+    internal void BubbleChildInteraction(string coordinatorRunId, int subtaskId, string childRunId, RunEvent evt)
+    {
+        if (evt.Type == EventTypes.AgentQuestionAsked)
+        {
+            var entry = _streamStore.Get(coordinatorRunId);
+            entry?.RecordNext(EventTypes.CoordinatorChildQuestion, new
+            {
+                childRunId,
+                subtaskId,
+                requestId = ReadString(evt.Payload, "requestId"),
+                question = ReadString(evt.Payload, "question"),
+            });
+        }
+        else if (evt.Type == EventTypes.ToolApprovalRequired)
+        {
+            var entry = _streamStore.Get(coordinatorRunId);
+            entry?.RecordNext(EventTypes.CoordinatorChildApprovalRequired, new
+            {
+                childRunId,
+                subtaskId,
+                requestId = ReadString(evt.Payload, "requestId"),
+                toolName = ReadString(evt.Payload, "toolName"),
+                url = ReadString(evt.Payload, "url"),
+                message = ReadString(evt.Payload, "message"),
+            });
+        }
     }
 
     private static bool TryMapTerminalEvent(RunEvent evt, out ChildOutcome outcome)

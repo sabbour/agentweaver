@@ -278,6 +278,14 @@ public sealed record ToolApprovalRequest
     public string Scope { get; init; } = "once";
 }
 
+/// <summary>Request body for POST /api/runs/{id}/questions/{requestId}/answer.</summary>
+public sealed record AnswerQuestionRequest
+{
+    /// <summary>The free-text answer supplied to a pending <c>ask_question</c> request.</summary>
+    [JsonPropertyName("answer")]
+    public string? Answer { get; init; }
+}
+
 /// <summary>Request body for POST /api/runs/{id}/review.</summary>
 public sealed record ReviewRequest
 {

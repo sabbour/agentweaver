@@ -18,6 +18,7 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
+    private readonly IQuestionGate _questionGate;
     private readonly ILoggerFactory _loggerFactory;
 
     public WorkflowAgentFactory(
@@ -27,6 +28,7 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
+        IQuestionGate questionGate,
         ILoggerFactory loggerFactory)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -35,12 +37,13 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
         _toolApprovalGate = toolApprovalGate;
+        _questionGate = questionGate;
         _loggerFactory = loggerFactory;
     }
 
     public IWorkflowTurnAgent CreateWorkerAgent() => new CopilotAIAgent(
         _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-        _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());
+        _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(), _questionGate);
 
     public IWorkflowTurnAgent CreateRaiAgent() => new RaiAIAgent(
         _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,

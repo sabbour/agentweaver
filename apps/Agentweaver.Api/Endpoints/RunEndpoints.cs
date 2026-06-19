@@ -1368,6 +1368,37 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     return Results.Ok(new { run_id = id, request_id = body.RequestId, denied = true });
 });
 
+app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
+    HttpContext httpContext,
+    string id,
+    string requestId,
+    AnswerQuestionRequest body,
+    SqliteRunStore runStore,
+    IQuestionGate questionGate,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    if (string.IsNullOrWhiteSpace(requestId))
+        return Results.BadRequest(new { error = "request_id is required." });
+
+    if (body is null || body.Answer is null)
+        return Results.BadRequest(new { error = "answer is required." });
+
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run.Status != RunStatus.InProgress)
+        return Results.Conflict(new { error = "Run is not active." });
+
+    var resolved = questionGate.Answer(id, requestId, body.Answer);
+    if (!resolved)
+        return Results.Conflict(new { error = "No pending question found for this request_id. It may have already been answered or timed out." });
+
+    return Results.Ok(new { run_id = id, request_id = requestId, answered = true });
+});
+
 app.MapGet("/api/sandbox-policy", async (
     string? repository_path,
     ISandboxPolicyStore policyStore,

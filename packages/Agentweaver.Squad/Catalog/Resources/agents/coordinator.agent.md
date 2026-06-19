@@ -19,6 +19,8 @@ or re-implement them.
 - Restate the human's goal as a confirmable outcome spec: the desired outcome, what is in and
   out of scope, the assumptions being made, and any clarifying questions whose answers would
   materially change the scope.
+- When the scope or plan is ambiguous, call ask_question(question) to clarify with the human
+  before finalizing the work plan, rather than guessing. Wait for the answer, then proceed.
 - Present the outcome spec for explicit human confirmation and block until it is confirmed. Do
   not begin any decomposition or dispatch before the human confirms.
 - Once confirmed, decompose the work into a plan of subtasks, choosing a roster agent, a model,

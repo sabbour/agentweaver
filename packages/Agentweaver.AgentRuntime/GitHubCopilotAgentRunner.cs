@@ -48,6 +48,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
+    private readonly IQuestionGate? _questionGate;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
     public GitHubCopilotAgentRunner(
@@ -57,7 +58,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
-        ILogger<GitHubCopilotAgentRunner> logger)
+        ILogger<GitHubCopilotAgentRunner> logger,
+        IQuestionGate? questionGate = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
@@ -66,6 +68,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
         _toolApprovalGate = toolApprovalGate ?? throw new ArgumentNullException(nameof(toolApprovalGate));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _questionGate = questionGate;
     }
 
     public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct, string? systemPromptContext = null)
@@ -257,7 +260,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             EmitEvent: Emit,
             RunId: runId,
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
-            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash));
+            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
+            QuestionGate: _questionGate);
 
         var sessionConfig = new SessionConfig
         {
@@ -366,6 +370,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         {
             _approvalStore.Clear(runId);
             _toolApprovalGate.Clear(runId);
+            _questionGate?.Clear(runId);
             // Dispose (not delete) the agent so the SDK persists session events for history replay.
             // Cast to IAsyncDisposable since AIAgent base class does not declare it,
             // but the concrete GitHubCopilotAgent implementation does.
@@ -748,17 +753,27 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
     /// <summary>
     /// Builds the tool list for <see cref="SessionConfig.Tools"/>:
-    /// only <c>report_intent</c> and <c>report_outcome</c>, wrapped as native overrides so
-    /// the SDK accepts them. Registering only these functions (not the full
-    /// <see cref="SandboxToolRegistry.Build"/> list) prevents conflicts with native tools
-    /// and keeps governance tight.
+    /// <c>report_intent</c>, <c>report_outcome</c>, and (when a question gate is wired)
+    /// <c>ask_question</c>, wrapped as native overrides so the SDK accepts them. Registering
+    /// only these functions (not the full <see cref="SandboxToolRegistry.Build"/> list) prevents
+    /// conflicts with native tools and keeps governance tight.
     /// </summary>
     internal static IList<AIFunction> BuildSessionConfigTools(SandboxToolContext context)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
         var outcomeFn = all.First(f => string.Equals(f.Name, "report_outcome", StringComparison.Ordinal));
-        return [new CopilotOverrideAIFunction(intentFn), new CopilotOverrideAIFunction(outcomeFn)];
+        var tools = new List<AIFunction> { new CopilotOverrideAIFunction(intentFn), new CopilotOverrideAIFunction(outcomeFn) };
+
+        // ask_question blocks on the question gate; only present it when a gate is wired so the
+        // model never calls a tool that cannot resolve.
+        if (context.QuestionGate is not null)
+        {
+            var askFn = all.First(f => string.Equals(f.Name, "ask_question", StringComparison.Ordinal));
+            tools.Add(new CopilotOverrideAIFunction(askFn));
+        }
+
+        return tools;
     }
 
     /// <summary>
