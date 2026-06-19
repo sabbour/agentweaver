@@ -333,6 +333,198 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         badgeColor: 'subtle',
       };
     }
+
+    // -----------------------------------------------------------------------
+    // Coordinator orchestration milestones — friendly, scannable narrative cards.
+    // -----------------------------------------------------------------------
+    case 'coordinator.recovered':
+      return {
+        icon: <ShieldRegular aria-hidden="true" />,
+        label: 'recovered',
+        summary: `Resumed after restart (${String(p['status'] ?? 'in progress')})`,
+        badgeColor: 'informative',
+      };
+    case 'coordinator.outcome_spec':
+      return {
+        icon: <TaskListSquareLtrRegular aria-hidden="true" />,
+        label: 'outcome spec',
+        summary: p['desiredOutcome']
+          ? `Drafted: ${String(p['desiredOutcome']).slice(0, 140).replace(/\n/g, ' ')}`
+          : 'Drafted outcome spec for review',
+        badgeColor: 'informative',
+      };
+    case 'coordinator.outcome_spec.confirmed':
+      return {
+        icon: <CheckmarkCircleFilled aria-hidden="true" />,
+        label: 'outcome confirmed',
+        summary: p['confirmedBy'] ? `Confirmed by ${String(p['confirmedBy'])}` : 'Outcome spec confirmed',
+        badgeColor: 'success',
+      };
+    case 'coordinator.work_plan': {
+      const subtasks = Array.isArray(p['subtasks']) ? (p['subtasks'] as unknown[]).length : 0;
+      return {
+        icon: <TaskListSquareLtrRegular aria-hidden="true" />,
+        label: 'work plan',
+        summary: `Decomposed into ${subtasks} subtask${subtasks === 1 ? '' : 's'}`,
+        badgeColor: 'informative',
+      };
+    }
+    case 'subtask.dispatched':
+      return {
+        icon: <BranchRegular aria-hidden="true" />,
+        label: 'subtask dispatched',
+        summary: `${String(p['assignedAgent'] ?? 'agent')}${p['selectedModelId'] ? ` · ${String(p['selectedModelId'])}` : ''}`,
+        badgeColor: 'informative',
+      };
+    case 'subtask.rai_flagged':
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'subtask rai',
+        summary: `${String(p['assignedAgent'] ?? 'Subtask')} flagged by RAI`,
+        badgeColor: 'warning',
+      };
+    case 'subtask.assemble_ready':
+      return {
+        icon: <CheckmarkCircleFilled aria-hidden="true" />,
+        label: 'subtask ready',
+        summary: `${String(p['assignedAgent'] ?? 'Subtask')} ready to assemble`,
+        badgeColor: 'success',
+      };
+    case 'subtask.completed':
+      return {
+        icon: <CheckmarkCircleFilled aria-hidden="true" />,
+        label: 'subtask completed',
+        summary: `${String(p['assignedAgent'] ?? 'Subtask')} completed (no changes)`,
+        badgeColor: 'success',
+      };
+    case 'subtask.failed':
+      return {
+        icon: <ErrorCircleFilled aria-hidden="true" />,
+        label: 'subtask failed',
+        summary: `${String(p['assignedAgent'] ?? 'Subtask')} failed`,
+        badgeColor: 'danger',
+      };
+    case 'coordinator.children_complete':
+      return {
+        icon: <CheckmarkCircleFilled aria-hidden="true" />,
+        label: 'subtasks done',
+        summary: `${Number(p['assembleReady'] ?? 0)} ready · ${Number(p['completed'] ?? 0)} no-change · ${Number(p['failed'] ?? 0)} failed of ${Number(p['total'] ?? 0)}`,
+        badgeColor: Number(p['failed'] ?? 0) > 0 ? 'warning' : 'informative',
+      };
+    case 'coordinator.steering':
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'steering',
+        summary: `${String(p['kind'] ?? 'directive')}${p['instruction'] ? `: ${String(p['instruction']).slice(0, 120)}` : ''} (${String(p['status'] ?? '')})`,
+        badgeColor: 'informative',
+      };
+    case 'coordinator.assembly_started':
+      return {
+        icon: <BranchRegular aria-hidden="true" />,
+        label: 'assembly',
+        summary: `Collective assembly started${p['integrationBranch'] ? ` on ${String(p['integrationBranch'])}` : ''}`,
+        badgeColor: 'informative',
+      };
+    case 'coordinator.assembly_rai_started':
+      return {
+        icon: <ShieldRegular aria-hidden="true" />,
+        label: 'assembly rai',
+        summary: 'Collective RAI review started',
+        badgeColor: 'informative',
+      };
+    case 'coordinator.assembly_rai_completed':
+      return {
+        icon: <ShieldRegular aria-hidden="true" />,
+        label: 'assembly rai',
+        summary: p['raiSafetyFlagged'] ? 'RAI review complete — safety flagged' : 'RAI review complete',
+        badgeColor: p['raiSafetyFlagged'] ? 'warning' : 'informative',
+      };
+    case 'coordinator.assembly_review_requested':
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'review requested',
+        summary: 'Collective output ready for your review',
+        badgeColor: 'warning',
+      };
+    case 'coordinator.assembly_review_approved':
+      return {
+        icon: <CheckmarkCircleFilled aria-hidden="true" />,
+        label: 'review approved',
+        summary: p['reviewer'] ? `Approved by ${String(p['reviewer'])}` : 'Review approved',
+        badgeColor: 'success',
+      };
+    case 'coordinator.assembly_changes_requested': {
+      const ids = Array.isArray(p['redispatchedSubtaskIds']) ? (p['redispatchedSubtaskIds'] as unknown[]).length : 0;
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'changes requested',
+        summary: `Re-dispatching ${ids} subtask${ids === 1 ? '' : 's'}`,
+        badgeColor: 'warning',
+      };
+    }
+    case 'coordinator.assembly_merge_started':
+      return {
+        icon: <BranchRegular aria-hidden="true" />,
+        label: 'merge',
+        summary: `Merging${p['integrationBranch'] ? ` ${String(p['integrationBranch'])}` : ''}`,
+        badgeColor: 'informative',
+      };
+    case 'coordinator.assembly_merge_completed':
+      return {
+        icon: <BranchRegular aria-hidden="true" />,
+        label: 'merge completed',
+        summary: `Merged${p['commitHash'] ? ` at ${String(p['commitHash']).slice(0, 10)}` : ''}`,
+        badgeColor: 'success',
+      };
+    case 'coordinator.assembly_merge_failed':
+      return {
+        icon: <ErrorCircleFilled aria-hidden="true" />,
+        label: 'merge failed',
+        summary: String(p['reason'] ?? 'Merge failed'),
+        badgeColor: 'danger',
+      };
+    case 'coordinator.assembly_scribe_started':
+      return {
+        icon: <CodeRegular aria-hidden="true" />,
+        label: 'scribe',
+        summary: 'Documentation pass started',
+        badgeColor: 'informative',
+      };
+    case 'coordinator.assembly_scribe_completed':
+      return {
+        icon: <CodeRegular aria-hidden="true" />,
+        label: 'scribe',
+        summary: 'Documentation pass complete',
+        badgeColor: 'informative',
+      };
+    case 'coordinator.assembly_completed':
+      return {
+        icon: <CheckmarkCircleFilled aria-hidden="true" />,
+        label: 'assembly complete',
+        summary: `Complete${p['commitHash'] ? ` — merged at ${String(p['commitHash']).slice(0, 10)}` : ''}`,
+        badgeColor: 'success',
+      };
+    case 'coordinator.assembly_blocked':
+      return {
+        icon: <ErrorCircleFilled aria-hidden="true" />,
+        label: 'assembly blocked',
+        summary: String(p['reason'] ?? 'Assembly blocked'),
+        badgeColor: 'danger',
+      };
+    case 'coordinator.assembly_declined':
+      return {
+        icon: <DismissCircleFilled aria-hidden="true" />,
+        label: 'assembly declined',
+        summary: String(p['reason'] ?? 'Assembly declined'),
+        badgeColor: 'subtle',
+      };
+    case 'coordinator.assembly_failed':
+      return {
+        icon: <ErrorCircleFilled aria-hidden="true" />,
+        label: 'assembly failed',
+        summary: String(p['reason'] ?? 'Assembly failed'),
+        badgeColor: 'danger',
+      };
     default:
       return {
         icon: null,

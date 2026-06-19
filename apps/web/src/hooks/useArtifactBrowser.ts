@@ -16,6 +16,21 @@ export type FilterValue = (typeof FILTERS)[number]['value'];
 
 export const HISTORICAL_STATUSES = new Set(['merged', 'declined', 'merge_failed', 'failed']);
 
+/**
+ * Optional adapter that redirects the artifact browser at a non-standard run's artifacts and review
+ * gate. Used by the Coordinator session: it owns no worktree, so files/diff come from the integration
+ * branch and the three review actions are delivered to the collective assembly gate instead of the
+ * per-run review endpoints. When omitted the hook uses the standard per-run endpoints unchanged.
+ */
+export interface ArtifactBrowserAdapter {
+  getFiles?: (runId: string, filter: string) => Promise<WorkspaceFileEntry[]>;
+  getFileDiff?: (runId: string, path: string) => Promise<WorkspaceFileDiff>;
+  getWorkspace?: (runId: string) => Promise<WorkspaceNode[]>;
+  approve?: (runId: string) => Promise<void>;
+  requestChanges?: (runId: string, comment: string) => Promise<void>;
+  decline?: (runId: string) => Promise<void>;
+}
+
 function extractErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body}`;
   if (err instanceof Error) return err.message;
@@ -65,6 +80,7 @@ export function useArtifactBrowser(
   onCommitSuccess?: () => void,
   onSubmitReviewSuccess?: () => void,
   commitMessage?: string | null,
+  adapter?: ArtifactBrowserAdapter,
 ): ArtifactBrowserState {
   const isHistorical = HISTORICAL_STATUSES.has(runStatus);
   const isLive = runStatus === 'in_progress';
@@ -139,8 +155,7 @@ export function useArtifactBrowser(
     let intervalId: ReturnType<typeof setInterval> | undefined;
 
     const doFetch = () => {
-      apiClient
-        .getRunFiles(runId, activeFilter)
+      (adapter?.getFiles ?? apiClient.getRunFiles.bind(apiClient))(runId, activeFilter)
         .then((data) => {
           if (active) {
             setFiles(data);
@@ -177,7 +192,7 @@ export function useArtifactBrowser(
       active = false;
       clearInterval(intervalId);
     };
-  }, [runId, activeFilter, isLive]);
+  }, [runId, activeFilter, isLive, adapter]);
 
   // Fetch workspace files when the Files tab is active.
   useEffect(() => {
@@ -185,8 +200,7 @@ export function useArtifactBrowser(
 
     let active = true;
 
-    apiClient
-      .getRunWorkspace(runId)
+    (adapter?.getWorkspace ?? apiClient.getRunWorkspace.bind(apiClient))(runId)
       .then((data) => {
         if (active) {
           setWorkspaceFiles(data);
@@ -203,7 +217,7 @@ export function useArtifactBrowser(
     return () => {
       active = false;
     };
-  }, [runId, activeTab]);
+  }, [runId, activeTab, adapter]);
 
   // Fetch diff when selected file changes (only for changed files).
   // Loading state is reset in the file selection handler, not here.
@@ -212,8 +226,7 @@ export function useArtifactBrowser(
 
     let active = true;
 
-    apiClient
-      .getRunFileDiff(runId, selectedPath)
+    (adapter?.getFileDiff ?? apiClient.getRunFileDiff.bind(apiClient))(runId, selectedPath)
       .then((data) => {
         if (active) {
           setDiff(data);
@@ -231,7 +244,7 @@ export function useArtifactBrowser(
     return () => {
       active = false;
     };
-  }, [runId, selectedPath, selectedPathIsChanged]);
+  }, [runId, selectedPath, selectedPathIsChanged, adapter]);
 
   const handleSetActiveTab = (tab: 'changes' | 'files') => {
     if (tab === 'files') {
@@ -273,8 +286,13 @@ export function useArtifactBrowser(
     setReviewPending(true);
     setReviewError(null);
     try {
-      const resp = await apiClient.submitReview(runId, approved);
-      setReviewResult(resp);
+      if (adapter?.decline && !approved) {
+        await adapter.decline(runId);
+        setReviewResult({ run_id: runId, status: 'declined', merge_result: null });
+      } else {
+        const resp = await apiClient.submitReview(runId, approved);
+        setReviewResult(resp);
+      }
       onSubmitReviewSuccess?.();
     } catch (err) {
       if (err instanceof ApiError) {
@@ -296,8 +314,13 @@ export function useArtifactBrowser(
     setCommitPending(true);
     setCommitError(null);
     try {
-      const resp = await apiClient.commitRun(runId);
-      setCommitResult(resp);
+      if (adapter?.approve) {
+        await adapter.approve(runId);
+        setCommitResult({ run_id: runId, status: 'merged', merge_result: null, conflicting_files: null });
+      } else {
+        const resp = await apiClient.commitRun(runId);
+        setCommitResult(resp);
+      }
       onCommitSuccess?.();
     } catch (err) {
       setCommitError(extractErrorMessage(err));
@@ -311,8 +334,13 @@ export function useArtifactBrowser(
     setRequestChangesPending(true);
     setRequestChangesError(null);
     try {
-      const resp = await apiClient.requestChanges(runId, comment);
-      setRequestChangesResult(resp);
+      if (adapter?.requestChanges) {
+        await adapter.requestChanges(runId, comment);
+        setRequestChangesResult({ run_id: runId, status: 'changes_requested' });
+      } else {
+        const resp = await apiClient.requestChanges(runId, comment);
+        setRequestChangesResult(resp);
+      }
       onRequestChangesSuccess?.();
     } catch (err) {
       if (err instanceof ApiError) {

@@ -51,18 +51,16 @@ public sealed class WorkflowRestartService
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
-            // A coordinator run is intentionally left InProgress while it dispatches children and runs
-            // collective assembly (its stream stays open across that window). A process restart cannot
-            // resume that background pipeline, so fail it WITH a human-readable reason rather than a
-            // bare "Failed" the user can't act on (which previously showed as an unexplained red badge
-            // while subtasks sat parked at assemble_ready).
+            // A coordinator (parent) run is intentionally left InProgress while it dispatches children
+            // and runs collective assembly (its stream stays open across that window). Those engines
+            // are NOT MAF-checkpointed (D3 — service-driven), but every bit of their state is persisted
+            // in the work plan, so they are recovered separately by
+            // CoordinatorRunService.RecoverInterruptedRunsAsync (invoked right after this sweep). Leave
+            // the run InProgress here so that recovery can re-arm the correct engine.
             if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
             {
-                _logger.LogWarning(
-                    "Failing interrupted coordinator run {RunId} (orchestration was in progress at restart)", run.Id);
-                await _runStore.UpdateResultAsync(
-                    run.Id, RunStatus.Failed, "interrupted: orchestration was in progress at restart",
-                    DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Deferring interrupted coordinator run {RunId} to coordinator restart recovery", run.Id);
                 continue;
             }
 

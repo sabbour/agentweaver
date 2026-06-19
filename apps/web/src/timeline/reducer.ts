@@ -420,6 +420,38 @@ function processEvent(
     case 'agent.intent':
     case 'tool.auto_approved':
     case 'coordinator.autopilot_answered':
+    // Coordinator orchestration milestones — surface as lifecycle cards so the
+    // coordinator session timeline narrates the run (spec → plan → dispatch →
+    // assembly) even when no agent-turn content is streamed. Normal runs never
+    // emit these types, so this is inert for the per-run timeline. High-frequency
+    // topology/graph snapshots and subtask.running ticks are deliberately omitted
+    // (the workflow graph already visualizes those) to keep the narrative readable.
+    case 'coordinator.recovered':
+    case 'coordinator.outcome_spec':
+    case 'coordinator.outcome_spec.confirmed':
+    case 'coordinator.work_plan':
+    case 'subtask.dispatched':
+    case 'subtask.rai_flagged':
+    case 'subtask.assemble_ready':
+    case 'subtask.completed':
+    case 'subtask.failed':
+    case 'coordinator.children_complete':
+    case 'coordinator.steering':
+    case 'coordinator.assembly_started':
+    case 'coordinator.assembly_rai_started':
+    case 'coordinator.assembly_rai_completed':
+    case 'coordinator.assembly_review_requested':
+    case 'coordinator.assembly_review_approved':
+    case 'coordinator.assembly_changes_requested':
+    case 'coordinator.assembly_merge_started':
+    case 'coordinator.assembly_merge_completed':
+    case 'coordinator.assembly_merge_failed':
+    case 'coordinator.assembly_scribe_started':
+    case 'coordinator.assembly_scribe_completed':
+    case 'coordinator.assembly_completed':
+    case 'coordinator.assembly_blocked':
+    case 'coordinator.assembly_declined':
+    case 'coordinator.assembly_failed':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
 
     case 'run.outcome': {

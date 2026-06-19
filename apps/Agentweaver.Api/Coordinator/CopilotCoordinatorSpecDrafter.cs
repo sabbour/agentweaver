@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 
@@ -23,6 +25,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
+    private readonly RunStreamStore _streamStore;
     private readonly ILoggerFactory _loggerFactory;
 
     public CopilotCoordinatorSpecDrafter(
@@ -32,6 +35,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
+        RunStreamStore streamStore,
         ILoggerFactory loggerFactory)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -40,6 +44,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
         _toolApprovalGate = toolApprovalGate;
+        _streamStore = streamStore;
         _loggerFactory = loggerFactory;
     }
 
@@ -99,13 +104,21 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 _toolApprovalGate,
                 _loggerFactory.CreateLogger<CopilotAIAgent>());
 
+            // Stream the drafting turn onto the COORDINATOR run stream so the reused run timeline
+            // shows the coordinator's live output (intent, any grounding tool calls, and the drafted
+            // spec text) instead of an empty session while it works. RecordingChannelWriter appends to
+            // the coordinator entry; the agent emits no run.completed (only agent.turn.end), so the
+            // coordinator timeline is not prematurely terminated.
+            var coordEntry = _streamStore.Get(input.RunId);
+            var streamWriter = coordEntry is null ? null : new RecordingChannelWriter(coordEntry);
+
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
                 repositoryPath: input.RepositoryPath,
                 runId: input.RunId + "-coordinator-draft",
                 modelId: input.ModelId,
                 systemPromptContext: systemPrompt,
-                streamWriter: null,
+                streamWriter: streamWriter,
                 projectId: input.ProjectId,
                 agentName: CoordinatorAgentName,
                 apiBaseUrl: null,

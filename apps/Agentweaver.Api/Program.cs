@@ -182,6 +182,12 @@ using (var scope = app.Services.CreateScope())
     }
 }
 await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
+// Coordinator (parent) runs are recovered AFTER the generic sweep (which has already failed any
+// stranded child runs) so a re-dispatched subtask always launches a fresh child. This re-arms the
+// dispatch / collective-assembly engine from the persisted work plan, or resumes the spec-phase MAF
+// workflow from checkpoint, instead of failing interrupted orchestrations.
+await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorRunService>()
+    .RecoverInterruptedRunsAsync(CancellationToken.None);
 
 app.UseExceptionHandler(err => err.Run(async context =>
 {

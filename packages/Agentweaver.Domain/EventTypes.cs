@@ -108,6 +108,14 @@ public static class EventTypes
     public const string CoordinatorStarted = "coordinator.started";
 
     /// <summary>
+    /// Emitted when a coordinator (orchestration) run is recovered from a process restart and its
+    /// dispatch / collective-assembly engine is re-armed from the persisted work plan. Lets the live
+    /// view know the run resumed (the engines then re-emit the topology / assembly snapshots).
+    /// Payload: { status: string } (the work-plan status it resumed from)
+    /// </summary>
+    public const string CoordinatorRecovered = "coordinator.recovered";
+
+    /// <summary>
     /// Emitted when the coordinator presents an outcome-spec draft (or revision) for
     /// human confirmation. The run is suspended at the await-confirmation gate after this.
     /// Payload: { specId, status, desiredOutcome, scope, assumptions, clarifyingQuestions }

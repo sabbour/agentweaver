@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ChevronLeftRegular, ChevronRightRegular } from '@fluentui/react-icons';
-import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
+import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { FileTreePanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
 
@@ -82,15 +82,16 @@ interface RunLayoutProps {
   onRequestChangesSuccess?: () => void;
   onCommitSuccess?: () => void;
   onSubmitReviewSuccess?: () => void;
+  artifactAdapter?: ArtifactBrowserAdapter;
   style?: React.CSSProperties;
 }
 
-export function RunLayout({ runId, runStatus, commitMessage, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, style }: RunLayoutProps) {
+export function RunLayout({ runId, runStatus, commitMessage, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, artifactAdapter, style }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
   // Sub-runs (Rai, Scribe) have no workspace of their own — skip the artifact browser.
   const effectiveRunId = isSubRunId(runId) ? null : runId;
-  const artifactState = useArtifactBrowser(effectiveRunId ?? '', runStatus, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, commitMessage);
+  const artifactState = useArtifactBrowser(effectiveRunId ?? '', runStatus, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, commitMessage, artifactAdapter);
   const internalRef = useRef<HTMLDivElement>(null);
   const scrollRef = centerScrollRef ?? internalRef;
 

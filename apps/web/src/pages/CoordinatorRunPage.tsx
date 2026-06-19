@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Button,
@@ -9,6 +9,7 @@ import {
   DialogSurface,
   DialogTitle,
   Field,
+  Input,
   MessageBar,
   MessageBarBody,
   Spinner,
@@ -24,7 +25,9 @@ import {
 import {
   ArrowRoutingRegular,
   BotRegular,
-  CheckmarkCircleRegular,
+  ChevronLeftRegular,
+  ChevronRightRegular,
+  DismissRegular,
   EditRegular,
   SendRegular,
   StopRegular,
@@ -33,6 +36,8 @@ import {
   ReactFlow,
   Handle,
   Position,
+  useReactFlow,
+  useNodesInitialized,
   type Node,
   type Edge,
   type NodeProps,
@@ -41,7 +46,7 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, SteerKind, AssemblyReviewDecision } from '../api/types';
+import type { GraphDescriptor, SteerKind, RunStatus } from '../api/types';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
@@ -49,18 +54,25 @@ import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
+import { Timeline } from '../components/Timeline';
+import { useTimelineItems } from '../timeline/useTimelineItems';
+import { RunLayout } from '../components/RunLayout';
+import { RunWatcher } from '../components/RunWatcher';
+import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import {
   workflowNodeTypes,
   forwardEdge,
   loopbackEdge,
+  workflowEdgeTypes,
   coordinatorLoopbackLabel,
   roleDescForRole,
   iconForRole,
   useNodeStyles,
   StatusBadge,
   ElapsedTimer,
-  statusDescription,
   CoordinatorSessionContext,
+  ExecutionModalContext,
+  ActiveEdgeContext,
   type ExecutorDef,
   type ExecutorState,
   type StepStatus,
@@ -83,6 +95,15 @@ interface SteerRequest {
 }
 
 const CoordSteerContext = createContext<((req: SteerRequest) => void) | undefined>(undefined);
+
+// Subtask pipeline expansion is controlled at the page level so the graph container height can grow
+// to fit expanded child pipelines (instead of clipping them inside the fixed-height canvas).
+interface CoordExpandValue { expanded: Set<string>; toggle: (key: string) => void; }
+const CoordExpandContext = createContext<CoordExpandValue | undefined>(undefined);
+
+// "View run" on a subtask opens the child run in a modal (reusing the standard RunWatcher) rather
+// than navigating away from the orchestration.
+const CoordViewRunContext = createContext<((runId: string) => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Topology status helpers
@@ -145,14 +166,32 @@ interface OrchState {
   phase: OrchPhase;
   reason?: string;
   diff?: string;
+  conflictFiles?: string[];
+  conflictBranch?: string;
+}
+
+// Maps a terminal assembly reason code (integration_conflict, integration_build_error, merge_failed,
+// assembly_declined, …) to a human-readable explanation for the blocked/failed card. Falls back to
+// the raw reason when unknown so nothing is hidden.
+function friendlyAssemblyReason(reason: string | undefined): string {
+  switch (reason) {
+    case 'integration_conflict':
+      return 'Two subtasks changed the same lines, so their branches could not be combined automatically. Resolve by steering the coordinator to re-run the affected subtask(s) against the latest changes, or stop and merge manually.';
+    case 'integration_build_error':
+      return 'The combined integration branch could not be built (a git/worktree error occurred while assembling the subtask branches).';
+    case 'merge_failed':
+      return 'Merging the assembled output into your branch failed (a conflict appeared at final merge time).';
+    default:
+      return reason ? `The collective assembly stopped: ${reason}.` : 'The collective assembly could not complete.';
+  }
 }
 
 // coordinator.assembly_* event type → phase. These event types may not be emitted
 // yet; absence simply means we fall through to the status field / work-plan status.
 const ASSEMBLY_EVENT_PHASE: Record<string, OrchPhase> = {
-  'coordinator.assembly_assembling': 'assembling',
+  'coordinator.assembly_started': 'assembling',
   'coordinator.assembly_review_requested': 'in_review',
-  'coordinator.assembly_complete': 'complete',
+  'coordinator.assembly_completed': 'complete',
   'coordinator.assembly_failed': 'failed',
   'coordinator.assembly_blocked': 'blocked',
   'coordinator.assembly_declined': 'declined',
@@ -193,10 +232,16 @@ function deriveOrchState(
     if (phase) winner = { phase, payload: evt.payload };
   }
   if (winner) {
+    const rawFiles = winner.payload['conflictingFiles'] ?? winner.payload['conflicting_files'];
+    const conflictFiles = Array.isArray(rawFiles)
+      ? rawFiles.map((f) => String(f)).filter((f) => f.trim() !== '')
+      : undefined;
     return {
       phase: winner.phase,
       reason: readStr(winner.payload, ['reason', 'message', 'error', 'detail']),
       diff: readStr(winner.payload, ['diff', 'summary', 'integrationDiff', 'integration_diff', 'treeHash', 'tree_hash']),
+      conflictFiles: conflictFiles && conflictFiles.length > 0 ? conflictFiles : undefined,
+      conflictBranch: readStr(winner.payload, ['conflictingBranch', 'conflicting_branch']),
     };
   }
   const fieldPhase = normalizePhase(statusField);
@@ -260,82 +305,6 @@ function orchPhaseLabel(phase: OrchPhase): string {
 // Session timeline derivation (issue 6)
 // ---------------------------------------------------------------------------
 
-interface Milestone {
-  key: string;
-  label: string;
-  ts?: number;
-}
-
-function readTs(p: Record<string, unknown>): number | undefined {
-  const t = p['timestamp_utc'] ?? p['timestamp'] ?? p['ts'] ?? p['at'];
-  if (t == null) return undefined;
-  const ms = new Date(String(t)).getTime();
-  return isNaN(ms) ? undefined : ms;
-}
-
-// Build a chronological list of orchestration milestones from the coordinator's own
-// event stream. Tolerant of missing payload fields and unknown event variants.
-function buildTimeline(events: RunStreamEvent[]): Milestone[] {
-  const out: Milestone[] = [];
-  let seq = 0;
-  const push = (label: string, ts?: number) => out.push({ key: `${seq++}`, label, ts });
-  for (const evt of events) {
-    const p = evt.payload;
-    const ts = readTs(p);
-    const sid = p['subtaskId'] != null ? String(p['subtaskId']) : undefined;
-    switch (evt.type) {
-      case 'coordinator.started': {
-        const goal = typeof p['goal'] === 'string' ? p['goal'] as string : undefined;
-        push(goal ? `Coordinator started — ${goal}` : 'Coordinator started', ts);
-        break;
-      }
-      case 'coordinator.outcome_spec.confirmed':
-        push('Outcome spec confirmed', ts);
-        break;
-      case 'coordinator.work_plan': {
-        const n = Array.isArray(p['subtasks']) ? (p['subtasks'] as unknown[]).length : undefined;
-        push(n != null ? `Work plan ready — ${n} subtask${n === 1 ? '' : 's'}` : 'Work plan ready', ts);
-        break;
-      }
-      case 'subtask.dispatched':       push(`Subtask ${sid ?? ''} dispatched`.trim(), ts); break;
-      case 'subtask.running':          push(`Subtask ${sid ?? ''} running`.trim(), ts); break;
-      case 'subtask.assemble_ready':   push(`Subtask ${sid ?? ''} ready for assembly`.trim(), ts); break;
-      case 'subtask.rai_flagged':      push(`Subtask ${sid ?? ''} flagged by RAI`.trim(), ts); break;
-      case 'subtask.completed':        push(`Subtask ${sid ?? ''} completed`.trim(), ts); break;
-      case 'subtask.failed':           push(`Subtask ${sid ?? ''} failed`.trim(), ts); break;
-      case 'coordinator.children_complete': push('All subtasks complete', ts); break;
-      case 'coordinator.assembly_assembling':      push('Assembling collective output', ts); break;
-      case 'coordinator.assembly_review_requested': push('Collective review requested', ts); break;
-      case 'coordinator.assembly_complete':        push('Assembly complete', ts); break;
-      case 'coordinator.assembly_failed':          push(`Assembly failed${readStr(p, ['reason', 'message']) ? `: ${readStr(p, ['reason', 'message'])}` : ''}`, ts); break;
-      case 'coordinator.assembly_blocked':         push(`Assembly blocked${readStr(p, ['reason', 'message']) ? `: ${readStr(p, ['reason', 'message'])}` : ''}`, ts); break;
-      case 'coordinator.assembly_declined':        push(`Assembly declined${readStr(p, ['reason', 'message']) ? `: ${readStr(p, ['reason', 'message'])}` : ''}`, ts); break;
-      case 'coordinator.steering': {
-        const kind = readStr(p, ['kind']) ?? 'steer';
-        const status = readStr(p, ['status']) ?? 'requested';
-        push(`Steering ${kind} ${status}`, ts);
-        break;
-      }
-      case 'tool.auto_approved': {
-        const tool = readStr(p, ['toolName', 'tool_name']) ?? 'tool';
-        const url = readStr(p, ['url']);
-        push(`Tool auto-approved: ${tool}${url ? ` ${url}` : ''}`, ts);
-        break;
-      }
-      case 'coordinator.autopilot_answered': {
-        const q = readStr(p, ['question']) ?? '';
-        const a = readStr(p, ['answer']) ?? '';
-        const childRid = readStr(p, ['childRunId', 'child_run_id']);
-        const child = childRid ? ` (child ${childRid.slice(0, 8)})` : '';
-        push(`Autopilot answered${child}: ${q} → ${a}`, ts);
-        break;
-      }
-      default: break;
-    }
-  }
-  return out;
-}
-
 function fmtTotal(ms: number): string {
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;
@@ -377,9 +346,14 @@ interface SubtaskNodeData extends Record<string, unknown> {
   childGraphRef: string | undefined;
   childRunId: string | undefined;
   agent: string | undefined;
+  agentRole: string | undefined;
   model: string | undefined;
   phase: string | undefined;
   projectId: string;
+  startedAt?: number;
+  completedAt?: number;
+  /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
+  dir?: 'LR' | 'TB';
 }
 
 // Fallback child pipeline defs (used when a child run's graph descriptor is not yet available).
@@ -389,46 +363,91 @@ const INLINE_CHILD_FALLBACK: ExecutorDef[] = [
   { key: 'assemble-ready', label: 'Assemble-ready',  roleDescription: 'Awaiting collective assembly', Icon: iconForRole('assembly') },
 ];
 
-// A compact pipeline node card rendered inline inside a SubtaskNode expansion panel.
+// Vertical space (px) a subtask node reserves below its body when its child pipeline is expanded,
+// so dagre spaces sibling subtasks apart instead of letting the expansion overlap neighbours.
+const EXPANDED_PIPELINE_RESERVE = 188;
+
+// Refits the graph to the viewport AFTER React Flow has measured the node DOM. The bare `fitView`
+// prop only fits once at mount using estimated sizes, so on the initial pre-spec load the wide
+// linear chain (Coordinator → RAI → Review → Merge → Scribe) was fitted before measurement and the
+// last node (Scribe) ended up clipped off the right edge. Re-fitting once nodes are initialized —
+// and whenever the layout token changes (node/edge count, expansion, height) — keeps the whole
+// pipeline in view without leaving stale vertical whitespace.
+function GraphAutoFit({ token }: { token: string }) {
+  const { fitView } = useReactFlow();
+  const initialized = useNodesInitialized();
+  useEffect(() => {
+    if (!initialized) return;
+    const id = requestAnimationFrame(() => {
+      void fitView({ padding: 0.12, maxZoom: 1.1, duration: 150 });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [initialized, token, fitView]);
+  return null;
+}
+
+// A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
+// narrow VERTICAL strip (icon + label/role + status/timer) so the expansion stays within the card
+// width and only grows downward — avoiding the horizontal overflow that overlapped neighbour nodes.
 // Does not use React Flow Handles (rendered outside a ReactFlow canvas).
-function ChildNodeMiniCard({ def, state }: { def: ExecutorDef; state: ExecutorState }) {
-  const s = useNodeStyles();
+function ChildStepRow({ def, state, isLast }: { def: ExecutorDef; state: ExecutorState; isLast: boolean }) {
   const { key, label, Icon } = def;
-  const { status, startedAt, completedAt, message } = state;
-  const subText = message ?? statusDescription(key, status);
+  const { status, startedAt, completedAt } = state;
   return (
     <div
-      className={`${s.card} ${s.cardDefault} ${status === 'started' ? s.cardActive : ''}`}
-      role="article"
-      aria-label={`${label}: ${status}`}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
       data-testid={`child-node-${key}`}
     >
-      <div className={s.cardHeader}>
-        <StatusBadge status={status} />
-      </div>
-      <div className={s.cardMain}>
-        <span className={s.cardIcon} aria-hidden="true">
-          <Icon fontSize={20} />
+      <div
+        role="article"
+        aria-label={`${label}: ${status}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '6px 8px',
+          border: '1px solid var(--colorNeutralStroke2)',
+          borderRadius: 6,
+          background: status === 'started'
+            ? 'var(--colorBrandBackground2)'
+            : 'var(--colorNeutralBackground1)',
+        }}
+      >
+        <span aria-hidden="true" style={{ display: 'inline-flex', color: 'var(--colorNeutralForeground3)', flexShrink: 0 }}>
+          <Icon fontSize={16} />
         </span>
-        <div className={s.cardTitleGroup}>
-          <span className={s.cardTitle}>{label}</span>
-          <span className={s.cardRole}>{def.roleDescription}</span>
-          {subText && <span className={s.cardSubText}>{subText}</span>}
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+          <span style={{ fontSize: 'var(--fontSizeBase200)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {label}
+          </span>
+          <span style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {def.roleDescription}
+          </span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
+          <StatusBadge status={status} />
           {startedAt !== undefined && (
-            <span className={s.cardTimer}>
+            <span style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)' }}>
               <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
             </span>
           )}
         </div>
       </div>
+      {!isLast && (
+        <span aria-hidden="true" style={{ alignSelf: 'center', color: 'var(--colorNeutralForeground4)', lineHeight: 1, fontSize: 12, height: 14, display: 'flex', alignItems: 'center' }}>
+          ↓
+        </span>
+      )}
     </div>
   );
 }
 
-function SubtaskNode({ data }: NodeProps) {
+function SubtaskNode({ id, data }: NodeProps) {
   const s = useNodeStyles();
   const d = data as SubtaskNodeData;
-  const [expanded, setExpanded] = useState(false);
+  const expandCtx = useContext(CoordExpandContext);
+  const viewRun = useContext(CoordViewRunContext);
+  const expanded = expandCtx?.expanded.has(id) ?? false;
   const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
 
@@ -495,21 +514,25 @@ function SubtaskNode({ data }: NodeProps) {
 
   return (
     <div
-      className={`${s.card} ${s.cardSubtask}`}
+      className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}`}
       data-node-type="subtask"
       role="article"
       aria-label={`${d.label as string}: ${d.topoStatus as string}`}
     >
-      <Handle type="target" position={Position.Left} style={handleStyle} />
-      <Handle type="source" position={Position.Right} style={handleStyle} />
+      <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
+      <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
 
       <div className={s.cardHeader}>
         <StatusBadge status={stepStatus} label={statusLabel} />
-        {expanded && Object.keys(childStepStates).length > 0 && (
+        {d.startedAt !== undefined ? (
+          <span className={s.cardTimer}>
+            <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} />
+          </span>
+        ) : (expanded && Object.keys(childStepStates).length > 0 && (
           <span className={s.cardTimer}>
             <AggregateElapsed states={childStepStates} />
           </span>
-        )}
+        ))}
       </div>
 
       <div className={s.cardMain}>
@@ -520,7 +543,7 @@ function SubtaskNode({ data }: NodeProps) {
         </span>
         <div className={s.cardTitleGroup}>
           <span className={s.cardTitle}>{d.label as string}</span>
-          <span className={s.cardRole}>Subtask Agent</span>
+          <span className={s.cardRole}>{(d.agentRole as string | undefined) ?? 'Subtask Agent'}</span>
           {d.agent && <span className={s.cardSubText}>{d.agent as string}</span>}
           {d.model && <span className={s.cardModel}>{d.model as string}</span>}
           {d.phase && <span className={s.cardSubText}>{d.phase as string}</span>}
@@ -533,52 +556,41 @@ function SubtaskNode({ data }: NodeProps) {
             appearance="outline"
             size="small"
             aria-label={`${expanded ? 'Collapse' : 'Expand'} pipeline for ${d.label as string}`}
-            onClick={() => setExpanded((prev) => !prev)}
+            onClick={() => expandCtx?.toggle(id)}
           >
             {expanded ? 'Collapse pipeline' : 'Expand pipeline'}
           </Button>
           {d.childRunId && (
-            <Link
-              to={`/projects/${d.projectId as string}/runs/${d.childRunId as string}/workflow`}
-              style={{ textDecoration: 'none' }}
+            <Button
+              appearance="outline"
+              size="small"
+              onClick={() => viewRun?.(d.childRunId as string)}
             >
-              <Button appearance="outline" size="small">View run</Button>
-            </Link>
+              View run
+            </Button>
           )}
         </div>
       )}
 
-      {/* Inline child pipeline — live node cards with status badges, elapsed timers, and messages. */}
+      {/* Inline child pipeline — compact vertical strip of step rows. Stays within the card width
+          (grows only downward) so the expansion never overflows into neighbouring subtask columns. */}
       {expanded && (
         <div
           className="nopan nodrag"
           style={{
             marginTop: 10,
             display: 'flex',
-            flexDirection: 'row',
-            alignItems: 'flex-start',
-            flexWrap: 'wrap',
+            flexDirection: 'column',
             gap: 0,
           }}
         >
           {childNodes.map((node, i) => (
-            <span key={node.def.key} style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
-              <ChildNodeMiniCard def={node.def} state={node.state} />
-              {i < childNodes.length - 1 && (
-                <span
-                  aria-hidden="true"
-                  style={{
-                    alignSelf: 'center',
-                    color: 'var(--colorNeutralForeground3)',
-                    padding: '0 4px',
-                    fontSize: 'var(--fontSizeBase300)',
-                    userSelect: 'none',
-                  }}
-                >
-                  →
-                </span>
-              )}
-            </span>
+            <ChildStepRow
+              key={node.def.key}
+              def={node.def}
+              state={node.state}
+              isLast={i === childNodes.length - 1}
+            />
           ))}
         </div>
       )}
@@ -598,7 +610,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-    maxWidth: '1400px',
+    width: '100%',
   },
   breadcrumb: {
     display: 'flex',
@@ -626,13 +638,34 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     color: tokens.colorNeutralForeground2,
   },
-  // Two-column layout: outcome spec on the LEFT (scrollable), topology on the RIGHT.
+  // Graph band — full-width horizontal pipeline above the two columns.
+  graphBand: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  // Two-column layout: outcome spec on the LEFT (collapsible), coordinator session on the RIGHT.
   twoCol: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(320px, 420px) minmax(0, 1fr)',
+    gridTemplateColumns: 'minmax(300px, 360px) minmax(0, 1fr)',
     gap: tokens.spacingHorizontalL,
     alignItems: 'start',
-    '@media (max-width: 980px)': {
+    '@media (max-width: 1024px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  twoColCollapsed: {
+    display: 'grid',
+    gridTemplateColumns: '44px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'start',
+  },
+  twoColSessionCollapsed: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 44px',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'start',
+    '@media (max-width: 1024px)': {
       gridTemplateColumns: '1fr',
     },
   },
@@ -643,20 +676,45 @@ const useStyles = makeStyles({
     maxHeight: 'calc(100vh - 180px)',
     overflowY: 'auto',
     paddingRight: tokens.spacingHorizontalS,
-    '@media (max-width: 980px)': {
+    '@media (max-width: 1024px)': {
       maxHeight: 'none',
     },
   },
-  rightCol: {
+  outcomeHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+  },
+  sessionHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  outcomeRail: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    minHeight: '160px',
+  },
+  railLabel: {
+    writingMode: 'vertical-rl',
+    transform: 'rotate(180deg)',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    letterSpacing: '0.04em',
+    userSelect: 'none',
+  },
+  centerCol: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
     minWidth: 0,
-  },
-  section: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
   },
   sectionTitleRow: {
     display: 'flex',
@@ -668,8 +726,20 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
+  conflictFiles: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
+  conflictList: {
+    margin: 0,
+    paddingLeft: tokens.spacingHorizontalL,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+  },
   dagContainer: {
-    height: '520px',
+    minHeight: '200px',
+    width: '100%',
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -680,6 +750,26 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
+  },
+  steerInput: {
+    flex: 1,
+    minWidth: '220px',
+  },
+  viewRunSurface: {
+    maxWidth: '92vw',
+    width: '1200px',
+    padding: tokens.spacingVerticalM,
+  },
+  viewRunBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '82vh',
+    gap: tokens.spacingVerticalS,
+  },
+  viewRunHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   steerLabel: {
     fontSize: tokens.fontSizeBase200,
@@ -694,42 +784,6 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     padding: tokens.spacingVerticalM,
   },
-  sessionScroll: {
-    maxHeight: '300px',
-    overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-  },
-  timelineRow: {
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: tokens.spacingHorizontalS,
-    fontSize: tokens.fontSizeBase200,
-  },
-  timelineTime: {
-    fontFamily: tokens.fontFamilyMonospace,
-    color: tokens.colorNeutralForeground3,
-    minWidth: '64px',
-    flexShrink: 0,
-  },
-  timelineLabel: {
-    color: tokens.colorNeutralForeground1,
-  },
-  chatRow: {
-    display: 'flex',
-    alignItems: 'flex-end',
-    gap: tokens.spacingHorizontalS,
-  },
-  chatGrow: {
-    flex: 1,
-    minWidth: 0,
-  },
-  steeringFeed: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
   actionRequired: {
     display: 'flex',
     flexDirection: 'column',
@@ -738,19 +792,23 @@ const useStyles = makeStyles({
   },
   toggleGroup: {
     display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    padding: `${tokens.spacingVerticalS} 0`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    marginBottom: tokens.spacingVerticalS,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalL,
+    rowGap: tokens.spacingVerticalXS,
+  },
+  sessionToolbar: {
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalXS} 0`,
   },
   actionSource: {
     fontSize: tokens.fontSizeBase200,
     fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground2,
-  },
-  feedItem: {
-    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
   },
   reviewActions: {
@@ -798,6 +856,10 @@ export function CoordinatorRunPage() {
   // Topology seed from work plan + children (for subtask status projection).
   const [topoSeed, setTopoSeed] = useState(initialTopologyState);
 
+  // Agent name → role title, fetched from the project team roster, so a subtask card can show the
+  // assigned agent's ROLE (e.g. "Repo Auditor") and not just their cast name (e.g. "Deckard").
+  const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
+
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
@@ -820,6 +882,24 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [runId]);
 
+  // Fetch the project team once to resolve each assigned agent's role title for the subtask cards.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    apiClient.getTeam(projectId)
+      .then((team) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const m of team.members ?? []) {
+          if (m.name && m.role_title) map[m.name] = m.role_title;
+        }
+        setRoleByAgent(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+
   // ---------------------------------------------------------------------------
   // Orchestration lifecycle poll (issues 3 & 4). Reads the coordinator_status field
   // (added by the backend concurrently — optional) plus the work-plan status, both
@@ -828,6 +908,12 @@ export function CoordinatorRunPage() {
   const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
   const [coordStatusReason, setCoordStatusReason] = useState<string | undefined>(undefined);
   const [workPlanStatus, setWorkPlanStatus] = useState<string | undefined>(undefined);
+  // Actual run-level RunStatus (distinct from the WorkPlan/orchestration phase). A run can be
+  // terminally Failed/Declined at the run level while its WorkPlan.Status is still `in_review`
+  // (e.g. a run interrupted by an old build before the durability fix): the in-memory assembly
+  // gate is NOT armed, so showing an actionable review bar would 409. We use this to suppress the
+  // review affordance for a terminal run and show its failure reason instead.
+  const [runLevelStatus, setRunLevelStatus] = useState<RunStatus | undefined>(undefined);
   // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
   // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
   const [autopilot, setAutopilot] = useState(false);
@@ -854,6 +940,7 @@ export function CoordinatorRunPage() {
       setCoordStatusField(statusField);
       setCoordStatusReason(reasonField);
       setWorkPlanStatus(wpStatus);
+      setRunLevelStatus(detail?.status ?? undefined);
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
         setAutopilot(Boolean(detail.autopilot));
@@ -907,29 +994,41 @@ export function CoordinatorRunPage() {
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase);
 
-  // Session timeline (issue 6) — chronological orchestration milestones.
-  const timeline = useMemo<Milestone[]>(() => buildTimeline(events), [events]);
-  const timelineStart = timeline.find((m) => m.ts !== undefined)?.ts;
+  // Session run — reuse the standard rich run Timeline over the coordinator's OWN event stream,
+  // so the coordinator session reads like every other agent's "view run" (turn groups, tool cards,
+  // agent messages) instead of a bespoke milestone list.
+  const { items: coordItems, runOutcome: coordRunOutcome } = useTimelineItems(events, runId ?? '');
+  const liveRun = streamStatus === 'connecting' || streamStatus === 'streaming';
 
-  // Steering feedback (issue 6) — directive state from coordinator.steering events.
-  const steeringFeed = useMemo(() => {
-    const out: Array<{ id: string; kind: string; status: string; instruction?: string }> = [];
-    for (const evt of events) {
-      if (evt.type !== 'coordinator.steering') continue;
-      const p = evt.payload;
-      const id = readStr(p, ['directiveId']) ?? String(out.length);
-      const rec = {
-        id,
-        kind: readStr(p, ['kind']) ?? 'steer',
-        status: readStr(p, ['status']) ?? 'requested',
-        instruction: readStr(p, ['instruction']),
-      };
-      const existing = out.find((d) => d.id === id);
-      if (existing) Object.assign(existing, rec);
-      else out.push(rec);
+  // Outcome column collapse — fold the spec to a thin left rail to give the session room.
+  const [outcomeCollapsed, setOutcomeCollapsed] = useState(false);
+
+  // Auto-collapse the outcome spec once it is confirmed (dispatch is unblocked from that point),
+  // freeing horizontal space for the session. Only auto-fires once so the user can re-expand.
+  const specConfirmed = useMemo(
+    () => events.some((e) => e.type === 'coordinator.outcome_spec.confirmed'),
+    [events],
+  );
+  const autoCollapsedRef = useRef(false);
+  useEffect(() => {
+    if (specConfirmed && !autoCollapsedRef.current) {
+      autoCollapsedRef.current = true;
+      setOutcomeCollapsed(true);
     }
-    return out;
-  }, [events]);
+  }, [specConfirmed]);
+
+  // Session column collapse — symmetric to the outcome rail, but folds to a thin RIGHT rail. While
+  // the outcome spec is still being authored (no work plan yet) the session has nothing useful to
+  // show, so it defaults collapsed to hand the outcome panel the full width; it auto-expands once the
+  // orchestration moves past spec authoring (spec confirmed, subtasks dispatched, or any orch phase).
+  // A manual toggle takes over from the automatic default.
+  const hasSubtaskNodes = useMemo(
+    () => (effectiveDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
+    [effectiveDescriptor],
+  );
+  const inSpecAuthoring = !specConfirmed && !hasSubtaskNodes && orch.phase === 'unknown';
+  const [sessionCollapseOverride, setSessionCollapseOverride] = useState<boolean | null>(null);
+  const sessionCollapsed = sessionCollapseOverride ?? inSpecAuthoring;
 
   // Bubbled child questions + tool-approval requests re-projected onto the coordinator stream
   // (issue: make it easy to answer/approve from the all-up view). Each item records the source
@@ -996,7 +1095,128 @@ export function CoordinatorRunPage() {
     [events, topoSeed],
   );
 
-  // Build React Flow nodes + forward edges from the coordinator descriptor.
+  // Per-subtask elapsed timing, derived from the subtask.* coordinator events (which carry a
+  // timestamp_utc). Keyed by the raw subtaskId string. startedAt = first dispatched/running;
+  // completedAt = first terminal (completed/failed/assemble_ready/rai_flagged). Drives a live counter
+  // on each subtask card so the user can see how long it has been running.
+  const subtaskTiming = useMemo<Record<string, { startedAt?: number; completedAt?: number }>>(() => {
+    const STARTED = new Set(['subtask.dispatched', 'subtask.running']);
+    const TERMINAL = new Set(['subtask.completed', 'subtask.failed', 'subtask.assemble_ready', 'subtask.rai_flagged']);
+    const map: Record<string, { startedAt?: number; completedAt?: number }> = {};
+    for (const evt of events) {
+      if (!STARTED.has(evt.type) && !TERMINAL.has(evt.type)) continue;
+      const sid = evt.payload['subtaskId'];
+      if (sid == null) continue;
+      const key = String(sid);
+      const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
+      const tsMs = tsStr ? new Date(tsStr).getTime() : NaN;
+      if (isNaN(tsMs)) continue;
+      const cur = map[key] ?? {};
+      if (STARTED.has(evt.type)) {
+        cur.startedAt = cur.startedAt === undefined ? tsMs : Math.min(cur.startedAt, tsMs);
+      } else {
+        cur.completedAt = cur.completedAt === undefined ? tsMs : Math.max(cur.completedAt, tsMs);
+      }
+      map[key] = cur;
+    }
+    return map;
+  }, [events]);
+
+  // Per-assembly-stage elapsed timing (RAI / Review / Merge / Scribe), derived from the
+  // coordinator.assembly_* events (which now carry timestamp_utc). Keyed by node ROLE so it can be
+  // injected into the generic assembly node state the same way subtaskTiming feeds subtask cards —
+  // giving each collective-assembly stage a live count-up timer that survives SSE replay/restart.
+  const assemblyTiming = useMemo<Record<string, { startedAt?: number; completedAt?: number }>>(() => {
+    const STARTED: Record<string, string> = {
+      'coordinator.assembly_rai_started': 'rai',
+      'coordinator.assembly_review_requested': 'review',
+      'coordinator.assembly_merge_started': 'merge',
+      'coordinator.assembly_scribe_started': 'scribe',
+    };
+    const COMPLETED: Record<string, string> = {
+      'coordinator.assembly_rai_completed': 'rai',
+      'coordinator.assembly_review_approved': 'review',
+      'coordinator.assembly_changes_requested': 'review',
+      'coordinator.assembly_declined': 'review',
+      'coordinator.assembly_merge_completed': 'merge',
+      'coordinator.assembly_merge_failed': 'merge',
+      'coordinator.assembly_scribe_completed': 'scribe',
+    };
+    const map: Record<string, { startedAt?: number; completedAt?: number }> = {};
+    for (const evt of events) {
+      const startRole = STARTED[evt.type];
+      const doneRole = COMPLETED[evt.type];
+      const role = startRole ?? doneRole;
+      if (!role) continue;
+      const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
+      const tsMs = tsStr ? new Date(tsStr).getTime() : NaN;
+      if (isNaN(tsMs)) continue;
+      const cur = map[role] ?? {};
+      if (startRole) {
+        cur.startedAt = cur.startedAt === undefined ? tsMs : Math.min(cur.startedAt, tsMs);
+      } else {
+        cur.completedAt = cur.completedAt === undefined ? tsMs : Math.max(cur.completedAt, tsMs);
+      }
+      map[role] = cur;
+    }
+    return map;
+  }, [events]);
+  // reserve room for expanded child pipelines and the container can grow to fit them.
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const toggleExpand = useCallback((key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const expandValue = useMemo<CoordExpandValue>(
+    () => ({ expanded: expandedKeys, toggle: toggleExpand }),
+    [expandedKeys, toggleExpand],
+  );
+
+  // Which coordinator loopback arc (if any) is currently "lit" blue: the review→coordinator
+  // "Request changes" arc while a human-review request-changes wave is re-dispatching, or the
+  // rai→coordinator "RAI flags" arc while an RAI flag is looping back. Mirrors the per-run page's
+  // active-edge highlight (ActiveEdgeContext). A loop is active when its triggering event is the
+  // most recent one that has not yet been superseded by a fresh assembly review / terminal.
+  const activeLoopbackId = useMemo<string | undefined>(() => {
+    let changesSeq = -1;
+    let raiSeq = -1;
+    let supersedeSeq = -1;
+    for (const e of events) {
+      const seq = e.sequence ?? -1;
+      const t = e.type as string;
+      if (t === 'coordinator.assembly_changes_requested') {
+        changesSeq = Math.max(changesSeq, seq);
+      } else if (t === 'subtask.rai_flagged') {
+        raiSeq = Math.max(raiSeq, seq);
+      } else if (
+        t === 'coordinator.assembly_review_requested' ||
+        t === 'coordinator.assembly_review_approved' ||
+        t === 'coordinator.assembly_completed' ||
+        t === 'coordinator.assembly_declined' ||
+        t === 'coordinator.assembly_failed' ||
+        t === 'coordinator.assembly_blocked'
+      ) {
+        supersedeSeq = Math.max(supersedeSeq, seq);
+      }
+    }
+    const reviewActive = changesSeq > supersedeSeq && changesSeq >= raiSeq;
+    const raiActive = raiSeq > supersedeSeq && raiSeq > changesSeq;
+    if (!reviewActive && !raiActive) return undefined;
+    if (!effectiveDescriptor) return undefined;
+    const wantRole = reviewActive ? 'review' : 'rai';
+    const roleById: Record<string, string> = {};
+    for (const n of effectiveDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
+    const edge = effectiveDescriptor.edges.find(
+      (e) => e.loopback && roleById[e.from] === wantRole,
+    );
+    return edge ? `${edge.from}-${edge.to}` : undefined;
+  }, [events, effectiveDescriptor]);
+
+
   const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
     if (!effectiveDescriptor) return { rfNodes: [], displayEdges: [] };
 
@@ -1023,9 +1243,15 @@ export function CoordinatorRunPage() {
     const nodeSizeHints: Record<string, NodeSizeHint> = {};
     const raw: Node[] = effectiveDescriptor.nodes.map((node) => {
       const nt = node.node_type;
+      // Subtask cards render taller than the generic hint (multi-line title + role + agent + model +
+      // phase + the Expand-pipeline / View-run buttons), so reserve a generous base height to keep
+      // sibling fan-out cards from overlapping. Expanded cards reserve extra room for the inline
+      // child pipeline so the expansion pushes neighbours apart instead of overlapping them.
+      const subtaskExpanded = nt === 'subtask' && expandedKeys.has(node.id);
+      const baseHeight = nt === 'subtask' ? 244 : (NODE_TYPE_H[nt ?? ''] ?? NODE_H);
       nodeSizeHints[node.id] = {
         width:  NODE_TYPE_W[nt ?? ''] ?? NODE_W,
-        height: NODE_TYPE_H[nt ?? ''] ?? NODE_H,
+        height: baseHeight + (subtaskExpanded ? EXPANDED_PIPELINE_RESERVE : 0),
       };
 
       const planned = node.kind === 'planned';
@@ -1038,6 +1264,9 @@ export function CoordinatorRunPage() {
         const modelField  = node.model  ?? (node.data?.['model']  as string | undefined) ?? topoNode?.selectedModelId;
         const phaseField  = node.phase  ?? (node.data?.['phase']  as string | undefined);
         const childRunId  = node.child_run_id ?? (node.data?.['child_run_id'] as string | undefined) ?? topoNode?.childRunId;
+        // node.id is "plan:subtask-{id}"; the subtask.* timing map is keyed by the raw "{id}".
+        const subtaskKey  = node.id.replace(/^plan:/, '').replace(/^subtask-/, '');
+        const timing      = subtaskTiming[subtaskKey];
         return {
           id:   node.id,
           type: 'subtask',
@@ -1049,9 +1278,13 @@ export function CoordinatorRunPage() {
             childGraphRef: node.child_graph_ref,
             childRunId,
             agent:         agentField,
+            agentRole:     agentField ? roleByAgent[agentField] : undefined,
             model:         modelField,
             phase:         phaseField,
             projectId:     projectId ?? '',
+            startedAt:     timing?.startedAt,
+            completedAt:   timing?.completedAt,
+            dir:           'LR',
           } as SubtaskNodeData,
           position: { x: 0, y: 0 },
         };
@@ -1063,10 +1296,19 @@ export function CoordinatorRunPage() {
       const roleKey = node.role;
       const coordTopoNode = topology.nodes['coordinator'];
 
-      // Collective-assembly stage status is driven by the orchestration phase. Assembly itself is
-      // automated; only the Human Review gate requires the user.
-      const assemblyStatus = (roleKey === 'rai' || roleKey === 'review' || roleKey === 'merge' || roleKey === 'scribe')
-        ? assemblyNodeStatus(roleKey, orch.phase)
+      // Collective-assembly stage status. Two sources combine: the phase projection
+      // (assemblyNodeStatus) covers RAI + the human Review gate, but merge/scribe have no distinct
+      // orchestration phase, so their started/completed state is taken from the stage's own
+      // timing events. Phase status wins when present (it preserves the review "failed"/decline
+      // semantics); timing fills in the merge/scribe window so every stage can go live.
+      const isAssemblyRole = roleKey === 'rai' || roleKey === 'review' || roleKey === 'merge' || roleKey === 'scribe';
+      const at = isAssemblyRole ? assemblyTiming[roleKey] : undefined;
+      const timingStatus: StepStatus | undefined =
+        at?.completedAt !== undefined ? 'completed'
+        : at?.startedAt !== undefined ? 'started'
+        : undefined;
+      const assemblyStatus = isAssemblyRole
+        ? (assemblyNodeStatus(roleKey, orch.phase) ?? timingStatus)
         : undefined;
 
       let nodePlanned = planned;
@@ -1075,7 +1317,7 @@ export function CoordinatorRunPage() {
         stepStatus = topoStatusToStepStatus(coordNodeStatusOverride ?? coordTopoNode?.status ?? 'running');
       } else if (assemblyStatus !== undefined) {
         stepStatus = assemblyStatus;
-        nodePlanned = false; // the phase has reached this stage; it is live, not planned
+        nodePlanned = false; // the stage has been reached; it is live, not planned
       } else {
         stepStatus = 'pending';
       }
@@ -1083,6 +1325,13 @@ export function CoordinatorRunPage() {
       const st: ExecutorState = nodePlanned
         ? { status: 'pending' }
         : { status: stepStatus };
+
+      // Feed the stage's wall-clock timing so the generic WorkflowNode renders a live count-up
+      // timer (RAI / Review / Merge / Scribe), matching the subtask cards.
+      if (at?.startedAt !== undefined) {
+        st.startedAt = at.startedAt;
+        st.completedAt = at.completedAt;
+      }
 
       const def: ExecutorDef = {
         key:             roleKey,
@@ -1102,16 +1351,17 @@ export function CoordinatorRunPage() {
           runId:     runId      ?? '',
           executionId: '',
           projectId:   projectId ?? '',
+          dir:         'LR',
         } as WorkflowNodeData,
         position: { x: 0, y: 0 },
       };
     });
 
     return {
-      rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 60, nodeSep: 30 }, nodeSizeHints),
+      rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: 40 }, nodeSizeHints),
       displayEdges: allEdges,
     };
-  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase]);
+  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
 
   // ---------------------------------------------------------------------------
   // Steering dialog
@@ -1156,73 +1406,56 @@ export function CoordinatorRunPage() {
   }, [steerReq, instruction, runId, closeSteer]);
 
   // ---------------------------------------------------------------------------
-  // Steering chat box (issue 6) — persistent free-form steering on the page.
-  // ---------------------------------------------------------------------------
-  const [chatText, setChatText] = useState('');
-  const [chatBusy, setChatBusy] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
-
-  const sendChatSteer = useCallback(async (kind: SteerKind) => {
-    if (!runId) return;
-    if (kind !== 'stop' && !chatText.trim()) return;
-    setChatBusy(true);
-    setChatError(null);
-    try {
-      await apiClient.steerCoordinator(runId, {
-        kind,
-        instruction: kind === 'stop' ? undefined : chatText.trim() || undefined,
-      });
-      if (kind !== 'stop') setChatText('');
-    } catch (err) {
-      setChatError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setChatBusy(false);
-    }
-  }, [runId, chatText]);
-
-  // ---------------------------------------------------------------------------
-  // Assembly review (issues 3 & 4) — collective human review over the integration output.
-  // ---------------------------------------------------------------------------
-  const [reviewComment, setReviewComment] = useState('');
-  const [reviewBusy, setReviewBusy] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [reviewDone, setReviewDone] = useState<AssemblyReviewDecision | null>(null);
-
-  const submitReview = useCallback(async (decision: AssemblyReviewDecision) => {
-    if (!runId) return;
-    if (decision !== 'approve' && !reviewComment.trim()) {
-      setReviewError('A comment is required to request changes or decline.');
-      return;
-    }
-    setReviewBusy(true);
-    setReviewError(null);
-    try {
-      await apiClient.reviewAssembly(runId, {
-        decision,
-        comment: reviewComment.trim() || undefined,
-      });
-      setReviewDone(decision);
-      setReviewComment('');
-    } catch (err) {
-      setReviewError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setReviewBusy(false);
-    }
-  }, [runId, reviewComment]);
-
   // Session panel anchor — the coordinator node's "View session" scrolls here.
   const sessionRef = useRef<HTMLDivElement>(null);
   const scrollToSession = useCallback(() => {
     sessionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
+
+  // Review/Changes panel anchor — the Human Review gate's "Review now" scrolls here.
+  const reviewRef = useRef<HTMLDivElement>(null);
+  const scrollToReview = useCallback(() => {
+    reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  // Collective-assembly nodes own no separate run, so their WorkflowNode action buttons resolve to
+  // in-page scrolls instead of an execution modal: rai/scribe "View execution" jumps to the
+  // coordinator timeline (where the assembly_* events render); review "Review now" and merge
+  // "Browse files" jump to the reused Changes/Files review panel.
+  const viewAssemblyExecution = useCallback((id: string) => {
+    if (id.endsWith('-rai') || id.endsWith('-scribe')) scrollToSession();
+    else scrollToReview();
+  }, [scrollToSession, scrollToReview]);
+
+  // "View run" modal — renders the selected child run via the standard RunWatcher in a dialog.
+  const [viewRunId, setViewRunId] = useState<string | null>(null);
+  const openChildRun = useCallback((id: string) => setViewRunId(id), []);
+
+  // Inline coordinator steering from the graph toolbar — sends redirect/amend with the typed text
+  // directly (falling back to the confirmation dialog when no text is provided).
+  const [steerText, setSteerText] = useState('');
+  const [steerBusy, setSteerBusy] = useState(false);
+  const quickSteer = useCallback(async (kind: SteerKind) => {
+    if (!runId) return;
+    const text = steerText.trim();
+    if ((kind === 'redirect' || kind === 'amend') && !text) {
+      openSteer({ kind });
+      return;
+    }
+    setSteerBusy(true);
+    try {
+      await apiClient.steerCoordinator(runId, {
+        kind,
+        instruction: kind === 'stop' ? undefined : text || undefined,
+      });
+      if (kind !== 'stop') setSteerText('');
+    } catch {
+      // Surface failures through the dialog path so the user can retry with full context.
+      openSteer({ kind });
+    } finally {
+      setSteerBusy(false);
+    }
+  }, [runId, steerText, openSteer]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -1253,9 +1486,60 @@ export function CoordinatorRunPage() {
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
+  // Auto-size the graph band to its content so it grows as subtask pipelines expand, instead of a
+  // fixed height that clips tall fan-outs (horizontal LR layout still varies in height per rank).
+  const graphHeight = useMemo(() => {
+    if (rfNodes.length === 0) return 200;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const n of rfNodes) {
+      const nt = (n.data as { nodeType?: string } | undefined)?.nodeType;
+      // Mirror the layout size hints: subtask cards reserve a taller base, plus the inline-pipeline
+      // reserve when expanded, so the band grows to exactly contain the (possibly expanded) cards.
+      const base = nt === 'subtask' ? 244 : (NODE_TYPE_H[nt ?? ''] ?? NODE_H);
+      const h = base + (nt === 'subtask' && expandedKeys.has(n.id) ? EXPANDED_PIPELINE_RESERVE : 0);
+      minY = Math.min(minY, n.position.y);
+      maxY = Math.max(maxY, n.position.y + h);
+    }
+    return Math.max(180, maxY - minY + 56);
+  }, [rfNodes, expandedKeys]);
   const needsInstruction = steerReq?.kind === 'redirect' || steerReq?.kind === 'amend';
   // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
+
+  // A run can be terminally finished at the RUN level (Failed/Declined/Merged) while its WorkPlan
+  // status still reads `in_review` — e.g. a run interrupted by a pre-durability build. In that state
+  // the in-memory assembly-review gate is NOT armed, so presenting an actionable review bar would
+  // 409. Treat the review as actionable only when the run itself is not terminal.
+  const runTerminal = runLevelStatus !== undefined
+    && ['failed', 'declined', 'merge_failed', 'merged', 'completed'].includes(runLevelStatus);
+  const reviewActionable = orch.phase === 'in_review' && !runTerminal;
+
+  // Map the coordinator orchestration phase onto the standard artifact-browser run status so the
+  // reused Changes/Files rail shows the review bar (Approve / Request changes / Decline) exactly when
+  // the ONE collective human-review gate is open.
+  const coordRunStatus = useMemo(() => {
+    switch (orch.phase) {
+      case 'in_review':  return reviewActionable ? 'awaiting_review' : (runLevelStatus ?? 'merge_failed');
+      case 'complete':   return 'merged';
+      case 'declined':   return 'declined';
+      case 'failed':
+      case 'blocked':    return 'merge_failed';
+      default:           return 'in_progress';
+    }
+  }, [orch.phase, reviewActionable, runLevelStatus]);
+
+  // Adapter that points the standard artifact browser at the coordinator's collective assembly:
+  // files/diff come from the integration branch (the coordinator owns no worktree), and the three
+  // review actions are delivered to the collective assembly gate instead of the per-run endpoints.
+  const coordAdapter = useMemo<ArtifactBrowserAdapter>(() => ({
+    getFiles: (rid, filter) => apiClient.getAssemblyFiles(rid, filter),
+    getFileDiff: (rid, path) => apiClient.getAssemblyFileDiff(rid, path),
+    getWorkspace: async () => [],
+    approve: (rid) => apiClient.reviewAssembly(rid, 'approve'),
+    requestChanges: (rid, comment) => apiClient.reviewAssembly(rid, 'request_changes', comment),
+    decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
+  }), []);
 
   return (
     <div className={styles.root}>
@@ -1277,80 +1561,165 @@ export function CoordinatorRunPage() {
 
       {goal && <Text className={styles.goal}>Goal: {goal}</Text>}
 
-      {/* Two-column layout: outcome spec on the LEFT (scrollable), topology on the RIGHT. */}
-      <div className={styles.twoCol}>
-        {/* LEFT — outcome spec in its own scroll container. */}
-        <div className={styles.leftCol}>
-          <Title3>Outcome spec</Title3>
-          <OutcomeSpecPanel runId={runId} events={events} streamStatus={streamStatus} />
+      {/* Coordinator graph — full-width horizontal band on top (fits the pipeline far better
+          than a narrow side column). */}
+      <div className={styles.graphBand}>
+        <div className={styles.sectionTitleRow}>
+          <Title3>Coordinator Graph</Title3>
+          {orch.phase !== 'unknown' && (
+            <span className={styles.steerLabel}>{orchPhaseLabel(orch.phase)}</span>
+          )}
+          {isStreaming && <Spinner size="extra-tiny" aria-label="Live" />}
         </div>
+        <Text className={styles.hint}>
+          Live view of the coordinator and its subtasks. Expand a subtask to see its pipeline, or use
+          the steering controls to stop, redirect, or amend the orchestration.
+        </Text>
 
-        {/* RIGHT — execution topology + assembly review + session/steering. */}
-        <div className={styles.rightCol}>
-          {/* Unified coordinator graph — coordinator + subtasks + planned assembly. */}
-          <div className={styles.section}>
-            <div className={styles.sectionTitleRow}>
-              <Title3>Coordinator Graph</Title3>
-              {orch.phase !== 'unknown' && (
-                <span className={styles.steerLabel}>{orchPhaseLabel(orch.phase)}</span>
-              )}
-              {isStreaming && <Spinner size="extra-tiny" aria-label="Live" />}
-            </div>
-            <Text className={styles.hint}>
-              Live view of the coordinator and its subtasks. Expand a subtask to see its pipeline, or use
-              the steering controls to stop, redirect, or amend the orchestration.
-            </Text>
-
-            {/* Steering bar — always visible when coordinator run is mounted. */}
-            <CoordSteerContext.Provider value={openSteer}>
-              <div className={styles.steerBar}>
-                <span className={styles.steerLabel}>Steer coordinator:</span>
-                <Button appearance="subtle" size="small" icon={<StopRegular />}
-                  onClick={() => openSteer({ kind: 'stop' })}>
-                  Stop
-                </Button>
-                <Button appearance="subtle" size="small" icon={<ArrowRoutingRegular />}
-                  onClick={() => openSteer({ kind: 'redirect' })}>
-                  Redirect
-                </Button>
-                <Button appearance="subtle" size="small" icon={<EditRegular />}
-                  onClick={() => openSteer({ kind: 'amend' })}>
-                  Amend
-                </Button>
-              </div>
-
-              {/* ReactFlow canvas */}
-              {hasGraph ? (
-                <CoordinatorSessionContext.Provider value={scrollToSession}>
-                  <div className={styles.dagContainer}>
-                    <ReactFlow
-                      nodes={rfNodes}
-                      edges={displayEdges}
-                      nodeTypes={coordinatorNodeTypes}
-                      fitView
-                      fitViewOptions={{ padding: 0.12, maxZoom: 1.1 }}
-                      minZoom={0.4}
-                      nodesDraggable={false}
-                      nodesConnectable={false}
-                      nodesFocusable={false}
-                      edgesFocusable={false}
-                      panOnScroll={false}
-                      zoomOnScroll={false}
-                      zoomOnPinch={false}
-                      zoomOnDoubleClick={false}
-                      panOnDrag
-                      proOptions={{ hideAttribution: true }}
-                    />
-                  </div>
-                </CoordinatorSessionContext.Provider>
-              ) : (
-                <Text className={styles.hint}>
-                  {isConnecting ? 'Connecting to coordinator stream...' : 'Waiting for coordinator graph...'}
-                </Text>
-              )}
-            </CoordSteerContext.Provider>
+        <CoordSteerContext.Provider value={openSteer}>
+          <div className={styles.steerBar}>
+            <span className={styles.steerLabel}>Steer coordinator:</span>
+            <Input
+              size="small"
+              className={styles.steerInput}
+              value={steerText}
+              onChange={(_, v) => setSteerText(v.value)}
+              placeholder="Message the coordinator to redirect or amend…"
+              disabled={steerBusy || !coordActive}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && steerText.trim()) { e.preventDefault(); void quickSteer('amend'); }
+              }}
+            />
+            <Button appearance="primary" size="small" icon={<SendRegular />}
+              disabled={steerBusy || !coordActive || !steerText.trim()}
+              onClick={() => void quickSteer('amend')}>
+              Send
+            </Button>
+            <Button appearance="subtle" size="small" icon={<ArrowRoutingRegular />}
+              disabled={steerBusy || !coordActive}
+              onClick={() => void quickSteer('redirect')}>
+              Redirect
+            </Button>
+            <Button appearance="subtle" size="small" icon={<EditRegular />}
+              disabled={steerBusy || !coordActive}
+              onClick={() => void quickSteer('amend')}>
+              Amend
+            </Button>
+            <Button appearance="subtle" size="small" icon={<StopRegular />}
+              disabled={steerBusy}
+              onClick={() => openSteer({ kind: 'stop' })}>
+              Stop
+            </Button>
+            {steerBusy && <Spinner size="extra-tiny" aria-label="Steering" />}
           </div>
 
+          {hasGraph ? (
+            <ExecutionModalContext.Provider value={viewAssemblyExecution}>
+            <ActiveEdgeContext.Provider value={activeLoopbackId}>
+            <CoordinatorSessionContext.Provider value={scrollToSession}>
+            <CoordExpandContext.Provider value={expandValue}>
+            <CoordViewRunContext.Provider value={openChildRun}>
+              <div className={styles.dagContainer} style={{ height: graphHeight }}>
+                <ReactFlow
+                  key={`${rfNodes.length}:${displayEdges.length}`}
+                  nodes={rfNodes}
+                  edges={displayEdges}
+                  nodeTypes={coordinatorNodeTypes}
+                  edgeTypes={workflowEdgeTypes}
+                  fitView
+                  fitViewOptions={{ padding: 0.12, maxZoom: 1.1 }}
+                  minZoom={0.4}
+                  nodesDraggable={false}
+                  nodesConnectable={false}
+                  nodesFocusable={false}
+                  edgesFocusable={false}
+                  panOnScroll={false}
+                  zoomOnScroll={false}
+                  zoomOnPinch={false}
+                  zoomOnDoubleClick={false}
+                  panOnDrag
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <GraphAutoFit
+                    token={`${rfNodes.length}:${displayEdges.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
+                  />
+                </ReactFlow>
+              </div>
+            </CoordViewRunContext.Provider>
+            </CoordExpandContext.Provider>
+            </CoordinatorSessionContext.Provider>
+            </ActiveEdgeContext.Provider>
+            </ExecutionModalContext.Provider>
+          ) : (
+            <Text className={styles.hint}>
+              {isConnecting ? 'Connecting to coordinator stream...' : 'Waiting for coordinator graph...'}
+            </Text>
+          )}
+        </CoordSteerContext.Provider>
+      </div>
+
+      {/* Two-column layout: [Outcome (collapsible, auto-collapses on confirm)] [Coordinator session
+          (collapsible to a thin right rail; starts collapsed while the spec is authored)]. */}
+      <div className={
+        outcomeCollapsed
+          ? styles.twoColCollapsed
+          : sessionCollapsed
+            ? styles.twoColSessionCollapsed
+            : styles.twoCol
+      }>
+        {/* COL 1 — outcome spec, collapsible to a thin left rail. */}
+        {outcomeCollapsed ? (
+          <div className={styles.outcomeRail}>
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ChevronRightRegular />}
+              aria-label="Expand outcome spec"
+              onClick={() => setOutcomeCollapsed(false)}
+            />
+            <span className={styles.railLabel}>Outcome spec</span>
+          </div>
+        ) : (
+          <div className={styles.leftCol}>
+            <div className={styles.outcomeHeaderRow}>
+              <Title3>Outcome spec</Title3>
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<ChevronLeftRegular />}
+                aria-label="Collapse outcome spec"
+                onClick={() => setOutcomeCollapsed(true)}
+              />
+            </div>
+            <OutcomeSpecPanel runId={runId} events={events} streamStatus={streamStatus} />
+          </div>
+        )}
+
+        {/* COL 2 — coordinator session: automation/actions controls, the rich run view, and steering.
+            Collapsible to a thin right rail (mirrors the outcome rail) to give the outcome panel the
+            full width while the spec is still being authored. */}
+        {sessionCollapsed ? (
+          <div className={styles.outcomeRail}>
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ChevronLeftRegular />}
+              aria-label="Expand coordinator session"
+              onClick={() => setSessionCollapseOverride(false)}
+            />
+            <span className={styles.railLabel}>Coordinator session</span>
+          </div>
+        ) : (
+        <div ref={sessionRef} className={styles.centerCol}>
+          <div className={styles.sessionHeaderRow}>
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ChevronRightRegular />}
+              aria-label="Collapse coordinator session"
+              onClick={() => setSessionCollapseOverride(true)}
+            />
+          </div>
           {/* Assembly review affordance — de-confuses the stuck state (issues 3 & 4). */}
           {(orch.phase === 'awaiting_assembly' || orch.phase === 'assembling') && (
             <div className={styles.panel}>
@@ -1364,45 +1733,22 @@ export function CoordinatorRunPage() {
             </div>
           )}
 
-          {orch.phase === 'in_review' && reviewDone === null && (
-            <div className={styles.panel}>
-              <Title3>Assembly review</Title3>
-              <Text className={styles.hint}>
-                Review the assembled integration output, then approve, request changes, or decline.
-              </Text>
-              {orch.diff && <div className={styles.diffBox}>{orch.diff}</div>}
-              <Field label="Comment (required to request changes or decline)">
-                <Textarea
-                  value={reviewComment}
-                  onChange={(_, v) => setReviewComment(v.value)}
-                  placeholder="Optional for approve; required otherwise."
-                  rows={3}
-                />
-              </Field>
-              {reviewError && (
-                <MessageBar intent="error"><MessageBarBody>{reviewError}</MessageBarBody></MessageBar>
-              )}
-              <div className={styles.reviewActions}>
-                <Button appearance="primary" icon={<CheckmarkCircleRegular />} disabled={reviewBusy}
-                  onClick={() => void submitReview('approve')}>
-                  Approve
-                </Button>
-                <Button appearance="secondary" icon={<EditRegular />} disabled={reviewBusy}
-                  onClick={() => void submitReview('request_changes')}>
-                  Request changes
-                </Button>
-                <Button appearance="secondary" icon={<StopRegular />} disabled={reviewBusy}
-                  onClick={() => void submitReview('decline')}>
-                  Decline
-                </Button>
-                {reviewBusy && <Spinner size="extra-tiny" aria-hidden="true" />}
-              </div>
-            </div>
+          {reviewActionable && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                Your review is pending. Review the assembled changes in the Changes panel below, then
+                Approve, request a Change, or Decline.
+              </MessageBarBody>
+            </MessageBar>
           )}
 
-          {reviewDone && (
-            <MessageBar intent={reviewDone === 'approve' ? 'success' : 'info'}>
-              <MessageBarBody>Review submitted: {reviewDone.replace('_', ' ')}.</MessageBarBody>
+          {orch.phase === 'in_review' && runTerminal && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                This orchestration ended ({runLevelStatus}) before the collective review could be
+                completed, so the review gate is no longer open. {orch.reason ?? ''} Start a new
+                coordinator run to retry.
+              </MessageBarBody>
             </MessageBar>
           )}
 
@@ -1410,8 +1756,18 @@ export function CoordinatorRunPage() {
             <div className={styles.panel}>
               <Title3>Assembly {orchPhaseLabel(orch.phase).toLowerCase()}</Title3>
               <MessageBar intent="error">
-                <MessageBarBody>{orch.reason ?? 'The collective assembly could not complete.'}</MessageBarBody>
+                <MessageBarBody>{friendlyAssemblyReason(orch.reason)}</MessageBarBody>
               </MessageBar>
+              {orch.conflictFiles && orch.conflictFiles.length > 0 && (
+                <div className={styles.conflictFiles}>
+                  <Text className={styles.hint}>Conflicting file{orch.conflictFiles.length > 1 ? 's' : ''}:</Text>
+                  <ul className={styles.conflictList}>
+                    {orch.conflictFiles.map((f) => (
+                      <li key={f}><code>{f}</code></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <Text className={styles.hint}>
                 The subtasks are parked. Use the steering chat below to redirect or amend the orchestration, or stop it.
               </Text>
@@ -1424,16 +1780,9 @@ export function CoordinatorRunPage() {
             </MessageBar>
           )}
 
-          {/* All-up coordinator session + steering chat box (issue 6). */}
-          <div ref={sessionRef} className={styles.panel}>
-            <div className={styles.sectionTitleRow}>
-              <Title3>Coordinator session</Title3>
-              {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
-            </div>
-            <Text className={styles.hint}>
-              All-up orchestration timeline from the coordinator&apos;s own event stream.
-            </Text>
-
+          {/* Session controls — compact automation toolbar + bubbled child actions. */}
+          <div className={styles.sessionToolbar}>
+            {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
             {/* Automation toggles — autopilot + auto-approve-tools. Both cascade to children. */}
             <div className={styles.toggleGroup}>
               <Tooltip
@@ -1444,7 +1793,7 @@ export function CoordinatorRunPage() {
                   checked={autopilot}
                   disabled={autopilotBusy || !coordActive}
                   onChange={(_, d) => toggleAutopilot(d.checked)}
-                  label="Autopilot (auto-answer questions)"
+                  label="Autopilot"
                   labelPosition="after"
                 />
               </Tooltip>
@@ -1456,16 +1805,17 @@ export function CoordinatorRunPage() {
                   checked={autoApprove}
                   disabled={autoApproveBusy || !coordActive}
                   onChange={(_, d) => toggleAutoApprove(d.checked)}
-                  label="Auto-approve tools (cascades to children)"
+                  label="Auto-approve tools"
                   labelPosition="after"
                 />
               </Tooltip>
             </div>
+          </div>
 
-            {/* Action required — bubbled child questions + tool-approval requests. Answers/grants
-                target the CHILD that asked (childRunId), not the coordinator run. Each item
-                collapses once resolved. */}
-            {childRequests.length > 0 && (
+          {/* Action required — bubbled child questions + tool-approval requests. Answers/grants
+              target the CHILD that asked (childRunId), not the coordinator run. Each item
+              collapses once resolved. */}
+          {childRequests.length > 0 && (
               <div className={styles.actionRequired} aria-label="Child actions awaiting a response">
                 {childRequests.map((item) => {
                   const label = item.subtaskId ? `Subtask ${item.subtaskId}` : `Child ${item.childRunId.slice(0, 8)}`;
@@ -1506,67 +1856,50 @@ export function CoordinatorRunPage() {
               </div>
             )}
 
-            {timeline.length === 0 ? (
-              <Text className={styles.hint}>No milestones yet.</Text>
-            ) : (
-              <div className={styles.sessionScroll}>
-                {timeline.map((m) => (
-                  <div key={m.key} className={styles.timelineRow}>
-                    <span className={styles.timelineTime}>
-                      {m.ts !== undefined && timelineStart !== undefined
-                        ? `+${fmtTotal(Math.max(0, m.ts - timelineStart))}`
-                        : '—'}
-                    </span>
-                    <span className={styles.timelineLabel}>{m.label}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Steering chat box — submits free-form steering without opening a dialog. */}
-            <Title3>Steer the coordinator</Title3>
-            <div className={styles.chatRow}>
-              <div className={styles.chatGrow}>
-                <Textarea
-                  value={chatText}
-                  onChange={(_, v) => setChatText(v.value)}
-                  placeholder="Message the coordinator to amend or redirect…"
-                  rows={2}
-                  disabled={chatBusy}
-                />
-              </div>
-              <Button appearance="primary" icon={<SendRegular />}
-                disabled={chatBusy || !chatText.trim()} onClick={() => void sendChatSteer('amend')}>
-                Send
-              </Button>
-            </div>
-            <div className={styles.steerBar}>
-              <Button appearance="subtle" size="small" icon={<ArrowRoutingRegular />}
-                disabled={chatBusy || !chatText.trim()} onClick={() => void sendChatSteer('redirect')}>
-                Redirect
-              </Button>
-              <Button appearance="subtle" size="small" icon={<StopRegular />}
-                disabled={chatBusy} onClick={() => void sendChatSteer('stop')}>
-                Stop
-              </Button>
-              {chatBusy && <Spinner size="extra-tiny" aria-hidden="true" />}
-            </div>
-            {chatError && (
-              <MessageBar intent="error"><MessageBarBody>{chatError}</MessageBarBody></MessageBar>
-            )}
-            {steeringFeed.length > 0 && (
-              <div className={styles.steeringFeed}>
-                {steeringFeed.map((d) => (
-                  <span key={d.id} className={styles.feedItem}>
-                    {steerKindLabel(d.kind as SteerKind)} — {d.status}
-                    {d.instruction ? `: ${d.instruction}` : ''}
-                  </span>
-                ))}
-              </div>
-            )}
+          {/* Rich run view — the standard Changes/Files rail + review bar reused for the coordinator.
+              The coordinator owns no worktree, so the adapter points the artifact browser at the
+              collective integration-branch diff and routes Approve/Change/Decline to the assembly
+              gate. The center is the coordinator's own run timeline, so the session reads like every
+              other agent's "view run". The ref is the scroll target for the gate's "Review now". */}
+          <div ref={reviewRef}>
+          <RunLayout
+            runId={runId ?? ''}
+            runStatus={coordRunStatus}
+            artifactAdapter={coordAdapter}
+            centerContent={
+              <Timeline
+                items={coordItems}
+                streamStatus={streamStatus}
+                isLiveRun={coordActive && liveRun}
+                runId={runId}
+                runOutcome={coordRunOutcome}
+              />
+            }
+            style={{ height: '70vh', minHeight: '520px' }}
+          />
           </div>
         </div>
+        )}
       </div>
+
+      {/* View-run modal — the standard run view (Changes/Files + timeline) for a child subtask,
+          opened in a dialog so the user never leaves the orchestration. */}
+      <Dialog open={!!viewRunId} onOpenChange={(_, d) => { if (!d.open) setViewRunId(null); }}>
+        <DialogSurface className={styles.viewRunSurface}>
+          <DialogBody className={styles.viewRunBody}>
+            <div className={styles.viewRunHeader}>
+              <Title3>Child run {viewRunId ? viewRunId.slice(0, 8) : ''}</Title3>
+              <Button
+                appearance="subtle"
+                icon={<DismissRegular />}
+                aria-label="Close child run"
+                onClick={() => setViewRunId(null)}
+              />
+            </div>
+            {viewRunId && <RunWatcher runId={viewRunId} style={{ flex: 1, minHeight: 0 }} />}
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       {/* Steering dialog */}
       <Dialog open={!!steerReq} onOpenChange={(_, d) => { if (!d.open) closeSteer(); }}>

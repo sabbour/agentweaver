@@ -47,6 +47,7 @@ Clients should order and deduplicate events by `sequence`.
 | `merge.completed` | After an approved run merges cleanly into the originating branch | `merged_commit_hash`; `previous_head_sha` (direct path only) |
 | `merge.failed` | After an approved run cannot merge back cleanly | `reason` |
 | `coordinator.started` | When a coordinator run begins drafting an OutcomeSpec from the user's goal | `goal` |
+| `coordinator.recovered` | When an interrupted coordinator run is resumed after a process restart and its dispatch / collective-assembly engine is re-armed from the persisted work plan | `status` (the work-plan status it resumed from) |
 | `coordinator.outcome_spec` | When the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate | `specId`, `status`, `desiredOutcome`, `scope`, `assumptions`, `clarifyingQuestions` |
 | `coordinator.outcome_spec.confirmed` | When a human confirms the drafted OutcomeSpec and the coordinator run proceeds | `specId`, `confirmedBy` |
 | `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
@@ -221,6 +222,10 @@ Plumbing executors (input storers, adapters, terminals) are collapsed or hidden:
 ### `coordinator.started`
 
 Emitted once when a coordinator run begins. A coordinator run is a Run with `ParentRunId == null` driven by the built-in Coordinator agent. `goal` carries the user's submitted goal text. The run reads the project's Feature 006 memories and decision-inbox entries as grounding context, then drafts an OutcomeSpec.
+
+### `coordinator.recovered`
+
+Emitted when an interrupted coordinator run is resumed after an API process restart. A coordinator run stays `InProgress` across the (non-MAF) dispatch + collective-assembly window, so a restart would otherwise strand it. On startup — after the generic restart sweep has failed any stranded child runs — `CoordinatorRunService.RecoverInterruptedRunsAsync` reconstructs the orchestration entirely from the persisted work plan and re-arms the correct engine: the dispatch loop re-launches in-flight subtasks (reset to `pending`), or the collective-assembly pipeline rebuilds the integration branch and re-arms the human-review gate. (The pre-confirm spec phase is a checkpointed MAF workflow and is resumed from its checkpoint instead, with no `coordinator.recovered` event.) `status` is the work-plan status the run resumed from (`planned`, `dispatching`, `awaiting_assembly`, `assembling`, or `in_review`). The re-armed engine then re-emits its topology / assembly snapshots so the live view renders without client-side computation.
 
 ### `coordinator.outcome_spec`
 

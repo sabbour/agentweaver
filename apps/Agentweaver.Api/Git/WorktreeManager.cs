@@ -115,6 +115,28 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
+    /// Computes the unified diff of <paramref name="branch"/> vs <paramref name="originatingBranch"/>,
+    /// returning <c>null</c> when either branch is absent (e.g. a coordinator integration branch that
+    /// has not been assembled yet) instead of throwing. Used to surface the collective assembly diff
+    /// for a coordinator run that owns no worktree.
+    /// </summary>
+    public string? TryGetBranchDiff(string repositoryPath, string originatingBranch, string branch)
+    {
+        if (string.IsNullOrEmpty(repositoryPath) || !Repository.IsValid(repositoryPath))
+            return null;
+
+        using var repo = new Repository(repositoryPath);
+
+        var origin = repo.Branches[originatingBranch];
+        var target = repo.Branches[branch];
+        if (origin?.Tip is null || target?.Tip is null)
+            return null;
+
+        using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, target.Tip.Tree);
+        return patch.Content;
+    }
+
+    /// <summary>
     /// Phase 3 (D1): builds the COLLECTIVE integration branch. Creates (or resets)
     /// <paramref name="integrationBranch"/> at the originating branch tip, then merges each eligible
     /// child branch in <paramref name="childBranchesInOrder"/> (already dependency/topologically
@@ -133,6 +155,13 @@ public sealed class WorktreeManager
         string integrationBranch,
         IReadOnlyList<string> childBranchesInOrder)
     {
+        // Defensive: a prior — or interrupted — assembly can leave a LINKED worktree checked out on
+        // the integration branch, which makes the ref undeletable below ("Cannot delete branch ... as
+        // it is the current HEAD of a linked repository"). The integration branch is built headlessly
+        // and is never meant to be checked out, so prune any such stale worktree first so a re-run
+        // (e.g. after request-changes re-dispatch) can reset the branch cleanly.
+        PruneWorktreesCheckedOutOnBranch(repositoryPath, integrationBranch);
+
         using var repo = new Repository(repositoryPath);
 
         var origin = repo.Branches[originatingBranch]
@@ -195,6 +224,72 @@ public sealed class WorktreeManager
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
         return IntegrationBranchResult.Success(integrationBranch, integrationCommit.Tree.Sha, patch.Content);
+    }
+
+    /// <summary>
+    /// Prunes any LINKED worktree currently checked out on <paramref name="branchName"/> so the branch
+    /// ref can be deleted or reset. Mirrors the robust delete-dir → prune sequence used by
+    /// <see cref="RemoveWorktree"/>: deleting the physical directory makes the admin entry prunable,
+    /// and the prune itself releases libgit2's branch-checked-out lock. Best-effort — every step logs
+    /// and continues on failure so a transient inspection error never aborts the assembly. A no-op
+    /// when no linked worktree references the branch (the normal headless case).
+    /// </summary>
+    private void PruneWorktreesCheckedOutOnBranch(string repositoryPath, string branchName)
+    {
+        // Phase 1: identify linked worktrees on the branch (capture admin name + physical path).
+        var targets = new List<(string Name, string? Path)>();
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            foreach (var wt in repo.Worktrees)
+            {
+                try
+                {
+                    using var wtRepo = wt.WorktreeRepository;
+                    var head = wtRepo.Info.IsHeadDetached ? null : wtRepo.Head.FriendlyName;
+                    if (string.Equals(head, branchName, StringComparison.Ordinal))
+                        targets.Add((wt.Name, wtRepo.Info.WorkingDirectory));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Could not inspect linked worktree '{Name}' while resolving integration branch '{Branch}'",
+                        wt.Name, branchName);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not enumerate worktrees while resolving integration branch '{Branch}'", branchName);
+            return;
+        }
+
+        // Phase 2: for each match, delete the physical dir then prune the admin entry (fresh handle).
+        foreach (var (name, path) in targets)
+        {
+            _logger.LogWarning(
+                "Pruning stale linked worktree '{Name}' checked out on integration branch '{Branch}'",
+                name, branchName);
+
+            if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+            {
+                try { Directory.Delete(path, recursive: true); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete worktree directory '{Path}'", path); }
+            }
+
+            try
+            {
+                using var pruneRepo = new Repository(repositoryPath);
+                var wt = pruneRepo.Worktrees[name];
+                if (wt is not null)
+                    pruneRepo.Worktrees.Prune(wt, true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to prune stale worktree '{Name}'", name);
+            }
+        }
     }
 
     /// <summary>

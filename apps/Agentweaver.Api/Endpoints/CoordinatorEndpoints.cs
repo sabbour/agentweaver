@@ -300,6 +300,110 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
         _ => Results.Conflict(new { error = "no_assembly_review_pending" }),
     };
 });
+
+// GET /api/runs/{id}/assembly/files — the COLLECTIVE changed-file set for a coordinator run.
+// The coordinator owns no worktree; the assembled output lives on the integration branch
+// (agentweaver/integration/{id}). We diff that branch vs the originating branch and parse the
+// unified diff into file entries, so the standard Changes/Files rail can review the collective
+// output. Returns [] (never 409) before assembly has built the integration branch.
+app.MapGet("/api/runs/{id}/assembly/files", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    WorktreeManager worktreeManager,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for assembly files", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+
+    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
+    string? aggregateDiff;
+    try
+    {
+        aggregateDiff = worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to compute assembly diff for run {RunId}", runId);
+        return Results.Problem("Failed to compute assembly diff.", statusCode: 500);
+    }
+
+    var entries = WorkspaceFileEntryParser.ParseUnifiedDiffEntries(aggregateDiff ?? string.Empty);
+    return Results.Json(entries);
+});
+
+// GET /api/runs/{id}/assembly/files/{**path} — per-file diff within the collective assembly diff.
+app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
+    HttpContext httpContext,
+    string id,
+    string path,
+    SqliteRunStore runStore,
+    WorktreeManager worktreeManager,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for assembly file diff", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+
+    var normalizedPath = path.Replace('\\', '/').TrimEnd('/');
+    if (string.IsNullOrEmpty(normalizedPath))
+        return Results.BadRequest(new { error = "Invalid file path." });
+
+    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
+    string? aggregateDiff;
+    try
+    {
+        aggregateDiff = worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to compute assembly diff for run {RunId} path {Path}", runId, normalizedPath);
+        return Results.Problem("Failed to compute assembly diff.", statusCode: 500);
+    }
+
+    if (string.IsNullOrEmpty(aggregateDiff))
+        return Results.NotFound();
+
+    // Whitelist: only serve paths present in the collective changed-file set.
+    var entries = WorkspaceFileEntryParser.ParseUnifiedDiffEntries(aggregateDiff);
+    var whitelistEntry = entries.FirstOrDefault(e => string.Equals(e.Path, normalizedPath, StringComparison.Ordinal));
+    if (whitelistEntry is null)
+        return Results.NotFound();
+
+    var (fileDiff, isBinary) = WorkspaceFileEntryParser.ParseFileDiffFromUnifiedDiff(aggregateDiff, normalizedPath);
+    return Results.Json(new WorkspaceFileDiff
+    {
+        Path     = normalizedPath,
+        Diff     = isBinary ? null : fileDiff,
+        Status   = whitelistEntry.Status,
+        IsBinary = isBinary,
+    });
+});
     }
 
 // Maps a persisted coordinator OutcomeSpec to the web-client-facing camelCase response.

@@ -82,8 +82,7 @@ public sealed class CoordinatorWorkflowFactory
 
         _checkpointDir = configuration["Coordinator:Checkpoints:Path"]
             ?? Path.Combine(AppPaths.DataDirectory, "coordinator-checkpoints");
-        Directory.CreateDirectory(_checkpointDir);
-        var store = new FileSystemJsonCheckpointStore(new DirectoryInfo(_checkpointDir));
+        var store = Agentweaver.Api.Infrastructure.ResilientCheckpointStore.Create(_checkpointDir, _logger);
         _checkpointManager = CheckpointManager.CreateJson(store);
 
         // Phase 2 orchestrator: decompose + persist runs only after the human confirms the spec.
@@ -178,6 +177,43 @@ public sealed class CoordinatorWorkflowFactory
         var workflow = BuildWorkflow();
         return await InProcessExecution.RunStreamingAsync(
             workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resumes a suspended coordinator run from its latest MAF checkpoint. Used by restart recovery
+    /// when a coordinator was still in the spec draft/confirm phase (suspended at the
+    /// <see cref="ConfirmationGateId"/> request port) at process death. The graph shape is fixed, so
+    /// (unlike <c>RunWorkflowFactory</c>) there is no child/full variant to reselect.
+    /// </summary>
+    public async Task<StreamingRun> ResumeAsync(CheckpointInfo checkpointInfo, CancellationToken ct)
+    {
+        var workflow = BuildWorkflow();
+        return await InProcessExecution.ResumeStreamingAsync(
+            workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>True when at least one checkpoint file exists for the given coordinator run.</summary>
+    public bool HasCheckpoint(string runId)
+    {
+        var dir = Path.Combine(_checkpointDir, runId);
+        return Directory.Exists(dir) && Directory.GetFiles(dir).Length > 0;
+    }
+
+    /// <summary>
+    /// Gets the latest checkpoint info for resumption, or <c>null</c> if none exists. Mirrors
+    /// <c>RunWorkflowFactory.GetLatestCheckpoint</c>: the run id is the MAF session id and the most
+    /// recently written checkpoint file is the resume point.
+    /// </summary>
+    public CheckpointInfo? GetLatestCheckpoint(string runId)
+    {
+        if (!HasCheckpoint(runId)) return null;
+        var dir = Path.Combine(_checkpointDir, runId);
+        var latestFile = Directory.GetFiles(dir)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+        if (latestFile is null) return null;
+        var checkpointId = Path.GetFileNameWithoutExtension(latestFile);
+        return new CheckpointInfo(runId, checkpointId);
     }
 
     /// <summary>Deletes checkpoint files for a coordinator run (cleanup on terminal state).</summary>

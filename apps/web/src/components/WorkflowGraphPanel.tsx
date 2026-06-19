@@ -86,6 +86,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   reviewedBy?: string;
   runOutcome?: { achieved: boolean; reason: string };
   runDegraded?: { toolName: string; reason: string };
+  /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
+  dir?: 'LR' | 'TB';
 }
 
 // ---------------------------------------------------------------------------
@@ -179,10 +181,46 @@ export const useNodeStyles = makeStyles({
   cardActive: {
     borderLeft: `3px solid ${tokens.colorBrandForeground1}`,
     backgroundColor: tokens.colorBrandBackground2,
+    animationName: {
+      '0%':   { boxShadow: `0 0 0 0 ${tokens.colorBrandStroke1}` },
+      '70%':  { boxShadow: `0 0 0 5px transparent` },
+      '100%': { boxShadow: `0 0 0 0 transparent` },
+    },
+    animationDuration: '1.8s',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: 'ease-out',
+    '@media (prefers-reduced-motion: reduce)': {
+      animationName: 'none',
+    },
   },
   cardActionRequired: {
     border: `2px solid ${tokens.colorPaletteMarigoldBorderActive}`,
     backgroundColor: tokens.colorPaletteMarigoldBackground2,
+    animationName: {
+      '0%':   { boxShadow: `0 0 0 0 ${tokens.colorPaletteMarigoldBorderActive}` },
+      '70%':  { boxShadow: `0 0 0 5px transparent` },
+      '100%': { boxShadow: `0 0 0 0 transparent` },
+    },
+    animationDuration: '2s',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: 'ease-out',
+    '@media (prefers-reduced-motion: reduce)': {
+      animationName: 'none',
+    },
+  },
+  // Continuous rotation for the in-progress (started) badge's sync icon so a running stage reads as
+  // actively working at a glance. Honours reduced-motion.
+  spinIcon: {
+    animationName: {
+      from: { transform: 'rotate(0deg)' },
+      to:   { transform: 'rotate(360deg)' },
+    },
+    animationDuration: '1.4s',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: 'linear',
+    '@media (prefers-reduced-motion: reduce)': {
+      animationName: 'none',
+    },
   },
   cardPlanned: {
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
@@ -329,7 +367,7 @@ export function StatusBadge({
   }[status];
   return (
     <span className={`${s.statusBadge} ${badgeClass}`}>
-      <BadgeIcon fontSize={10} aria-hidden="true" />
+      <BadgeIcon fontSize={10} aria-hidden="true" className={status === 'started' ? s.spinIcon : undefined} />
       {labelOverride ?? statusLabel(status)}
     </span>
   );
@@ -465,6 +503,8 @@ export function WorkflowNode({ data }: NodeProps) {
   ].filter(Boolean).join(' ');
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
+  const targetPos = (data as WorkflowNodeData).dir === 'TB' ? Position.Top : Position.Left;
+  const sourcePos = (data as WorkflowNodeData).dir === 'TB' ? Position.Bottom : Position.Right;
   const rawSubText = statusDescription(key, effectiveStatus);
   // message (from workflow.step payload) takes priority over the hardcoded statusDescription fallback.
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
@@ -477,8 +517,8 @@ export function WorkflowNode({ data }: NodeProps) {
       aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
       data-node-type={nodeType ?? 'default'}
     >
-      <Handle type="target" position={Position.Left}  style={handleStyle} />
-      <Handle type="source" position={Position.Right} style={handleStyle} />
+      <Handle type="target" position={targetPos} style={handleStyle} />
+      <Handle type="source" position={sourcePos} style={handleStyle} />
 
       <div className={s.cardHeader}>
         <StatusBadge

@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewRequest, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -61,6 +61,19 @@ export class AgentweaverApiClient {
   getRunFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}`);
+  }
+
+  // Collective assembly artifacts for a coordinator run. The coordinator owns no worktree; these
+  // diff the integration branch (agentweaver/integration/{id}) vs the originating branch so the
+  // standard Changes/Files rail can review the assembled output. Returns [] before assembly runs.
+  getAssemblyFiles(runId: string, filter?: string): Promise<WorkspaceFileEntry[]> {
+    const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
+    return this.request<WorkspaceFileEntry[]>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/files${query}`);
+  }
+
+  getAssemblyFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/files/${encoded}`);
   }
 
   getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
@@ -277,10 +290,16 @@ export class AgentweaverApiClient {
   }
 
   // Collective human review over the assembled integration output (Feature 008 Phase 3).
-  // The backend adds this endpoint concurrently; the client codes against the agreed
-  // contract (approve / request_changes / decline + optional comment).
-  reviewAssembly(coordinatorRunId: string, req: AssemblyReviewRequest): Promise<void> {
-    return this.request<void>('POST', `/api/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, req);
+  // Posts the backend AssemblyReviewRequest shape ({ approved, request_changes, feedback }) derived
+  // from a friendlier decision verb. approve -> merge/scribe/complete; request_changes -> re-dispatch;
+  // decline -> assembly_declined.
+  reviewAssembly(coordinatorRunId: string, decision: AssemblyReviewDecision, comment?: string): Promise<void> {
+    const body = {
+      approved: decision === 'approve',
+      request_changes: decision === 'request_changes',
+      feedback: comment,
+    };
+    return this.request<void>('POST', `/api/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, body);
   }
 
   // Answer a worker's bubbled question (agent.question_asked). The answer must be POSTed against

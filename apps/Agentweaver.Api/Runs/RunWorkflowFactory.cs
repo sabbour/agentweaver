@@ -94,7 +94,8 @@ public sealed class RunWorkflowFactory
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
 
-        var store = new FileSystemJsonCheckpointStore(new DirectoryInfo(_checkpointDir));
+        var store = ResilientCheckpointStore.Create(
+            _checkpointDir, _loggerFactory.CreateLogger<RunWorkflowFactory>());
         _checkpointManager = CheckpointManager.CreateJson(store);
     }
 

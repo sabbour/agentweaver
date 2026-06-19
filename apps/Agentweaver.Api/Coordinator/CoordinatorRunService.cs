@@ -45,6 +45,8 @@ public sealed class CoordinatorRunService
     private readonly CoordinatorWorkflowFactory _factory;
     private readonly RunWorkflowFactory _runWorkflowFactory;
     private readonly CoordinatorDispatchService _dispatchService;
+    private readonly CoordinatorAssemblyStore _assemblyStore;
+    private readonly ICoordinatorAssembly _assembly;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunOptionsStore _runOptions;
     private readonly ILogger<CoordinatorRunService> _logger;
@@ -59,6 +61,8 @@ public sealed class CoordinatorRunService
         CoordinatorWorkflowFactory factory,
         RunWorkflowFactory runWorkflowFactory,
         CoordinatorDispatchService dispatchService,
+        CoordinatorAssemblyStore assemblyStore,
+        ICoordinatorAssembly assembly,
         IServiceScopeFactory scopeFactory,
         IRunOptionsStore runOptions,
         IHostApplicationLifetime lifetime,
@@ -72,6 +76,8 @@ public sealed class CoordinatorRunService
         _factory = factory;
         _runWorkflowFactory = runWorkflowFactory;
         _dispatchService = dispatchService;
+        _assemblyStore = assemblyStore;
+        _assembly = assembly;
         _scopeFactory = scopeFactory;
         _runOptions = runOptions;
         _logger = logger;
@@ -381,6 +387,221 @@ public sealed class CoordinatorRunService
 
         _logger.LogInformation("Coordinator run {RunId} confirmed; handed off to dispatch + observe", runId);
         return true;
+    }
+
+    // -----------------------------------------------------------------------
+    // Restart recovery — survive a process restart mid-orchestration.
+    //
+    // The spec/confirm phase is a checkpointed MAF workflow and resumes from its checkpoint. Once the
+    // human confirms, the coordinator hands off to the non-MAF dispatch + collective-assembly engines
+    // (D3 — service-driven). Those background loops are in-memory DRIVERS over state that is fully
+    // PERSISTED in the relational store (WorkPlan.Status / AssemblyStage / IntegrationBranch, Subtask
+    // rows + child run rows). So we don't need MAF checkpoints for them: on restart we recreate the
+    // run's stream entry and RE-ARM the correct engine from the persisted work-plan status. Every
+    // engine entry point is idempotent (in-memory guard + DB CAS), so re-arming is safe.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Recovers coordinator (parent) runs that were <see cref="RunStatus.InProgress"/> when the
+    /// process died. Called ONCE at startup, AFTER <c>WorkflowRestartService.RecoverAsync</c> (which
+    /// has already failed any stranded child runs), so a re-dispatched subtask always launches a
+    /// fresh child. Each interrupted coordinator is routed by its persisted work-plan status; a
+    /// failure to recover one run never aborts the others.
+    /// </summary>
+    public async Task RecoverInterruptedRunsAsync(CancellationToken ct)
+    {
+        var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
+        foreach (var run in inProgress)
+        {
+            if (run.ParentRunId is not null || !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+                continue;
+
+            try
+            {
+                await RecoverOneAsync(run, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Coordinator restart recovery failed for run {RunId}; failing it", run.Id);
+                var entry = _streamStore.Get(run.Id.ToString()) ?? _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+                await FailRunSafeAsync(run.Id.ToString(), entry).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task RecoverOneAsync(Run run, CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+
+        WorkPlanAssemblyState? planState;
+        int? workPlanId;
+        bool hasSubtasks;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.AsNoTracking()
+                .FirstOrDefaultAsync(w => w.CoordinatorRunId == runId, ct).ConfigureAwait(false);
+            workPlanId = plan?.Id;
+            planState = plan is null ? null : new WorkPlanAssemblyState(plan.Id, plan.Status, plan.AssemblyStage, plan.IntegrationBranch);
+            hasSubtasks = plan is not null && await db.Subtasks.AsNoTracking()
+                .AnyAsync(s => s.WorkPlanId == plan.Id, ct).ConfigureAwait(false);
+        }
+
+        // (a) No work plan yet — still in the checkpointed spec draft/confirm phase. Resume the MAF
+        // workflow so the user can confirm / revise the outcome spec exactly as before.
+        var action = CoordinatorRecoveryRouter.Route(planState is not null, hasSubtasks, planState?.Status);
+
+        if (action == CoordinatorRecoveryAction.ResumeSpecPhase)
+        {
+            await RecoverSpecPhaseAsync(run, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // (b) Plan exists but produced no subtasks — nothing to dispatch; finalize per the spec.
+        if (action == CoordinatorRecoveryAction.FinalizeNoSubtasks)
+        {
+            var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
+            var terminal = spec?.Status == "declined" ? RunStatus.Declined : RunStatus.Completed;
+            var entry0 = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
+            await _runStore.TrySetTerminalStatusAsync(
+                run.Id, terminal, DateTimeOffset.UtcNow, spec?.Status ?? "confirmed", ct).ConfigureAwait(false);
+            entry0.RecordNext(EventTypes.RunCompleted, new { result = spec?.Status ?? "confirmed" });
+            _streamStore.Complete(runId);
+            _factory.DeleteCheckpoints(runId);
+            return;
+        }
+
+        var context = new CoordinatorDispatchContext(
+            CoordinatorRunId: runId,
+            RepositoryPath: run.RepositoryPath,
+            OriginatingBranch: run.OriginatingBranch,
+            SubmittingUser: run.SubmittingUser,
+            ProjectId: run.ProjectId);
+
+        // Recreate the live stream entry BEFORE re-arming any engine: the dispatch / assembly loops
+        // emit onto _streamStore.Get(runId) and silently no-op if the entry is absent.
+        var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
+        entry.RecordNext(EventTypes.CoordinatorRecovered, new { status = planState!.Status });
+
+        switch (action)
+        {
+            // (c) Children still in flight — reset the runs that crashed mid-execution back to pending
+            // (their child runs were already failed by the generic restart sweep) and re-arm dispatch.
+            // assemble_ready / completed / failed / rai_flagged subtasks keep their terminal status.
+            case CoordinatorRecoveryAction.Dispatch:
+                await ResetInFlightSubtasksAsync(workPlanId!.Value, ct).ConfigureAwait(false);
+                _dispatchService.StartDispatch(context);
+                _logger.LogInformation("Recovered coordinator run {RunId} into dispatch (status was {Status})", runId, planState.Status);
+                break;
+
+            // (d) All children terminal, awaiting collective assembly — re-arm assembly (the DB CAS
+            // claims awaiting_assembly -> assembling exactly once).
+            case CoordinatorRecoveryAction.Assemble:
+                _assembly.StartAssembly(context);
+                _logger.LogInformation("Recovered coordinator run {RunId} into collective assembly (awaiting_assembly)", runId);
+                break;
+
+            // (e) Crashed mid-assembly or while parked at the collective human-review gate. The
+            // integration-branch build + RAI + review-gate arming all live in memory and are gone, so
+            // reset the plan back to awaiting_assembly and re-run the (idempotent) assembly core — it
+            // rebuilds the integration branch and re-arms the review gate, identical to a request-changes
+            // wave. This is the only safe way to restore the in-memory review gate the HTTP review
+            // endpoint completes against.
+            case CoordinatorRecoveryAction.ReArmAssembly:
+                await _assemblyStore.SetStatusAndStageAsync(
+                    workPlanId!.Value, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
+                _assembly.StartAssembly(context);
+                _logger.LogInformation("Recovered coordinator run {RunId} into collective assembly (re-armed from {Status})", runId, planState.Status);
+                break;
+
+            // (f) The plan reached a terminal/parked state but the coordinator run row was never flipped
+            // off InProgress (a crash between the plan write and the run finalize). Settle the run row.
+            case CoordinatorRecoveryAction.SettleComplete:
+                await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Completed, DateTimeOffset.UtcNow, "complete", ct).ConfigureAwait(false);
+                entry.RecordNext(EventTypes.RunCompleted, new { result = "complete" });
+                _streamStore.Complete(runId);
+                _factory.DeleteCheckpoints(runId);
+                break;
+
+            case CoordinatorRecoveryAction.SettleFailed:
+                await _runStore.TrySetTerminalStatusAsync(
+                    run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, run.Result ?? planState.Status, ct).ConfigureAwait(false);
+                entry.RecordNext(EventTypes.RunFailed, new { reason = run.Result ?? planState.Status });
+                _streamStore.Complete(runId);
+                _factory.DeleteCheckpoints(runId);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Resumes a coordinator run that was suspended at the confirmation gate (spec draft/confirm phase)
+    /// from its MAF checkpoint, mirroring <c>WorkflowRestartService</c> step 4: recreate the stream
+    /// entry, resume the workflow, repopulate the pending request so confirm/revise works, then start
+    /// the supervised watch loop. If no checkpoint exists the run cannot be replayed, so it is failed.
+    /// </summary>
+    private async Task RecoverSpecPhaseAsync(Run run, CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+        var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
+        entry.MarkAwaitingReview();
+
+        var checkpointInfo = _factory.GetLatestCheckpoint(runId);
+        if (checkpointInfo is null)
+        {
+            _logger.LogWarning(
+                "Coordinator run {RunId} was drafting its spec at restart with no checkpoint; failing it", run.Id);
+            await FailRunSafeAsync(runId, entry).ConfigureAwait(false);
+            return;
+        }
+
+        var runCts = new CancellationTokenSource();
+        var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
+        var runCt = _registry.Register(runId, streamingRun, runCts);
+
+        // Repopulate the pending confirmation request so the confirm/revise endpoints find a live gate.
+        var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);
+        if (status == Microsoft.Agents.AI.Workflows.RunStatus.PendingRequests)
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            try
+            {
+                await foreach (var evt in streamingRun.WatchStreamAsync(cts.Token).ConfigureAwait(false))
+                {
+                    if (evt is RequestInfoEvent rie)
+                    {
+                        if (_pendingStore.Get(runId) is null)
+                            _pendingStore.Set(runId, rie.Request, run.SubmittingUser);
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { /* timeout is acceptable */ }
+        }
+
+        StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
+        _logger.LogInformation("Recovered coordinator run {RunId} at the spec confirmation gate", run.Id);
+    }
+
+    /// <summary>
+    /// Resets subtasks that were mid-flight (<c>dispatched</c> / <c>running</c>) back to
+    /// <c>pending</c> so the dispatch frontier re-launches them with fresh child runs. Terminal
+    /// subtasks (assemble_ready / completed / failed / rai_flagged) are left untouched — their work
+    /// (and child branches) survive the restart and feed collective assembly.
+    /// </summary>
+    private async Task ResetInFlightSubtasksAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.Subtasks
+            .Where(s => s.WorkPlanId == workPlanId
+                && (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.Status, SubtaskStatus.Pending)
+                .SetProperty(s => s.ChildRunId, (string?)null)
+                .SetProperty(s => s.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
     }
 
     // -----------------------------------------------------------------------

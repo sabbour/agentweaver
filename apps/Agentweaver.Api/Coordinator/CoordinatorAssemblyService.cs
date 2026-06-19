@@ -563,7 +563,21 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
 
     private void Emit(string coordinatorRunId, string eventType, object payload) =>
-        _streamStore.Get(coordinatorRunId)?.RecordNext(eventType, payload);
+        _streamStore.Get(coordinatorRunId)?.RecordNext(eventType, StampTimestamp(payload));
+
+    // Adds a server-side wall-clock `timestamp_utc` (ISO-8601 "O") to every assembly event so the
+    // frontend can derive live count-up timers for each stage (RAI, Review, Merge, Scribe) the same
+    // way it does for subtask.* events. The payload members are already camelCase identifiers, so
+    // serializing to a JsonObject preserves the exact keys the UI reads; the stamp survives SSE
+    // replay/restart because it is persisted in the event payload (not the client receive time).
+    private static System.Text.Json.Nodes.JsonObject StampTimestamp(object payload)
+    {
+        var node = System.Text.Json.JsonSerializer.SerializeToNode(payload) as System.Text.Json.Nodes.JsonObject
+            ?? new System.Text.Json.Nodes.JsonObject();
+        if (!node.ContainsKey("timestamp_utc"))
+            node["timestamp_utc"] = DateTimeOffset.UtcNow.ToString("O");
+        return node;
+    }
 
     private async Task EmitGraphAsync(string coordinatorRunId, int workPlanId, CancellationToken ct)
     {

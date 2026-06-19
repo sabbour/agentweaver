@@ -125,6 +125,22 @@ describe('timelineReducer', () => {
     expect(s.items[1].kind).toBe('lifecycle');
   });
 
+  // T-06b: coordinator orchestration milestones surface as lifecycle cards so the
+  // coordinator session timeline narrates the run even with no agent-turn content.
+  it('coordinator milestone events surface as lifecycle items; topology/running ticks do not', () => {
+    const s = fold([
+      makeEvent('coordinator.outcome_spec', { desiredOutcome: 'Ship X' }),
+      makeEvent('coordinator.work_plan', { subtasks: [{}, {}] }),
+      makeEvent('subtask.dispatched', { assignedAgent: 'Neo', selectedModelId: 'opus' }),
+      makeEvent('coordinator.topology', { kind: 'snapshot' }), // dropped (noise)
+      makeEvent('subtask.running', { assignedAgent: 'Neo' }), // dropped (noise)
+      makeEvent('coordinator.assembly_review_requested', {}),
+      makeEvent('coordinator.assembly_completed', { commitHash: 'abc1234567' }),
+    ]);
+    expect(s.items).toHaveLength(5);
+    expect(s.items.every((i) => i.kind === 'lifecycle')).toBe(true);
+  });
+
   // T-07
   it('run.failed mid-turn: open turn closed (active=false), LifecycleItem appended', () => {
     const s = fold([

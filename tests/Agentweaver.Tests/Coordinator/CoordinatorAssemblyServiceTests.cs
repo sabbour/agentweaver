@@ -184,8 +184,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var changes = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
             .Single(e => e.Type == EventTypes.CoordinatorAssemblyChangesRequested);
-        var redispatch = (IReadOnlyList<int>)changes.Payload.GetType()
-            .GetProperty("redispatchSubtaskIds")!.GetValue(changes.Payload)!;
+        // Assembly event payloads are stamped with timestamp_utc and stored as a JsonObject.
+        var changesPayload = (System.Text.Json.Nodes.JsonObject)changes.Payload;
+        var redispatch = changesPayload["redispatchSubtaskIds"]!.AsArray()
+            .Select(n => (int)n!).ToList();
         redispatch.Should().BeEquivalentTo(new[] { subtaskA });
 
         // Subtask A reset to pending; B's prior result is left intact.

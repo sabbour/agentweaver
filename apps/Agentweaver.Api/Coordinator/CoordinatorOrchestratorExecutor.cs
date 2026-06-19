@@ -8,6 +8,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 using Agentweaver.Squad.Catalog;
@@ -234,13 +235,21 @@ public sealed class CoordinatorOrchestratorExecutor
                 _toolApprovalGate,
                 _loggerFactory.CreateLogger<CopilotAIAgent>());
 
+            // Stream the decomposition turn (intent, tool calls, and the agent's reasoning) onto the
+            // COORDINATOR run stream so the reused run timeline shows live output while the coordinator
+            // plans, instead of an empty session. RecordingChannelWriter appends to the coordinator
+            // entry with the next sequence; the agent emits no run.completed, so it won't prematurely
+            // terminate the coordinator timeline (only agent.turn.end, which just closes the turn).
+            var coordEntry = _streamStore.Get(input.RunId);
+            var streamWriter = coordEntry is null ? null : new RecordingChannelWriter(coordEntry);
+
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
                 repositoryPath: input.RepositoryPath,
                 runId: input.RunId + "-coordinator-decompose",
                 modelId: input.ModelId,
                 systemPromptContext: charter,
-                streamWriter: null,
+                streamWriter: streamWriter,
                 projectId: input.ProjectId,
                 agentName: CoordinatorAgentName,
                 apiBaseUrl: null,

@@ -238,11 +238,12 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     }
 
     // =========================================================================
-    // Feature 008: a stranded InProgress COORDINATOR run is failed WITH a
-    // human-readable reason on restart (not a bare "Failed" the user can't act on).
+    // Feature 008: a stranded InProgress COORDINATOR run is NOT failed by the generic restart sweep;
+    // it is deferred (left InProgress) to CoordinatorRunService.RecoverInterruptedRunsAsync, which
+    // re-arms the dispatch / collective-assembly engine from the persisted work plan.
     // =========================================================================
     [Fact]
-    public async Task RecoverAsync_StrandedCoordinatorRun_FailsWithReason()
+    public async Task RecoverAsync_StrandedCoordinatorRun_LeftInProgressForCoordinatorRecovery()
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
@@ -267,10 +268,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         await service.RecoverAsync(CancellationToken.None);
 
         var updated = await runStore.GetAsync(runId);
-        updated!.Status.Should().Be(RunStatus.Failed);
-        updated.Result.Should().NotBeNullOrEmpty(
-            "a stranded coordinator run must carry a human-readable reason, not a bare Failed");
-        updated.Result.Should().Contain("interrupted");
+        updated!.Status.Should().Be(RunStatus.InProgress,
+            "the generic sweep must defer coordinator runs to coordinator restart recovery, not fail them");
     }
 
     // =========================================================================

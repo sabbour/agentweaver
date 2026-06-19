@@ -26,8 +26,14 @@ vi.mock('../api/apiClient', () => ({
     answerQuestion: vi.fn(),
     getRun: vi.fn(),
     getOutcomeSpec: vi.fn(),
+    getTeam: vi.fn().mockResolvedValue({ members: [] }),
     setAutopilot: vi.fn(),
     setAutoApprove: vi.fn(),
+    getRunFiles: vi.fn().mockResolvedValue([]),
+    getRunWorkspace: vi.fn().mockResolvedValue([]),
+    getRunFileDiff: vi.fn().mockResolvedValue(null),
+    getAssemblyFiles: vi.fn().mockResolvedValue([]),
+    getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -72,34 +78,36 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe('CoordinatorRunPage — session timeline (issue 6)', () => {
-  it('renders chronological milestones from the coordinator event stream', async () => {
+describe('CoordinatorRunPage — session run (issue 6)', () => {
+  it('renders the coordinator event stream using the standard run timeline', async () => {
     currentEvents = [
       { sequence: 1, type: 'coordinator.started', payload: { goal: 'Build it', timestamp_utc: '2026-06-18T15:00:00Z' } },
-      { sequence: 2, type: 'coordinator.work_plan', payload: { subtasks: [{}, {}], timestamp_utc: '2026-06-18T15:00:05Z' } },
+      { sequence: 2, type: 'agent.message', payload: { messageId: 'm1', content: 'Decomposing the outcome into subtasks.', timestamp_utc: '2026-06-18T15:00:05Z' } },
       { sequence: 3, type: 'subtask.dispatched', payload: { subtaskId: 1, timestamp_utc: '2026-06-18T15:00:10Z' } },
     ];
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('Coordinator session'),
+      () => expect(document.body.textContent).toContain('Decomposing the outcome into subtasks.'),
       { timeout: 4000 },
     );
 
     const text = document.body.textContent ?? '';
-    expect(text).toContain('Coordinator started');
-    expect(text).toContain('Work plan ready');
-    expect(text).toContain('Subtask 1 dispatched');
-    // Steering chat box is visible on the page (not only in the dialog).
-    expect(text).toContain('Steer the coordinator');
+    // The session now reuses the standard rich run Timeline over the coordinator's own stream,
+    // so the coordinator's agent messages render like every other agent's "view run".
+    expect(text).toContain('Decomposing the outcome into subtasks.');
+    // Steering lives in the graph toolbar (Stop/Redirect/Amend), reused instead of a standalone panel.
+    expect(text).toContain('Steer coordinator:');
+    // Compact automation toolbar (no oversized session panel/heading).
+    expect(text).toContain('Autopilot');
   });
 });
 
 describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () => {
   it('shows the assembling spinner state', async () => {
     currentEvents = [
-      { sequence: 1, type: 'coordinator.assembly_assembling', payload: {} },
+      { sequence: 1, type: 'coordinator.assembly_started', payload: {} },
     ];
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
@@ -110,24 +118,23 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     );
   });
 
-  it('shows the Approve / Request changes / Decline panel when review is requested', async () => {
+  it('reuses the standard review bar (Commit and Merge / Change / Decline) when review is requested', async () => {
     currentEvents = [
-      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { diff: '--- a\n+++ b\n+integration' } },
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: {} },
     ];
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('Assembly review'),
+      () => expect(document.body.textContent).toContain('Your review is pending'),
       { timeout: 4000 },
     );
 
     const text = document.body.textContent ?? '';
-    expect(text).toContain('Approve');
-    expect(text).toContain('Request changes');
+    // The collective output is reviewed through the SAME artifact-browser review bar as a normal run.
+    expect(text).toContain('Commit and Merge');
+    expect(text).toContain('Change');
     expect(text).toContain('Decline');
-    // The integration diff/summary is surfaced.
-    expect(text).toContain('+integration');
   });
 
   it('marks the Human Review topology gate as action-required ("Awaiting your review") when review is requested', async () => {
@@ -157,6 +164,45 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
 
     const text = document.body.textContent ?? '';
     expect(text).toContain('parked');
+  });
+
+  it('explains an integration_conflict block and lists the conflicting files', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.assembly_blocked',
+        payload: { reason: 'integration_conflict', conflictingFiles: ['src/a.txt', 'src/shared/util.ts'] },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('changed the same lines'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    // The blocked card replaces the raw reason code with a human explanation and surfaces the files.
+    expect(text).toContain('could not be combined automatically');
+    expect(text).toContain('src/a.txt');
+    expect(text).toContain('src/shared/util.ts');
+  });
+
+  it('shows a live count-up timer on the Merge stage once it has started', async () => {
+    // The Merge stage has no distinct orchestration phase, so its timer must come from the
+    // assembly_merge_started timestamp_utc. Started ~2m5s ago → "2m 5s".
+    const startedIso = new Date(Date.now() - 125_000).toISOString();
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_merge_started', payload: { workPlanId: 1, timestamp_utc: startedIso } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toMatch(/2m \d+s/),
+      { timeout: 4000 },
+    );
   });
 });
 

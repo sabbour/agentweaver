@@ -717,6 +717,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             assignedAgent = subtask.AssignedAgent,
             selectedModelId = subtask.SelectedModelId,
             status = subtask.Status,
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
 
         entry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildDelta(
