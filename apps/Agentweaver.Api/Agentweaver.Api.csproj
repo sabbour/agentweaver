@@ -16,6 +16,11 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.7" />
     <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.9.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <!-- Security override: force the patched native SQLite binary (bundles SQLite 3.50.3) over the
+         vulnerable 2.1.11 pulled transitively by Microsoft.Data.Sqlite / EF Core Sqlite. Fixes
+         GHSA-2m69-gcr7-jv3q (NU1903). The lib.e_sqlite3 package is intentionally separable from the
+         managed core/provider, so bumping only the native binary is the supported way to patch. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
