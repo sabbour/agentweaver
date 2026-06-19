@@ -418,6 +418,8 @@ function processEvent(
     case 'agent.task':
     case 'agent.tools':
     case 'agent.intent':
+    case 'tool.auto_approved':
+    case 'coordinator.autopilot_answered':
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
 
     case 'run.outcome': {

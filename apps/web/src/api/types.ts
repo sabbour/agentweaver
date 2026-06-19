@@ -65,6 +65,11 @@ export interface RunDetail {
   // Added by the backend concurrently; treat as optional and degrade gracefully.
   coordinator_status?: string | null;
   coordinator_status_reason?: string | null;
+  // Per-run options (live-toggleable). auto_approve_tools auto-grants non-dangerous tool HITLs;
+  // autopilot (coordinator only) auto-answers clarifying questions via the coordinator model.
+  // Both cascade to a coordinator's children. Optional — default false when absent.
+  auto_approve_tools?: boolean;
+  autopilot?: boolean;
 }
 
 // GET /api/runs/{id}/events — persisted append-only event log (FR-022). Used to seed
@@ -621,4 +626,15 @@ export interface AnswerQuestionResponse {
   run_id: string;
   request_id: string;
   answered: boolean;
+}
+
+// POST /api/runs/{id}/auto-approve and /autopilot — live per-run option toggles.
+export interface AutoApproveResponse {
+  run_id: string;
+  auto_approve_tools: boolean;
+}
+
+export interface AutopilotResponse {
+  run_id: string;
+  autopilot: boolean;
 }

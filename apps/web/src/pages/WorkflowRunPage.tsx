@@ -9,8 +9,10 @@ import {
   DialogSurface,
   DialogTitle,
   Spinner,
+  Switch,
   Text,
   Title2,
+  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -213,6 +215,9 @@ export function WorkflowRunPage() {
   const [seedEvents,     setSeedEvents]     = useState<RunStreamEvent[]>([]);
   // REST-seeded graph descriptor (null = 404 or not yet resolved → hardcoded fallback).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
+  // Per-run auto-approve-tools option (seeded from the run detail; toggled live).
+  const [autoApprove,    setAutoApprove]    = useState(false);
+  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
 
   // A run is a coordinator CHILD when GET /api/runs/{id} returns a non-null parent_run_id.
   const isChild = parentRunId !== undefined && parentRunId !== null && parentRunId !== '';
@@ -259,6 +264,7 @@ export function WorkflowRunPage() {
               if (cancelled) return;
               setParentRunId(detail.parent_run_id ?? undefined);
               if (detail.status) setRunStatus(detail.status);
+              setAutoApprove(Boolean(detail.auto_approve_tools));
             } catch { /* parent_run_id unavailable — treat as a non-child run */ }
           }
           return;
@@ -280,6 +286,7 @@ export function WorkflowRunPage() {
           setRunStatus(detail.status ?? undefined);
           setAgentName(name);
           setModelId(detail.model_source ?? undefined);
+          setAutoApprove(Boolean(detail.auto_approve_tools));
           applyRoleTitle(name, teamData);
         } catch { /* run not resolvable — leave executionId unset */ }
       })
@@ -642,6 +649,19 @@ export function WorkflowRunPage() {
   const shortId      = runId.length > 8 ? runId.slice(0, 8) : runId;
   const isConnecting = streamStatus === 'connecting';
   const projectName  = team?.project_name ?? projectId;
+  // The auto-approve endpoint 409s on a non-active run, so only offer the toggle while active.
+  const runActive    = runStatus !== undefined && !SEED_STATUSES.has(runStatus);
+  const toggleTarget = executionId ?? runId;
+
+  const toggleAutoApprove = (next: boolean) => {
+    if (autoApproveBusy) return;
+    setAutoApprove(next);          // optimistic
+    setAutoApproveBusy(true);
+    apiClient.setAutoApprove(toggleTarget, next)
+      .then((res) => setAutoApprove(Boolean(res.auto_approve_tools)))
+      .catch(() => setAutoApprove(!next))   // revert on error
+      .finally(() => setAutoApproveBusy(false));
+  };
 
   return (
     <div className={styles.root}>
@@ -659,6 +679,20 @@ export function WorkflowRunPage() {
         <Title2>Run</Title2>
         <span className={styles.runIdLabel}>{shortId}</span>
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
+        {!isChild && runActive && (
+          <Tooltip
+            content="Auto-approve tool permission requests for this run. Dangerous tools remain blocked by policy."
+            relationship="description"
+          >
+            <Switch
+              checked={autoApprove}
+              disabled={autoApproveBusy}
+              onChange={(_, d) => toggleAutoApprove(d.checked)}
+              label="Auto-approve tools"
+              labelPosition="before"
+            />
+          </Tooltip>
+        )}
       </div>
 
       {/* Bubbled questions — a blocked worker awaiting an answer renders a prominent inline

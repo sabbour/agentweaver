@@ -26,6 +26,8 @@ vi.mock('../api/apiClient', () => ({
     answerQuestion: vi.fn(),
     getRun: vi.fn(),
     getOutcomeSpec: vi.fn(),
+    setAutopilot: vi.fn(),
+    setAutoApprove: vi.fn(),
   },
 }));
 
@@ -64,6 +66,8 @@ beforeEach(() => {
   vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
   vi.mocked(apiClient.answerQuestion).mockResolvedValue({ run_id: 'child-run-2', request_id: 'q-1', answered: true });
+  vi.mocked(apiClient.setAutopilot).mockResolvedValue({ run_id: 'coord-run-1', autopilot: true });
+  vi.mocked(apiClient.setAutoApprove).mockResolvedValue({ run_id: 'coord-run-1', auto_approve_tools: true });
 });
 
 afterEach(() => cleanup());
@@ -286,4 +290,61 @@ describe('CoordinatorRunPage — bubbled child questions & approvals', () => {
     expect(text).toContain('Allow once');
   });
 });
+
+describe('CoordinatorRunPage — automation toggles (autopilot + auto-approve)', () => {
+  it('seeds both toggles from the coordinator run and flips them via the right endpoints', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'running', parent_run_id: null,
+      autopilot: true, auto_approve_tools: false,
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+    vi.mocked(apiClient.setAutopilot).mockResolvedValue({ run_id: 'coord-run-1', autopilot: false });
+    vi.mocked(apiClient.setAutoApprove).mockResolvedValue({ run_id: 'coord-run-1', auto_approve_tools: true });
+
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    // Autopilot (first switch) seeded checked, auto-approve (second switch) seeded unchecked.
+    await waitFor(() => {
+      const boxes = Array.from(container.querySelectorAll('input[type=checkbox]')) as HTMLInputElement[];
+      expect(boxes.length).toBeGreaterThanOrEqual(2);
+      expect(boxes[0].checked).toBe(true);
+      expect(boxes[1].checked).toBe(false);
+    }, { timeout: 4000 });
+
+    const boxes = () => Array.from(container.querySelectorAll('input[type=checkbox]')) as HTMLInputElement[];
+
+    // Flip autopilot (first) off.
+    fireEvent.click(boxes()[0]);
+    await waitFor(
+      () => expect(vi.mocked(apiClient.setAutopilot)).toHaveBeenCalledWith('coord-run-1', false),
+      { timeout: 4000 },
+    );
+
+    // Flip auto-approve (second) on.
+    fireEvent.click(boxes()[1]);
+    await waitFor(
+      () => expect(vi.mocked(apiClient.setAutoApprove)).toHaveBeenCalledWith('coord-run-1', true),
+      { timeout: 4000 },
+    );
+  });
+});
+
+describe('CoordinatorRunPage — automation audit lines', () => {
+  it('renders muted audit lines for tool.auto_approved and coordinator.autopilot_answered', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'tool.auto_approved', payload: { requestId: 'a-1', toolName: 'fetch_url', url: 'https://example.com' } },
+      { sequence: 2, type: 'coordinator.autopilot_answered', payload: { runId: 'coord-run-1', childRunId: 'child-run-2', requestId: 'q-1', question: 'Which region?', answer: 'westus2' } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(() => {
+      const text = document.body.textContent ?? '';
+      expect(text).toContain('Tool auto-approved: fetch_url');
+      expect(text).toContain('Autopilot answered');
+      expect(text).toContain('Which region?');
+      expect(text).toContain('westus2');
+    }, { timeout: 4000 });
+  });
+});
+
 

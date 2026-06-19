@@ -167,6 +167,20 @@ The right column hosts an all-up **Coordinator session** panel:
 - An **Action required** block (above the timeline) that surfaces bubbled child questions and tool-approval requests re-projected onto the coordinator stream (see below).
 - A persistent **steering chat box** (a text area + **Send** button, plus quick **Redirect** and **Stop** affordances) that submits free-form steering via `POST /api/runs/{id}/steer` (default `kind: "amend"`) **without** opening a dialog. Queued/applied steering directives from `coordinator.steering` events are listed below the box.
 
+##### Automation toggles (Autopilot + auto-approve tools)
+
+Above the timeline the coordinator session panel hosts two automation switches, seeded from the coordinator run detail (`GET /api/runs/{id}`) booleans `autopilot` and `auto_approve_tools` (both optional, default `false`). The seed is applied once on the first successful poll (a ref guard prevents the 4-second poll from clobbering an in-flight user toggle):
+
+- **Autopilot (auto-answer questions)** — flips via `apiClient.setAutopilot(runId, enabled)` → `POST /api/runs/{id}/autopilot` `{ enabled }`. Copy: *auto-answer clarifying questions using the coordinator model; permission requests still require approval.* Coordinator-only.
+- **Auto-approve tools (cascades to children)** — flips via `apiClient.setAutoApprove(runId, enabled)` → `POST /api/runs/{id}/auto-approve` `{ enabled }`. Copy: *auto-approve tool permission requests; dangerous tools remain blocked by policy.*
+
+Both toggles are **optimistic** (the switch flips immediately, then reconciles to the server's returned boolean, reverting on error) and target the **coordinator run id**; the cascade to child runs is applied server-side. Both are disabled when the orchestration is in a terminal/parked phase (`complete`/`failed`/`blocked`/`declined`), because the endpoints return `409` for non-active runs. The tooltips note that both settings cascade to children and that policy-denied tools stay blocked.
+
+Two muted **audit milestones** appear in the session timeline when automation acts:
+
+- `tool.auto_approved` `{ requestId, toolName, url? }` → *Tool auto-approved: {toolName} {url?}*.
+- `coordinator.autopilot_answered` `{ runId, childRunId?, requestId, question, answer }` → *Autopilot answered (child {id})?: {question} → {answer}* — the child suffix appears only when `childRunId` is present.
+
 ##### Bubbled child questions and approvals (routing)
 
 A child run can ask a question or request tool approval; the coordinator re-projects these onto its own stream as `coordinator.child_question` `{ childRunId, subtaskId, requestId, question }` and `coordinator.child_approval_required` `{ childRunId, subtaskId, requestId, toolName, url?, message? }`. The **Action required** block renders each as an actionable item labelled with its source subtask (`Subtask {n}`):
@@ -219,6 +233,15 @@ Without this fallback the child "View run" link previously left `executionId` un
 #### Run header
 
 A header bar shows the shortened run ID alongside a status indicator: a spinner while connecting or streaming, a success badge when done, or an error badge on failure.
+
+For an active, non-child run the header also hosts an **Auto-approve tools** switch, seeded from the run detail's `auto_approve_tools` boolean (optional, default `false`) and flipped via `apiClient.setAutoApprove(runId, enabled)` → `POST /api/runs/{id}/auto-approve` `{ enabled }`. It is optimistic (flips immediately, reconciles to the server boolean, reverts on error) and targets the resolved execution/run id. It is hidden for coordinator **child** runs (they inherit the coordinator's cascade) and for terminal/parked runs (the endpoint returns `409` when the run is not active). Autopilot is **coordinator-only** and is not shown here. Tooltip copy notes that dangerous tools remain blocked by policy.
+
+When automation acts, two **muted audit lines** (the same `size={100}` / `colorNeutralForeground3` treatment as `agent.intent` and the "Used N tools" rows — not prominent cards) appear in the timeline:
+
+- `tool.auto_approved` `{ requestId, toolName, url? }` → *Tool auto-approved: {toolName} {url?}*.
+- `coordinator.autopilot_answered` `{ runId, childRunId?, requestId, question, answer }` → *Autopilot answered{ (child {id})}: {question} → {answer}*.
+
+Both event types are routed through the timeline reducer's lifecycle group and rendered by `LifecycleEventCard`; payload keys are read defensively (`toolName`/`tool_name`, `childRunId`/`child_run_id`).
 
 #### Bubbled questions (answer affordance)
 

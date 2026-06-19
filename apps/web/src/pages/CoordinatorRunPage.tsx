@@ -12,10 +12,12 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  Switch,
   Text,
   Textarea,
   Title2,
   Title3,
+  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -288,6 +290,20 @@ function buildTimeline(events: RunStreamEvent[]): Milestone[] {
         const kind = readStr(p, ['kind']) ?? 'steer';
         const status = readStr(p, ['status']) ?? 'requested';
         push(`Steering ${kind} ${status}`, ts);
+        break;
+      }
+      case 'tool.auto_approved': {
+        const tool = readStr(p, ['toolName', 'tool_name']) ?? 'tool';
+        const url = readStr(p, ['url']);
+        push(`Tool auto-approved: ${tool}${url ? ` ${url}` : ''}`, ts);
+        break;
+      }
+      case 'coordinator.autopilot_answered': {
+        const q = readStr(p, ['question']) ?? '';
+        const a = readStr(p, ['answer']) ?? '';
+        const childRid = readStr(p, ['childRunId', 'child_run_id']);
+        const child = childRid ? ` (child ${childRid.slice(0, 8)})` : '';
+        push(`Autopilot answered${child}: ${q} → ${a}`, ts);
         break;
       }
       default: break;
@@ -696,6 +712,14 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalS,
   },
+  toggleGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalS} 0`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    marginBottom: tokens.spacingVerticalS,
+  },
   actionSource: {
     fontSize: tokens.fontSizeBase200,
     fontWeight: tokens.fontWeightSemibold,
@@ -780,6 +804,13 @@ export function CoordinatorRunPage() {
   const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
   const [coordStatusReason, setCoordStatusReason] = useState<string | undefined>(undefined);
   const [workPlanStatus, setWorkPlanStatus] = useState<string | undefined>(undefined);
+  // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
+  // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
+  const [autopilot, setAutopilot] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [autopilotBusy, setAutopilotBusy] = useState(false);
+  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
+  const seededToggles = useRef(false);
 
   useEffect(() => {
     if (!runId) return;
@@ -799,6 +830,12 @@ export function CoordinatorRunPage() {
       setCoordStatusField(statusField);
       setCoordStatusReason(reasonField);
       setWorkPlanStatus(wpStatus);
+      // Seed the option toggles once from the run detail; subsequent user toggles own the state.
+      if (!seededToggles.current && detail) {
+        setAutopilot(Boolean(detail.autopilot));
+        setAutoApprove(Boolean(detail.auto_approve_tools));
+        seededToggles.current = true;
+      }
       const phase = normalizePhase(statusField) !== 'unknown'
         ? normalizePhase(statusField)
         : normalizePhase(wpStatus);
@@ -1146,6 +1183,27 @@ export function CoordinatorRunPage() {
     sessionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
+  // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
+  const toggleAutopilot = useCallback((next: boolean) => {
+    if (!runId || autopilotBusy) return;
+    setAutopilot(next);
+    setAutopilotBusy(true);
+    apiClient.setAutopilot(runId, next)
+      .then((res) => setAutopilot(Boolean(res.autopilot)))
+      .catch(() => setAutopilot(!next))
+      .finally(() => setAutopilotBusy(false));
+  }, [runId, autopilotBusy]);
+
+  const toggleAutoApprove = useCallback((next: boolean) => {
+    if (!runId || autoApproveBusy) return;
+    setAutoApprove(next);
+    setAutoApproveBusy(true);
+    apiClient.setAutoApprove(runId, next)
+      .then((res) => setAutoApprove(Boolean(res.auto_approve_tools)))
+      .catch(() => setAutoApprove(!next))
+      .finally(() => setAutoApproveBusy(false));
+  }, [runId, autoApproveBusy]);
+
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
   }
@@ -1155,6 +1213,8 @@ export function CoordinatorRunPage() {
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
   const needsInstruction = steerReq?.kind === 'redirect' || steerReq?.kind === 'amend';
+  // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
+  const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
   return (
     <div className={styles.root}>
@@ -1332,6 +1392,34 @@ export function CoordinatorRunPage() {
             <Text className={styles.hint}>
               All-up orchestration timeline from the coordinator&apos;s own event stream.
             </Text>
+
+            {/* Automation toggles — autopilot + auto-approve-tools. Both cascade to children. */}
+            <div className={styles.toggleGroup}>
+              <Tooltip
+                content="Auto-answer clarifying questions using the coordinator model. Permission requests still require your approval. Cascades to children; every auto-answer is logged."
+                relationship="description"
+              >
+                <Switch
+                  checked={autopilot}
+                  disabled={autopilotBusy || !coordActive}
+                  onChange={(_, d) => toggleAutopilot(d.checked)}
+                  label="Autopilot (auto-answer questions)"
+                  labelPosition="after"
+                />
+              </Tooltip>
+              <Tooltip
+                content="Auto-approve tool permission requests. Dangerous tools remain blocked by policy. Cascades to children."
+                relationship="description"
+              >
+                <Switch
+                  checked={autoApprove}
+                  disabled={autoApproveBusy || !coordActive}
+                  onChange={(_, d) => toggleAutoApprove(d.checked)}
+                  label="Auto-approve tools (cascades to children)"
+                  labelPosition="after"
+                />
+              </Tooltip>
+            </div>
 
             {/* Action required — bubbled child questions + tool-approval requests. Answers/grants
                 target the CHILD that asked (childRunId), not the coordinator run. Each item

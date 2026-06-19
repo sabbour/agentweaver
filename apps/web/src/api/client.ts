@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewRequest, AnswerQuestionResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewRequest, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -293,6 +293,16 @@ export class AgentweaverApiClient {
       `/api/runs/${encodeURIComponent(runId)}/questions/${encodeURIComponent(requestId)}/answer`,
       { answer },
     );
+  }
+
+  // Live per-run option toggles. auto-approve cascades to a coordinator's children; autopilot is
+  // coordinator-only. Both 404 (not found) / 403 (not owner) / 409 (run not active).
+  setAutoApprove(runId: string, enabled: boolean): Promise<AutoApproveResponse> {
+    return this.request<AutoApproveResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/auto-approve`, { enabled });
+  }
+
+  setAutopilot(runId: string, enabled: boolean): Promise<AutopilotResponse> {
+    return this.request<AutopilotResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/autopilot`, { enabled });
   }
 
   // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller

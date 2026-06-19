@@ -23,6 +23,7 @@ vi.mock('../api/apiClient', () => ({
     getRunEvents: vi.fn(),
     getRunGraph: vi.fn(),
     answerQuestion: vi.fn(),
+    setAutoApprove: vi.fn(),
   },
 }));
 
@@ -67,6 +68,7 @@ beforeEach(() => {
   vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
   vi.mocked(apiClient.getRunGraph).mockResolvedValue(null);
   vi.mocked(apiClient.answerQuestion).mockResolvedValue({ run_id: 'run-1', request_id: 'q-1', answered: true });
+  vi.mocked(apiClient.setAutoApprove).mockResolvedValue({ run_id: 'run-1', auto_approve_tools: true });
 });
 
 afterEach(() => cleanup());
@@ -127,3 +129,31 @@ describe('WorkflowRunPage — bubbled questions', () => {
     );
   });
 });
+
+describe('WorkflowRunPage — auto-approve toggle', () => {
+  it('seeds the toggle from auto_approve_tools and flips via setAutoApprove with the run id', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'run-1', status: 'running', parent_run_id: null, auto_approve_tools: true,
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+    vi.mocked(apiClient.setAutoApprove).mockResolvedValue({ run_id: 'run-1', auto_approve_tools: false });
+
+    const { container } = render(<Wrapper><WorkflowRunPage /></Wrapper>);
+
+    let toggle!: HTMLInputElement;
+    await waitFor(() => {
+      const cb = Array.from(container.querySelectorAll('input[type=checkbox]')).find(
+        (el) => (el as HTMLInputElement).checked,
+      ) as HTMLInputElement | undefined;
+      expect(cb).toBeTruthy();
+      toggle = cb!;
+    }, { timeout: 4000 });
+
+    fireEvent.click(toggle);
+
+    await waitFor(
+      () => expect(vi.mocked(apiClient.setAutoApprove)).toHaveBeenCalledWith('run-1', false),
+      { timeout: 4000 },
+    );
+  });
+});
+

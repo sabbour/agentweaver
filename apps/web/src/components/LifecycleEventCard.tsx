@@ -836,6 +836,35 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     );
   }
 
+  // --- tool.auto_approved: muted audit line — a tool HITL was auto-granted by the run option.
+  // Rendered with the same muted treatment as agent.intent (not a prominent action card).
+  if (event.type === 'tool.auto_approved') {
+    const p = event.payload;
+    const toolName = String(p['toolName'] ?? p['tool_name'] ?? 'unknown');
+    const rawUrl = p['url'] ? String(p['url']) : '';
+    const url = rawUrl.length > 80 ? rawUrl.slice(0, 80) + '…' : rawUrl;
+    return (
+      <Text size={100} className={styles.intentAnnotation}>
+        Tool auto-approved: {toolName}{url ? ` ${url}` : ''}
+      </Text>
+    );
+  }
+
+  // --- coordinator.autopilot_answered: muted audit line — Autopilot auto-answered a (child)
+  // question via the coordinator model. Notes the child/subtask when childRunId is present.
+  if (event.type === 'coordinator.autopilot_answered') {
+    const p = event.payload;
+    const question = String(p['question'] ?? '');
+    const answer = String(p['answer'] ?? '');
+    const childRunId = p['childRunId'] ?? p['child_run_id'];
+    const child = childRunId ? ` (child ${String(childRunId).slice(0, 8)})` : '';
+    return (
+      <Text size={100} className={styles.intentAnnotation}>
+        Autopilot answered{child}: {question} → {answer}
+      </Text>
+    );
+  }
+
   // --- agent.tools: separate flat card listing registered tools ---
   if (event.type === 'agent.tools') {
     const tools = event.payload['tools'] as string[] | undefined;
