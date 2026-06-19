@@ -17,12 +17,14 @@ public sealed class AgentweaverWebApplicationFactory : WebApplicationFactory<Pro
     private readonly string _dbPath;
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
+    private readonly string _coordinatorCheckpointsPath;
 
     public AgentweaverWebApplicationFactory()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-waf-{Guid.NewGuid():N}.db");
         _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-wt-{Guid.NewGuid():N}");
         _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-cp-{Guid.NewGuid():N}");
+        _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-ccp-{Guid.NewGuid():N}");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -34,6 +36,7 @@ public sealed class AgentweaverWebApplicationFactory : WebApplicationFactory<Pro
                 ["Database:Path"] = _dbPath,
                 ["Worktrees:BasePath"] = _worktreesPath,
                 ["Checkpoints:Path"] = _checkpointsPath,
+                ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
                 ["Git:Author:Name"] = "Test",
@@ -68,6 +71,9 @@ public sealed class AgentweaverWebApplicationFactory : WebApplicationFactory<Pro
         catch { /* best effort */ }
 
         try { Directory.Delete(_checkpointsPath, recursive: true); }
+        catch { /* best effort */ }
+
+        try { Directory.Delete(_coordinatorCheckpointsPath, recursive: true); }
         catch { /* best effort */ }
     }
 }

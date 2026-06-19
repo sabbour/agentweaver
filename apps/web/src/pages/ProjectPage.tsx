@@ -27,6 +27,7 @@ import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
+import { KanbanBoard } from '../components/board/KanbanBoard';
 import { isCoordinatorRun } from '../utils/runKind';
 import type { CreateRunRequest, Project, WorkflowRunDto, TeamMemberDto } from '../api/types';
 
@@ -52,7 +53,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-    maxWidth: '860px',
+    maxWidth: '1400px',
   },
   breadcrumb: {
     display: 'flex',
@@ -479,6 +480,8 @@ export function ProjectPage() {
               />
             </div>
           </div>
+
+          <KanbanBoard projectId={projectId} />
 
           <div className={styles.infoGrid}>
             <Text className={styles.infoLabel}>Origin</Text>

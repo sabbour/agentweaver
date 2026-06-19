@@ -48,6 +48,20 @@ public sealed class RunWorkflowFactory
     public CheckpointManager CheckpointManager => _checkpointManager;
     public string CheckpointDirectory => _checkpointDir;
 
+    /// <summary>
+    /// The resolved API base URL used by Scribe for loopback memory-tool calls.
+    /// Exposed so <see cref="Agentweaver.Api.Coordinator.CollectiveAssemblyPipeline"/> can reuse
+    /// the same resolved value rather than duplicating the config-key lookup.
+    /// </summary>
+    internal string? ApiBaseUrl => _apiBaseUrl;
+
+    /// <summary>
+    /// The resolved API key used by Scribe for loopback memory-tool calls.
+    /// Exposed so <see cref="Agentweaver.Api.Coordinator.CollectiveAssemblyPipeline"/> can reuse
+    /// the same resolved value rather than duplicating the config-key lookup.
+    /// </summary>
+    internal string? ApiKey => _apiKey;
+
     public RunWorkflowFactory(
         IAgentRunner agentRunner,
         GitHubCopilotClientFactory copilotClientFactory,

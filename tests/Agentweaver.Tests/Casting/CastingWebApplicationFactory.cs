@@ -25,6 +25,7 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
     private readonly string _workspaceRoot;
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
+    private readonly string _coordinatorCheckpointsPath;
 
     public InMemoryGitHubTokenStore TokenStore { get; } = new();
 
@@ -35,6 +36,7 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
         _workspaceRoot   = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-ws-{unique}");
         _worktreesPath   = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-wt-{unique}");
         _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-cp-{unique}");
+        _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-ccp-{unique}");
 
         Directory.CreateDirectory(_workspaceRoot);
     }
@@ -92,6 +94,7 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
                 ["Database:Path"]                         = _dbPath,
                 ["Worktrees:BasePath"]                    = _worktreesPath,
                 ["Checkpoints:Path"]                      = _checkpointsPath,
+                ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
@@ -131,7 +134,7 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
             try { File.Delete(p); } catch { /* best effort */ }
         }
 
-        foreach (var dir in new[] { _workspaceRoot, _worktreesPath, _checkpointsPath })
+        foreach (var dir in new[] { _workspaceRoot, _worktreesPath, _checkpointsPath, _coordinatorCheckpointsPath })
         {
             try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
         }

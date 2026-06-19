@@ -20,11 +20,13 @@ public sealed class SqliteRunStore
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                               submitting_user, status, started_at, ended_at, result,
                               worktree_path, worktree_branch, project_id, model_id,
-                              agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id)
+                              agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
+                              origin, retried_from)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
                     $user, $status, $startedAt, $endedAt, $result,
                     $worktreePath, $worktreeBranch, $projectId, $modelId,
-                    $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId);
+                    $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
+                    $origin, $retriedFrom);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -45,6 +47,8 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$workflowRunId", (object?)run.WorkflowRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$parentRunId", (object?)run.ParentRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$subtaskId", (object?)run.SubtaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$origin", run.Origin.ToApiString());
+        command.Parameters.AddWithValue("$retriedFrom", (object?)run.RetriedFrom ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -434,11 +438,13 @@ public sealed class SqliteRunStore
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                               submitting_user, status, started_at, ended_at, result,
                               worktree_path, worktree_branch, project_id, model_id,
-                              agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id)
+                              agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
+                              retried_from)
             SELECT $runId, $repo, $branch, $modelSource, $task,
                    $user, $status, $startedAt, NULL, NULL,
                    NULL, NULL, $projectId, $modelId,
-                   $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId
+                   $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
+                   $retriedFrom
             WHERE EXISTS (
                 SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
             );
@@ -458,6 +464,7 @@ public sealed class SqliteRunStore
         command.Parameters.AddWithValue("$workflowRunId", (object?)run.WorkflowRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$parentRunId", (object?)run.ParentRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$subtaskId", (object?)run.SubtaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$retriedFrom", (object?)run.RetriedFrom ?? DBNull.Value);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -468,13 +475,15 @@ public sealed class SqliteRunStore
     //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
     //           15=merge_conflicts 16=project_id 17=model_id 18=agent_name 19=agent_charter
     //           20=reviewed_by 21=workflow_run_id 22=merged_commit_hash 23=parent_run_id 24=subtask_id
+    //           25=origin 26=retried_from
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
                submitting_user, status, started_at, ended_at, result,
                worktree_path, worktree_branch, tree_hash, step_count, diff,
                merge_conflicts, project_id, model_id, agent_name, agent_charter,
-               reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id
+               reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+               origin, retried_from
           FROM runs
         """;
 
@@ -505,6 +514,8 @@ public sealed class SqliteRunStore
         MergedCommitHash = r.IsDBNull(22) ? null : r.GetString(22),
         ParentRunId      = r.IsDBNull(23) ? null : r.GetString(23),
         SubtaskId        = r.IsDBNull(24) ? null : r.GetString(24),
+        Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(25) ? null : r.GetString(25)),
+        RetriedFrom      = r.IsDBNull(26) ? null : r.GetString(26),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

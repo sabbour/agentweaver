@@ -49,6 +49,7 @@ public sealed class CoordinatorRunService
     private readonly ICoordinatorAssembly _assembly;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunOptionsStore _runOptions;
+    private readonly IBacklogTaskStore _backlogStore;
     private readonly ILogger<CoordinatorRunService> _logger;
     private readonly bool _autoDispatch;
     private readonly CancellationToken _appStopping;
@@ -65,6 +66,7 @@ public sealed class CoordinatorRunService
         ICoordinatorAssembly assembly,
         IServiceScopeFactory scopeFactory,
         IRunOptionsStore runOptions,
+        IBacklogTaskStore backlogStore,
         IHostApplicationLifetime lifetime,
         IConfiguration configuration,
         ILogger<CoordinatorRunService> logger)
@@ -80,6 +82,7 @@ public sealed class CoordinatorRunService
         _assembly = assembly;
         _scopeFactory = scopeFactory;
         _runOptions = runOptions;
+        _backlogStore = backlogStore;
         _logger = logger;
         // Auto-dispatch is ON in production: confirming a spec launches and tracks child runs.
         // Hermetic web tests (non-git workspaces, signed-out tokens) disable it so the Phase 1
@@ -104,7 +107,8 @@ public sealed class CoordinatorRunService
         string? modelId,
         bool autoApproveTools,
         bool autopilot,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? retriedFrom = null)
     {
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
@@ -124,33 +128,162 @@ public sealed class CoordinatorRunService
             AgentName = "Coordinator",
             ParentRunId = null,
             SubtaskId = null,
+            RetriedFrom = retriedFrom,
         };
 
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
 
-        // Seed the per-run options so the coordinator's own model turns (and the cascade to child
-        // runs) honor the launch flags. Auto-approve covers the coordinator's allow-with-approval
-        // tools; Autopilot drives clarifying-question auto-answers.
-        _runOptions.Set(runId.ToString(), new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot));
-
-        var entry = _streamStore.Create(runId.ToString(), submittingUser);
-        entry.RecordNext(EventTypes.CoordinatorStarted, new { goal });
-
-        var input = new CoordinatorDraftInput(
-            runId.ToString(),
-            projectId.ToString(),
-            goal,
-            submittingUser,
-            repositoryPath,
-            modelId);
-
-        // Per-run CTS, registered so Abandon -> Cts.Cancel() can tear the run down (mirrors RunOrchestrator).
-        var runCts = new CancellationTokenSource();
-        var streamingRun = await _factory.StartAsync(input, runId.ToString(), runCts.Token).ConfigureAwait(false);
-        var runCt = _registry.Register(runId.ToString(), streamingRun, runCts);
-        StartWatching(runId.ToString(), streamingRun, entry, submittingUser, runCt);
+        // Interactive runs share the same activation body as unattended backlog-pickup runs, but they
+        // do NOT schedule the unattended confirm: a human confirms/revises the spec via the HTTP
+        // endpoints.
+        await ActivateAsync(run, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
+            .ConfigureAwait(false);
 
         return runId;
+    }
+
+    /// <summary>
+    /// Retriggers a FAILED backlog-pickup coordinator run (POST /api/runs/{id}/retry) as a FRESH
+    /// unattended coordinator run. Mints a NEW <see cref="RunId"/>, preserves the durable
+    /// <see cref="RunOrigin.BacklogPickup"/> origin and the accountable <paramref name="source"/>
+    /// SubmittingUser (the original CapturedBy, Principle IX), and is identity-shaped exactly like the
+    /// pickup path (WorkflowRunId null, resolved by run_id). It does NOT re-claim a backlog task — the
+    /// task is already Claimed — so there is no claim+reserve transaction here; the run row is inserted
+    /// directly. Like the heartbeat pickup, it schedules the unattended outcome-spec confirmation on
+    /// behalf of the accountable human. Returns the new run id.
+    /// </summary>
+    public async Task<RunId> StartRetriedPickupCoordinatorRunAsync(
+        Run source, bool autoApproveTools, bool autopilot, CancellationToken ct)
+    {
+        var runId = RunId.New();
+        var now = DateTimeOffset.UtcNow;
+
+        var run = new Run
+        {
+            Id = runId,
+            RepositoryPath = source.RepositoryPath,
+            OriginatingBranch = source.OriginatingBranch,
+            ModelSource = ModelSource.GitHubCopilot,
+            ModelId = source.ModelId,
+            Task = source.Task,
+            SubmittingUser = source.SubmittingUser,    // accountable human carried through (Principle IX)
+            Status = RunStatus.InProgress,
+            StartedAt = now,
+            ProjectId = source.ProjectId,
+            AgentName = "Coordinator",
+            ParentRunId = null,
+            SubtaskId = null,
+            WorkflowRunId = null,                      // identity parity: detail page resolves by run_id
+            Origin = RunOrigin.BacklogPickup,          // preserve durable pickup origin marker
+            RetriedFrom = source.Id.ToString(),
+        };
+
+        await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
+
+        await ActivateAsync(run, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
+            .ConfigureAwait(false);
+
+        // Unattended confirm on behalf of the accountable human, mirroring the heartbeat pickup path.
+        ScheduleUnattendedConfirm(runId.ToString(), source.SubmittingUser);
+
+        return runId;
+    }
+
+    /// <summary>
+    /// Activates a coordinator run whose row is ALREADY persisted (reserved) by the atomic
+    /// claim+reserve transaction (Feature 009, section 1.5) — used by unattended heartbeat pickup. It
+    /// does NOT insert the run row again (Tank's transaction already did); it seeds RunOptions, opens
+    /// the stream, starts + supervises the coordinator workflow, then performs the Phase 1
+    /// outcome-spec confirmation UNATTENDED on behalf of <paramref name="confirmedBy"/> (the
+    /// accountable human), because Autopilot does not bypass the confirmation gate.
+    /// </summary>
+    public async Task StartReservedCoordinatorRunAsync(
+        Run reservedRun, bool autoApproveTools, bool autopilot, string confirmedBy, CancellationToken ct)
+    {
+        await ActivateAsync(reservedRun, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
+            .ConfigureAwait(false);
+
+        // Fire-and-forget bounded loop: confirm the spec once it arms. Autopilot only auto-answers
+        // child clarifying questions and does NOT bypass this confirmation gate, so the pickup path
+        // must confirm the reversible PLAN on behalf of the accountable human (Principle IX). The
+        // destructive/irreversible tool gates, child-run permission approvals and the Phase-3
+        // assembly human-review gate remain enforced by the safety floor (Principle X).
+        ScheduleUnattendedConfirm(reservedRun.Id.ToString(), confirmedBy);
+    }
+
+    /// <summary>
+    /// Shared coordinator activation body (interactive and reserved). The run row is assumed already
+    /// persisted. Seeds the per-run options so the coordinator's own model turns (and the cascade to
+    /// child runs) honor the launch flags, opens the live stream, starts the MAF workflow under a
+    /// per-run CTS (registered so Abandon -> Cts.Cancel() tears the run down, mirroring
+    /// RunOrchestrator), and starts the supervised watch loop.
+    /// </summary>
+    private async Task ActivateAsync(Run run, RunOptions options)
+    {
+        var runId = run.Id.ToString();
+        _runOptions.Set(runId, options);
+
+        var entry = _streamStore.Create(runId, run.SubmittingUser);
+        entry.RecordNext(EventTypes.CoordinatorStarted, new { goal = run.Task });
+
+        var input = new CoordinatorDraftInput(
+            runId,
+            run.ProjectId!.Value.ToString(),
+            run.Task,
+            run.SubmittingUser,
+            run.RepositoryPath,
+            run.ModelId);
+
+        var runCts = new CancellationTokenSource();
+        var streamingRun = await _factory.StartAsync(input, runId, runCts.Token).ConfigureAwait(false);
+        var runCt = _registry.Register(runId, streamingRun, runCts);
+        StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
+    }
+
+    /// <summary>
+    /// Bounded, fire-and-forget loop that performs the Phase 1 outcome-spec confirmation unattended
+    /// (no human present). Polls <see cref="GetOutcomeSpecAsync"/> until the spec is
+    /// <c>awaiting_confirmation</c>, then resumes via the same <see cref="ConfirmOutcomeSpecAsync"/>
+    /// seam a human uses, attributed to <paramref name="confirmedBy"/> (= the backlog task's
+    /// CapturedBy, Principle IX). Stops on success, on a human beating it to the gate, on app
+    /// shutdown, or after a 5-minute deadline so it can never spin forever.
+    /// </summary>
+    private void ScheduleUnattendedConfirm(string runId, string confirmedBy)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+                while (DateTimeOffset.UtcNow < deadline && !_appStopping.IsCancellationRequested)
+                {
+                    var spec = await GetOutcomeSpecAsync(runId, _appStopping).ConfigureAwait(false);
+                    if (spec?.Status == "awaiting_confirmation")
+                    {
+                        var outcome = await ConfirmOutcomeSpecAsync(runId, confirmedBy, _appStopping).ConfigureAwait(false);
+                        if (outcome == CoordinatorGateOutcome.Accepted)
+                            return;
+                    }
+                    else if (spec?.Status is "confirmed" or "declined")
+                    {
+                        return;   // already advanced (e.g. a human confirmed first)
+                    }
+
+                    await Task.Delay(500, _appStopping).ConfigureAwait(false);
+                }
+
+                _logger.LogWarning(
+                    "Unattended confirm timed out for coordinator run {RunId}; left for a human", runId);
+            }
+            catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
+            {
+                // App shutting down — not an error.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unattended confirm loop failed for coordinator run {RunId}", runId);
+            }
+        }, _appStopping);
     }
 
     /// <summary>
@@ -454,6 +587,7 @@ public sealed class CoordinatorRunService
         if (action == CoordinatorRecoveryAction.ResumeSpecPhase)
         {
             await RecoverSpecPhaseAsync(run, ct).ConfigureAwait(false);
+            await TryRearmUnattendedConfirmAsync(run, ct).ConfigureAwait(false);
             return;
         }
 
@@ -581,6 +715,43 @@ public sealed class CoordinatorRunService
 
         StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
         _logger.LogInformation("Recovered coordinator run {RunId} at the spec confirmation gate", run.Id);
+    }
+
+    /// <summary>
+    /// Unattended-confirm recovery, keyed on the DURABLE <see cref="RunOrigin"/> marker (Feature 009,
+    /// section 3.6), never on inference from per-project pickup settings. For a recovered coordinator
+    /// parent run that is parked at <c>awaiting_confirmation</c>:
+    /// <list type="bullet">
+    /// <item>If <c>Origin == BacklogPickup</c>, resolve the accountable human from the 1:1 backlog
+    /// task pointing at this run (<c>backlog_tasks.run_id == run.Id</c>) and re-arm
+    /// <see cref="ScheduleUnattendedConfirm"/> with <c>confirmedBy = task.CapturedBy</c> (Principle
+    /// IX). If the backlog task is missing (e.g. project deleted), leave the run awaiting confirmation
+    /// rather than auto-confirming without an accountable human.</item>
+    /// <item>If <c>Origin == Interactive</c>, a human owns this gate — do NOT auto-confirm; the run
+    /// stays awaiting confirmation, exactly as before the restart (Principles IX/X/XI).</item>
+    /// </list>
+    /// </summary>
+    private async Task TryRearmUnattendedConfirmAsync(Run run, CancellationToken ct)
+    {
+        if (run.Origin != RunOrigin.BacklogPickup)
+            return;   // Interactive: a human owns this gate; never auto-confirm.
+
+        var spec = await GetOutcomeSpecAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+        if (spec?.Status != "awaiting_confirmation")
+            return;   // Not parked at the confirmation gate; nothing to re-arm.
+
+        var task = await _backlogStore.GetByRunIdAsync(run.Id, ct).ConfigureAwait(false);
+        if (task is null)
+        {
+            _logger.LogWarning(
+                "Recovered backlog-pickup coordinator run {RunId} is awaiting confirmation but its backlog "
+                + "task is missing (project deleted?); left for a human", run.Id);
+            return;
+        }
+
+        ScheduleUnattendedConfirm(run.Id.ToString(), task.CapturedBy);
+        _logger.LogInformation(
+            "Re-armed unattended confirm for recovered backlog-pickup coordinator run {RunId}", run.Id);
     }
 
     /// <summary>

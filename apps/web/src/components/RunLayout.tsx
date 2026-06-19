@@ -168,6 +168,7 @@ export function RunLayout({ runId, runStatus, commitMessage, centerContent, cent
         diffLoading={artifactState.diffLoading}
         diffError={artifactState.diffError}
         isChanged={artifactState.selectedPathIsChanged}
+        getContent={artifactAdapter?.getContent}
       />
     </div>
   );

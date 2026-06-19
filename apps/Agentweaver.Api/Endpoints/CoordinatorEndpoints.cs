@@ -457,6 +457,86 @@ app.MapGet("/api/runs/{id}/assembly/workspace", async (
         return Results.Problem("Failed to enumerate assembly workspace.", statusCode: 500);
     }
 });
+
+// GET /api/runs/{id}/assembly/content/{**path} — per-file CONTENT of the collective integration
+// branch (agentweaver/integration/{id}) tip, so the review modal's Preview/source tab can render an
+// assembled file. The coordinator owns NO worktree (its changes live on the integration branch), so
+// the worktree-backed /workspace/files/{**path}/content endpoint 409s for coordinator runs; this
+// reads the blob from the branch tip instead. Whitelisted to the collective changed-file set so it
+// cannot read arbitrary repo files, and returns 404 (never 409) before the integration branch exists.
+app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
+    HttpContext httpContext,
+    string id,
+    string path,
+    SqliteRunStore runStore,
+    WorktreeManager worktreeManager,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for assembly file content", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (string.IsNullOrEmpty(run.RepositoryPath)) return Results.NotFound();
+
+    var normalizedPath = path.Replace('\\', '/').TrimEnd('/');
+    if (string.IsNullOrEmpty(normalizedPath))
+        return Results.BadRequest(new { error = "Invalid file path." });
+
+    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
+
+    // Whitelist: only serve paths present in the collective changed-file set (same guard as the
+    // per-file diff endpoint). This is also the natural "is there anything to preview yet?" gate —
+    // before assembly builds the integration branch the diff is empty, so we 404 rather than 409.
+    string? aggregateDiff;
+    try
+    {
+        aggregateDiff = worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to compute assembly diff for run {RunId} path {Path}", runId, normalizedPath);
+        return Results.Problem("Failed to compute assembly diff.", statusCode: 500);
+    }
+
+    if (string.IsNullOrEmpty(aggregateDiff))
+        return Results.NotFound();
+
+    var entries = WorkspaceFileEntryParser.ParseUnifiedDiffEntries(aggregateDiff);
+    if (!entries.Any(e => string.Equals(e.Path, normalizedPath, StringComparison.Ordinal)))
+        return Results.NotFound();
+
+    try
+    {
+        using var repo = new Repository(run.RepositoryPath);
+        var commit = repo.Branches[integrationBranch]?.Tip
+                     ?? repo.Branches[$"refs/heads/{integrationBranch}"]?.Tip;
+        if (commit is null)
+            return Results.NotFound();
+
+        var treeEntry = commit[normalizedPath];
+        if (treeEntry is null || treeEntry.TargetType != TreeEntryTargetType.Blob)
+            return Results.NotFound();   // e.g. a deleted file has no blob on the tip to preview
+
+        var blob = (Blob)treeEntry.Target;
+        return Results.Json(EndpointHelpers.BuildBlobContent(blob, normalizedPath));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to read assembly blob for run {RunId} path {Path}", runId, normalizedPath);
+        return Results.Problem("Failed to read file content.", statusCode: 500);
+    }
+});
     }
 
 // Recursively flattens a git commit tree into the flat WorkspaceNode listing the Files tab renders

@@ -96,6 +96,16 @@ builder.Services.AddSingleton<IProjectWorkspaceProvider, LocalFilesystemWorkspac
 builder.Services.AddSingleton<ProjectGitInitializer>();
 builder.Services.AddSingleton<ProjectService>();
 
+// Backlog & Kanban board (Feature 009)
+builder.Services.AddSingleton<SqliteBacklogTaskStore>();
+builder.Services.AddSingleton<IBacklogTaskStore>(sp => sp.GetRequiredService<SqliteBacklogTaskStore>());
+builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();
+builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
+    sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
+builder.Services.AddSingleton<Agentweaver.Api.Runs.BoardProjectionService>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorPickupService>();
+builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbeatService>();
+
 // Agent runtime
 builder.Services.AddAgentRuntime();
 
@@ -201,6 +211,7 @@ app.UseMiddleware<ApiKeyAuthMiddleware>();
 
 app.MapRunEndpoints();
 app.MapProjectEndpoints();
+app.MapBacklogEndpoints();
 app.MapCoordinatorEndpoints();
 app.MapCastingEndpoints();
 app.MapTeamEndpoints();

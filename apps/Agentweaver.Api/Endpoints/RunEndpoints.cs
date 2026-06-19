@@ -215,6 +215,7 @@ app.MapGet("/api/runs/{id}", async (
         ReviewedBy = run.ReviewedBy,
         ParentRunId = run.ParentRunId,
         SubtaskId = run.SubtaskId,
+        RetriedFrom = run.RetriedFrom,
         CoordinatorStatus = coordinatorStatus,
         CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
         AutoApproveTools = runOptions.Get(run.Id.ToString()).AutoApproveTools,
@@ -1115,6 +1116,138 @@ app.MapPost("/api/runs/{id}/request-changes", async (
         new RequestChangesResponse { RunId = id, Status = RunStatus.InProgress.ToApiString() });
 });
 
+// POST /api/runs/{id}/retry — retrigger a FAILED run as a fresh run (new run_id), linked back via
+// retried_from. Never mutates the source run. Owner-scoped (401 unauth via middleware, 403 non-owner,
+// 404 unknown). Eligible source states: Failed and MergeFailed. Child runs and every other state are
+// rejected 409. A soft cap blocks retries once the retried_from chain reaches depth 3.
+app.MapPost("/api/runs/{id}/retry", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    CoordinatorRunService coordinator,
+    RunOrchestrator orchestrator,
+    IProjectStore projectStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    const int MaxRetryChainDepth = 3;
+
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for retry", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run))
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    // Child runs are retried THROUGH their coordinator parent, never independently.
+    if (run.ParentRunId is not null)
+        return Results.Conflict(new { error = "run_not_retryable", status = run.Status.ToApiString() });
+
+    // Eligible source states: terminal-failure only (Failed, MergeFailed). Declined and every
+    // non-failure / in-flight / terminal-success state is rejected.
+    if (run.Status is not (RunStatus.Failed or RunStatus.MergeFailed))
+        return Results.Conflict(new { error = "run_not_retryable", status = run.Status.ToApiString() });
+
+    // Soft cap: walk the retried_from provenance chain. Depth >= 3 means three retries already
+    // happened; refuse a fourth.
+    var depth = 0;
+    var ancestorId = run.RetriedFrom;
+    while (ancestorId is not null && depth < MaxRetryChainDepth)
+    {
+        if (!RunId.TryParse(ancestorId, out var ancestorRunId)) break;
+        Run? ancestor;
+        try { ancestor = await runStore.GetAsync(ancestorRunId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to walk retry chain for run {RunId}", runId);
+            return Results.Problem("Failed to evaluate the retry chain.", statusCode: 500);
+        }
+        depth++;
+        ancestorId = ancestor?.RetriedFrom;
+    }
+
+    if (depth >= MaxRetryChainDepth)
+        return Results.Conflict(new { error = "retry_limit_reached" });
+
+    var isCoordinatorRun = run.ParentRunId is null
+        && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+
+    RunId newRunId;
+    try
+    {
+        if (isCoordinatorRun && run.Origin == RunOrigin.BacklogPickup)
+        {
+            // Re-enter as a fresh unattended coordinator run; do NOT re-claim a backlog task.
+            var project = run.ProjectId is { } ppid ? await projectStore.GetAsync(ppid, ct) : null;
+            var autoApproveTools = project?.PickupAutoApproveTools ?? false;
+            var autopilot = project?.PickupAutopilot ?? true;
+            newRunId = await coordinator
+                .StartRetriedPickupCoordinatorRunAsync(run, autoApproveTools, autopilot, ct)
+                .ConfigureAwait(false);
+        }
+        else if (isCoordinatorRun)
+        {
+            // Interactive coordinator run: reuse the normal interactive start seam.
+            newRunId = await coordinator.StartCoordinatorRunAsync(
+                run.ProjectId!.Value,
+                run.Task,
+                run.SubmittingUser,
+                run.RepositoryPath,
+                run.OriginatingBranch,
+                run.ModelId,
+                autoApproveTools: false,
+                autopilot: false,
+                ct,
+                retriedFrom: run.Id.ToString())
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            // Regular single-agent project run: rebuild from persisted inputs and start fresh.
+            var newRun = new Run
+            {
+                Id = RunId.New(),
+                RepositoryPath = run.RepositoryPath,
+                OriginatingBranch = run.OriginatingBranch,
+                ModelSource = run.ModelSource,
+                ModelId = run.ModelId,
+                Task = run.Task,
+                SubmittingUser = run.SubmittingUser,
+                Status = RunStatus.Pending,
+                StartedAt = DateTimeOffset.UtcNow,
+                ProjectId = run.ProjectId,
+                AgentName = run.AgentName,
+                Origin = run.Origin,
+                RetriedFrom = run.Id.ToString(),
+            };
+            await orchestrator.StartRunAsync(newRun, ct).ConfigureAwait(false);
+            newRunId = newRun.Id;
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to start retry run for source run {RunId}", runId);
+        return Results.Problem("Failed to start the retry run.", statusCode: 500);
+    }
+
+    return Results.Created(
+        $"/api/runs/{newRunId}",
+        new RetryRunResponse
+        {
+            RunId = newRunId.ToString(),
+            RetriedFrom = run.Id.ToString(),
+            Status = RunStatus.InProgress.ToApiString(),
+        });
+});
+
 // GET /api/runs/{id}/workspace — flat directory listing of all files in the worktree (not just changed).
 // Used by the Files tab in the artifact browser. Only available for runs with an active worktree.
 app.MapGet("/api/runs/{id}/workspace", async (
@@ -1659,37 +1792,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
 
                 var blob = (Blob)treeEntry.Target;
 
-                if (blob.IsBinary)
-                {
-                    return Results.Json(new WorkspaceFileContent
-                    {
-                        Path     = normalizedPath,
-                        Content  = null,
-                        IsBinary = true,
-                        Language = DetectLanguage(normalizedPath),
-                    });
-                }
-
-                const int maxGitContentBytes = 1 * 1024 * 1024;
-                if (blob.Size > maxGitContentBytes)
-                {
-                    return Results.Json(new WorkspaceFileContent
-                    {
-                        Path     = normalizedPath,
-                        Content  = null,
-                        IsBinary = false,
-                        Language = "too_large",
-                    });
-                }
-
-                var content = blob.GetContentText();
-                return Results.Json(new WorkspaceFileContent
-                {
-                    Path     = normalizedPath,
-                    Content  = content,
-                    IsBinary = false,
-                    Language = DetectLanguage(normalizedPath),
-                });
+                return Results.Json(EndpointHelpers.BuildBlobContent(blob, normalizedPath));
             }
             catch (Exception ex)
             {
@@ -1733,7 +1836,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
                     Path     = normalizedPath,
                     Content  = null,
                     IsBinary = true,
-                    Language = DetectLanguage(normalizedPath),
+                    Language = EndpointHelpers.DetectLanguage(normalizedPath),
                 });
             }
 
@@ -1755,7 +1858,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
                 Path     = normalizedPath,
                 Content  = content,
                 IsBinary = false,
-                Language = DetectLanguage(normalizedPath),
+                Language = EndpointHelpers.DetectLanguage(normalizedPath),
             });
         }
         catch (Exception ex)
@@ -2136,37 +2239,6 @@ static IReadOnlyList<WorkspaceFileEntry> ApplyLineCounts(
             RemovedLines = Math.Max(0, cRemoved + uRemoved),
         };
     }).ToList();
-}
-
-/// <summary>
-/// Maps a file extension to a language identifier accepted by react-syntax-highlighter.
-/// Returns null for unknown extensions.
-/// </summary>
-static string? DetectLanguage(string path)
-{
-    var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
-    return ext switch
-    {
-        "cs"                                    => "csharp",
-        "ts" or "tsx"                           => "typescript",
-        "js" or "jsx"                           => "javascript",
-        "json"                                  => "json",
-        "md"                                    => "markdown",
-        "css"                                   => "css",
-        "html"                                  => "html",
-        "xml" or "csproj" or "props" or "targets" => "xml",
-        "yaml" or "yml"                         => "yaml",
-        "sh" or "bash"                          => "bash",
-        "ps1"                                   => "powershell",
-        "py"                                    => "python",
-        "go"                                    => "go",
-        "rs"                                    => "rust",
-        "java"                                  => "java",
-        "cpp" or "cc" or "cxx" or "c" or "h" or "hpp" => "cpp",
-        "sql"                                   => "sql",
-        "txt"                                   => "plaintext",
-        _                                       => null
-    };
 }
 }
 

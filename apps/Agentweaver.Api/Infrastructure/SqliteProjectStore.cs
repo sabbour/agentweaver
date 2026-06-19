@@ -19,11 +19,13 @@ public sealed class SqliteProjectStore : IProjectStore
             INSERT INTO projects (project_id, name, origin_kind, source_repository,
                                   working_directory, default_branch, owner,
                                   default_provider, default_model_copilot, default_model_foundry,
-                                  state, created_at, updated_at)
+                                  state, created_at, updated_at,
+                                  max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools)
             VALUES ($projectId, $name, $originKind, $sourceRepository,
                     $workingDirectory, $defaultBranch, $owner,
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
-                    $state, $createdAt, $updatedAt);
+                    $state, $createdAt, $updatedAt,
+                    $maxReadyPerHeartbeat, $pickupAutopilot, $pickupAutoApproveTools);
             """;
         command.Parameters.AddWithValue("$projectId", project.Id.ToString());
         command.Parameters.AddWithValue("$name", project.Name);
@@ -38,6 +40,9 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$state", StateToString(project.State));
         command.Parameters.AddWithValue("$createdAt", Ts(project.CreatedAt));
         command.Parameters.AddWithValue("$updatedAt", Ts(project.UpdatedAt));
+        command.Parameters.AddWithValue("$maxReadyPerHeartbeat", project.MaxReadyPerHeartbeat);
+        command.Parameters.AddWithValue("$pickupAutopilot", project.PickupAutopilot ? 1 : 0);
+        command.Parameters.AddWithValue("$pickupAutoApproveTools", project.PickupAutoApproveTools ? 1 : 0);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -133,14 +138,38 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task UpdatePickupSettingsAsync(
+        ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET max_ready_per_heartbeat = $maxReadyPerHeartbeat,
+                   pickup_autopilot = $pickupAutopilot,
+                   pickup_auto_approve_tools = $pickupAutoApproveTools,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$maxReadyPerHeartbeat", maxReadyPerHeartbeat);
+        command.Parameters.AddWithValue("$pickupAutopilot", autopilot ? 1 : 0);
+        command.Parameters.AddWithValue("$pickupAutoApproveTools", autoApproveTools ? 1 : 0);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     // Ordinals: 0=project_id 1=name 2=origin_kind 3=source_repository 4=working_directory
     //           5=default_branch 6=owner 7=default_provider 8=default_model_copilot
     //           9=default_model_foundry 10=state 11=created_at 12=updated_at
+    //           13=max_ready_per_heartbeat 14=pickup_autopilot 15=pickup_auto_approve_tools
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
                default_branch, owner, default_provider, default_model_copilot,
-               default_model_foundry, state, created_at, updated_at
+               default_model_foundry, state, created_at, updated_at,
+               max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools
           FROM projects
         """;
 
@@ -168,6 +197,9 @@ public sealed class SqliteProjectStore : IProjectStore
             State     = StateFromString(r.GetString(10)),
             CreatedAt = DateTimeOffset.Parse(r.GetString(11), null, DateTimeStyles.RoundtripKind),
             UpdatedAt = DateTimeOffset.Parse(r.GetString(12), null, DateTimeStyles.RoundtripKind),
+            MaxReadyPerHeartbeat   = r.IsDBNull(13) ? 3 : r.GetInt32(13),
+            PickupAutopilot        = r.IsDBNull(14) ? true : r.GetInt32(14) != 0,
+            PickupAutoApproveTools = r.IsDBNull(15) ? false : r.GetInt32(15) != 0,
         };
     }
 

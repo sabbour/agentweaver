@@ -144,7 +144,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             _workflowFactory.GetRecordingWriter,
             name: "assembly-scribe",
             createSubStream: _workflowFactory.CreateSubStreamWriter,
-            completeSubStream: _workflowFactory.CompleteSubStream);
+            completeSubStream: _workflowFactory.CompleteSubStream,
+            apiBaseUrl: _workflowFactory.ApiBaseUrl,
+            apiKey: _workflowFactory.ApiKey);
 
         var input = new ScribeTurnInput(
             RunId: request.CoordinatorRunId,

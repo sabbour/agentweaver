@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
   Dialog,
@@ -114,6 +114,9 @@ export interface FileViewerModalProps {
   diffLoading: boolean;
   diffError: string | null;
   isChanged?: boolean;
+  /** Optional per-file content fetcher. When provided (e.g. coordinator assembly reads from the
+   *  integration branch), it replaces the default worktree-backed apiClient.getRunFileContent. */
+  getContent?: (runId: string, path: string) => Promise<WorkspaceFileContent>;
 }
 
 export function FileViewerModal({
@@ -124,10 +127,16 @@ export function FileViewerModal({
   diffLoading,
   diffError,
   isChanged = true,
+  getContent,
 }: FileViewerModalProps) {
   const styles = useStyles();
   const isOpen = filePath !== null;
   const isMarkdown = filePath?.toLowerCase().endsWith('.md') ?? false;
+  const fetchContent = useCallback(
+    (rid: string, p: string): Promise<WorkspaceFileContent> =>
+      (getContent ?? apiClient.getRunFileContent.bind(apiClient))(rid, p),
+    [getContent],
+  );
 
   const [viewMode, setViewMode] = useState<'diff' | 'source' | 'preview'>(isChanged ? 'diff' : 'source');
 
@@ -155,8 +164,7 @@ export function FileViewerModal({
     setContentLoading(true); // eslint-disable-line react-hooks/set-state-in-effect
     setContentError(null);
 
-    apiClient
-      .getRunFileContent(runId, filePath)
+    fetchContent(runId, filePath)
       .then((data) => {
         if (active) {
           setFileContent(data);
@@ -173,7 +181,7 @@ export function FileViewerModal({
     return () => {
       active = false;
     };
-  }, [runId, filePath, isChanged]);
+  }, [runId, filePath, isChanged, fetchContent]);
 
   // Fetch content lazily on first switch to preview (diff mode only).
   // fileContent/contentLoading intentionally omitted from deps — the guard reads
@@ -187,8 +195,7 @@ export function FileViewerModal({
     setContentLoading(true); // eslint-disable-line react-hooks/set-state-in-effect
     setContentError(null);
 
-    apiClient
-      .getRunFileContent(runId, filePath)
+    fetchContent(runId, filePath)
       .then((data) => {
         if (active) {
           setFileContent(data);

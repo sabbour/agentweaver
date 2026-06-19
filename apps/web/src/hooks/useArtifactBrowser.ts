@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CommitResponse, RequestChangesResponse, ReviewResponse, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
+import type { CommitResponse, RequestChangesResponse, ReviewResponse, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -26,6 +26,9 @@ export interface ArtifactBrowserAdapter {
   getFiles?: (runId: string, filter: string) => Promise<WorkspaceFileEntry[]>;
   getFileDiff?: (runId: string, path: string) => Promise<WorkspaceFileDiff>;
   getWorkspace?: (runId: string) => Promise<WorkspaceNode[]>;
+  /** Per-file content for the Preview/source tab. Coordinator assembly reads it from the integration
+   *  branch tip (no worktree); when omitted the modal uses the standard worktree-backed endpoint. */
+  getContent?: (runId: string, path: string) => Promise<WorkspaceFileContent>;
   approve?: (runId: string) => Promise<void>;
   requestChanges?: (runId: string, comment: string) => Promise<void>;
   decline?: (runId: string) => Promise<void>;

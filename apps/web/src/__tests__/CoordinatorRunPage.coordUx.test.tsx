@@ -29,6 +29,7 @@ vi.mock('../api/apiClient', () => ({
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
     setAutopilot: vi.fn(),
     setAutoApprove: vi.fn(),
+    retryRun: vi.fn(),
     getRunFiles: vi.fn().mockResolvedValue([]),
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
@@ -37,6 +38,12 @@ vi.mock('../api/apiClient', () => ({
     getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
   },
 }));
+
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
 
 vi.mock('../api/sse', () => ({
   useRunStream: () => ({ events: currentEvents, status: 'done', error: null, reconnect: vi.fn() }),
@@ -66,6 +73,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockNavigate.mockReset();
   currentEvents = [];
   vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR);
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
@@ -119,6 +127,57 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
     );
     const text = document.body.textContent ?? '';
     expect(text).not.toContain('Steer coordinator:');
+  });
+});
+
+describe('CoordinatorRunPage — work-plan rendering (no raw JSON dump)', () => {
+  it('suppresses the decompose agent serialized work-plan JSON message but keeps the structured chip', async () => {
+    // The decompose agent streams its final assistant message (the SERIALIZED work plan) onto the
+    // coordinator stream, and the orchestrator emits coordinator.work_plan. The raw JSON array must
+    // NOT be dumped verbatim into the timeline; only the structured "Decomposed into N subtasks"
+    // chip (+ work-plan panel/graph) should surface.
+    const planJson = JSON.stringify([
+      { title: 'Audit the repo', scope: 'Read src/ and list issues', role: 'Repo Auditor', depends_on: [] },
+      { title: 'Apply fixes', scope: 'Patch the flagged files', role: 'Engineer', depends_on: [1] },
+    ]);
+
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: 'Build it', timestamp_utc: '2026-06-18T15:00:00Z' } },
+      { sequence: 2, type: 'agent.turn.start', payload: { turnId: 't1', timestamp_utc: '2026-06-18T15:00:01Z' } },
+      { sequence: 3, type: 'agent.message', payload: { messageId: 'plan-msg', content: planJson, timestamp_utc: '2026-06-18T15:00:05Z' } },
+      { sequence: 4, type: 'agent.turn.end', payload: { turnId: 't1', timestamp_utc: '2026-06-18T15:00:06Z' } },
+      { sequence: 5, type: 'coordinator.work_plan', payload: { workPlanId: 1, subtasks: [{}, {}], timestamp_utc: '2026-06-18T15:00:07Z' } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    // The structured affordance is present...
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Decomposed into 2 subtasks'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    // ...and the raw JSON blob is NOT rendered verbatim anywhere in the timeline.
+    expect(text).not.toContain('"depends_on"');
+    expect(text).not.toContain('"scope"');
+    expect(text).not.toContain(planJson);
+  });
+
+  it('still renders ordinary coordinator agent prose (only the serialized plan is suppressed)', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: 'Build it', timestamp_utc: '2026-06-18T15:00:00Z' } },
+      { sequence: 2, type: 'agent.turn.start', payload: { turnId: 't1', timestamp_utc: '2026-06-18T15:00:01Z' } },
+      { sequence: 3, type: 'agent.message', payload: { messageId: 'm1', content: 'Decomposing the outcome into subtasks.', timestamp_utc: '2026-06-18T15:00:05Z' } },
+      { sequence: 4, type: 'agent.turn.end', payload: { turnId: 't1', timestamp_utc: '2026-06-18T15:00:06Z' } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Decomposing the outcome into subtasks.'),
+      { timeout: 4000 },
+    );
   });
 });
 
@@ -500,4 +559,77 @@ describe('CoordinatorRunPage — automation audit lines', () => {
   });
 });
 
+describe('CoordinatorRunPage — Retry button (retrigger)', () => {
+  it('shows Retry button when runLevelStatus is failed', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'failed', parent_run_id: null,
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
 
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.querySelector('[data-testid="coordinator-retry-button"]')).toBeTruthy(),
+      { timeout: 4000 },
+    );
+  });
+
+  it('shows Retry button when runLevelStatus is merge_failed', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'merge_failed', parent_run_id: null,
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.querySelector('[data-testid="coordinator-retry-button"]')).toBeTruthy(),
+      { timeout: 4000 },
+    );
+  });
+
+  it('does NOT show Retry button for in_progress runs', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'in_progress', parent_run_id: null,
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Orchestration'),
+      { timeout: 4000 },
+    );
+    expect(document.body.querySelector('[data-testid="coordinator-retry-button"]')).toBeNull();
+  });
+
+  it('clicking Retry calls apiClient.retryRun and navigates to the new run', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'failed', parent_run_id: null,
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+    vi.mocked(apiClient.retryRun).mockResolvedValue({
+      run_id: 'new-coord-run-2',
+      retried_from: 'coord-run-1',
+      status: 'in_progress',
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const btn = await waitFor(
+      () => {
+        const el = document.body.querySelector('[data-testid="coordinator-retry-button"]');
+        expect(el).toBeTruthy();
+        return el as HTMLButtonElement;
+      },
+      { timeout: 4000 },
+    );
+
+    fireEvent.click(btn);
+
+    await waitFor(
+      () => expect(vi.mocked(apiClient.retryRun)).toHaveBeenCalledWith('coord-run-1'),
+      { timeout: 4000 },
+    );
+    await waitFor(
+      () => expect(mockNavigate).toHaveBeenCalledWith('/projects/p1/orchestrations/new-coord-run-2'),
+      { timeout: 4000 },
+    );
+  });
+});

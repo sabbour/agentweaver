@@ -1,9 +1,15 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace Agentweaver.Mcp.Tools;
+
+internal sealed record RetryRunResponse(
+    [property: JsonPropertyName("run_id")]      string RunId,
+    [property: JsonPropertyName("retried_from")] string RetriedFrom,
+    [property: JsonPropertyName("status")]      string Status);
 
 [McpServerToolType]
 public sealed class RunTools(AgentweaverApiClient api)
@@ -128,6 +134,21 @@ public sealed class RunTools(AgentweaverApiClient api)
         {
             var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/files/{path.TrimStart('/')}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "run_retry"), Description("Retry a failed run by creating a fresh run from its original inputs.")]
+    public async Task<string> RunRetryAsync(
+        [Description("Run ID")] string run_id,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.PostAsync<RetryRunResponse>(
+                $"/api/runs/{run_id}/retry", body: null, ct);
+            return $"Retried run {run_id} -> new run {result.RunId}.";
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }

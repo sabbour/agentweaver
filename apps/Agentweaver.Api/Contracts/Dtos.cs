@@ -136,6 +136,13 @@ public sealed record RunResponse
     public string? SubtaskId { get; init; }
 
     /// <summary>
+    /// The run_id of the FAILED run this run was retriggered from (POST /api/runs/{id}/retry).
+    /// Null for runs not produced by a retry. Lets the UI/MCP surface retry provenance.
+    /// </summary>
+    [JsonPropertyName("retried_from")]
+    public string? RetriedFrom { get; init; }
+
+    /// <summary>
     /// Orchestration status of a COORDINATOR run, sourced from its work plan
     /// (planned | dispatching | awaiting_assembly | assembling | in_review | complete |
     /// assembly_blocked | assembly_failed | assembly_declined). Null for standalone runs, child
@@ -926,4 +933,140 @@ public sealed record SteeringDirectiveResponse
     [JsonPropertyName("relayedAt")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? RelayedAt { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// Backlog & Workflow Kanban board (Feature 009). snake_case JSON, mirroring
+// the project/run endpoint conventions.
+// -----------------------------------------------------------------------
+
+/// <summary>Request body for POST /api/projects/{projectId}/backlog/tasks.</summary>
+public sealed record CaptureBacklogTaskRequest
+{
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+}
+
+/// <summary>Request body for PATCH /api/projects/{projectId}/backlog/tasks/{taskId}.</summary>
+public sealed record EditBacklogTaskRequest
+{
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+}
+
+/// <summary>Request body for the move-to-ready / move-to-backlog endpoints.</summary>
+public sealed record MoveBacklogTaskRequest
+{
+    [JsonPropertyName("target_index")] public int? TargetIndex { get; init; }
+}
+
+/// <summary>Request body for POST /api/projects/{projectId}/backlog/tasks/{taskId}/reorder.</summary>
+public sealed record ReorderBacklogTaskRequest
+{
+    [JsonPropertyName("target_index")] public int TargetIndex { get; init; }
+}
+
+/// <summary>Full backlog-task projection returned by capture/edit/move/reorder.</summary>
+public sealed record BacklogTaskDto
+{
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("title")] public required string Title { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("state")] public required string State { get; init; }
+    [JsonPropertyName("order_key")] public required string OrderKey { get; init; }
+    [JsonPropertyName("captured_by")] public required string CapturedBy { get; init; }
+    [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
+    [JsonPropertyName("committed_at")] public DateTimeOffset? CommittedAt { get; init; }
+    [JsonPropertyName("claimed_at")] public DateTimeOffset? ClaimedAt { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+}
+
+/// <summary>Per-project pickup settings (FR-008a + unattended seeding).</summary>
+public sealed record BacklogSettingsDto
+{
+    [JsonPropertyName("max_ready_per_heartbeat")] public required int MaxReadyPerHeartbeat { get; init; }
+    [JsonPropertyName("pickup_autopilot")] public required bool PickupAutopilot { get; init; }
+    [JsonPropertyName("pickup_auto_approve_tools")] public required bool PickupAutoApproveTools { get; init; }
+}
+
+/// <summary>A single workflow-stage column descriptor.</summary>
+public sealed record WorkflowStageDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("label")] public required string Label { get; init; }
+}
+
+/// <summary>Response body for GET /api/projects/{projectId}/workflow-stages.</summary>
+public sealed record WorkflowStagesResponse
+{
+    [JsonPropertyName("available")] public required bool Available { get; init; }
+    [JsonPropertyName("stages")] public required IReadOnlyList<WorkflowStageDto> Stages { get; init; }
+}
+
+/// <summary>A Backlog/Ready intake card.</summary>
+public sealed record TaskCardDto
+{
+    [JsonPropertyName("kind")] public string Kind => "task";
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("title")] public required string Title { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("state")] public required string State { get; init; }
+    [JsonPropertyName("order_key")] public required string OrderKey { get; init; }
+    [JsonPropertyName("captured_by")] public required string CapturedBy { get; init; }
+    [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
+    [JsonPropertyName("committed_at")] public DateTimeOffset? CommittedAt { get; init; }
+}
+
+/// <summary>A coordinator-run card placed in a workflow column.</summary>
+public sealed record RunCardDto
+{
+    [JsonPropertyName("kind")] public string Kind => "run";
+    [JsonPropertyName("run_id")] public required string RunId { get; init; }
+    [JsonPropertyName("workflow_run_id")] public string? WorkflowRunId { get; init; }
+    [JsonPropertyName("backlog_task_id")] public string? BacklogTaskId { get; init; }
+    [JsonPropertyName("task")] public required string Task { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("work_plan_status")] public string? WorkPlanStatus { get; init; }
+    [JsonPropertyName("assembly_stage")] public string? AssemblyStage { get; init; }
+    [JsonPropertyName("stage_id")] public required string StageId { get; init; }
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
+    [JsonPropertyName("retried_from")] public string? RetriedFrom { get; init; }
+    [JsonPropertyName("started_at")] public required DateTimeOffset StartedAt { get; init; }
+    [JsonPropertyName("ended_at")] public DateTimeOffset? EndedAt { get; init; }
+}
+
+/// <summary>A board column with its cards (TaskCardDto for intake, RunCardDto for workflow).</summary>
+public sealed record BoardColumnDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("kind")] public required string Kind { get; init; }   // "intake" | "workflow"
+    [JsonPropertyName("label")] public required string Label { get; init; }
+    [JsonPropertyName("cards")] public required IReadOnlyList<object> Cards { get; init; }
+
+    [JsonPropertyName("collapsed_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? CollapsedCount { get; init; }
+}
+
+/// <summary>Response body for GET /api/projects/{projectId}/board.</summary>
+public sealed record BoardDto
+{
+    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("workflow_stages_available")] public required bool WorkflowStagesAvailable { get; init; }
+    [JsonPropertyName("columns")] public required IReadOnlyList<BoardColumnDto> Columns { get; init; }
+}
+
+/// <summary>Response body for POST /api/projects/{projectId}/backlog/ready-all (bulk promote).</summary>
+public sealed record ReadyAllResponse
+{
+    [JsonPropertyName("moved")] public required int Moved { get; init; }
+}
+
+/// <summary>Response body for POST /api/runs/{id}/retry — the freshly created retry run.</summary>
+public sealed record RetryRunResponse
+{
+    [JsonPropertyName("run_id")] public required string RunId { get; init; }
+    [JsonPropertyName("retried_from")] public required string RetriedFrom { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
 }

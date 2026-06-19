@@ -15,4 +15,7 @@ public interface IProjectStore
     /// </summary>
     Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default);
     Task DeleteAsync(ProjectId id, CancellationToken ct = default);
+    /// <summary>Updates the per-project backlog pickup settings (FR-008a + unattended seeding).</summary>
+    Task UpdatePickupSettingsAsync(
+        ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default);
 }

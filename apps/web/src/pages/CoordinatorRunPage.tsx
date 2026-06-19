@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Button,
   Dialog,
@@ -23,6 +23,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
+  ArrowRepeatAllRegular,
   ArrowRoutingRegular,
   BotRegular,
   ChevronLeftRegular,
@@ -56,6 +57,7 @@ import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { Timeline } from '../components/Timeline';
 import { useTimelineItems } from '../timeline/useTimelineItems';
+import { stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
 import { RunLayout } from '../components/RunLayout';
 import { RunWatcher } from '../components/RunWatcher';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
@@ -853,6 +855,7 @@ function steerKindLabel(kind: SteerKind): string {
 export function CoordinatorRunPage() {
   const styles = useStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
+  const navigate = useNavigate();
 
   const { events, status: streamStatus } = useRunStream(runId ?? '', API_KEY, API_URL);
 
@@ -920,6 +923,10 @@ export function CoordinatorRunPage() {
   // gate is NOT armed, so showing an actionable review bar would 409. We use this to suppress the
   // review affordance for a terminal run and show its failure reason instead.
   const [runLevelStatus, setRunLevelStatus] = useState<RunStatus | undefined>(undefined);
+  const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
+  // Retry state for the header button.
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
   // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
   const [autopilot, setAutopilot] = useState(false);
@@ -947,6 +954,7 @@ export function CoordinatorRunPage() {
       setCoordStatusReason(reasonField);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      if (detail?.retried_from) setRetriedFrom(detail.retried_from);
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
         setAutopilot(Boolean(detail.autopilot));
@@ -1003,7 +1011,11 @@ export function CoordinatorRunPage() {
   // Session run — reuse the standard rich run Timeline over the coordinator's OWN event stream,
   // so the coordinator session reads like every other agent's "view run" (turn groups, tool cards,
   // agent messages) instead of a bespoke milestone list.
-  const { items: coordItems, runOutcome: coordRunOutcome } = useTimelineItems(events, runId ?? '');
+  const { items: coordItemsRaw, runOutcome: coordRunOutcome } = useTimelineItems(events, runId ?? '');
+  // Suppress the decompose agent's serialized work-plan JSON message: the structured work plan is
+  // already surfaced by the "Decomposed into N subtasks" lifecycle chip + the work-plan panel/graph,
+  // so the raw JSON array must not be dumped verbatim into the session timeline.
+  const coordItems = useMemo(() => stripSerializedWorkPlanMessages(coordItemsRaw), [coordItemsRaw]);
   const liveRun = streamStatus === 'connecting' || streamStatus === 'streaming';
 
   // Outcome column collapse — fold the spec to a thin left rail to give the session room.
@@ -1502,6 +1514,21 @@ export function CoordinatorRunPage() {
       .finally(() => setAutoApproveBusy(false));
   }, [runId, autoApproveBusy]);
 
+  const handleRetry = useCallback(async () => {
+    if (!runId || !projectId || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const res = await apiClient.retryRun(runId);
+      navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
+    } catch (err) {
+      setRetryError(
+        err instanceof Error ? err.message : String(err),
+      );
+      setRetrying(false);
+    }
+  }, [runId, projectId, retrying, navigate]);
+
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
   }
@@ -1510,6 +1537,8 @@ export function CoordinatorRunPage() {
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
+  const isRetryable     = runLevelStatus === 'failed' || runLevelStatus === 'merge_failed';
+  const retriedFromShort = retriedFrom ? retriedFrom.slice(0, 8) : null;
   // Auto-size the graph band to its content so it grows as subtask pipelines expand, instead of a
   // fixed height that clips tall fan-outs (horizontal LR layout still varies in height per rank).
   const graphHeight = useMemo(() => {
@@ -1565,6 +1594,7 @@ export function CoordinatorRunPage() {
     getFiles: (rid, filter) => apiClient.getAssemblyFiles(rid, filter),
     getFileDiff: (rid, path) => apiClient.getAssemblyFileDiff(rid, path),
     getWorkspace: (rid) => apiClient.getAssemblyWorkspace(rid),
+    getContent: (rid, path) => apiClient.getAssemblyFileContent(rid, path),
     approve: (rid) => apiClient.reviewAssembly(rid, 'approve'),
     requestChanges: (rid, comment) => apiClient.reviewAssembly(rid, 'request_changes', comment),
     decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
@@ -1586,7 +1616,35 @@ export function CoordinatorRunPage() {
         <Title2>Orchestration</Title2>
         <span className={styles.runIdLabel}>{shortId}</span>
         {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Connecting" />}
+        {isRetryable && (
+          <Button
+            appearance="primary"
+            size="small"
+            icon={<ArrowRepeatAllRegular />}
+            disabled={retrying}
+            onClick={() => void handleRetry()}
+            data-testid="coordinator-retry-button"
+          >
+            Retry
+          </Button>
+        )}
+        {retriedFromShort && (
+          <Text className={styles.runIdLabel}>
+            Retried from{' '}
+            <Link
+              to={`/projects/${projectId}/orchestrations/${retriedFrom}`}
+              className={styles.breadcrumbLink}
+            >
+              {retriedFromShort}
+            </Link>
+          </Text>
+        )}
       </div>
+      {retryError && (
+        <MessageBar intent="error">
+          <MessageBarBody>Retry failed: {retryError}</MessageBarBody>
+        </MessageBar>
+      )}
 
       {goal && <Text className={styles.goal}>Goal: {goal}</Text>}
 

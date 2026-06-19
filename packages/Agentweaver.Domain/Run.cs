@@ -47,4 +47,15 @@ public sealed record Run
     public string? ParentRunId { get; init; }
     /// <summary>The Subtask.Id this child run executes. Null for non-orchestrated runs.</summary>
     public string? SubtaskId { get; init; }
+    /// <summary>Durable provenance marker. Defaults to <see cref="RunOrigin.Interactive"/>; only the
+    /// backlog-pickup claim+reserve transaction stamps <see cref="RunOrigin.BacklogPickup"/>.</summary>
+    public RunOrigin Origin { get; init; } = RunOrigin.Interactive;
+
+    /// <summary>
+    /// The run_id of the FAILED run this run was retriggered from (POST /api/runs/{id}/retry).
+    /// Null for runs that were not produced by a retry. Forms a provenance chain (a retry of a retry
+    /// points at its immediate predecessor) used to surface lineage in the UI and to enforce the
+    /// soft retry-depth cap.
+    /// </summary>
+    public string? RetriedFrom { get; init; }
 }

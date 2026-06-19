@@ -76,6 +76,20 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merged_commit_hash TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN parent_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN subtask_id TEXT;", ct);
+
+        // Durable run-origin marker for backlog-pickup coordinator runs (Feature 009). Existing rows
+        // default to 'interactive'; only the claim+reserve transaction writes 'backlog_pickup'.
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'interactive';", ct);
+        await TryAlterAsync(connection, "CREATE INDEX IF NOT EXISTS idx_runs_origin_status ON runs (origin, status);", ct);
+
+        // Retry provenance (POST /api/runs/{id}/retry): the run_id of the failed run a fresh run was
+        // retriggered from. Existing rows default to NULL (not produced by a retry).
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN retried_from TEXT;", ct);
+
+        // Per-project backlog pickup configuration (Feature 009, FR-008a + unattended seeding).
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_autopilot INTEGER NOT NULL DEFAULT 1;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_auto_approve_tools INTEGER NOT NULL DEFAULT 0;", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
@@ -154,6 +168,35 @@ public sealed class SqliteDb
             started_at       TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_workflow_runs_project ON workflow_runs (project_id);
+
+        CREATE TABLE IF NOT EXISTS backlog_tasks (
+            task_id       TEXT PRIMARY KEY,
+            project_id    TEXT NOT NULL,
+            title         TEXT NOT NULL,
+            description   TEXT,
+            state         TEXT NOT NULL,            -- 'backlog' | 'ready' | 'claimed'
+            order_key     TEXT NOT NULL,
+            captured_by   TEXT NOT NULL,
+            created_at    TEXT NOT NULL,
+            committed_at  TEXT,
+            claimed_at    TEXT,
+            run_id        TEXT,                      -- non-null iff state = 'claimed'
+            FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
+        );
+
+        -- Project scoping + ordered top-N reads.
+        CREATE INDEX IF NOT EXISTS idx_backlog_tasks_project_state
+            ON backlog_tasks (project_id, state, order_key);
+
+        -- order_key uniqueness per (project_id, state) for the UNCLAIMED buckets only. Claimed rows
+        -- are excluded so a stale claimed order_key never blocks a future insert.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_orderkey_unique
+            ON backlog_tasks (project_id, state, order_key)
+            WHERE state IN ('backlog','ready');
+
+        -- One-task-to-at-most-one-run invariant at the storage layer.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_run
+            ON backlog_tasks (run_id) WHERE run_id IS NOT NULL;
 
         """;
 }

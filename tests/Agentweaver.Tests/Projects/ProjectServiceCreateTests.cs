@@ -262,5 +262,8 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
 
         public Task DeleteAsync(ProjectId id, CancellationToken ct = default) =>
             _inner.DeleteAsync(id, ct);
+
+        public Task UpdatePickupSettingsAsync(ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            _inner.UpdatePickupSettingsAsync(id, maxReadyPerHeartbeat, autopilot, autoApproveTools, updatedAt, ct);
     }
 }

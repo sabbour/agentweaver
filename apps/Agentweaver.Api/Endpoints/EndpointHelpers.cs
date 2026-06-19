@@ -67,4 +67,60 @@ internal static SandboxPolicy ToSandboxPolicyDomain(SandboxPolicyDto dto) => new
     RedactPii                  = dto.RedactPii,
     MaxOutputBytes             = dto.MaxOutputBytes,
 };
+
+/// <summary>
+/// Builds the <see cref="WorkspaceFileContent"/> the Preview/source tab consumes from a git
+/// <see cref="Blob"/>. Shared by the merged-run content endpoint (RunEndpoints) and the coordinator
+/// assembly content endpoint (CoordinatorEndpoints) so the binary / too-large / text handling has a
+/// single implementation. The 1&#160;MB cap mirrors the worktree-backed content path.
+/// </summary>
+internal static WorkspaceFileContent BuildBlobContent(Blob blob, string normalizedPath)
+{
+    const int maxGitContentBytes = 1 * 1024 * 1024;
+
+    if (blob.IsBinary)
+        return new WorkspaceFileContent { Path = normalizedPath, Content = null, IsBinary = true, Language = DetectLanguage(normalizedPath) };
+
+    if (blob.Size > maxGitContentBytes)
+        return new WorkspaceFileContent { Path = normalizedPath, Content = null, IsBinary = false, Language = "too_large" };
+
+    return new WorkspaceFileContent
+    {
+        Path     = normalizedPath,
+        Content  = blob.GetContentText(),
+        IsBinary = false,
+        Language = DetectLanguage(normalizedPath),
+    };
+}
+
+/// <summary>
+/// Maps a file extension to a language identifier accepted by react-syntax-highlighter.
+/// Returns null for unknown extensions. Shared across the run and coordinator content endpoints.
+/// </summary>
+internal static string? DetectLanguage(string path)
+{
+    var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+    return ext switch
+    {
+        "cs"                                    => "csharp",
+        "ts" or "tsx"                           => "typescript",
+        "js" or "jsx"                           => "javascript",
+        "json"                                  => "json",
+        "md"                                    => "markdown",
+        "css"                                   => "css",
+        "html"                                  => "html",
+        "xml" or "csproj" or "props" or "targets" => "xml",
+        "yaml" or "yml"                         => "yaml",
+        "sh" or "bash"                          => "bash",
+        "ps1"                                   => "powershell",
+        "py"                                    => "python",
+        "go"                                    => "go",
+        "rs"                                    => "rust",
+        "java"                                  => "java",
+        "cpp" or "cc" or "cxx" or "c" or "h" or "hpp" => "cpp",
+        "sql"                                   => "sql",
+        "txt"                                   => "plaintext",
+        _                                       => null
+    };
+}
 }

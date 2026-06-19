@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -41,6 +41,10 @@ export class AgentweaverApiClient {
     return this.request<RunDetail>('GET', `/api/runs/${encodeURIComponent(runId)}`);
   }
 
+  retryRun(runId: string): Promise<RetryRunResponse> {
+    return this.request<RetryRunResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/retry`, {});
+  }
+
   // Persisted run events (FR-022). Seeds the execution timeline for terminal/parked
   // runs whose live SSE stream is closed (e.g. a finished coordinator child). The
   // backend persists and replays the events here; 404 until the log exists.
@@ -78,6 +82,14 @@ export class AgentweaverApiClient {
 
   getAssemblyWorkspace(runId: string): Promise<WorkspaceNode[]> {
     return this.request<WorkspaceNode[]>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/workspace`);
+  }
+
+  // Per-file CONTENT of the collective integration branch tip, for the review modal's Preview/source
+  // tab. The coordinator owns no worktree, so the standard worktree-backed content endpoint 409s;
+  // this reads the blob from agentweaver/integration/{id} instead.
+  getAssemblyFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<WorkspaceFileContent>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/content/${encoded}`);
   }
 
   getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
@@ -341,6 +353,53 @@ export class AgentweaverApiClient {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
     }
+  }
+
+  // Backlog & Workflow Kanban board (Feature 009). Thin pass-throughs to the
+  // snake_case backlog endpoints — all ordering/claim/validation logic lives server-side.
+  getBoard(projectId: string, includeTerminalHistory = false): Promise<BoardDto> {
+    const query = includeTerminalHistory ? '?include_terminal_history=true' : '';
+    return this.request<BoardDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/board${query}`);
+  }
+
+  getWorkflowStages(projectId: string): Promise<WorkflowStagesResponse> {
+    return this.request<WorkflowStagesResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/workflow-stages`);
+  }
+
+  captureBacklogTask(projectId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
+    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks`, body);
+  }
+
+  editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
+    return this.request<BacklogTaskDto>('PATCH', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`, body);
+  }
+
+  deleteBacklogTask(projectId: string, taskId: string): Promise<void> {
+    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
+  }
+
+  moveTaskToReady(projectId: string, taskId: string, targetIndex?: number): Promise<BacklogTaskDto> {
+    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/ready`, { target_index: targetIndex ?? null });
+  }
+
+  moveTaskToBacklog(projectId: string, taskId: string, targetIndex?: number): Promise<BacklogTaskDto> {
+    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/backlog`, { target_index: targetIndex ?? null });
+  }
+
+  reorderBacklogTask(projectId: string, taskId: string, targetIndex: number): Promise<BacklogTaskDto> {
+    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/reorder`, { target_index: targetIndex });
+  }
+
+  sendAllBacklogToReady(projectId: string): Promise<{ moved: number }> {
+    return this.request<{ moved: number }>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/ready-all`, {});
+  }
+
+  getBacklogSettings(projectId: string): Promise<BacklogSettingsDto> {
+    return this.request<BacklogSettingsDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/backlog/settings`);
+  }
+
+  setBacklogSettings(projectId: string, settings: BacklogSettingsDto): Promise<BacklogSettingsDto> {
+    return this.request<BacklogSettingsDto>('PUT', `/api/projects/${encodeURIComponent(projectId)}/backlog/settings`, settings);
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {

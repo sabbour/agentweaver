@@ -29,6 +29,7 @@
     <ProjectReference Include="..\..\packages\Agentweaver.SandboxFs\Agentweaver.SandboxFs.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
     <ProjectReference Include="..\..\apps\Agentweaver.Api\Agentweaver.Api.csproj" />
+    <ProjectReference Include="..\..\apps\Agentweaver.Mcp\Agentweaver.Mcp.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.Squad\Agentweaver.Squad.csproj" />
   </ItemGroup>
 

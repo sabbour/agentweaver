@@ -22,6 +22,7 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
     private readonly string _dbPath;
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
+    private readonly string _coordinatorCheckpointsPath;
 
     /// <summary>Exposed so tests can configure the agent's behavior per test.</summary>
     public TestFileEditAgentRunner TestAgentRunner { get; } = new();
@@ -31,6 +32,7 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
         _dbPath        = Path.Combine(Path.GetTempPath(), $"agentweaver-rc-{Guid.NewGuid():N}.db");
         _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rc-wt-{Guid.NewGuid():N}");
         _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rc-cp-{Guid.NewGuid():N}");
+        _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rc-ccp-{Guid.NewGuid():N}");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -42,6 +44,7 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
                 ["Database:Path"]                         = _dbPath,
                 ["Worktrees:BasePath"]                    = _worktreesPath,
                 ["Checkpoints:Path"]                      = _checkpointsPath,
+                ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
                 ["Auth:ApiKey"]                           = OwnerApiKey,
                 ["Auth:User"]                             = OwnerUser,
                 ["Auth:Keys:0:Token"]                     = OtherApiKey,
@@ -91,5 +94,6 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
 
         try { Directory.Delete(_worktreesPath, recursive: true); } catch { /* best effort */ }
         try { Directory.Delete(_checkpointsPath, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(_coordinatorCheckpointsPath, recursive: true); } catch { /* best effort */ }
     }
 }

@@ -41,9 +41,16 @@ export interface SubmitRunResponse {
   status: RunStatus;
 }
 
+export interface RetryRunResponse {
+  run_id: string;
+  retried_from: string;
+  status: string;
+}
+
 export interface RunDetail {
   run_id: string;
   status: RunStatus;
+  retried_from?: string | null;
   model_source: ModelSource;
   started_at: string;
   ended_at: string | null;
@@ -637,4 +644,92 @@ export interface AutoApproveResponse {
 export interface AutopilotResponse {
   run_id: string;
   autopilot: boolean;
+}
+
+// -----------------------------------------------------------------------
+// Feature 009 — Backlog & Workflow Kanban board. snake_case JSON DTOs,
+// mirroring apps/Agentweaver.Api/Contracts/Dtos.cs (the Web is a thin client).
+// -----------------------------------------------------------------------
+
+// Full backlog-task projection returned by capture/edit/move/reorder.
+export interface BacklogTaskDto {
+  task_id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  state: string; // backlog | ready | claimed
+  order_key: string;
+  captured_by: string;
+  created_at: string;
+  committed_at?: string | null;
+  claimed_at?: string | null;
+  run_id?: string | null;
+}
+
+// A Backlog/Ready intake card (board column kind === "intake").
+export interface TaskCardDto {
+  kind: 'task';
+  task_id: string;
+  title: string;
+  description: string | null;
+  state: string; // backlog | ready
+  order_key: string;
+  captured_by: string;
+  created_at: string;
+  committed_at?: string | null;
+}
+
+// A coordinator-run card placed in a workflow column (read-only).
+export interface RunCardDto {
+  kind: 'run';
+  run_id: string;
+  workflow_run_id?: string | null;
+  backlog_task_id?: string | null;
+  task: string;
+  status: string;
+  retried_from?: string | null;
+  work_plan_status?: string | null;
+  assembly_stage?: string | null;
+  stage_id: string;
+  agent_name?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+}
+
+export type BoardCardDto = TaskCardDto | RunCardDto;
+
+// A board column with its cards. Columns are server-ordered; the Web never
+// hardcodes workflow stage names (FR-015) — it renders whatever the API returns.
+export interface BoardColumnDto {
+  id: string;
+  kind: 'intake' | 'workflow';
+  label: string;
+  cards: BoardCardDto[];
+  collapsed_count?: number;
+}
+
+// Response body for GET /api/projects/{projectId}/board.
+export interface BoardDto {
+  project_id: string;
+  workflow_stages_available: boolean;
+  columns: BoardColumnDto[];
+}
+
+// Per-project pickup settings (FR-008a).
+export interface BacklogSettingsDto {
+  max_ready_per_heartbeat: number;
+  pickup_autopilot: boolean;
+  pickup_auto_approve_tools: boolean;
+}
+
+// A single workflow-stage column descriptor.
+export interface WorkflowStageDto {
+  id: string;
+  label: string;
+}
+
+// Response body for GET /api/projects/{projectId}/workflow-stages.
+export interface WorkflowStagesResponse {
+  available: boolean;
+  stages: WorkflowStageDto[];
 }
