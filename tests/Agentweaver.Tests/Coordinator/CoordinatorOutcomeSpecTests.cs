@@ -79,13 +79,19 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         spec.Assumptions.Should().NotBeNullOrWhiteSpace();
         spec.ConfirmedBy.Should().BeNull("no one has confirmed an awaiting_confirmation spec");
 
-        // The coordinator.outcome_spec event is emitted on the run stream.
+        // The coordinator.outcome_spec event is emitted on the run stream, carrying the goal so the
+        // UI populates the GOAL field live even when its GET snapshot raced ahead of the draft.
         var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
         var entry = streamStore.Get(runId);
         entry.Should().NotBeNull();
-        entry!.GetSnapshotSince(0).Events.Should().Contain(
-            e => e.Type == EventTypes.CoordinatorOutcomeSpec,
+        var specEvent = entry!.GetSnapshotSince(0).Events.FirstOrDefault(
+            e => e.Type == EventTypes.CoordinatorOutcomeSpec);
+        specEvent.Should().NotBeNull(
             "the draft executor must emit coordinator.outcome_spec before suspending");
+        var specPayload = JsonSerializer.SerializeToElement(specEvent!.Payload);
+        specPayload.GetProperty("goal").GetString().Should().Be(
+            "Build a deterministic outcome spec for testing",
+            "the outcome_spec event must carry the goal for the UI GOAL field");
 
         // No dispatch in Phase 1: the run stays in_progress (suspended), not terminal, and no
         // child run was created.

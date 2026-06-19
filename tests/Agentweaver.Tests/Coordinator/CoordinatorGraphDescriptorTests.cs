@@ -216,4 +216,36 @@ public sealed class CoordinatorGraphDescriptorTests
         d.Edges.Single(e => e.From == "planned:assembly-rai" && e.To == "planned:assembly-review")
             .Cardinality.Should().Be("direct");
     }
+
+    [Fact]
+    public void BuildEmpty_ProducesCoordinatorVariant_WithNoSubtasks_AndPlannedAssemblyStage()
+    {
+        // Pre-confirmation / pre-decomposition: a coordinator run has no work plan yet. The graph
+        // must stay on the coordinator variant (Coordinator + PLANNED assembly stage) rather than
+        // falling through to the misleading single-agent per-run pipeline.
+        var d = CoordinatorGraphDescriptor.BuildEmpty("coord_run");
+
+        d.Variant.Should().Be("coordinator");
+        d.GraphId.Should().Be("coordinator:coord_run");
+        d.StartNodeId.Should().Be("coordinator");
+
+        // Exactly the coordinator node + the four planned assembly nodes — no subtask fan-out.
+        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[]
+        {
+            "coordinator",
+            "planned:assembly-rai", "planned:assembly-review",
+            "planned:assembly-merge", "planned:assembly-scribe",
+        });
+        d.Nodes.Should().NotContain(n => n.NodeType == "subtask");
+
+        // The whole assembly stage is PLANNED (nothing has run yet).
+        foreach (var id in new[] { "planned:assembly-rai", "planned:assembly-review", "planned:assembly-merge", "planned:assembly-scribe" })
+            d.Nodes.Single(n => n.Id == id).Kind.Should().Be("planned");
+
+        // Coordinator still wires straight into the planned RAI stage and keeps its loopbacks.
+        var edges = d.Edges.Select(e => (e.From, e.To)).ToHashSet();
+        edges.Should().Contain(("coordinator", "planned:assembly-rai"));
+        edges.Should().Contain(("planned:assembly-rai", "planned:assembly-review"));
+        edges.Should().Contain(("planned:assembly-review", "coordinator"));
+    }
 }

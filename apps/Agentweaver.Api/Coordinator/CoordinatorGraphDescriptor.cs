@@ -46,6 +46,16 @@ public static class CoordinatorGraphDescriptor
         return BuildCore(coordinatorRunId, projected, dependencies, assemblyStage);
     }
 
+    /// <summary>
+    /// Builds the coordinator-variant descriptor for a coordinator run that has no persisted work
+    /// plan yet (pre-confirmation / pre-decomposition): just the Coordinator node wired to the
+    /// PLANNED collective-assembly stage, with no subtask fan-out. This keeps the pre-confirmation
+    /// view on the coordinator graph (not the misleading single-agent per-run pipeline) until
+    /// decomposition produces subtasks.
+    /// </summary>
+    public static GraphDescriptor BuildEmpty(string coordinatorRunId) =>
+        BuildCore(coordinatorRunId, Array.Empty<SubtaskNode>(), Array.Empty<(int, int)>(), assemblyStage: null);
+
     /// <summary>Builds the descriptor from the <see cref="CoordinatorWorkPlanView"/> projection.</summary>
     public static GraphDescriptor Build(CoordinatorWorkPlanView plan)
     {
@@ -124,6 +134,12 @@ public static class CoordinatorGraphDescriptor
         foreach (var s in subtasks)
             if (!hasOutgoing.Contains(s.Id))
                 edges.Add((SubtaskNodeId(s.Id), AssemblyRaiNodeId));
+
+        // No subtasks yet (pre-confirmation / pre-decomposition): wire the coordinator straight into
+        // the planned assembly stage so the empty coordinator graph still renders as a connected
+        // pipeline (Coordinator -> RAI -> Review -> Merge -> Scribe) instead of a floating node.
+        if (subtasks.Count == 0)
+            edges.Add((CoordinatorNodeId, AssemblyRaiNodeId));
 
         // planned assembly chain.
         edges.Add((AssemblyRaiNodeId, AssemblyReviewNodeId));

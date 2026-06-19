@@ -212,6 +212,7 @@ public sealed class CoordinatorWorkflowFactory
         {
             specId,
             status,
+            goal = input.Goal,
             desiredOutcome = draft.DesiredOutcome,
             scope = draft.Scope,
             assumptions = draft.Assumptions,
