@@ -189,6 +189,22 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
   // Suppress render for empty settled messages (§7.3)
   if (!streaming && content.trim() === '') return null;
 
+  // The coordinator's spec-drafting turn streams its final answer as a raw JSON object
+  // ({"desired_outcome": …, "scope": …, …}). That JSON is already surfaced structurally in the
+  // Outcome spec panel, so rendering the raw blob in the timeline is redundant and ugly. Replace it
+  // with a compact pointer. Detect by the leading brace + the spec's signature key.
+  const looksLikeSpecDraft = /^\s*\{/.test(content) && /"desired_outcome"\s*:/.test(content);
+  if (looksLikeSpecDraft) {
+    return (
+      <div className={styles.wrapper} aria-label="Agent message">
+        <BotRegular className={styles.icon} aria-hidden="true" />
+        <Text as="span" style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic', paddingTop: tokens.spacingVerticalXXS }}>
+          Drafted the outcome spec — see the Outcome spec panel.
+        </Text>
+      </div>
+    );
+  }
+
   const isTruncated = content.length >= DISPLAY_MAX;
   const displayContent = isTruncated ? content.slice(0, DISPLAY_MAX) : content;
 

@@ -72,6 +72,7 @@ import {
   ElapsedTimer,
   CoordinatorSessionContext,
   ExecutionModalContext,
+  BrowseFilesContext,
   ActiveEdgeContext,
   type ExecutorDef,
   type ExecutorState,
@@ -524,15 +525,6 @@ function SubtaskNode({ id, data }: NodeProps) {
 
       <div className={s.cardHeader}>
         <StatusBadge status={stepStatus} label={statusLabel} />
-        {d.startedAt !== undefined ? (
-          <span className={s.cardTimer}>
-            <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} />
-          </span>
-        ) : (expanded && Object.keys(childStepStates).length > 0 && (
-          <span className={s.cardTimer}>
-            <AggregateElapsed states={childStepStates} />
-          </span>
-        ))}
       </div>
 
       <div className={s.cardMain}>
@@ -594,6 +586,20 @@ function SubtaskNode({ id, data }: NodeProps) {
           ))}
         </div>
       )}
+
+      {d.startedAt !== undefined ? (
+        <div className={s.cardFooter}>
+          <span className={s.cardTimer}>
+            <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} />
+          </span>
+        </div>
+      ) : (expanded && Object.keys(childStepStates).length > 0 && (
+        <div className={s.cardFooter}>
+          <span className={s.cardTimer}>
+            <AggregateElapsed states={childStepStates} />
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1307,8 +1313,15 @@ export function CoordinatorRunPage() {
         at?.completedAt !== undefined ? 'completed'
         : at?.startedAt !== undefined ? 'started'
         : undefined;
+      const phaseStatus = isAssemblyRole ? assemblyNodeStatus(roleKey, orch.phase) : undefined;
+      // Timing wins once a stage has actually finished: after the user approves the review (or
+      // merge/scribe begin), the orchestration phase can linger on `in_review`, which would
+      // otherwise keep the Human Review gate showing "Awaiting your review". A real decline still
+      // surfaces via phaseStatus === 'failed', which keeps precedence.
       const assemblyStatus = isAssemblyRole
-        ? (assemblyNodeStatus(roleKey, orch.phase) ?? timingStatus)
+        ? (phaseStatus === 'failed' ? 'failed'
+           : timingStatus === 'completed' ? 'completed'
+           : (phaseStatus ?? timingStatus))
         : undefined;
 
       let nodePlanned = planned;
@@ -1349,7 +1362,7 @@ export function CoordinatorRunPage() {
           isPlanned: nodePlanned,
           nodeType:  nt,
           runId:     runId      ?? '',
-          executionId: '',
+          executionId: runId    ?? '',
           projectId:   projectId ?? '',
           dir:         'LR',
         } as WorkflowNodeData,
@@ -1418,18 +1431,29 @@ export function CoordinatorRunPage() {
     reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
-  // Collective-assembly nodes own no separate run, so their WorkflowNode action buttons resolve to
-  // in-page scrolls instead of an execution modal: rai/scribe "View execution" jumps to the
-  // coordinator timeline (where the assembly_* events render); review "Review now" and merge
-  // "Browse files" jump to the reused Changes/Files review panel.
-  const viewAssemblyExecution = useCallback((id: string) => {
-    if (id.endsWith('-rai') || id.endsWith('-scribe')) scrollToSession();
-    else scrollToReview();
-  }, [scrollToSession, scrollToReview]);
+  // Merge "Browse files": surface the assembled filesystem (git tree of the integration branch) by
+  // scrolling to the review rail AND switching it to the Files tab. The monotonic signal is read by
+  // RunLayout, which flips the artifact browser to Files on each increment.
+  const [filesFocusSignal, setFilesFocusSignal] = useState(0);
+  const browseAssemblyFiles = useCallback(() => {
+    setFilesFocusSignal((n) => n + 1);
+    scrollToReview();
+  }, [scrollToReview]);
 
-  // "View run" modal — renders the selected child run via the standard RunWatcher in a dialog.
+  // "View run" modal — renders the selected child run (or a collective-assembly sub-run stream
+  // such as `${runId}-rai` / `${runId}-scribe`) via the standard RunWatcher in a dialog.
   const [viewRunId, setViewRunId] = useState<string | null>(null);
   const openChildRun = useCallback((id: string) => setViewRunId(id), []);
+
+  // Collective-assembly "View execution": the RAI and Scribe stages run a real agent turn on their
+  // own persisted sub-run stream (`${runId}-rai` / `${runId}-scribe`), so open that stream in the
+  // RunWatcher dialog to surface the actual work (tool calls, inbox review, memory writes) — same
+  // pattern the per-run page uses. Merge "Browse files" and Review "Review now" own no separate run,
+  // so they jump to the reused Changes/Files review panel.
+  const viewAssemblyExecution = useCallback((id: string) => {
+    if (id.endsWith('-rai') || id.endsWith('-scribe')) setViewRunId(id);
+    else scrollToReview();
+  }, [scrollToReview]);
 
   // Inline coordinator steering from the graph toolbar — sends redirect/amend with the typed text
   // directly (falling back to the confirmation dialog when no text is provided).
@@ -1501,8 +1525,13 @@ export function CoordinatorRunPage() {
       minY = Math.min(minY, n.position.y);
       maxY = Math.max(maxY, n.position.y + h);
     }
-    return Math.max(180, maxY - minY + 56);
-  }, [rfNodes, expandedKeys]);
+    // Loopback arcs (e.g. "RAI flags" above, "Request changes" below) route ~ARC_GAP(40)px plus a
+    // label outside the node box on each side. Reserve headroom so fitView leaves room for them
+    // instead of clipping the arcs/labels at the band edges.
+    const hasLoopback = displayEdges.some((e) => e.type === 'loopback');
+    const loopHeadroom = hasLoopback ? 132 : 0;
+    return Math.max(180, maxY - minY + 56 + loopHeadroom);
+  }, [rfNodes, expandedKeys, displayEdges]);
   const needsInstruction = steerReq?.kind === 'redirect' || steerReq?.kind === 'amend';
   // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
@@ -1535,7 +1564,7 @@ export function CoordinatorRunPage() {
   const coordAdapter = useMemo<ArtifactBrowserAdapter>(() => ({
     getFiles: (rid, filter) => apiClient.getAssemblyFiles(rid, filter),
     getFileDiff: (rid, path) => apiClient.getAssemblyFileDiff(rid, path),
-    getWorkspace: async () => [],
+    getWorkspace: (rid) => apiClient.getAssemblyWorkspace(rid),
     approve: (rid) => apiClient.reviewAssembly(rid, 'approve'),
     requestChanges: (rid, comment) => apiClient.reviewAssembly(rid, 'request_changes', comment),
     decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
@@ -1577,6 +1606,7 @@ export function CoordinatorRunPage() {
         </Text>
 
         <CoordSteerContext.Provider value={openSteer}>
+          {coordActive && (
           <div className={styles.steerBar}>
             <span className={styles.steerLabel}>Steer coordinator:</span>
             <Input
@@ -1606,15 +1636,17 @@ export function CoordinatorRunPage() {
               Amend
             </Button>
             <Button appearance="subtle" size="small" icon={<StopRegular />}
-              disabled={steerBusy}
+              disabled={steerBusy || !coordActive}
               onClick={() => openSteer({ kind: 'stop' })}>
               Stop
             </Button>
             {steerBusy && <Spinner size="extra-tiny" aria-label="Steering" />}
           </div>
+          )}
 
           {hasGraph ? (
             <ExecutionModalContext.Provider value={viewAssemblyExecution}>
+            <BrowseFilesContext.Provider value={browseAssemblyFiles}>
             <ActiveEdgeContext.Provider value={activeLoopbackId}>
             <CoordinatorSessionContext.Provider value={scrollToSession}>
             <CoordExpandContext.Provider value={expandValue}>
@@ -1649,6 +1681,7 @@ export function CoordinatorRunPage() {
             </CoordExpandContext.Provider>
             </CoordinatorSessionContext.Provider>
             </ActiveEdgeContext.Provider>
+            </BrowseFilesContext.Provider>
             </ExecutionModalContext.Provider>
           ) : (
             <Text className={styles.hint}>
@@ -1866,6 +1899,7 @@ export function CoordinatorRunPage() {
             runId={runId ?? ''}
             runStatus={coordRunStatus}
             artifactAdapter={coordAdapter}
+            focusFilesSignal={filesFocusSignal}
             centerContent={
               <Timeline
                 items={coordItems}
@@ -1888,11 +1922,17 @@ export function CoordinatorRunPage() {
         <DialogSurface className={styles.viewRunSurface}>
           <DialogBody className={styles.viewRunBody}>
             <div className={styles.viewRunHeader}>
-              <Title3>Child run {viewRunId ? viewRunId.slice(0, 8) : ''}</Title3>
+              <Title3>
+                {viewRunId?.endsWith('-rai')
+                  ? 'RAI review (collective assembly)'
+                  : viewRunId?.endsWith('-scribe')
+                    ? 'Scribe documentation (collective assembly)'
+                    : `Child run ${viewRunId ? viewRunId.slice(0, 8) : ''}`}
+              </Title3>
               <Button
                 appearance="subtle"
                 icon={<DismissRegular />}
-                aria-label="Close child run"
+                aria-label="Close run"
                 onClick={() => setViewRunId(null)}
               />
             </div>

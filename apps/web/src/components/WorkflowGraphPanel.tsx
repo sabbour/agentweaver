@@ -103,6 +103,13 @@ export const ActiveEdgeContext = createContext<string | undefined>(undefined);
 /** CoordinatorRunPage: open/scroll to the all-up orchestration session panel. */
 export const CoordinatorSessionContext = createContext<(() => void) | undefined>(undefined);
 
+/**
+ * CoordinatorRunPage: the Merge stage's "Browse files" wants the assembled filesystem (the Files
+ * tab of the review rail), not the per-run execution modal. When provided, the Merge button calls
+ * this instead of {@link ExecutionModalContext}; the per-run page leaves it unset and keeps the modal.
+ */
+export const BrowseFilesContext = createContext<((executionId: string) => void) | undefined>(undefined);
+
 // ---------------------------------------------------------------------------
 // Role → icon / description helpers (exported so pages can build node data)
 // ---------------------------------------------------------------------------
@@ -288,6 +295,12 @@ export const useNodeStyles = makeStyles({
     fontVariantNumeric: 'tabular-nums',
     marginTop: '1px',
   },
+  cardFooter: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    marginTop: '2px',
+  },
   cardModel: {
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground4,
@@ -470,6 +483,7 @@ export function WorkflowNode({ data }: NodeProps) {
 
   const openModal = useContext(ExecutionModalContext);
   const openSession = useContext(CoordinatorSessionContext);
+  const browseFiles = useContext(BrowseFilesContext);
 
   const effectiveStatus: StepStatus =
     key === 'agent' && status === 'completed' && (runOutcome?.achieved === false || runDegraded !== undefined)
@@ -541,11 +555,6 @@ export function WorkflowNode({ data }: NodeProps) {
           {agentName && <span className={s.cardSubText}>{agentName as string}</span>}
           {modelId && key === 'agent' && <span className={s.cardModel}>{modelId as string}</span>}
           {subText && <span className={s.cardSubText}>{subText}</span>}
-          {startedAt !== undefined && (
-            <span className={s.cardTimer}>
-              <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
-            </span>
-          )}
         </div>
       </div>
 
@@ -584,7 +593,7 @@ export function WorkflowNode({ data }: NodeProps) {
       )}
       {key === 'merge' && !isPlanned && status === 'completed' && (
         <div className={`${s.cardActions} nopan nodrag`}>
-          <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => openModal?.(executionId as string)}>
+          <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => (browseFiles ?? openModal)?.(executionId as string)}>
             Browse files
           </Button>
         </div>
@@ -604,6 +613,14 @@ export function WorkflowNode({ data }: NodeProps) {
             alt={reviewedBy as string}
           />
           <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>{reviewedBy as string}</Text>
+        </div>
+      )}
+
+      {startedAt !== undefined && (
+        <div className={s.cardFooter}>
+          <span className={s.cardTimer}>
+            <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
+          </span>
         </div>
       )}
     </div>

@@ -33,6 +33,7 @@ vi.mock('../api/apiClient', () => ({
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
     getAssemblyFiles: vi.fn().mockResolvedValue([]),
+    getAssemblyWorkspace: vi.fn().mockResolvedValue([]),
     getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
   },
 }));
@@ -101,6 +102,23 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
     expect(text).toContain('Steer coordinator:');
     // Compact automation toolbar (no oversized session panel/heading).
     expect(text).toContain('Autopilot');
+  });
+
+  it('hides the steering toolbar once the orchestration is complete (no Stop on a finished run)', async () => {
+    // Regression: a terminal orchestration cannot be steered or stopped, so the whole "Steer
+    // coordinator:" toolbar (incl. the Stop button) must disappear once the run completes.
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_completed', payload: { timestamp_utc: new Date().toISOString() } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Coordinator Graph'),
+      { timeout: 4000 },
+    );
+    const text = document.body.textContent ?? '';
+    expect(text).not.toContain('Steer coordinator:');
   });
 });
 
@@ -201,6 +219,82 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
 
     await waitFor(
       () => expect(document.body.textContent).toMatch(/2m \d+s/),
+      { timeout: 4000 },
+    );
+  });
+
+  it('clears the Human Review "Awaiting your review" state once the review is approved and merge has begun', async () => {
+    // Regression: the orchestration phase lingers on `in_review` after the user approves, while
+    // merge/scribe run. Timing (review_approved → review.completedAt) must win so the gate no longer
+    // shows action-required. The review node should read "Reviewed", not "Awaiting your review".
+    const t0 = new Date(Date.now() - 120_000).toISOString();
+    const t1 = new Date(Date.now() - 90_000).toISOString();
+    const t2 = new Date(Date.now() - 60_000).toISOString();
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { timestamp_utc: t0 } },
+      { sequence: 2, type: 'coordinator.assembly_review_approved', payload: { timestamp_utc: t1 } },
+      { sequence: 3, type: 'coordinator.assembly_merge_started', payload: { workPlanId: 1, timestamp_utc: t2 } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Reviewed'),
+      { timeout: 4000 },
+    );
+    expect(document.body.textContent ?? '').not.toContain('Awaiting your review');
+  });
+
+  it('opens the Scribe sub-run stream in a dialog from the assembly "View execution" button', async () => {
+    // Regression: assembly Scribe/RAI own a real persisted sub-run stream (`${runId}-scribe`),
+    // so "View execution" must open it in the RunWatcher dialog (surfacing the actual memory work),
+    // not merely scroll to the high-level coordinator timeline.
+    const startedIso = new Date(Date.now() - 30_000).toISOString();
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_scribe_started', payload: { workPlanId: 1, timestamp_utc: startedIso } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const btn = await waitFor(() => {
+      const els = Array.from(document.querySelectorAll('button'))
+        .filter(b => b.textContent === 'View execution');
+      expect(els.length).toBeGreaterThan(0);
+      return els[els.length - 1];
+    }, { timeout: 4000 });
+
+    fireEvent.click(btn);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Scribe documentation (collective assembly)'),
+      { timeout: 4000 },
+    );
+  });
+
+  it('Merge "Browse files" switches the review rail to the Files tab (integration-branch tree)', async () => {
+    // Regression: "Browse files" must surface the assembled filesystem from a git perspective — i.e.
+    // flip the artifact browser to the Files tab and fetch the integration-branch workspace tree —
+    // rather than only scrolling to the Changes diff.
+    const t0 = new Date(Date.now() - 60_000).toISOString();
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_merge_started', payload: { workPlanId: 1, timestamp_utc: t0 } },
+      { sequence: 2, type: 'coordinator.assembly_merge_completed', payload: { workPlanId: 1, timestamp_utc: new Date().toISOString() } },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const btn = await waitFor(() => {
+      const el = Array.from(document.querySelectorAll('button'))
+        .find(b => b.textContent?.includes('Browse files'));
+      expect(el).toBeTruthy();
+      return el as HTMLButtonElement;
+    }, { timeout: 4000 });
+
+    expect(apiClient.getAssemblyWorkspace).not.toHaveBeenCalled();
+    fireEvent.click(btn);
+
+    await waitFor(
+      () => expect(apiClient.getAssemblyWorkspace).toHaveBeenCalledWith('coord-run-1'),
       { timeout: 4000 },
     );
   });

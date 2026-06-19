@@ -76,6 +76,10 @@ export class AgentweaverApiClient {
     return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/files/${encoded}`);
   }
 
+  getAssemblyWorkspace(runId: string): Promise<WorkspaceNode[]> {
+    return this.request<WorkspaceNode[]>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/workspace`);
+  }
+
   getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<WorkspaceFileContent>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
@@ -244,6 +248,10 @@ export class AgentweaverApiClient {
 
   getAgentMemory(projectId: string, agentName: string): Promise<import('./types').AgentMemoryDto[]> {
     return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`);
+  }
+
+  getProjectMemory(projectId: string): Promise<import('./types').AgentMemoryDto[]> {
+    return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/memory`);
   }
 
   // Sync

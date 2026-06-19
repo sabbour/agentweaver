@@ -100,7 +100,28 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
+  qaList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
 });
+
+// Split clarifying questions into individual items. The coordinator sometimes returns several
+// questions crammed into one string as an inline numbered list ("1. ... 2. ..."); break those
+// apart so each question can be answered on its own. Leading "N." / "N)" prefixes are stripped.
+function splitQuestions(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    const matches = line.match(/\d+\.\s+[\s\S]*?(?=\s+\d+\.\s+|$)/g);
+    if (matches && matches.length > 1) {
+      for (const m of matches) out.push(m.trim());
+    } else {
+      out.push(line.trim());
+    }
+  }
+  return out.map((q) => q.replace(/^\d+[.)]\s*/, '').trim()).filter((q) => q.length > 0);
+}
 
 // Render a value that may be a single string or a list of strings.
 function toLines(value?: string | string[]): string[] {
@@ -154,7 +175,8 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reviseOpen, setReviseOpen] = useState(false);
-  const [feedback, setFeedback] = useState('');
+  const [answers, setAnswers] = useState<string[]>([]);
+  const [extraFeedback, setExtraFeedback] = useState('');
   const [revising, setRevising] = useState(false);
 
   const fetchSpec = useCallback(async () => {
@@ -248,16 +270,18 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
   };
 
   const handleRevise = async () => {
-    if (!feedback.trim()) return;
+    const composed = composedFeedback.trim();
+    if (!composed) return;
     setActing(true);
     setActionError(null);
     try {
-      const updated = await apiClient.reviseOutcomeSpec(runId, feedback.trim());
+      const updated = await apiClient.reviseOutcomeSpec(runId, composed);
       if (updated) setSpecFromApi(updated);
       else await fetchSpec();
       setRevising(true);
       setReviseOpen(false);
-      setFeedback('');
+      setAnswers([]);
+      setExtraFeedback('');
     } catch (err) {
       setActionError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
@@ -269,7 +293,18 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
   const statusMeta = STATUS_META[status] ?? STATUS_META.drafting;
   const awaiting = status === 'awaiting_confirmation';
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
-  const clarifying = toLines(spec?.clarifyingQuestions);
+  const clarifying = useMemo(() => splitQuestions(toLines(spec?.clarifyingQuestions)), [spec?.clarifyingQuestions]);
+
+  // Compose the revise feedback from the per-question answers plus any free-form feedback.
+  // Each answered question becomes a "Q: …\nA: …" block the coordinator re-drafts from.
+  const composedFeedback = useMemo(() => {
+    const qa = clarifying
+      .map((q, i) => ({ q, a: (answers[i] ?? '').trim() }))
+      .filter((x) => x.a.length > 0)
+      .map((x) => `Q: ${x.q}\nA: ${x.a}`)
+      .join('\n\n');
+    return [qa, extraFeedback.trim()].filter((s) => s.length > 0).join('\n\n');
+  }, [clarifying, answers, extraFeedback]);
 
   // Once a freshly re-drafted spec returns to awaiting_confirmation, clear the
   // "incorporating your changes" state so the panel reflects the new spec.
@@ -277,13 +312,11 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
     if (status === 'awaiting_confirmation') setRevising(false);
   }, [status]);
 
-  // Open the revise dialog, seeding a Q/A template from the clarifying questions
-  // when the user has not already typed feedback. Answering the questions IS the
-  // revise feedback the coordinator re-drafts from.
+  // Open the revise dialog with one empty answer slot per clarifying question.
+  // Answering the questions IS the revise feedback the coordinator re-drafts from.
   const openRevise = () => {
-    if (!feedback.trim() && clarifying.length > 0) {
-      setFeedback(clarifying.map((q) => `Q: ${q}\nA: `).join('\n\n'));
-    }
+    setAnswers(clarifying.map(() => ''));
+    setExtraFeedback('');
     setReviseOpen(true);
   };
 
@@ -372,7 +405,7 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
         </div>
       )}
 
-      <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) setFeedback(''); }}>
+      <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) { setAnswers([]); setExtraFeedback(''); } }}>
         <DialogSurface>
           <DialogBody>
             <DialogTitle>Clarify and request changes</DialogTitle>
@@ -387,32 +420,46 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
                   <div className={styles.section}>
                     <Text className={styles.sectionLabel}>Clarifying questions</Text>
                     <Text className={styles.reviseHint}>
-                      Answer these to refine the spec, or edit the feedback freely.
+                      Answer any that apply — your answers refine the spec.
                     </Text>
-                    <ul className={styles.list}>
+                    <div className={styles.qaList}>
                       {clarifying.map((q, i) => (
-                        <li key={i} className={styles.listItem}>{q}</li>
+                        <Field key={i} label={`${i + 1}. ${q}`}>
+                          <Textarea
+                            value={answers[i] ?? ''}
+                            onChange={(_, v) => setAnswers((prev) => {
+                              const next = prev.length === clarifying.length ? [...prev] : clarifying.map((_, j) => prev[j] ?? '');
+                              next[i] = v.value;
+                              return next;
+                            })}
+                            placeholder="Your answer…"
+                            rows={2}
+                          />
+                        </Field>
                       ))}
-                    </ul>
+                    </div>
                   </div>
                 )}
-                <Field label="Feedback" required>
+                <Field
+                  label={clarifying.length > 0 ? 'Additional feedback' : 'Feedback'}
+                  required={clarifying.length === 0}
+                >
                   <Textarea
-                    value={feedback}
-                    onChange={(_, v) => setFeedback(v.value)}
+                    value={extraFeedback}
+                    onChange={(_, v) => setExtraFeedback(v.value)}
                     placeholder="e.g. Narrow the scope to the API only; assume Postgres, not MySQL."
-                    rows={4}
+                    rows={3}
                   />
                 </Field>
               </div>
             </DialogContent>
             <DialogActions>
-              <Button appearance="secondary" disabled={acting} onClick={() => { setReviseOpen(false); setFeedback(''); }}>
+              <Button appearance="secondary" disabled={acting} onClick={() => { setReviseOpen(false); setAnswers([]); setExtraFeedback(''); }}>
                 Cancel
               </Button>
               <Button
                 appearance="primary"
-                disabled={!feedback.trim() || acting}
+                disabled={!composedFeedback.trim() || acting}
                 onClick={() => void handleRevise()}
               >
                 {acting ? 'Sending' : 'Send'}

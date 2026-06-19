@@ -100,9 +100,9 @@ export function MemoriesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
-  const [selectedTab, setSelectedTab] = useState<'decisions' | 'rai'>('decisions');
+  const [selectedTab, setSelectedTab] = useState<'decisions' | 'memory'>('decisions');
   const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
-  const [raiMemory,   setRaiMemory]   = useState<AgentMemoryDto[] | null>(null);
+  const [memory,      setMemory]      = useState<AgentMemoryDto[] | null>(null);
   const [loading,     setLoading]     = useState(false);
 
   useEffect(() => {
@@ -116,13 +116,13 @@ export function MemoriesPage() {
         .catch(() => setDecisions([]))
         .finally(() => setLoading(false));
     } else {
-      if (raiMemory !== null) { setLoading(false); return; }
-      apiClient.getAgentMemory(projectId, 'Rai')
-        .then(m => setRaiMemory(m))
-        .catch(() => setRaiMemory([]))
+      if (memory !== null) { setLoading(false); return; }
+      apiClient.getProjectMemory(projectId)
+        .then(m => setMemory(m))
+        .catch(() => setMemory([]))
         .finally(() => setLoading(false));
     }
-  }, [projectId, selectedTab, decisions, raiMemory]);
+  }, [projectId, selectedTab, decisions, memory]);
 
   return (
     <div className={styles.root}>
@@ -137,17 +137,18 @@ export function MemoriesPage() {
 
       <Title2>Team Memory</Title2>
       <Text className={styles.subtitle}>
-        Scribe maintains team-wide decisions, session logs, and cross-agent context across every run.
-        Rai maintains a responsible-AI audit trail.
+        Scribe maintains team-wide decisions, session logs, and cross-agent memory across every run.
+        The Agent Memory tab shows what each agent (including the coordinator's Scribe pass) has
+        recorded; Rai's responsible-AI audit entries appear here too.
       </Text>
 
       {/* Tabs */}
       <TabList
         selectedValue={selectedTab}
-        onTabSelect={(_e, d: SelectTabData) => setSelectedTab(d.value as 'decisions' | 'rai')}
+        onTabSelect={(_e, d: SelectTabData) => setSelectedTab(d.value as 'decisions' | 'memory')}
       >
-        <Tab value="decisions">Decisions &amp; Memory</Tab>
-        <Tab value="rai">RAI Audit</Tab>
+        <Tab value="decisions">Decisions</Tab>
+        <Tab value="memory">Agent Memory</Tab>
       </TabList>
 
       <div className={styles.tabContent}>
@@ -176,14 +177,15 @@ export function MemoriesPage() {
             )
         )}
 
-        {!loading && selectedTab === 'rai' && (
-          raiMemory === null || raiMemory.length === 0
-            ? <Text className={styles.empty}>No RAI audit entries recorded yet.</Text>
+        {!loading && selectedTab === 'memory' && (
+          memory === null || memory.length === 0
+            ? <Text className={styles.empty}>No agent memory recorded yet.</Text>
             : (
               <div className={styles.itemList}>
-                {raiMemory.map(m => (
+                {memory.map(m => (
                   <div key={m.id} className={styles.item}>
                     <div className={styles.itemHeader}>
+                      <Badge appearance="outline">{m.agent_name}</Badge>
                       <Badge appearance="tint" color={
                         m.importance === 'high' ? 'danger' :
                         m.importance === 'medium' ? 'warning' : 'subtle'

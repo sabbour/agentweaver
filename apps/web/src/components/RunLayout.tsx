@@ -83,10 +83,15 @@ interface RunLayoutProps {
   onCommitSuccess?: () => void;
   onSubmitReviewSuccess?: () => void;
   artifactAdapter?: ArtifactBrowserAdapter;
+  /**
+   * Monotonic counter; each increment switches the artifact browser to the Files tab and expands the
+   * tree. Used by the Coordinator's Merge "Browse files" to surface the assembled filesystem.
+   */
+  focusFilesSignal?: number;
   style?: React.CSSProperties;
 }
 
-export function RunLayout({ runId, runStatus, commitMessage, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, artifactAdapter, style }: RunLayoutProps) {
+export function RunLayout({ runId, runStatus, commitMessage, centerContent, centerScrollRef, onCenterScroll, onRequestChangesSuccess, onCommitSuccess, onSubmitReviewSuccess, artifactAdapter, focusFilesSignal, style }: RunLayoutProps) {
   const styles = useStyles();
   const [leftExpanded, setLeftExpanded] = useState(true);
   // Sub-runs (Rai, Scribe) have no workspace of their own — skip the artifact browser.
@@ -104,6 +109,17 @@ export function RunLayout({ runId, runStatus, commitMessage, centerContent, cent
       setLeftExpanded(true); // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [runStatus]);
+
+  // Merge "Browse files" (coordinator): surface the assembled filesystem by switching to the Files
+  // tab and ensuring the tree rail is visible. Guarded on >0 so the initial mount is unaffected.
+  useEffect(() => {
+    if (focusFilesSignal && focusFilesSignal > 0) {
+      setLeftExpanded(true); // eslint-disable-line react-hooks/set-state-in-effect
+      artifactState.setActiveTab('files');
+    }
+    // artifactState identity changes each render; intentionally key only on the signal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusFilesSignal]);
 
   return (
     <div className={styles.root} style={style}>

@@ -29,6 +29,14 @@ const awaitingSpec: OutcomeSpec = {
 
 const confirmedSpec: OutcomeSpec = { ...awaitingSpec, status: 'confirmed', confirmedBy: 'Ahmed' };
 
+// A spec whose clarifying questions arrive crammed into one string ("1. … 2. …").
+const specWithQuestions: OutcomeSpec = {
+  status: 'awaiting_confirmation',
+  goal: 'Add color endpoints',
+  desiredOutcome: 'Two endpoints',
+  clarifyingQuestions: ['1. What should the exact URL paths be? 2. Should GET /colors remain as-is?'],
+};
+
 const gateArmingError = () =>
   new ApiError(409, JSON.stringify({ error: 'no_pending_gate', message: 'The outcome spec is not awaiting confirmation.' }));
 
@@ -64,5 +72,37 @@ describe('OutcomeSpecPanel confirm retry', () => {
     expect(vi.mocked(apiClient.confirmOutcomeSpec)).toHaveBeenCalledTimes(3);
     expect(document.body.textContent).not.toContain('no_pending_gate');
     expect(document.body.textContent).not.toContain('API error 409');
+  });
+});
+
+describe('OutcomeSpecPanel clarify dialog', () => {
+  it('splits crammed clarifying questions into separate answer fields and composes Q/A feedback', async () => {
+    vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue(specWithQuestions);
+    vi.mocked(apiClient.reviseOutcomeSpec).mockResolvedValue({ ...specWithQuestions, status: 'drafting' });
+
+    render(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    const openBtn = await screen.findByRole('button', { name: /clarify and request changes/i });
+    await userEvent.click(openBtn);
+
+    // Each clarifying question gets its own answer box (2) plus the additional-feedback box (1).
+    const boxes = await screen.findAllByRole('textbox');
+    expect(boxes.length).toBe(3);
+
+    await userEvent.type(boxes[0], 'Use /colors/grayscale and /colors/color');
+    await userEvent.type(boxes[1], 'Keep it as-is');
+
+    await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
+
+    await waitFor(() => expect(vi.mocked(apiClient.reviseOutcomeSpec)).toHaveBeenCalledTimes(1));
+    const composed = vi.mocked(apiClient.reviseOutcomeSpec).mock.calls[0][1] as string;
+    expect(composed).toContain('Q: What should the exact URL paths be?');
+    expect(composed).toContain('A: Use /colors/grayscale and /colors/color');
+    expect(composed).toContain('Q: Should GET /colors remain as-is?');
+    expect(composed).toContain('A: Keep it as-is');
   });
 });

@@ -404,7 +404,80 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
         IsBinary = isBinary,
     });
 });
+
+// GET /api/runs/{id}/assembly/workspace — full file tree of the collective integration branch
+// (agentweaver/integration/{id}) HEAD, so the Files tab can browse the assembled filesystem from a
+// git perspective (every tracked file, not just the changed set). The coordinator owns no worktree,
+// so we read the branch tip's commit tree directly. Returns [] (never 409) before assembly has built
+// the integration branch.
+app.MapGet("/api/runs/{id}/assembly/workspace", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return Results.Empty; }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for assembly workspace", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
+
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (string.IsNullOrEmpty(run.RepositoryPath))
+        return Results.Json(Array.Empty<WorkspaceNode>());
+
+    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
+    try
+    {
+        using var repo = new Repository(run.RepositoryPath);
+        var commit = repo.Branches[integrationBranch]?.Tip
+                     ?? repo.Branches[$"refs/heads/{integrationBranch}"]?.Tip;
+        if (commit is null)
+            return Results.Json(Array.Empty<WorkspaceNode>());
+
+        var nodes = new List<WorkspaceNode>();
+        EnumerateAssemblyTree(commit.Tree, "", nodes);
+        var sorted = nodes
+            .OrderBy(n => n.IsFolder ? 0 : 1)
+            .ThenBy(n => n.Path, StringComparer.Ordinal)
+            .ToArray();
+        return Results.Json(sorted);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to enumerate assembly workspace for run {RunId}", runId);
+        return Results.Problem("Failed to enumerate assembly workspace.", statusCode: 500);
+    }
+});
+    }
+
+// Recursively flattens a git commit tree into the flat WorkspaceNode listing the Files tab renders
+// (folders first within each level; full forward-slash relative paths). Mirrors the per-run merged
+// commit-tree enumeration in RunEndpoints.
+static void EnumerateAssemblyTree(Tree tree, string prefix, List<WorkspaceNode> nodes)
+{
+    foreach (var entry in tree)
+    {
+        var entryPath = string.IsNullOrEmpty(prefix) ? entry.Name : $"{prefix}/{entry.Name}";
+        if (entry.TargetType == TreeEntryTargetType.Tree)
+        {
+            nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = true, Status = null });
+            EnumerateAssemblyTree((Tree)entry.Target, entryPath, nodes);
+        }
+        else if (entry.TargetType == TreeEntryTargetType.Blob)
+        {
+            nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = false, Status = null });
+        }
+    }
+}
 
 // Maps a persisted coordinator OutcomeSpec to the web-client-facing camelCase response.
 // Server state is rendered as-is (Principle III); the web panel parses scope/assumptions/

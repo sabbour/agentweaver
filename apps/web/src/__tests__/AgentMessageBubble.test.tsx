@@ -208,4 +208,22 @@ describe('AgentMessageBubble', () => {
     // Raw content must still be present as text
     expect(container.textContent).toContain('# Heading');
   });
+
+  // SPEC-01: the coordinator's raw outcome-spec JSON is replaced with a pointer to the panel
+  it('replaces a raw outcome-spec JSON blob with a pointer to the Outcome spec panel', () => {
+    const specJson = JSON.stringify({
+      desired_outcome: 'Two new endpoints',
+      scope: 'In scope: …',
+      assumptions: 'Postgres',
+      clarifying_questions: '1. What paths?',
+    });
+    render(
+      <Wrapper>
+        <AgentMessageBubble content={specJson} streaming={false} isLiveRun={false} />
+      </Wrapper>,
+    );
+    expect(screen.getByText(/see the Outcome spec panel/i)).toBeDefined();
+    // The raw JSON keys must not be dumped into the timeline.
+    expect(screen.queryByText(/desired_outcome/)).toBeNull();
+  });
 });

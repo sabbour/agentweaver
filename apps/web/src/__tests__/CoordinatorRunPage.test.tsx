@@ -28,6 +28,7 @@ vi.mock('../api/apiClient', () => ({
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
     getAssemblyFiles: vi.fn().mockResolvedValue([]),
+    getAssemblyWorkspace: vi.fn().mockResolvedValue([]),
     getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
   },
 }));
