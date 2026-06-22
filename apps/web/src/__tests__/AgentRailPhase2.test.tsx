@@ -95,20 +95,24 @@ describe('KanbanBoard AgentRail (Phase 2)', () => {
     expect(screen.getByText('2 active')).toBeTruthy();
   });
 
-  it('does NOT render the AgentRail when agent_queues is absent (graceful degradation)', async () => {
+  it('renders the AgentRail with empty state when agent_queues is absent', async () => {
     vi.mocked(apiClient.getBoard).mockResolvedValue(makeBoard({ agent_queues: undefined }));
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
 
-    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
-    expect(screen.queryByTestId('agent-rail')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('agent-rail')).toBeTruthy());
+    expect(screen.getByText('No active agents')).toBeTruthy();
+    // Board columns still render beneath the rail
+    expect(screen.getByTestId('column-backlog')).toBeTruthy();
   });
 
-  it('does NOT render the AgentRail when agent_queues is an empty array', async () => {
+  it('renders the AgentRail with empty state when agent_queues is an empty array', async () => {
     vi.mocked(apiClient.getBoard).mockResolvedValue(makeBoard({ agent_queues: [] }));
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
 
-    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
-    expect(screen.queryByTestId('agent-rail')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('agent-rail')).toBeTruthy());
+    expect(screen.getByText('No active agents')).toBeTruthy();
+    // Board columns still render beneath the rail
+    expect(screen.getByTestId('column-backlog')).toBeTruthy();
   });
 });
 

@@ -166,7 +166,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         </MessageBar>
       )}
 
-      {board && agentItems.length > 0 && (
+      {board && (
         <div className={styles.agentRail}>
           <AgentRail
             agents={agentItems}
