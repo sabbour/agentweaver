@@ -148,7 +148,16 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
 
             var response = await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
 
-            if (IsRedVerdict(response))
+            if (!TryParseVerdict(response, out var verdict))
+            {
+                // Fail-open: an unparseable verdict must never block shipping, but it must be
+                // observable so a genuine miss can be diagnosed.
+                _logger.LogWarning(
+                    "Rai verdict could not be parsed for run {RunId} — defaulting to GREEN (fail-open). Raw response (truncated): {Raw}",
+                    input.RunId, Truncate(response));
+            }
+
+            if (verdict == RaiVerdict.Red)
             {
                 _logger.LogWarning("Rai issued a RED verdict for run {RunId} — flagging content safety", input.RunId);
                 subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "red", runId = input.RunId }));
@@ -157,7 +166,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 return input with { ContentSafetyFlagged = true };
             }
 
-            if (IsReviseVerdict(response))
+            if (verdict == RaiVerdict.Revise)
             {
                 _logger.LogInformation("Rai issued a REVISE verdict for run {RunId} — requesting agent revision", input.RunId);
                 subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "revise", runId = input.RunId }));
@@ -166,7 +175,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 return input with { RaiRevisionRequired = true, RaiFeedback = ExtractFeedback(response) };
             }
 
-            var verdictLabel = DetermineVerdict(response);
+            var verdictLabel = ToLabel(verdict);
             subWriter?.TryWrite(new RunEvent(2, EventTypes.RaiVerdict, new { verdict = verdictLabel, runId = input.RunId }));
         }
         catch (Exception ex)
@@ -186,20 +195,147 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         return input;
     }
 
-    private static bool IsRedVerdict(string? response)
+    /// <summary>
+    /// The four verdicts the Rai reviewer may issue, ordered by escalating severity. Used as the
+    /// precedence ranking when a response (defensively) appears to contain more than one verdict
+    /// line: RED &gt; REVISE &gt; YELLOW &gt; GREEN, so the most conservative outcome wins.
+    /// </summary>
+    internal enum RaiVerdict
     {
-        if (string.IsNullOrEmpty(response)) return false;
-        return response.Contains("🔴", StringComparison.Ordinal)
-            || response.Contains("red verdict", StringComparison.OrdinalIgnoreCase)
-            || (response.Contains("RED", StringComparison.Ordinal)
-                && !response.Contains("REVISE", StringComparison.OrdinalIgnoreCase));
+        Green = 0,
+        Yellow = 1,
+        Revise = 2,
+        Red = 3,
     }
 
-    private static bool IsReviseVerdict(string? response)
+    private static readonly (string Token, RaiVerdict Verdict)[] VerdictTokens =
     {
-        if (string.IsNullOrEmpty(response)) return false;
-        return response.Contains("REVISE", StringComparison.OrdinalIgnoreCase)
-            || response.Contains("revise verdict", StringComparison.OrdinalIgnoreCase);
+        ("RED", RaiVerdict.Red),
+        ("REVISE", RaiVerdict.Revise),
+        ("YELLOW", RaiVerdict.Yellow),
+        ("GREEN", RaiVerdict.Green),
+    };
+
+    /// <summary>
+    /// Robustly parses the Rai reviewer's declared verdict from its response. The reviewer is
+    /// instructed (see the task prompt) to "Issue exactly one verdict on its own line:
+    /// GREEN / YELLOW / REVISE / RED". This parser therefore inspects each line and only counts a
+    /// verdict when the line <em>is</em> or <em>starts with</em> the uppercase token (optionally
+    /// after a leading bullet / markdown marker) followed by a word boundary, or contains an
+    /// unambiguous verdict emoji (🔴 RED / 🟡 YELLOW). Mid-sentence or hyphenated prose mentions
+    /// (e.g. "no RED-level issues") are deliberately NOT treated as verdicts, which fixes the
+    /// false-positive that flagged benign GREEN responses as RED. When multiple verdict lines are
+    /// present the highest-severity one wins (RED &gt; REVISE &gt; YELLOW &gt; GREEN).
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> when an explicit verdict line/emoji was found (<paramref name="verdict"/> holds
+    /// it). <c>false</c> when no verdict could be parsed — <paramref name="verdict"/> is then set to
+    /// <see cref="RaiVerdict.Green"/> (fail-open: an unparseable advisory check must not block
+    /// shipping) and the caller should log the miss.
+    /// </returns>
+    internal static bool TryParseVerdict(string? response, out RaiVerdict verdict)
+    {
+        verdict = RaiVerdict.Green;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        var found = false;
+        var best = RaiVerdict.Green;
+        foreach (var rawLine in response.Split('\n'))
+        {
+            if (!TryParseVerdictLine(rawLine, out var lineVerdict))
+                continue;
+
+            if (!found || lineVerdict > best)
+                best = lineVerdict;
+            found = true;
+        }
+
+        verdict = best;
+        return found;
+    }
+
+    /// <summary>Convenience wrapper that applies the fail-open default (GREEN) when unparseable.</summary>
+    internal static RaiVerdict ParseVerdict(string? response) =>
+        TryParseVerdict(response, out var verdict) ? verdict : RaiVerdict.Green;
+
+    private static bool TryParseVerdictLine(string rawLine, out RaiVerdict verdict)
+    {
+        // Emoji verdicts are unambiguous markers and may appear anywhere on the line.
+        if (rawLine.Contains("🔴", StringComparison.Ordinal))
+        {
+            verdict = RaiVerdict.Red;
+            return true;
+        }
+        if (rawLine.Contains("🟡", StringComparison.Ordinal))
+        {
+            verdict = RaiVerdict.Yellow;
+            return true;
+        }
+
+        var line = StripLeadingMarkers(rawLine);
+        foreach (var (token, candidate) in VerdictTokens)
+        {
+            if (StartsWithVerdictToken(line, token))
+            {
+                verdict = candidate;
+                return true;
+            }
+        }
+
+        verdict = RaiVerdict.Green;
+        return false;
+    }
+
+    /// <summary>
+    /// Strips leading whitespace and common bullet / markdown markers ("- ", "* ", "**", "#", "&gt;")
+    /// so a verdict emitted as "- RED — ..." or "**RED**" is still recognized at the line boundary.
+    /// </summary>
+    private static string StripLeadingMarkers(string line)
+    {
+        var i = 0;
+        while (i < line.Length)
+        {
+            var c = line[i];
+            if (c is ' ' or '\t' or '\r' or '-' or '*' or '#' or '>' or '`')
+                i++;
+            else
+                break;
+        }
+        return i > 0 ? line[i..] : line;
+    }
+
+    /// <summary>
+    /// True when <paramref name="line"/> begins with the exact uppercase <paramref name="token"/> as
+    /// a whole word — i.e. followed by end-of-line or a non-word, non-hyphen, non-apostrophe
+    /// character. This rejects compounds like "RED-level" and possessives so prose never counts as a
+    /// verdict; only the agent's declared verdict token does.
+    /// </summary>
+    private static bool StartsWithVerdictToken(string line, string token)
+    {
+        if (!line.StartsWith(token, StringComparison.Ordinal))
+            return false;
+        if (line.Length == token.Length)
+            return true;
+
+        var next = line[token.Length];
+        return !(char.IsLetterOrDigit(next) || next is '-' or '\'' or '_');
+    }
+
+    private static string ToLabel(RaiVerdict verdict) => verdict switch
+    {
+        RaiVerdict.Red => "red",
+        RaiVerdict.Revise => "revise",
+        RaiVerdict.Yellow => "yellow",
+        _ => "green",
+    };
+
+    private static string Truncate(string? response)
+    {
+        if (string.IsNullOrEmpty(response))
+            return string.Empty;
+        const int max = 500;
+        return response.Length <= max ? response : response[..max] + "…";
     }
 
     /// <summary>
@@ -219,15 +355,5 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             : response.Trim();
     }
 
-    private static string DetermineVerdict(string? response)
-    {
-        if (string.IsNullOrEmpty(response)) return "unknown";
-        if (IsRedVerdict(response)) return "red";
-        if (IsReviseVerdict(response)) return "revise";
-        if (response.Contains("🟡", StringComparison.Ordinal)
-            || response.Contains("yellow", StringComparison.OrdinalIgnoreCase)
-            || response.Contains("YELLOW", StringComparison.OrdinalIgnoreCase))
-            return "yellow";
-        return "green";
-    }
+    private static string DetermineVerdict(string? response) => ToLabel(ParseVerdict(response));
 }
