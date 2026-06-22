@@ -13,6 +13,7 @@ import { ApiError } from '../../api/client';
 import { fromDto } from '../../api/agentQueues';
 import { AgentRail } from '../AgentRail';
 import { KanbanColumn } from './KanbanColumn';
+import { columnAccentColor } from './columnMeta';
 import { CaptureTaskForm } from './CaptureTaskForm';
 import { PickupSettings } from './PickupSettings';
 import type { BoardColumnDto, RunCardDto } from '../../api/types';
@@ -41,6 +42,22 @@ const useStyles = makeStyles({
     overflowX: 'auto',
     alignItems: 'flex-start',
     paddingBottom: tokens.spacingVerticalS,
+    // Slim, styled horizontal scrollbar instead of the heavy default OS bar.
+    scrollbarWidth: 'thin',
+    scrollbarColor: `${tokens.colorNeutralStroke1} transparent`,
+    '::-webkit-scrollbar': {
+      height: '8px',
+    },
+    '::-webkit-scrollbar-track': {
+      backgroundColor: 'transparent',
+    },
+    '::-webkit-scrollbar-thumb': {
+      backgroundColor: tokens.colorNeutralStroke1,
+      borderRadius: tokens.borderRadiusCircular,
+    },
+    '::-webkit-scrollbar-thumb:hover': {
+      backgroundColor: tokens.colorNeutralStroke1Hover,
+    },
   },
   agentRail: {
     padding: `${tokens.spacingVerticalXS} 0`,
@@ -100,6 +117,17 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       ),
     }));
   }, [board, selectedRunIds]);
+
+  // Deterministic accent palette keyed by each column's position among the workflow
+  // columns (backlog/ready are fixed). Computed once per board layout so colors are
+  // stable across renders. The mapping itself lives in columnAccentColor (KanbanColumn).
+  const columnsWithAccent = useMemo(() => {
+    let workflowIndex = 0;
+    return filteredColumns.map((col) => ({
+      col,
+      accent: columnAccentColor(col.id, col.id === 'backlog' || col.id === 'ready' ? 0 : workflowIndex++),
+    }));
+  }, [filteredColumns]);
 
   const handleDropTask = async (taskId: string, sourceColumnId: string, targetColumnId: string, targetIndex: number) => {
     setDraggingTaskId(null);
@@ -182,10 +210,11 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
 
       {board && (
         <div className={styles.columns}>
-          {filteredColumns.map((column) => (
+          {columnsWithAccent.map(({ col: column, accent }) => (
             <KanbanColumn
               key={column.id}
               column={column}
+              accentColor={accent}
               projectId={projectId}
               onMutated={refetch}
               onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>

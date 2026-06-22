@@ -608,6 +608,13 @@ export interface SteerCoordinatorRequest {
   instruction?: string;
 }
 
+// POST /api/runs/{coordinatorRunId}/steer response body.
+// status:"queued"  — run was live; directive applies at the next turn boundary.
+// status:"applied" — run was parked/failed and has been recovered (subtasks reset, run resumed).
+export interface SteerCoordinatorResponse {
+  status: 'queued' | 'applied' | string;
+}
+
 // coordinator.steering event payload — steering directive state surfaced on a node.
 export interface SteeringDirective {
   directiveId: string;

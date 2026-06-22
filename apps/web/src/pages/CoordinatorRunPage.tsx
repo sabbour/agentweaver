@@ -54,6 +54,7 @@ import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentRail } from '../components/AgentRail';
+import { SteerPanel } from '../components/SteerPanel';
 import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
@@ -1860,7 +1861,7 @@ export function CoordinatorRunPage() {
           )}
 
           {(orch.phase === 'failed' || orch.phase === 'blocked' || orch.phase === 'declined') && (
-            <div className={styles.panel}>
+            <div className={styles.panel} data-testid="assembly-blocked-panel">
               <Title3>Assembly {orchPhaseLabel(orch.phase).toLowerCase()}</Title3>
               <MessageBar intent="error">
                 <MessageBarBody>{friendlyAssemblyReason(orch.reason)}</MessageBarBody>
@@ -1876,8 +1877,9 @@ export function CoordinatorRunPage() {
                 </div>
               )}
               <Text className={styles.hint}>
-                The subtasks are parked. Use the steering chat below to redirect or amend the orchestration, or stop it.
+                Use the controls below to redirect the coordinator with an instruction, or stop the run.
               </Text>
+              <SteerPanel runId={runId} blockReason={orch.reason} />
             </div>
           )}
 

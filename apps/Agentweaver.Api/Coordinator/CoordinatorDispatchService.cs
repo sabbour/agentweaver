@@ -23,6 +23,13 @@ public interface ICoordinatorDispatch
 {
     /// <summary>Launches dispatch + observe for a coordinator run (fire-and-forget; idempotent).</summary>
     void StartDispatch(CoordinatorDispatchContext context);
+
+    /// <summary>
+    /// True while a dispatch loop is actively running for this coordinator run. Recovery paths use
+    /// this as the SINGLE-WRITER guard: a parked-coordinator resume may only reset subtask rows when
+    /// no loop is running (the loop is the sole writer of those rows while it is alive).
+    /// </summary>
+    bool IsDispatchActive(string coordinatorRunId);
 }
 
 /// <summary>
@@ -105,7 +112,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 "Coordinator dispatch already active for run {RunId}; skipping", context.CoordinatorRunId);
             return;
         }
-
         _ = Task.Run(async () =>
         {
             try
@@ -126,6 +132,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             }
         }, _appStopping);
     }
+
+    /// <inheritdoc />
+    public bool IsDispatchActive(string coordinatorRunId) => _active.ContainsKey(coordinatorRunId);
 
     // -----------------------------------------------------------------------
     // Dispatch + observe loop
@@ -728,10 +737,19 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             topologySeq));
     }
 
-    private static string ComposeChildTask(Subtask subtask) =>
-        string.IsNullOrWhiteSpace(subtask.Scope)
+    private static string ComposeChildTask(Subtask subtask)
+    {
+        var baseTask = string.IsNullOrWhiteSpace(subtask.Scope)
             ? subtask.Title
             : $"{subtask.Title}\n\n{subtask.Scope}";
+
+        // A re-dispatched subtask that was resumed by steering recovery carries guidance (the human's
+        // steering instruction + the failure context). Append it so the worker re-does the work
+        // against the latest state and addresses the feedback.
+        return string.IsNullOrWhiteSpace(subtask.RecoveryGuidance)
+            ? baseTask
+            : $"{baseTask}\n\n{subtask.RecoveryGuidance}";
+    }
 
     private static bool ReadBool(object payload, string property)
     {

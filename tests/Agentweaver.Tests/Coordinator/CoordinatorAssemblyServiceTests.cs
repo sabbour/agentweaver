@@ -475,6 +475,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     {
         public List<CoordinatorDispatchContext> StartDispatchCalls { get; } = [];
         public void StartDispatch(CoordinatorDispatchContext context) => StartDispatchCalls.Add(context);
+        public bool IsDispatchActive(string coordinatorRunId) => false;
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

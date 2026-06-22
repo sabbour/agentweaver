@@ -79,6 +79,7 @@ beforeEach(() => {
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
   vi.mocked(apiClient.answerQuestion).mockResolvedValue({ run_id: 'child-run-2', request_id: 'q-1', answered: true });
   vi.mocked(apiClient.setAutopilot).mockResolvedValue({ run_id: 'coord-run-1', autopilot: true });
@@ -240,7 +241,7 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     );
 
     const text = document.body.textContent ?? '';
-    expect(text).toContain('parked');
+    expect(text).toContain('Use the controls below to redirect the coordinator');
   });
 
   it('explains an integration_conflict block and lists the conflicting files', async () => {

@@ -98,11 +98,11 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "coordinator_steer"), Description("Steer a Coordinator run's subagents. kind 'stop' cancels immediately; kind 'redirect' or 'amend' takes effect at the targeted subagent's next turn boundary without restarting the run. Omit target_child_run_id to broadcast to every active child. Pause is not supported in Phase 2.")]
+    [McpServerTool(Name = "coordinator_steer"), Description("Steer a Coordinator run. Use 'stop' to cancel active subagents immediately; 'redirect' or 'amend' to inject guidance at the targeted subagent's next turn boundary; or a recovery verb (e.g. 'recover') to reset blocked/failed/parked subtasks and auto-resume the dispatch loop. Omit target_child_run_id to broadcast to every active child. instruction is required for redirect/amend and optional for stop/recovery verbs. Pause is not supported.")]
     public async Task<string> CoordinatorSteerAsync(
         [Description("Coordinator run ID")] string run_id,
-        [Description("Steering verb: 'stop', 'redirect', or 'amend'")] string kind,
-        [Description("Direction relayed to the targeted subagent(s)")] string instruction,
+        [Description("Steering verb: 'stop', 'redirect', 'amend', or a recovery verb such as 'recover'")] string kind,
+        [Description("Direction relayed to the targeted subagent(s); required for redirect/amend, optional for stop and recovery verbs")] string? instruction,
         [Description("Target child run ID (optional); omit to broadcast to every active child")] string? target_child_run_id,
         CancellationToken ct)
     {

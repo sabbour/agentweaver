@@ -14,12 +14,15 @@ import {
   Spinner,
   Text,
   Textarea,
+  Tooltip,
   makeStyles,
+  shorthands,
   tokens,
 } from '@fluentui/react-components';
 import type { FluentIcon } from '@fluentui/react-icons';
 import {
   AlertRegular,
+  ArrowMaximizeRegular,
   ArrowRoutingRegular,
   ArrowSyncRegular,
   BotRegular,
@@ -32,12 +35,17 @@ import {
   OpenRegular,
   SendRegular,
   StopRegular,
+  ZoomInRegular,
+  ZoomOutRegular,
 } from '@fluentui/react-icons';
 import {
   ReactFlow,
   MarkerType,
+  Panel,
   Position,
   Handle,
+  useReactFlow,
+  useStore,
   type Node,
   type Edge,
   type NodeProps,
@@ -173,11 +181,26 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
   },
   container: {
+    position: 'relative',
     height: '560px',
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     '& .react-flow__renderer': { borderRadius: '8px' },
+  },
+  zoomCluster: {
+    display: 'flex',
+    flexDirection: 'column',
+    ...shorthands.gap('2px'),
+    padding: '4px',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow8,
+  },
+  zoomLevel: {
+    minWidth: '52px',
+    fontVariantNumeric: 'tabular-nums',
   },
   dialogFields: {
     display: 'flex',
@@ -332,6 +355,69 @@ function topoEdge(source: string, target: string): Edge {
 }
 
 // ---------------------------------------------------------------------------
+// Zoom / pan controls
+// ---------------------------------------------------------------------------
+
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 2;
+const ZOOM_DURATION = 200;
+const FIT_VIEW_OPTIONS = { padding: 0.15, maxZoom: 1.1, duration: ZOOM_DURATION };
+
+// Always-visible zoom/pan control cluster. Rendered inside <ReactFlow> as a Panel so
+// it shares the flow store context (useReactFlow / useStore). Buttons are the reliable,
+// discoverable path to zoom; wheel-zoom is gated behind Ctrl/Cmd so the graph never
+// hijacks normal page scroll. Exported for isolated testing.
+export function GraphControls() {
+  const styles = useStyles();
+  const { zoomIn, zoomOut, zoomTo, fitView } = useReactFlow();
+  const zoom = useStore((s) => s.transform[2]);
+  const zoomPercent = `${Math.round((zoom ?? 1) * 100)}%`;
+
+  return (
+    <div className={styles.zoomCluster} role="group" aria-label="Graph zoom controls">
+      <Tooltip content="Zoom in" relationship="label" withArrow>
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<ZoomInRegular />}
+          aria-label="Zoom in"
+          onClick={() => void zoomIn({ duration: ZOOM_DURATION })}
+        />
+      </Tooltip>
+      <Tooltip content="Reset to 100%" relationship="label" withArrow>
+        <Button
+          appearance="subtle"
+          size="small"
+          className={styles.zoomLevel}
+          aria-label={`Reset zoom to 100% (currently ${zoomPercent})`}
+          onClick={() => void zoomTo(1, { duration: ZOOM_DURATION })}
+        >
+          {zoomPercent}
+        </Button>
+      </Tooltip>
+      <Tooltip content="Zoom out" relationship="label" withArrow>
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<ZoomOutRegular />}
+          aria-label="Zoom out"
+          onClick={() => void zoomOut({ duration: ZOOM_DURATION })}
+        />
+      </Tooltip>
+      <Tooltip content="Fit to view" relationship="label" withArrow>
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<ArrowMaximizeRegular />}
+          aria-label="Fit to view"
+          onClick={() => void fitView(FIT_VIEW_OPTIONS)}
+        />
+      </Tooltip>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Graph
 // ---------------------------------------------------------------------------
 
@@ -420,19 +506,25 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
             edges={rfEdges}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }}
-            minZoom={0.4}
+            fitViewOptions={FIT_VIEW_OPTIONS}
+            minZoom={MIN_ZOOM}
+            maxZoom={MAX_ZOOM}
             nodesDraggable={false}
             nodesConnectable={false}
             nodesFocusable={false}
             edgesFocusable={false}
             panOnScroll={false}
-            zoomOnScroll={false}
-            zoomOnPinch={false}
+            zoomOnScroll
+            zoomActivationKeyCode={['Meta', 'Control']}
+            zoomOnPinch
             zoomOnDoubleClick={false}
             panOnDrag
             proOptions={{ hideAttribution: true }}
-          />
+          >
+            <Panel position="top-right">
+              <GraphControls />
+            </Panel>
+          </ReactFlow>
         </div>
       </SteerContext.Provider>
 

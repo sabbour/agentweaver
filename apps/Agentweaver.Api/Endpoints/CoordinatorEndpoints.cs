@@ -244,6 +244,12 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
     {
         return Results.BadRequest(new { error = "steering_invalid", message = ex.Message });
     }
+    catch (SteeringRecoveryExhaustedException ex)
+    {
+        return Results.Json(
+            new { error = "steering_recovery_exhausted", message = ex.Message },
+            statusCode: StatusCodes.Status409Conflict);
+    }
 });
 
 // POST /api/runs/{coordinatorRunId}/assembly/review — the ONE collective human-review gate

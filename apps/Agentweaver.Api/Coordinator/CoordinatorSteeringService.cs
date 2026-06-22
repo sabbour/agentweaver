@@ -50,6 +50,14 @@ public static class SteeringStatus
 public sealed class SteeringValidationException(string message) : Exception(message);
 
 /// <summary>
+/// Thrown when a <c>redirect</c>/<c>amend</c> would resume a parked/failed coordinator but every
+/// affected subtask has already hit the per-subtask recovery attempt cap. The orchestration stays
+/// parked (no infinite re-dispatch loop); the HTTP wave maps this to <c>409 Conflict</c> so the
+/// operator learns auto-recovery is exhausted (manual full-run retry remains available).
+/// </summary>
+public sealed class SteeringRecoveryExhaustedException(string message) : Exception(message);
+
+/// <summary>
 /// A redirect/amend directive parked in <see cref="CoordinatorSteeringQueue"/> until the dispatch
 /// loop can inject it at the target child's next turn boundary.
 /// </summary>
@@ -234,11 +242,24 @@ public sealed class CoordinatorSteeringService
             directiveId = directive.Id;
         }
 
-        return normalized == SteeringKind.Stop
-            ? await ApplyStopAsync(coordinatorRunId, directiveId, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
-                .ConfigureAwait(false)
-            : await QueueNextBoundaryAsync(coordinatorRunId, directiveId, normalized, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
+        if (normalized == SteeringKind.Stop)
+            return await ApplyStopAsync(
+                coordinatorRunId, directiveId, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
                 .ConfigureAwait(false);
+
+        // redirect / amend. On a LIVE loop these queue and drain at the target child's next turn
+        // boundary. But when the orchestration has dead-ended (rai_flagged subtask or assembly
+        // conflict), the one-shot dispatch loop has already exited, so a queued directive would never
+        // drain. Detect that settled/parked case and RESUME the coordinator instead.
+        var resumed = await TryResumeParkedCoordinatorAsync(
+            coordinatorRunId, directiveId, normalized, resolvedInstruction, createdBy, createdAt, ct)
+            .ConfigureAwait(false);
+        if (resumed is not null)
+            return resumed;
+
+        return await QueueNextBoundaryAsync(
+            coordinatorRunId, directiveId, normalized, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
+            .ConfigureAwait(false);
     }
 
     // -----------------------------------------------------------------------
@@ -307,6 +328,171 @@ public sealed class CoordinatorSteeringService
         return new SteeringDirectiveView(
             directiveId, coordinatorRunId, targetChildRunId, kind, instruction,
             SteeringStatus.Queued, createdBy, createdAt, RelayedAt: null);
+    }
+
+    // -----------------------------------------------------------------------
+    // redirect / amend on a PARKED/FAILED coordinator — auto-resume recovery.
+    // -----------------------------------------------------------------------
+
+    /// <summary>Per-subtask recovery attempt cap — a flagged/failed subtask cannot auto-resume forever.</summary>
+    private const int MaxRecoveryAttempts = 3;
+
+    /// <summary>
+    /// When a coordinator has dead-ended — a <c>rai_flagged</c> subtask blocked assembly, or a
+    /// collective-assembly conflict parked the run — the one-shot dispatch loop has already exited and
+    /// a queued redirect/amend would never drain. This resumes the coordinator: it resets the affected
+    /// subtasks to <c>pending</c> with the steering instruction + failure context as guidance, bumps
+    /// each subtask's recovery-attempt counter (capped), un-terminalizes the coordinator run, re-opens
+    /// its stream, and re-arms <see cref="ICoordinatorDispatch.StartDispatch"/> so the loop re-dispatches
+    /// the reset frontier. The reset is single-writer-safe ONLY because the loop is confirmed not running
+    /// (no active children + <see cref="ICoordinatorDispatch.IsDispatchActive"/> is false), mirroring the
+    /// request-changes precedent.
+    /// </summary>
+    /// <returns>
+    /// The applied directive view when the coordinator was parked and resumed; <c>null</c> when the
+    /// coordinator is NOT in a recoverable settled state (the caller then falls back to queueing).
+    /// </returns>
+    /// <exception cref="SteeringRecoveryExhaustedException">Every affected subtask is over the attempt cap.</exception>
+    private async Task<SteeringDirectiveView?> TryResumeParkedCoordinatorAsync(
+        string coordinatorRunId, int directiveId, string kind, string instruction,
+        string createdBy, DateTimeOffset createdAt, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var sp = scope.ServiceProvider;
+        var db = sp.GetRequiredService<MemoryDbContext>();
+
+        var plan = await db.WorkPlans
+            .FirstOrDefaultAsync(w => w.CoordinatorRunId == coordinatorRunId, ct).ConfigureAwait(false);
+        if (plan is null)
+            return null; // No work plan — nothing to recover; fall back to legacy queue behavior.
+
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return null;
+
+        // A plan exists — this MIGHT be a recoverable parked coordinator, so resolve the run store and
+        // dispatch engine now (kept out of the no-plan path so the lightweight steering unit tests,
+        // which register only MemoryDbContext, never need them).
+        var runStore = sp.GetRequiredService<SqliteRunStore>();
+        var dispatch = sp.GetRequiredService<ICoordinatorDispatch>();
+
+        var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null)
+            return null;
+
+        // Only resume a SETTLED, recoverable orchestration: the coordinator run terminalized
+        // (Failed/MergeFailed), or the plan parked at an assembly-blocked/failed state. A mid-flight
+        // dispatch or assembly is left alone (fall back to queue).
+        var runIsTerminalRecoverable = run.Status is RunStatus.Failed or RunStatus.MergeFailed;
+        var planIsParked = plan.Status is WorkPlanStatus.AssemblyBlocked or WorkPlanStatus.AssemblyFailed;
+        if (!runIsTerminalRecoverable && !planIsParked)
+            return null;
+
+        // Single-writer guard: the dispatch loop must be confirmed NOT running before we mutate
+        // subtask rows (it is the sole writer while alive).
+        if (dispatch.IsDispatchActive(coordinatorRunId))
+            return null;
+
+        var subtasks = await db.Subtasks
+            .Where(s => s.WorkPlanId == plan.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        // "Coordinator figures it out": reset the non-satisfying terminal subtasks (rai_flagged /
+        // failed). If there are none, this is a pure assembly conflict — redo the change-producing
+        // (assemble_ready) subtasks; if none of those either, fall back to all subtasks. Completed
+        // (no-change) subtasks are left intact.
+        var affected = subtasks
+            .Where(s => s.Status is SubtaskStatus.RaiFlagged or SubtaskStatus.Failed)
+            .ToList();
+        if (affected.Count == 0)
+            affected = subtasks.Where(s => s.Status == SubtaskStatus.AssembleReady).ToList();
+        if (affected.Count == 0)
+            affected = subtasks;
+
+        var eligible = affected.Where(s => s.RecoveryAttempts < MaxRecoveryAttempts).ToList();
+        if (eligible.Count == 0)
+            throw new SteeringRecoveryExhaustedException(
+                $"Recovery attempt cap ({MaxRecoveryAttempts}) reached for every affected subtask " +
+                $"[{string.Join(", ", affected.Select(s => s.Id))}]; the coordinator stays parked. " +
+                "Use run retry to re-run the whole coordinator.");
+
+        var now = DateTimeOffset.UtcNow;
+        var resetIds = new List<int>();
+        foreach (var subtask in eligible)
+        {
+            subtask.RecoveryGuidance = BuildRecoveryGuidance(subtask.Status, instruction, subtask.RecoveryAttempts + 1);
+            subtask.Status = SubtaskStatus.Pending;
+            subtask.RecoveryAttempts += 1;
+            subtask.ChildRunId = null;
+            subtask.UpdatedAt = now;
+            resetIds.Add(subtask.Id);
+        }
+
+        // Move the plan back to dispatching (mirrors request-changes) so the synchronous state is
+        // coherent before the loop spins up.
+        plan.Status = WorkPlanStatus.Dispatching;
+        plan.AssemblyStage = null;
+        plan.UpdatedAt = now;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        // Un-terminalize the coordinator run so the project runs list/detail show it live again.
+        if (runIsTerminalRecoverable)
+            await runStore.UpdateStatusAsync(runId, RunStatus.InProgress, endedAt: null, ct).ConfigureAwait(false);
+
+        // Re-open the coordinator stream (assembly's block had completed it) so the resumed dispatch /
+        // assembly loops emit onto a live entry, then announce the recovery.
+        _streamStore.Remove(coordinatorRunId);
+        var entry = _streamStore.Create(coordinatorRunId, run.SubmittingUser);
+        entry.RecordNext(EventTypes.CoordinatorRecovered, new
+        {
+            reason = "steering_resume",
+            directiveId,
+            resetSubtaskIds = resetIds,
+            instruction,
+        });
+
+        // directive: collapse to applied (the resume took effect immediately, like stop).
+        await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, now, ct).ConfigureAwait(false);
+        EmitSteering(coordinatorRunId, directiveId, kind, targetChildRunId: null, SteeringStatus.Applied, instruction);
+
+        // Re-arm dispatch (idempotent). The loop re-dispatches the reset frontier; when those children
+        // finish it returns to awaiting_assembly and re-triggers assembly (DB CAS guards exactly-once).
+        var context = new CoordinatorDispatchContext(
+            CoordinatorRunId: coordinatorRunId,
+            RepositoryPath: run.RepositoryPath,
+            OriginatingBranch: run.OriginatingBranch,
+            SubmittingUser: run.SubmittingUser,
+            ProjectId: run.ProjectId);
+        dispatch.StartDispatch(context);
+
+        _logger.LogInformation(
+            "Steering {Kind} resumed parked coordinator {RunId} (directive {DirectiveId}); reset subtasks [{Ids}] to pending and re-armed dispatch",
+            kind, coordinatorRunId, directiveId, string.Join(",", resetIds));
+
+        return new SteeringDirectiveView(
+            directiveId, coordinatorRunId, TargetChildRunId: null, kind, instruction,
+            SteeringStatus.Applied, createdBy, createdAt, RelayedAt: now);
+    }
+
+    /// <summary>
+    /// Builds the guidance text appended to a re-dispatched worker's task: the human's steering
+    /// instruction plus a short failure-context line derived from the prior terminal status.
+    /// </summary>
+    private static string BuildRecoveryGuidance(string priorStatus, string instruction, int attempt)
+    {
+        var context = priorStatus switch
+        {
+            SubtaskStatus.RaiFlagged =>
+                "A prior attempt was flagged by the Responsible AI reviewer and was not shipped.",
+            SubtaskStatus.Failed =>
+                "A prior attempt failed before producing shippable changes.",
+            SubtaskStatus.AssembleReady =>
+                "A prior attempt's changes conflicted during collective assembly with another subtask.",
+            _ => "A prior attempt did not complete successfully.",
+        };
+
+        return
+            $"Recovery guidance from the coordinator (attempt {attempt}): {instruction}\n\n" +
+            $"Context: {context} Re-do this work against the latest repository state and address the feedback above.";
     }
 
     // -----------------------------------------------------------------------
