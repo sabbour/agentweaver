@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Badge, Button, Caption1, Text, makeStyles, tokens } from '@fluentui/react-components';
 import type { RunCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
+import { AgentAvatar } from '../AgentAvatar';
 
 const useStyles = makeStyles({
   card: {
@@ -29,6 +30,11 @@ const useStyles = makeStyles({
   },
   meta: {
     color: tokens.colorNeutralForeground3,
+  },
+  agentChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
 });
 
@@ -82,7 +88,14 @@ export function RunCard({ card, projectId }: RunCardProps) {
         <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
       </div>
       {stage && <Caption1 className={styles.meta}>{stage}</Caption1>}
-      <Caption1 className={styles.meta}>{card.agent_name ?? 'Coordinator'}</Caption1>
+      {card.agent_name ? (
+        <div className={styles.agentChip} data-testid="run-card-agent">
+          <AgentAvatar name={card.agent_name} size={16} />
+          <Caption1 className={styles.meta}>{card.agent_name}</Caption1>
+        </div>
+      ) : (
+        <Caption1 className={styles.meta}>Coordinator</Caption1>
+      )}
       {retriedFromShort && (
         <Caption1 className={styles.meta}>
           Retried from{' '}

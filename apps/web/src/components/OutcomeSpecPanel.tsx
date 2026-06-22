@@ -20,6 +20,7 @@ import {
 } from '@fluentui/react-components';
 import {
   CheckmarkCircleRegular,
+  ChevronLeftRegular,
   DismissCircleRegular,
   EditRegular,
   LockClosedRegular,
@@ -165,9 +166,10 @@ interface OutcomeSpecPanelProps {
   runId: string;
   events: RunStreamEvent[];
   streamStatus: StreamStatus;
+  onCollapse?: () => void;
 }
 
-export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPanelProps) {
+export function OutcomeSpecPanel({ runId, events, streamStatus, onCollapse }: OutcomeSpecPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -327,6 +329,15 @@ export function OutcomeSpecPanel({ runId, events, streamStatus }: OutcomeSpecPan
         <Badge appearance="tint" color={statusMeta.color}>{statusMeta.label}</Badge>
         <div className={styles.spacer} />
         {streamStatus === 'connecting' && <Spinner size="extra-tiny" aria-label="Connecting" />}
+        {onCollapse && (
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<ChevronLeftRegular />}
+            aria-label="Collapse outcome spec"
+            onClick={onCollapse}
+          />
+        )}
       </div>
 
       {/* Dispatch gate — make the safety property explicit (US1 / FR-008) */}

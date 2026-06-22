@@ -70,6 +70,63 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Seeds a work plan for a coordinator run plus its subtasks (persona, status, title). Used by the
+    /// Phase 2 per-agent work-queue rollup tests to populate <c>agent_queues</c> across runs.
+    /// </summary>
+    private async Task SeedWorkPlanWithSubtasksAsync(
+        ProjectId projectId, RunId coordinatorRunId, string status,
+        params (string Agent, string Status, string Title)[] subtasks)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var spec = new OutcomeSpec
+        {
+            ProjectId        = projectId.ToString(),
+            CoordinatorRunId = coordinatorRunId.ToString(),
+            Goal             = "g",
+            DesiredOutcome   = "o",
+            Scope            = "s",
+            Assumptions      = "a",
+            Status           = "confirmed",
+            CreatedAt        = DateTimeOffset.UtcNow,
+            UpdatedAt        = DateTimeOffset.UtcNow,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId    = spec.Id,
+            ProjectId        = projectId.ToString(),
+            CoordinatorRunId = coordinatorRunId.ToString(),
+            Status           = status,
+            AssemblyStage    = null,
+            CreatedAt        = DateTimeOffset.UtcNow,
+            UpdatedAt        = DateTimeOffset.UtcNow,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        foreach (var (agent, subtaskStatus, title) in subtasks)
+        {
+            db.Subtasks.Add(new Subtask
+            {
+                WorkPlanId        = plan.Id,
+                Title             = title,
+                Scope             = "scope",
+                AssignedAgent     = agent,
+                SelectedModelId   = "gpt-4o",
+                Phase             = "execution",
+                IsolationStrategy = "worktree",
+                Status            = subtaskStatus,
+                CreatedAt         = DateTimeOffset.UtcNow,
+                UpdatedAt         = DateTimeOffset.UtcNow,
+            });
+        }
+        await db.SaveChangesAsync();
+    }
+
     private static List<object> CardsIn(BoardDto board, string columnId) =>
         board.Columns.Single(c => c.Id == columnId).Cards.ToList();
 
@@ -207,6 +264,100 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         board.Columns[1].Id.Should().Be("ready");
         board.Columns[1].Kind.Should().Be("intake");
         board.Columns.Should().NotContain(c => c.Kind == "workflow");
+    }
+
+    // =========================================================================
+    // Phase 2: project-aggregate per-agent work-queue rollup (agent_queues).
+    // =========================================================================
+    [Fact]
+    public async Task GetBoard_AgentQueues_AggregatePerPersona_AcrossActiveRuns_WithCorrectBuckets()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+        var projector = new WorkflowStageProjector();
+        var service = new BoardProjectionService(backlogStore, runStore, projector, _scopeFactory);
+
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+
+        // Two ACTIVE coordinator runs (InProgress + a non-terminal "planned" work plan).
+        var run1 = await ClaimRunAsync(backlogStore, project.Id, "a");
+        var run2 = await ClaimRunAsync(backlogStore, project.Id, "b");
+
+        await SeedWorkPlanWithSubtasksAsync(project.Id, run1, WorkPlanStatus.Planned,
+            ("Tank", "dispatched", "Tank wires the endpoint"),   // active
+            ("Tank", "pending", "Tank writes the migration"),    // queued
+            ("Tank", "failed", "Tank's flaky attempt"),          // blocked
+            ("Trinity", "completed", "Trinity ships the rail")); // done
+
+        await SeedWorkPlanWithSubtasksAsync(project.Id, run2, WorkPlanStatus.Planned,
+            ("Tank", "running", "Tank streams the board"),       // active
+            ("Trinity", "assemble_ready", "Trinity polishes UX"),// done
+            ("Trinity", "pending", "Trinity drafts the modal")); // queued
+
+        // A TERMINAL run whose subtasks must NOT leak into the rollup (historical, merged-away).
+        var run3 = await ClaimRunAsync(backlogStore, project.Id, "c");
+        await runStore.UpdateStatusAsync(run3, RunStatus.Merged, DateTimeOffset.UtcNow);
+        await SeedWorkPlanWithSubtasksAsync(project.Id, run3, WorkPlanStatus.Complete,
+            ("Tank", "completed", "Tank's old merged work"));
+
+        var board = await service.GetBoardAsync(project.Id, includeTerminalHistory: false, default);
+
+        board.AgentQueues.Should().NotBeNull();
+        board.AgentQueues.Select(q => q.AgentName).Should().BeEquivalentTo(new[] { "Tank", "Trinity" });
+
+        var tank = board.AgentQueues.Single(q => q.AgentName == "Tank");
+        tank.Active.Should().Be(2);   // dispatched (run1) + running (run2)
+        tank.Queued.Should().Be(1);   // pending (run1)
+        tank.Blocked.Should().Be(1);  // failed (run1)
+        tank.Done.Should().Be(0);     // run3's completed subtask is terminal -> excluded
+        tank.RunIds.Should().BeEquivalentTo(new[] { run1.ToString(), run2.ToString() });
+        tank.RunIds.Should().NotContain(run3.ToString());
+        tank.SampleTitles.Should().NotBeEmpty();
+        tank.SampleTitles.Count.Should().BeLessThanOrEqualTo(3);
+
+        var trinity = board.AgentQueues.Single(q => q.AgentName == "Trinity");
+        trinity.Active.Should().Be(0);
+        trinity.Queued.Should().Be(1);   // pending (run2)
+        trinity.Blocked.Should().Be(0);
+        trinity.Done.Should().Be(2);     // completed (run1) + assemble_ready (run2)
+        trinity.RunIds.Should().BeEquivalentTo(new[] { run1.ToString(), run2.ToString() });
+
+        // Ordering: Tank (more load) sorts before Trinity.
+        board.AgentQueues[0].AgentName.Should().Be("Tank");
+    }
+
+    [Fact]
+    public async Task GetBoard_AgentQueues_EmptyWhenNoActiveRuns_NeverNull()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory);
+
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+        await backlogStore.InsertAsync(MakeReadyTask(project.Id, "g"));
+
+        var board = await service.GetBoardAsync(project.Id, includeTerminalHistory: false, default);
+
+        board.AgentQueues.Should().NotBeNull();
+        board.AgentQueues.Should().BeEmpty();
+    }
+
+    private static async Task<RunId> ClaimRunAsync(
+        SqliteBacklogTaskStore backlogStore, ProjectId projectId, string orderKey)
+    {
+        var task = MakeReadyTask(projectId, orderKey);
+        await backlogStore.InsertAsync(task);
+        var runId = RunId.New();
+        (await backlogStore.TryClaimAndReserveCoordinatorRunAsync(
+            projectId, task.Id, MakeCoordinatorRun(projectId, runId), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
+        return runId;
     }
 
     public async ValueTask DisposeAsync()

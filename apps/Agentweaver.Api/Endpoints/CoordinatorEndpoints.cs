@@ -283,7 +283,7 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
         TargetFiles: request.TargetFiles,
         Reviewer: caller.User);
 
-    var result = reviewGate.TrySubmit(coordinatorRunId, caller.User, decision);
+    var result = reviewGate.TrySubmit(coordinatorRunId, caller.User, decision, caller.GitHubLogin);
 
     logger.LogInformation(
         "Assembly review decision: {Decision}. RunId={RunId} Reviewer={Reviewer} Result={Result}",

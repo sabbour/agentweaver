@@ -47,12 +47,14 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, SteerKind, RunStatus } from '../api/types';
+import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse } from '../api/types';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
+import { AgentRail } from '../components/AgentRail';
+import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { Timeline } from '../components/Timeline';
@@ -652,6 +654,10 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
+  agentRailBand: {
+    padding: `${tokens.spacingVerticalS} 0`,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   // Two-column layout: outcome spec on the LEFT (collapsible), coordinator session on the RIGHT.
   twoCol: {
     display: 'grid',
@@ -878,14 +884,18 @@ export function CoordinatorRunPage() {
       .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
       .catch(() => {});
 
-    // Fetch work plan + children for topology status seed.
+    // Fetch work plan + children for topology status seed + AgentRail.
     void (async () => {
       const [workPlan, children] = await Promise.all([
         apiClient.getWorkPlan(runId).catch(() => null),
         apiClient.getCoordinatorChildren(runId).catch(() => null),
       ]);
       if (cancelled) return;
-      if (workPlan) setTopoSeed(seedTopologyFromWorkPlan(workPlan, children));
+      if (workPlan) {
+        setTopoSeed(seedTopologyFromWorkPlan(workPlan, children));
+        setWorkPlanData(workPlan);
+        setChildrenData(children ?? []);
+      }
     })();
 
     return () => { cancelled = true; };
@@ -924,6 +934,9 @@ export function CoordinatorRunPage() {
   // review affordance for a terminal run and show its failure reason instead.
   const [runLevelStatus, setRunLevelStatus] = useState<RunStatus | undefined>(undefined);
   const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
+  // Per-run work-plan + children snapshot — used to drive the AgentRail.
+  const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
+  const [childrenData, setChildrenData] = useState<CoordinatorChildResponse[]>([]);
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -1587,6 +1600,12 @@ export function CoordinatorRunPage() {
     }
   }, [orch.phase, reviewActionable, runLevelStatus]);
 
+  // Per-run agent load items for the AgentRail — derived from the work-plan + children snapshot.
+  const agentItems = useMemo(
+    () => (workPlanData && runId ? deriveAgentQueues(workPlanData, childrenData, runId) : []),
+    [workPlanData, childrenData, runId],
+  );
+
   // Adapter that points the standard artifact browser at the coordinator's collective assembly:
   // files/diff come from the integration branch (the coordinator owns no worktree), and the three
   // review actions are delivered to the collective assembly gate instead of the per-run endpoints.
@@ -1614,7 +1633,6 @@ export function CoordinatorRunPage() {
       {/* Header */}
       <div className={styles.headerRow}>
         <Title2>Orchestration</Title2>
-        <span className={styles.runIdLabel}>{shortId}</span>
         {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Connecting" />}
         {isRetryable && (
           <Button
@@ -1749,6 +1767,14 @@ export function CoordinatorRunPage() {
         </CoordSteerContext.Provider>
       </div>
 
+      {/* Agent rail — compact per-agent load summary derived from the work plan.
+          Phase 2 TODO: wire onSelectAgent to filter/highlight the topology and work plan. */}
+      {workPlanData && (
+        <div className={styles.agentRailBand}>
+          <AgentRail agents={agentItems} title="Agents" />
+        </div>
+      )}
+
       {/* Two-column layout: [Outcome (collapsible, auto-collapses on confirm)] [Coordinator session
           (collapsible to a thin right rail; starts collapsed while the spec is authored)]. */}
       <div className={
@@ -1772,17 +1798,7 @@ export function CoordinatorRunPage() {
           </div>
         ) : (
           <div className={styles.leftCol}>
-            <div className={styles.outcomeHeaderRow}>
-              <Title3>Outcome spec</Title3>
-              <Button
-                appearance="subtle"
-                size="small"
-                icon={<ChevronLeftRegular />}
-                aria-label="Collapse outcome spec"
-                onClick={() => setOutcomeCollapsed(true)}
-              />
-            </div>
-            <OutcomeSpecPanel runId={runId} events={events} streamStatus={streamStatus} />
+            <OutcomeSpecPanel runId={runId} events={events} streamStatus={streamStatus} onCollapse={() => setOutcomeCollapsed(true)} />
           </div>
         )}
 

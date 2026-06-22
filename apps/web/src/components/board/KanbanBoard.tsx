@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   MessageBar,
   MessageBarBody,
@@ -10,9 +10,12 @@ import {
 import { useBoard } from '../../api/board';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
+import { fromDto } from '../../api/agentQueues';
+import { AgentRail } from '../AgentRail';
 import { KanbanColumn } from './KanbanColumn';
 import { CaptureTaskForm } from './CaptureTaskForm';
 import { PickupSettings } from './PickupSettings';
+import type { BoardColumnDto, RunCardDto } from '../../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -39,6 +42,11 @@ const useStyles = makeStyles({
     alignItems: 'flex-start',
     paddingBottom: tokens.spacingVerticalS,
   },
+  agentRail: {
+    padding: `${tokens.spacingVerticalXS} 0`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingBottom: tokens.spacingVerticalS,
+  },
 });
 
 export interface KanbanBoardProps {
@@ -62,6 +70,36 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [rejectMessage, setRejectMessage] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+
+  // Derive AgentQueueItems from the board's agent_queues field (Phase 2 — optional).
+  const agentItems = useMemo(
+    () => (board?.agent_queues ?? []).map(fromDto),
+    [board?.agent_queues],
+  );
+
+  // When an agent is selected, build the set of run_ids they own for O(1) lookup.
+  const selectedRunIds = useMemo<Set<string> | null>(() => {
+    if (!selectedAgent) return null;
+    const item = agentItems.find((a) => a.agentName === selectedAgent);
+    return item?.runIds ? new Set(item.runIds) : null;
+  }, [selectedAgent, agentItems]);
+
+  // Filter each column's cards: when a filter is active, show only RunCardDto cards
+  // whose run_id appears in the selected agent's run_ids. Task cards (no run_id) are
+  // hidden while a filter is active because they belong to the intake queue, not to
+  // any specific agent.
+  const filteredColumns = useMemo<BoardColumnDto[]>(() => {
+    if (!board) return [];
+    if (!selectedRunIds) return board.columns;
+    return board.columns.map((col) => ({
+      ...col,
+      cards: col.cards.filter(
+        (card): card is RunCardDto =>
+          card.kind === 'run' && selectedRunIds.has(card.run_id),
+      ),
+    }));
+  }, [board, selectedRunIds]);
 
   const handleDropTask = async (taskId: string, sourceColumnId: string, targetColumnId: string, targetIndex: number) => {
     setDraggingTaskId(null);
@@ -128,9 +166,23 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         </MessageBar>
       )}
 
+      {board && agentItems.length > 0 && (
+        <div className={styles.agentRail}>
+          <AgentRail
+            agents={agentItems}
+            title="Agents"
+            selectedAgent={selectedAgent ?? undefined}
+            onSelectAgent={(name) => setSelectedAgent(name)}
+          />
+          {selectedAgent && (
+            <span data-testid="agent-rail-filter-active" style={{ display: 'none' }} aria-hidden="true" />
+          )}
+        </div>
+      )}
+
       {board && (
         <div className={styles.columns}>
-          {board.columns.map((column) => (
+          {filteredColumns.map((column) => (
             <KanbanColumn
               key={column.id}
               column={column}
@@ -149,7 +201,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         </div>
       )}
 
-      {board && board.columns.length === 0 && <Text>No columns to display.</Text>}
+      {board && filteredColumns.length === 0 && !selectedAgent && <Text>No columns to display.</Text>}
     </div>
   );
 }

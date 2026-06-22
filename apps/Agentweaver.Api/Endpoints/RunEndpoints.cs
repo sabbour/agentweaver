@@ -246,7 +246,7 @@ app.MapDelete("/api/runs/{id}", async (
 
     if (run is null) return Results.NotFound();
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    if (!string.Equals(caller.User, run.SubmittingUser, StringComparison.Ordinal))
+    if (!caller.Owns(run.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     var terminalStatuses = new[] { RunStatus.Merged, RunStatus.Declined, RunStatus.MergeFailed, RunStatus.Failed, RunStatus.Completed };
@@ -319,7 +319,7 @@ app.MapGet("/api/runs/{id}/stream", async (
     // (or when the entry has been evicted) fall back to the persistent run record.
     if (entry is not null)
     {
-        if (!string.Equals(caller.User, entry.Owner, StringComparison.Ordinal))
+        if (!caller.Owns(entry.Owner))
         {
             httpContext.Response.StatusCode = 404;
             return;
@@ -339,7 +339,7 @@ app.MapGet("/api/runs/{id}/stream", async (
                 return;
             }
 
-        if (!isSubStream && (run is null || !string.Equals(caller.User, run.SubmittingUser, StringComparison.Ordinal)))
+        if (!isSubStream && (run is null || !caller.Owns(run.SubmittingUser)))
         {
             httpContext.Response.StatusCode = 404;
             return;
@@ -364,7 +364,7 @@ app.MapGet("/api/runs/{id}/stream", async (
         if (entry is not null)
         {
             // Authorize the entry we found after waiting.
-            if (!string.Equals(caller.User, entry.Owner, StringComparison.Ordinal))
+            if (!caller.Owns(entry.Owner))
             {
                 httpContext.Response.StatusCode = 404;
                 return;
@@ -719,7 +719,7 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Guardrail 9: IDOR defense-in-depth — verify caller owns the pending request.
-    if (!string.Equals(caller.User, pendingEntry.OwnerUser, StringComparison.Ordinal))
+    if (!caller.Owns(pendingEntry.OwnerUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     if (streamingRunForReview is null)
@@ -1006,8 +1006,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     // IsOwner above already verified caller.User == run.SubmittingUser; this check mirrors
     // the pattern in the /review endpoint (Guardrail 9).
     var pendingEntry = pendingStore.Get(id);
-    if (pendingEntry is not null &&
-        !string.Equals(caller.User, pendingEntry.OwnerUser, StringComparison.Ordinal))
+    if (pendingEntry is not null && !caller.Owns(pendingEntry.OwnerUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     // Validate comment.

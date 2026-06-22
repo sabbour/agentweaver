@@ -26,7 +26,7 @@ namespace Agentweaver.Api.Endpoints;
 internal static class EndpointHelpers
 {
 internal static bool IsOwner(HttpContext context, Run run) =>
-    string.Equals(ApiKeyAuthMiddleware.GetCaller(context).User, run.SubmittingUser, StringComparison.Ordinal);
+    ApiKeyAuthMiddleware.GetCaller(context).Owns(run.SubmittingUser);
 
 internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)
 {

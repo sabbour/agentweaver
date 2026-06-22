@@ -708,11 +708,24 @@ export interface BoardColumnDto {
   collapsed_count?: number;
 }
 
+// Per-agent load summary rolled up across all coordinator runs in the project.
+// Added by the backend as board.agent_queues (FR-phase2-rail).
+export interface AgentQueueDto {
+  agent_name:    string;
+  active:        number;
+  queued:        number;
+  blocked:       number;
+  done:          number;
+  run_ids:       string[];   // coordinator run ids with ≥1 subtask for this agent
+  sample_titles: string[];   // up to 3 subtask titles
+}
+
 // Response body for GET /api/projects/{projectId}/board.
 export interface BoardDto {
   project_id: string;
   workflow_stages_available: boolean;
   columns: BoardColumnDto[];
+  agent_queues?: AgentQueueDto[]; // optional — degrades gracefully if backend not yet deployed
 }
 
 // Per-project pickup settings (FR-008a).

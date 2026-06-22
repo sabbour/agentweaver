@@ -59,6 +59,11 @@ public sealed class BoardProjectionService
             BuildIntakeColumn("ready", "Ready", tasks, BacklogTaskState.Ready),
         };
 
+        // Active (non-terminal) coordinator run ids backing the board — the set the per-agent
+        // work-queue rollup aggregates over (historical/merged-away runs in the terminal column are
+        // excluded so the homepage "Agents" rail reflects current in-flight work only).
+        var activeRunIds = new List<string>();
+
         if (workflowAvailable)
         {
             // run_id -> backlog task id, for run-card provenance (Claimed tasks are represented by
@@ -82,6 +87,9 @@ public sealed class BoardProjectionService
                 var stageId = _stageProjector.CoordinatorRunToStageId(run, planStage);
                 if (!byStage.TryGetValue(stageId, out var bucket))
                     continue;   // defensive: unknown stage id never surfaces a broken column
+
+                if (!string.Equals(stageId, WorkflowStageProjector.TerminalStageId, StringComparison.Ordinal))
+                    activeRunIds.Add(run.Id.ToString());
 
                 runToTask.TryGetValue(run.Id.ToString(), out var backlogTaskId);
                 bucket.Add(new RunCardDto
@@ -119,11 +127,14 @@ public sealed class BoardProjectionService
             }
         }
 
+        var agentQueues = await BuildAgentQueuesAsync(activeRunIds, ct).ConfigureAwait(false);
+
         return new BoardDto
         {
             ProjectId = projectId.ToString(),
             WorkflowStagesAvailable = workflowAvailable,
             Columns = columns,
+            AgentQueues = agentQueues,
         };
     }
 
@@ -196,5 +207,115 @@ public sealed class BoardProjectionService
         return rows.ToDictionary(
             w => w.CoordinatorRunId,
             w => new CoordinatorWorkPlanStage(w.Status, w.AssemblyStage));
+    }
+
+    /// <summary>
+    /// Project-aggregate per-agent work-queue rollup for the homepage "Agents" rail. Loads every
+    /// subtask (persona, status, title) across the active coordinator runs in ONE batched query
+    /// (WorkPlans joined to Subtasks — no per-run round trip), then aggregates into load buckets per
+    /// distinct <c>assignedAgent</c>. Status -&gt; bucket mapping mirrors the locked web Phase 1
+    /// mapping (apps/web/src/api/agentQueues.ts) exactly. Returns an empty list (never null) when
+    /// there are no active runs or no subtasks.
+    /// </summary>
+    private async Task<IReadOnlyList<AgentQueueDto>> BuildAgentQueuesAsync(
+        IReadOnlyCollection<string> activeRunIds, CancellationToken ct)
+    {
+        if (activeRunIds.Count == 0)
+            return Array.Empty<AgentQueueDto>();
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        // One query: every subtask of every active run's work plan, projected to the three fields the
+        // rollup needs. The coordinator run id rides along so run_ids can be attributed per agent.
+        var rows = await db.WorkPlans.AsNoTracking()
+            .Where(w => activeRunIds.Contains(w.CoordinatorRunId))
+            .Join(
+                db.Subtasks.AsNoTracking(),
+                w => w.Id,
+                s => s.WorkPlanId,
+                (w, s) => new SubtaskRow(w.CoordinatorRunId, s.AssignedAgent, s.Status, s.Title))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        if (rows.Count == 0)
+            return Array.Empty<AgentQueueDto>();
+
+        var byAgent = new Dictionary<string, AgentQueueAccumulator>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var agent = string.IsNullOrWhiteSpace(row.AssignedAgent) ? "Unassigned" : row.AssignedAgent;
+            if (!byAgent.TryGetValue(agent, out var acc))
+            {
+                acc = new AgentQueueAccumulator();
+                byAgent[agent] = acc;
+            }
+
+            var bucket = SubtaskStatusToBucket(row.Status);
+            switch (bucket)
+            {
+                case Bucket.Active: acc.Active++; break;
+                case Bucket.Queued: acc.Queued++; break;
+                case Bucket.Blocked: acc.Blocked++; break;
+                case Bucket.Done: acc.Done++; break;
+            }
+
+            acc.RunIds.Add(row.CoordinatorRunId);
+
+            // sample_titles prefer in-flight (queued + active) work; dedup, cap at 3.
+            if ((bucket == Bucket.Queued || bucket == Bucket.Active)
+                && acc.SampleTitles.Count < 3
+                && !string.IsNullOrWhiteSpace(row.Title))
+            {
+                acc.SampleTitles.Add(row.Title);
+            }
+        }
+
+        var result = byAgent
+            .Select(kvp => new AgentQueueDto
+            {
+                AgentName = kvp.Key,
+                Active = kvp.Value.Active,
+                Queued = kvp.Value.Queued,
+                Blocked = kvp.Value.Blocked,
+                Done = kvp.Value.Done,
+                RunIds = kvp.Value.RunIds.OrderBy(x => x, StringComparer.Ordinal).ToList(),
+                SampleTitles = kvp.Value.SampleTitles.Take(3).ToList(),
+            })
+            // Most-loaded agents first (mirrors the web ordering), with a stable name tie-break.
+            .OrderByDescending(a => a.Active * 4 + a.Queued * 2 + a.Blocked)
+            .ThenBy(a => a.AgentName, StringComparer.Ordinal)
+            .ToList();
+
+        return result;
+    }
+
+    /// <summary>
+    /// Maps a server-side WorkPlan subtask status to a load bucket. Mirrors
+    /// apps/web/src/api/agentQueues.ts exactly. Server-side subtask statuses are
+    /// pending | dispatched | running | rai_flagged | assemble_ready | completed | failed; the extra
+    /// in_progress/merged cases are kept for forward-parity with the web mapping.
+    /// </summary>
+    private static Bucket SubtaskStatusToBucket(string status) =>
+        status?.ToLowerInvariant() switch
+        {
+            "dispatched" or "running" or "in_progress" => Bucket.Active,
+            "completed" or "assemble_ready" or "merged" => Bucket.Done,
+            "failed" or "rai_flagged" => Bucket.Blocked,
+            _ => Bucket.Queued,   // pending + anything unrecognized = queued (not yet started)
+        };
+
+    private enum Bucket { Active, Queued, Blocked, Done }
+
+    private readonly record struct SubtaskRow(string CoordinatorRunId, string AssignedAgent, string Status, string Title);
+
+    private sealed class AgentQueueAccumulator
+    {
+        public int Active;
+        public int Queued;
+        public int Blocked;
+        public int Done;
+        public readonly HashSet<string> RunIds = new(StringComparer.Ordinal);
+        public readonly List<string> SampleTitles = new();
     }
 }

@@ -1,4 +1,4 @@
-import type { BoardDto } from '../../api/types';
+import type { AgentQueueDto, BoardDto } from '../../api/types';
 
 // Minimal board fixture mirroring GET /api/projects/{id}/board (design 5.7).
 // Backlog + Ready intake columns first, then server-ordered workflow columns
@@ -60,5 +60,19 @@ export function makeBoardWorkflowUnavailable(): BoardDto {
       { id: 'backlog', kind: 'intake', label: 'Backlog', cards: [] },
       { id: 'ready', kind: 'intake', label: 'Ready', cards: [] },
     ],
+  };
+}
+
+// Board fixture with agent_queues for Phase 2 AgentRail tests.
+export function makeAgentQueueDto(overrides?: Partial<AgentQueueDto>): AgentQueueDto {
+  return {
+    agent_name:    'Neo',
+    active:        2,
+    queued:        1,
+    blocked:       0,
+    done:          3,
+    run_ids:       ['r1'],
+    sample_titles: ['Task A', 'Task B'],
+    ...overrides,
   };
 }

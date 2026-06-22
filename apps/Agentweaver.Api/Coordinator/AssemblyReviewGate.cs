@@ -41,12 +41,16 @@ public sealed class AssemblyReviewGate
     /// Atomically consumes the armed gate and delivers the decision (at-most-once; double-POST
     /// safe). Verifies the caller owns the pending request (IDOR defense, Guardrail 9).
     /// </summary>
-    public AssemblyReviewSubmitResult TrySubmit(string coordinatorRunId, string callerUser, AssemblyReviewDecision decision)
+    public AssemblyReviewSubmitResult TrySubmit(string coordinatorRunId, string callerUser, AssemblyReviewDecision decision, string? callerGitHubLogin = null)
     {
         if (!_gates.TryGetValue(coordinatorRunId, out var entry))
             return AssemblyReviewSubmitResult.NotArmed;
 
-        if (!string.Equals(entry.OwnerUser, callerUser, StringComparison.Ordinal))
+        // Identity-aware ownership: the gate owner is the run's SubmittingUser, which for backlog-pickup
+        // runs is the captured GitHub login rather than the API-key principal. Match either.
+        var owns = string.Equals(entry.OwnerUser, callerUser, StringComparison.Ordinal) ||
+                   (callerGitHubLogin is not null && string.Equals(entry.OwnerUser, callerGitHubLogin, StringComparison.Ordinal));
+        if (!owns)
             return AssemblyReviewSubmitResult.Forbidden;
 
         // Atomic removal so a concurrent double-POST cannot deliver twice.

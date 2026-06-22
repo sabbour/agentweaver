@@ -1055,6 +1055,30 @@ public sealed record BoardDto
     [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
     [JsonPropertyName("workflow_stages_available")] public required bool WorkflowStagesAvailable { get; init; }
     [JsonPropertyName("columns")] public required IReadOnlyList<BoardColumnDto> Columns { get; init; }
+
+    /// <summary>
+    /// Phase 2 project-aggregate per-agent work-queue rollup feeding the homepage "Agents" rail.
+    /// One entry per distinct subtask <c>assignedAgent</c> persona aggregated across the active
+    /// (non-terminal) coordinator runs backing the board. Empty (never null) when there is no
+    /// in-flight subtask work.
+    /// </summary>
+    [JsonPropertyName("agent_queues")] public required IReadOnlyList<AgentQueueDto> AgentQueues { get; init; }
+}
+
+/// <summary>
+/// Per-agent work-queue rollup for the project homepage "Agents" rail. Aggregates a persona's
+/// subtasks across the active coordinator runs into load buckets. Status -&gt; bucket mapping mirrors
+/// the web Phase 1 mapping (apps/web/src/api/agentQueues.ts) exactly.
+/// </summary>
+public sealed record AgentQueueDto
+{
+    [JsonPropertyName("agent_name")] public required string AgentName { get; init; }
+    [JsonPropertyName("active")] public required int Active { get; init; }     // dispatched | running | in_progress
+    [JsonPropertyName("queued")] public required int Queued { get; init; }     // pending + any unrecognized status
+    [JsonPropertyName("blocked")] public required int Blocked { get; init; }   // failed | rai_flagged
+    [JsonPropertyName("done")] public required int Done { get; init; }         // completed | assemble_ready | merged
+    [JsonPropertyName("run_ids")] public required IReadOnlyList<string> RunIds { get; init; }
+    [JsonPropertyName("sample_titles")] public required IReadOnlyList<string> SampleTitles { get; init; }
 }
 
 /// <summary>Response body for POST /api/projects/{projectId}/backlog/ready-all (bulk promote).</summary>
