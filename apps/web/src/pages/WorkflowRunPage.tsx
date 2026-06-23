@@ -38,6 +38,7 @@ import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
+import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
 import {
   workflowNodeTypes,
   workflowEdgeTypes,
@@ -201,6 +202,9 @@ function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStre
 export function WorkflowRunPage() {
   const styles = usePageStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
+
+  // Ctrl+Scroll zoom over the workflow diagram (workflow-zoom) — shared with the board.
+  const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
 
   const [agentName,      setAgentName]      = useState<string | undefined>(undefined);
   const [agentRoleTitle, setAgentRoleTitle] = useState<string | undefined>(undefined);
@@ -725,27 +729,32 @@ export function WorkflowRunPage() {
             <Spinner size="small" label="Loading run…" />
           </div>
         ) : (
-        <div className={styles.dagContainer}>
-          <ReactFlow
-            nodes={rfNodes}
-            edges={displayEdges}
-            nodeTypes={workflowNodeTypes}
-            edgeTypes={workflowEdgeTypes}
-            fitView
-            fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }}
-            minZoom={0.5}
-            nodesDraggable={false}
-            nodesConnectable={false}
-            nodesFocusable={false}
-            edgesFocusable={false}
-            panOnScroll={false}
-            zoomOnScroll={false}
-            zoomOnPinch={false}
-            zoomOnDoubleClick={false}
-            panOnDrag={false}
-            proOptions={{ hideAttribution: true }}
-          />
-        </div>
+        <>
+          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+          <div className={styles.dagContainer} ref={viewportRef}>
+            <div style={{ zoom, width: '100%', height: '100%' }}>
+              <ReactFlow
+                nodes={rfNodes}
+                edges={displayEdges}
+                nodeTypes={workflowNodeTypes}
+                edgeTypes={workflowEdgeTypes}
+                fitView
+                fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }}
+                minZoom={0.5}
+                nodesDraggable={false}
+                nodesConnectable={false}
+                nodesFocusable={false}
+                edgesFocusable={false}
+                panOnScroll={false}
+                zoomOnScroll={false}
+                zoomOnPinch={false}
+                zoomOnDoubleClick={false}
+                panOnDrag={false}
+                proOptions={{ hideAttribution: true }}
+              />
+            </div>
+          </div>
+        </>
         )}
       </ActiveEdgeContext.Provider>
       </ExecutionModalContext.Provider>

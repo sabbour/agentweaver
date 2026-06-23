@@ -20,12 +20,14 @@ public sealed class SqliteProjectStore : IProjectStore
                                   working_directory, default_branch, owner,
                                   default_provider, default_model_copilot, default_model_foundry,
                                   state, created_at, updated_at,
-                                  max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools)
+                                  max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
+                                  default_workflow_id, active_review_policy_name)
             VALUES ($projectId, $name, $originKind, $sourceRepository,
                     $workingDirectory, $defaultBranch, $owner,
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
                     $state, $createdAt, $updatedAt,
-                    $maxReadyPerHeartbeat, $pickupAutopilot, $pickupAutoApproveTools);
+                    $maxReadyPerHeartbeat, $pickupAutopilot, $pickupAutoApproveTools,
+                    $defaultWorkflowId, $activeReviewPolicyName);
             """;
         command.Parameters.AddWithValue("$projectId", project.Id.ToString());
         command.Parameters.AddWithValue("$name", project.Name);
@@ -43,6 +45,8 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$maxReadyPerHeartbeat", project.MaxReadyPerHeartbeat);
         command.Parameters.AddWithValue("$pickupAutopilot", project.PickupAutopilot ? 1 : 0);
         command.Parameters.AddWithValue("$pickupAutoApproveTools", project.PickupAutoApproveTools ? 1 : 0);
+        command.Parameters.AddWithValue("$defaultWorkflowId", (object?)project.DefaultWorkflowId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$activeReviewPolicyName", (object?)project.ActiveReviewPolicyName ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -160,16 +164,52 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task UpdateDefaultWorkflowAsync(ProjectId id, string? workflowId, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET default_workflow_id = $defaultWorkflowId,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$defaultWorkflowId", (object?)workflowId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task UpdateActiveReviewPolicyAsync(ProjectId id, string? policyName, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET active_review_policy_name = $activeReviewPolicyName,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$activeReviewPolicyName", (object?)policyName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     // Ordinals: 0=project_id 1=name 2=origin_kind 3=source_repository 4=working_directory
     //           5=default_branch 6=owner 7=default_provider 8=default_model_copilot
     //           9=default_model_foundry 10=state 11=created_at 12=updated_at
     //           13=max_ready_per_heartbeat 14=pickup_autopilot 15=pickup_auto_approve_tools
+    //           16=default_workflow_id 17=active_review_policy_name
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
                default_branch, owner, default_provider, default_model_copilot,
                default_model_foundry, state, created_at, updated_at,
-               max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools
+               max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
+               default_workflow_id, active_review_policy_name
           FROM projects
         """;
 
@@ -200,6 +240,8 @@ public sealed class SqliteProjectStore : IProjectStore
             MaxReadyPerHeartbeat   = r.IsDBNull(13) ? 3 : r.GetInt32(13),
             PickupAutopilot        = r.IsDBNull(14) ? true : r.GetInt32(14) != 0,
             PickupAutoApproveTools = r.IsDBNull(15) ? false : r.GetInt32(15) != 0,
+            DefaultWorkflowId      = r.IsDBNull(16) ? null : r.GetString(16),
+            ActiveReviewPolicyName = r.IsDBNull(17) ? null : r.GetString(17),
         };
     }
 

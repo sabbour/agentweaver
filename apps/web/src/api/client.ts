@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -109,7 +109,7 @@ export class AgentweaverApiClient {
     return this.request<RequestChangesResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/request-changes`, { comment });
   }
 
-  updateSandboxPolicy(policy: Pick<SandboxPolicy, 'repository_path' | 'shell_enabled' | 'direct' | 'network_enabled'>): Promise<SandboxPolicy> {
+  updateSandboxPolicy(policy: SandboxPolicy): Promise<SandboxPolicy> {
     return this.request<SandboxPolicy>('PUT', '/api/sandbox-policy', policy);
   }
 
@@ -425,6 +425,98 @@ export class AgentweaverApiClient {
     }
     if (!response.ok) throw new ApiError(response.status, text);
     return (text ? JSON.parse(text) : null) as ReviewResponse;
+  }
+
+  // Lightweight API-reachability probe for the shell status dot (Spec 011, FR-013).
+  // Prefers a dedicated /api/health endpoint when present; falls back to the root
+  // ("Agentweaver API") endpoint. Returns true when the API responds, false on a
+  // network error. Reachability is "the API answered", so any HTTP response counts.
+  async checkHealth(): Promise<boolean> {
+    const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}` };
+    try {
+      const res = await fetch(`${this.baseUrl}/api/health`, { method: 'GET', headers });
+      if (res.status !== 404) return res.ok;
+    } catch {
+      // /api/health unreachable; fall through to the root probe.
+    }
+    try {
+      const res = await fetch(`${this.baseUrl}/`, { method: 'GET', headers });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  // System diagnostics snapshot (Spec 011, FR-016).
+  getDiagnostics(): Promise<SystemDiagnosticsDto> {
+    return this.request<SystemDiagnosticsDto>('GET', '/api/diagnostics');
+  }
+
+  // Project-scoped diagnostics (Spec 011, FR-016). Owner-authorized.
+  getProjectDiagnostics(projectId: string): Promise<import('./types').ProjectDiagnosticsDto> {
+    return this.request<import('./types').ProjectDiagnosticsDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/diagnostics`);
+  }
+
+  // Heartbeat service status (Spec 011, FR-017).
+  getHeartbeatStatus(): Promise<HeartbeatStatusDto> {
+    return this.request<HeartbeatStatusDto>('GET', '/api/diagnostics/heartbeat');
+  }
+
+  // Workflow definitions (Spec 010, FR-039). Project-scoped, owner-authorized.
+  // List discovered workflows + validation status; Sync re-reads .scaffolders/
+  // workflows/ from disk and returns the refreshed set; Get returns one full
+  // definition.
+  listWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
+    return this.request<import('./types').WorkflowListResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/workflows`);
+  }
+
+  syncWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
+    return this.request<import('./types').WorkflowListResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/workflows/sync`, {});
+  }
+
+  getWorkflow(projectId: string, workflowId: string): Promise<import('./types').WorkflowDetailDto> {
+    return this.request<import('./types').WorkflowDetailDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`);
+  }
+
+  // Set the project's default workflow (Feature 010, FR-041). A null id clears back
+  // to the built-in default. Returns the refreshed list (with default_workflow_id).
+  setDefaultWorkflow(projectId: string, workflowId: string | null): Promise<import('./types').WorkflowListResponse> {
+    return this.request<import('./types').WorkflowListResponse>('PUT', `/api/projects/${encodeURIComponent(projectId)}/workflows/default`, { workflow_id: workflowId });
+  }
+
+  // Set a per-task workflow override (Feature 010, FR-042). A null id clears it.
+  // Throws ApiError 409 (body { error: 'task_claimed' }) if the task is already claimed.
+  setTaskWorkflowOverride(projectId: string, taskId: string, workflowId: string | null): Promise<import('./types').WorkflowOverrideResponse> {
+    return this.request<import('./types').WorkflowOverrideResponse>('PUT', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/workflow-override`, { workflow_id: workflowId });
+  }
+
+  // Review policies (Spec 010, FR-025/027/033). Project-scoped, owner-authorized.
+  // List discovered policies + active selection; Get returns one policy's steps;
+  // SetActive selects the active policy by name (null clears to the built-in
+  // default); Sync re-reads .scaffolders/review-policies/ and returns the set.
+  listReviewPolicies(projectId: string): Promise<import('./types').ReviewPolicyListResponse> {
+    return this.request<import('./types').ReviewPolicyListResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/review-policies`);
+  }
+
+  getReviewPolicy(projectId: string, policyName: string): Promise<import('./types').ReviewPolicyDetailDto> {
+    return this.request<import('./types').ReviewPolicyDetailDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/review-policies/${encodeURIComponent(policyName)}`);
+  }
+
+  setActiveReviewPolicy(projectId: string, name: string | null): Promise<import('./types').ReviewPolicyListResponse> {
+    return this.request<import('./types').ReviewPolicyListResponse>('PUT', `/api/projects/${encodeURIComponent(projectId)}/review-policies/active`, { name });
+  }
+
+  syncReviewPolicies(projectId: string): Promise<import('./types').ReviewPolicyListResponse> {
+    return this.request<import('./types').ReviewPolicyListResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/review-policies/sync`, {});
+  }
+
+  // Metrics (web IA reorg) — per-project dashboard + global "Now" overview.
+  getProjectDashboard(projectId: string): Promise<import('./types').ProjectDashboardDto> {
+    return this.request<import('./types').ProjectDashboardDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/dashboard`);
+  }
+
+  getOverview(): Promise<import('./types').OverviewDto> {
+    return this.request<import('./types').OverviewDto>('GET', '/api/overview');
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

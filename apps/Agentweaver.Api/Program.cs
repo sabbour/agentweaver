@@ -21,6 +21,8 @@ using Agentweaver.Squad.Squad;
 using Agentweaver.Squad.Analysis;
 using Agentweaver.Squad.Sync;
 using Agentweaver.Api.Endpoints;
+using Agentweaver.Api.Workflows;
+using Agentweaver.Api.ReviewPolicies;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -104,7 +106,14 @@ builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
     sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
 builder.Services.AddSingleton<Agentweaver.Api.Runs.BoardProjectionService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorPickupService>();
+builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.HeartbeatStatusStore>();
 builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbeatService>();
+
+// Workflows (Feature 010) + Diagnostics (Feature 011)
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
+builder.Services.AddSingleton<Agentweaver.Api.ReviewPolicies.ReviewPolicyRegistry>();
+builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
+builder.Services.AddSingleton<Agentweaver.Api.Metrics.MetricsService>();
 
 // Agent runtime
 builder.Services.AddAgentRuntime();
@@ -218,6 +227,10 @@ app.MapTeamEndpoints();
 app.MapAuthEndpoints();
 app.MapDecisionsEndpoints();
 app.MapMemoryEndpoints();
+app.MapWorkflowDefinitionEndpoints();
+app.MapReviewPolicyEndpoints();
+app.MapDiagnosticsEndpoints();
+app.MapMetricsEndpoints();
 
 app.Run();
 

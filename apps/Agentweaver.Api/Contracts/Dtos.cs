@@ -278,7 +278,42 @@ public sealed record SandboxPolicyDto
     public int MaxOutputBytes { get; init; }
 }
 
-/// <summary>Response body for GET /api/github/repos.</summary>
+/// <summary>
+/// Request body for PUT /api/sandbox-policy. PATCH/preserve semantics: every field except
+/// <see cref="RepositoryPath"/> is optional (nullable). An OMITTED/null field preserves the existing
+/// stored value; an explicitly provided value (including an empty array, which clears) is applied. This
+/// makes partial saves — e.g. the MCP <c>sandbox_policy_set</c> sending only repository_path +
+/// shell_enabled — correct-by-construction instead of wiping unspecified fields.
+/// </summary>
+public sealed record SandboxPolicyUpdateRequest
+{
+    [JsonPropertyName("repository_path")]
+    public required string RepositoryPath { get; init; }
+
+    [JsonPropertyName("shell_enabled")]
+    public bool? ShellEnabled { get; init; }
+
+    [JsonPropertyName("direct")]
+    public bool? Direct { get; init; }
+
+    [JsonPropertyName("network_enabled")]
+    public bool? NetworkEnabled { get; init; }
+
+    [JsonPropertyName("allowed_repository_roots")]
+    public IReadOnlyList<string>? AllowedRepositoryRoots { get; init; }
+
+    [JsonPropertyName("destructive_command_patterns")]
+    public IReadOnlyList<string>? DestructiveCommandPatterns { get; init; }
+
+    [JsonPropertyName("require_approval_for_all_shell")]
+    public bool? RequireApprovalForAllShell { get; init; }
+
+    [JsonPropertyName("redact_pii")]
+    public bool? RedactPii { get; init; }
+
+    [JsonPropertyName("max_output_bytes")]
+    public int? MaxOutputBytes { get; init; }
+}
 public sealed record GitHubRepoResponse(
     string FullName,
     string? Description,

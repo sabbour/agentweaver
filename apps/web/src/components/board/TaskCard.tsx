@@ -4,15 +4,20 @@ import {
   Caption1,
   Field,
   Input,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   Text,
   Textarea,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { CheckmarkRegular, DeleteRegular, DismissRegular, EditRegular } from '@fluentui/react-icons';
+import { CheckmarkRegular, DeleteRegular, DismissRegular, EditRegular, FlowRegular } from '@fluentui/react-icons';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import type { TaskCardDto } from '../../api/types';
+import type { TaskCardDto, WorkflowSummaryDto } from '../../api/types';
 
 const useStyles = makeStyles({
   card: {
@@ -85,9 +90,45 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
   const [description, setDescription] = useState(card.description ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [workflows, setWorkflows] = useState<WorkflowSummaryDto[] | null>(null);
+  const [workflowsLoading, setWorkflowsLoading] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const reportError = (e: unknown) => {
     setError(e instanceof ApiError ? `API error ${e.status}: ${e.body}` : e instanceof Error ? e.message : String(e));
+  };
+
+  const loadWorkflows = async () => {
+    if (workflows || workflowsLoading) return;
+    setWorkflowsLoading(true);
+    try {
+      const list = await apiClient.listWorkflows(projectId);
+      setWorkflows(list.workflows);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setWorkflowsLoading(false);
+    }
+  };
+
+  const handleSetOverride = async (workflowId: string | null) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await apiClient.setTaskWorkflowOverride(projectId, card.task_id, workflowId);
+      setNotice(workflowId ? 'Workflow override set.' : 'Workflow override cleared.');
+      await onMutated();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setError('This task was just claimed — its workflow can no longer be changed.');
+        await onMutated();
+      } else {
+        reportError(e);
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleSave = async () => {
@@ -169,12 +210,32 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
       <div className={styles.header}>
         <Text className={styles.title}>{card.title}</Text>
         <div className={styles.cardActions}>
+          <Menu onOpenChange={(_, d) => { if (d.open) void loadWorkflows(); }}>
+            <MenuTrigger disableButtonEnhancement>
+              <Button appearance="subtle" size="small" icon={<FlowRegular />} aria-label="Set workflow" disabled={busy} />
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                {workflowsLoading && <MenuItem disabled>Loading workflows…</MenuItem>}
+                {!workflowsLoading && workflows?.filter((wf) => wf.valid && wf.id).map((wf) => (
+                  <MenuItem key={wf.id} onClick={() => void handleSetOverride(wf.id)}>
+                    {wf.name ?? wf.id}{wf.is_default ? ' (default)' : ''}
+                  </MenuItem>
+                ))}
+                {!workflowsLoading && workflows && workflows.filter((wf) => wf.valid && wf.id).length === 0 && (
+                  <MenuItem disabled>No valid workflows</MenuItem>
+                )}
+                <MenuItem onClick={() => void handleSetOverride(null)}>Use project default</MenuItem>
+              </MenuList>
+            </MenuPopover>
+          </Menu>
           <Button appearance="subtle" size="small" icon={<EditRegular />} aria-label="Edit task" disabled={busy} onClick={() => setEditing(true)} />
           <Button appearance="subtle" size="small" icon={<DeleteRegular />} aria-label="Delete task" disabled={busy} onClick={() => void handleDelete()} />
         </div>
       </div>
       {card.description && <Text className={styles.description}>{card.description}</Text>}
       <Caption1 className={styles.meta}>{card.captured_by}</Caption1>
+      {notice && <Caption1 className={styles.meta}>{notice}</Caption1>}
       {error && <Text className={styles.error}>{error}</Text>}
     </div>
   );

@@ -18,4 +18,16 @@ public interface IProjectStore
     /// <summary>Updates the per-project backlog pickup settings (FR-008a + unattended seeding).</summary>
     Task UpdatePickupSettingsAsync(
         ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sets (or clears, when <paramref name="workflowId"/> is null) the project's default workflow
+    /// reference (Feature 010, FR-041).
+    /// </summary>
+    Task UpdateDefaultWorkflowAsync(ProjectId id, string? workflowId, DateTimeOffset updatedAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sets (or clears, when <paramref name="policyName"/> is null) the project's active review-policy
+    /// name (Feature 010, FR-027/033).
+    /// </summary>
+    Task UpdateActiveReviewPolicyAsync(ProjectId id, string? policyName, DateTimeOffset updatedAt, CancellationToken ct = default);
 }

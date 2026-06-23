@@ -90,6 +90,17 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_autopilot INTEGER NOT NULL DEFAULT 1;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_auto_approve_tools INTEGER NOT NULL DEFAULT 0;", ct);
+
+        // Per-project default workflow + per-task workflow override (Feature 010, FR-041/FR-042).
+        // YAML/predefined workflows are loaded from .scaffolders/workflows/ and referenced here by id.
+        // NULL means "use the built-in default" (project) / "use the project default" (task).
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_workflow_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_override_id TEXT;", ct);
+
+        // Per-project active review policy (Feature 010, FR-027/033). Named review policies are loaded
+        // from .scaffolders/review-policies/ and referenced here BY NAME. NULL means "use the built-in
+        // default policy" (Rubber-duck + RAI, FR-032).
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN active_review_policy_name TEXT;", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)

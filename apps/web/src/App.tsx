@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import {
   FluentProvider,
   Spinner,
@@ -16,84 +16,43 @@ import { CoordinatorRunPage } from './pages/CoordinatorRunPage';
 import { TeamPage } from './pages/TeamPage';
 import { CastingWizardPage } from './pages/CastingWizardPage';
 import { MemoriesPage } from './pages/MemoriesPage';
-import { GitHubSignIn } from './components/GitHubSignIn';
+import { WorkflowsPage } from './pages/WorkflowsPage';
 import { SignInPage } from './pages/SignInPage';
+import { DiagnosticsPage } from './pages/DiagnosticsPage';
+import { HeartbeatPage } from './pages/HeartbeatPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { FlowPage } from './pages/FlowPage';
+import { OrchestrationsPage } from './pages/OrchestrationsPage';
+import { OverviewPage } from './pages/OverviewPage';
+import { AppShell } from './components/shell/AppShell';
 import { apiClient } from './api/apiClient';
 
-const useStyles = makeStyles({
-  app: {
-    minHeight: '100vh',
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  header: {
-    padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalXXL}`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  brand: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    textDecoration: 'none',
-    color: tokens.colorNeutralForeground1,
-  },
-  brandLogo: {
-    height: '32px',
-    width: 'auto',
-    display: 'block',
-  },
-  brandName: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
-  },
-  headerNav: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalL,
-    alignItems: 'center',
-  },
-  navLink: {
-    color: tokens.colorNeutralForeground2,
-    textDecoration: 'none',
-    fontSize: tokens.fontSizeBase300,
-    ':hover': {
-      color: tokens.colorNeutralForeground1,
-    },
-  },
-  main: {
-    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
-  },
-});
-
 function Shell() {
-  const styles = useStyles();
   return (
-    <div className={styles.app}>
-      <header className={styles.header}>
-        <Link to="/" className={styles.brand}>
-          <img src="/agentweaver.png" alt="Agentweaver" className={styles.brandLogo} />
-          <span className={styles.brandName}>Agentweaver</span>
-        </Link>
-        <nav className={styles.headerNav} aria-label="Main navigation">
-          <GitHubSignIn />
-        </nav>
-      </header>
-      <main className={styles.main}>
-        <Routes>
-          <Route path="/" element={<ProjectGalleryPage />} />
-          <Route path="/projects/:projectId" element={<ProjectPage />} />
-          <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
-          <Route path="/projects/:projectId/team" element={<TeamPage />} />
-          <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
-          <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
-          <Route path="/projects/:projectId/runs/:runId/execution/:executionId" element={<WatchPage />} />
-          <Route path="/projects/:projectId/runs/:runId/workflow" element={<WorkflowRunPage />} />
-          <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunPage />} />
-        </Routes>
-      </main>
-    </div>
+    <AppShell>
+      <Routes>
+        {/* Global (non-project) destinations */}
+        <Route path="/" element={<OverviewPage />} />
+        <Route path="/overview" element={<OverviewPage />} />
+        <Route path="/projects" element={<ProjectGalleryPage />} />
+
+        {/* Project-scoped */}
+        <Route path="/projects/:projectId" element={<DashboardPage />} />
+        <Route path="/projects/:projectId/board" element={<ProjectPage />} />
+        <Route path="/projects/:projectId/flow" element={<FlowPage />} />
+        <Route path="/projects/:projectId/orchestrations" element={<OrchestrationsPage />} />
+        <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
+        <Route path="/projects/:projectId/team" element={<TeamPage />} />
+        <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
+        <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
+        <Route path="/projects/:projectId/workflows" element={<WorkflowsPage />} />
+        <Route path="/projects/:projectId/diagnostics" element={<DiagnosticsPage />} />
+        <Route path="/projects/:projectId/heartbeat" element={<HeartbeatPage />} />
+        <Route path="/projects/:projectId/runs/:runId/execution/:executionId" element={<WatchPage />} />
+        <Route path="/projects/:projectId/runs/:runId/workflow" element={<WorkflowRunPage />} />
+        <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunPage />} />
+      </Routes>
+    </AppShell>
   );
 }
 

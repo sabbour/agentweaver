@@ -96,12 +96,8 @@ export function SettingsPage() {
     setSaveError(null);
     setSaveSuccess(false);
     try {
-      const updated = await apiClient.updateSandboxPolicy({
-        repository_path: policy.repository_path,
-        shell_enabled: policy.shell_enabled,
-        direct: policy.direct,
-        network_enabled: policy.network_enabled,
-      });
+      // Round-trip the FULL policy so omitted fields are never dropped.
+      const updated = await apiClient.updateSandboxPolicy(policy);
       setPolicy(updated);
       setSaveSuccess(true);
     } catch (err) {
@@ -168,20 +164,27 @@ export function SettingsPage() {
               />
             </Field>
 
-            <Field label="Direct execution (no sandbox isolation)">
+            <Field
+              label="Sandbox enabled"
+              hint="When off, commands run directly on the host with no isolation layer."
+            >
               <Switch
-                label={policy.direct ? 'On — commands run on host shell directly' : 'Off — uses bwrap/mxc isolation'}
-                checked={policy.direct}
+                label={policy.direct ? 'Off — no isolation layer' : 'On — commands run in the sandbox'}
+                checked={!policy.direct}
                 onChange={(_, data) =>
-                  setPolicy((prev) => prev ? { ...prev, direct: data.checked } : prev)
+                  setPolicy((prev) => prev ? { ...prev, direct: !data.checked } : prev)
                 }
               />
             </Field>
 
-            <Field label="Outbound network">
+            <Field
+              label="Outbound network"
+              hint={policy.direct ? 'Only applies when the sandbox is enabled.' : undefined}
+            >
               <Switch
                 label={policy.network_enabled ? 'Enabled' : 'Blocked'}
                 checked={policy.network_enabled}
+                disabled={policy.direct}
                 onChange={(_, data) =>
                   setPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
                 }

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Agentweaver.Api.Diagnostics;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
@@ -30,14 +31,17 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
     private readonly ILogger<CoordinatorHeartbeatService> _logger;
     private readonly bool _enabled;
     private readonly TimeSpan _interval;
+    private readonly HeartbeatStatusStore _statusStore;
 
     public CoordinatorHeartbeatService(
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
+        HeartbeatStatusStore statusStore,
         ILogger<CoordinatorHeartbeatService> logger)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _statusStore = statusStore;
 
         // Master enable flag (default true). Hermetic web tests set it false to stay deterministic,
         // mirroring the existing Coordinator:AutoDispatch toggle.
@@ -65,6 +69,12 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
 
     private async Task RunTickAsync(CancellationToken stoppingToken)
     {
+        var tickStart = DateTimeOffset.UtcNow;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int actedCount = 0;
+        int errorCount = 0;
+        string? lastError = null;
+
         using var scope = _scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
         var projectStore = sp.GetRequiredService<IProjectStore>();
@@ -97,6 +107,7 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
                     try
                     {
                         await pickupService.TryPickupAsync(project, task, stoppingToken).ConfigureAwait(false);
+                        actedCount++;
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -104,6 +115,8 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
                     }
                     catch (Exception exTask)
                     {
+                        errorCount++;
+                        lastError = exTask.Message;
                         _logger.LogError(exTask, "Heartbeat: pickup failed for task {TaskId}", task.Id);
                         // Isolated; sibling tasks still processed.
                     }
@@ -115,9 +128,14 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
             }
             catch (Exception exProject)
             {
+                errorCount++;
+                lastError = exProject.Message;
                 _logger.LogError(exProject, "Heartbeat: project {ProjectId} tick failed", project.Id);
                 // Isolated; next project still processed.
             }
         }
+
+        sw.Stop();
+        _statusStore.RecordTickOutcome(tickStart, actedCount, errorCount, sw.Elapsed.TotalMilliseconds, lastError);
     }
 }

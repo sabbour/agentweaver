@@ -7,6 +7,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { useCtrlScrollZoom, ZoomControls } from './useCtrlScrollZoom';
 import { useBoard } from '../../api/board';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
@@ -35,12 +36,8 @@ const useStyles = makeStyles({
     flex: 1,
     minWidth: '280px',
   },
-  columns: {
-    display: 'flex',
-    flexDirection: 'row',
-    gap: tokens.spacingHorizontalM,
+  columnsViewport: {
     overflowX: 'auto',
-    alignItems: 'flex-start',
     paddingBottom: tokens.spacingVerticalS,
     // Slim, styled horizontal scrollbar instead of the heavy default OS bar.
     scrollbarWidth: 'thin',
@@ -58,6 +55,14 @@ const useStyles = makeStyles({
     '::-webkit-scrollbar-thumb:hover': {
       backgroundColor: tokens.colorNeutralStroke1Hover,
     },
+  },
+  columns: {
+    display: 'flex',
+    flexDirection: 'row',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'flex-start',
+    // Zoom origin: anchor to the top-left so zooming out keeps Backlog in place.
+    transformOrigin: 'top left',
   },
   agentRail: {
     padding: `${tokens.spacingVerticalXS} 0`,
@@ -88,6 +93,10 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const [rejectMessage, setRejectMessage] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+
+  // Board zoom (board-zoom). Ctrl+Scroll over the columns adjusts the zoom so the
+  // user can fit all workflow columns on screen; +/- controls do the same.
+  const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
 
   // Derive AgentQueueItems from the board's agent_queues field (Phase 2 — optional).
   const agentItems = useMemo(
@@ -209,25 +218,30 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       )}
 
       {board && (
-        <div className={styles.columns}>
-          {columnsWithAccent.map(({ col: column, accent }) => (
-            <KanbanColumn
-              key={column.id}
-              column={column}
-              accentColor={accent}
-              projectId={projectId}
-              onMutated={refetch}
-              onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>
-                void handleDropTask(taskId, sourceColumnId, targetColumnId, targetIndex)}
-              onRejectDrop={handleRejectDrop}
-              onDragStartTask={(taskId) => setDraggingTaskId(taskId)}
-              onDragEndTask={() => setDraggingTaskId(null)}
-              draggingTaskId={draggingTaskId}
-              includeTerminalHistory={includeTerminalHistory}
-              onToggleTerminalHistory={() => setIncludeTerminalHistory((v) => !v)}
-            />
-          ))}
-        </div>
+        <>
+          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+          <div className={styles.columnsViewport} ref={viewportRef}>
+            <div className={styles.columns} style={{ zoom }}>
+              {columnsWithAccent.map(({ col: column, accent }) => (
+                <KanbanColumn
+                  key={column.id}
+                  column={column}
+                  accentColor={accent}
+                  projectId={projectId}
+                  onMutated={refetch}
+                  onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>
+                    void handleDropTask(taskId, sourceColumnId, targetColumnId, targetIndex)}
+                  onRejectDrop={handleRejectDrop}
+                  onDragStartTask={(taskId) => setDraggingTaskId(taskId)}
+                  onDragEndTask={() => setDraggingTaskId(null)}
+                  draggingTaskId={draggingTaskId}
+                  includeTerminalHistory={includeTerminalHistory}
+                  onToggleTerminalHistory={() => setIncludeTerminalHistory((v) => !v)}
+                />
+              ))}
+            </div>
+          </div>
+        </>
       )}
 
       {board && filteredColumns.length === 0 && !selectedAgent && <Text>No columns to display.</Text>}

@@ -11,6 +11,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 
@@ -542,60 +543,39 @@ public sealed class RunWorkflowFactory
             return (childWf, childDescriptor, childBuilder.BuildExecutorMetaMap());
         }
 
-        var fullBuilder = new GraphDescriptorBuilder(agentInputStorer)
-            // storer -> agent turn (unconditional)
-            .AddEdge(agentInputStorer, agentBinding)
-            // agent turn -> Rai RAI gate (unconditional)
-            .AddEdge(agentBinding, raiBinding)
-            // Rai REVISE (iteration < cap) -> revision adapter -> loop back to agent
-            .AddEdge<AgentTurnOutput>(raiBinding, raiRevisionAdapter,
-                output => output is not null && output.RaiRevisionRequired && output.Iteration < MaxIterations)
-            .AddEdge(raiRevisionAdapter, agentBinding, idempotent: true)
-            // Content safety: the agent turn itself was flagged (empty diff, ContentSafetyFlagged)
-            // -> fail immediately, never reaching review. Note Rai RED keeps a non-empty diff and
-            // therefore routes to the review gate below (human has final say), unchanged.
-            .AddEdge<AgentTurnOutput>(raiBinding, terminalSafetyFailed,
-                output => output is not null && !output.RaiRevisionRequired
-                    && string.IsNullOrEmpty(output.Diff) && output.ContentSafetyFlagged)
-            // No changes -> no-op -> scribe path
-            .AddEdge<AgentTurnOutput>(raiBinding, terminalNoOp,
-                output => output is not null && !output.RaiRevisionRequired
-                    && string.IsNullOrEmpty(output.Diff) && !output.ContentSafetyFlagged)
-            .AddEdge(terminalNoOp, scribeInputNoChanges)
-            .AddEdge(scribeInputNoChanges, scribeBindingNoChanges)
-            .AddEdge(scribeBindingNoChanges, scribeOutputNoChanges)
-            // Everything else (OK, RED, REVISE cap) -> review adapter -> human review gate.
-            // RaiSafetyFlagged is set so the reviewer can see Rai's verdict as advisory context.
-            .AddEdge<AgentTurnOutput>(raiBinding, reviewAdapter,
-                output => output is not null && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff))
-            // Review adapter -> review gate
-            .AddEdge(reviewAdapter, reviewBinding)
-            // Approved -> merge adapter -> merge executor
-            .AddEdge<WorkflowReviewDecision>(reviewBinding, mergeAdapter,
-                decision => decision is not null && decision.Approved)
-            .AddEdge(mergeAdapter, mergeBinding)
-            // Merge succeeded or failed terminally -> scribe path
-            .AddEdge<MergeOutput>(mergeBinding, terminalMerge,
-                output => output is not null && output.Status != "blocked")
-            .AddEdge(terminalMerge, scribeInputMerge)
-            .AddEdge(scribeInputMerge, scribeBindingMerge)
-            .AddEdge(scribeBindingMerge, scribeOutputMerge)
-            // Merge blocked -> re-enter review gate via HITL
-            .AddEdge<MergeOutput>(mergeBinding, blockedAdapter,
-                output => output is not null && output.Status == "blocked")
-            .AddEdge(blockedAdapter, reviewBinding, idempotent: true)
-            // Review RequestChanges -> revision adapter -> loop back to agent (no cap)
-            .AddEdge<WorkflowReviewDecision>(reviewBinding, reviewChangesAdapter,
-                decision => decision is not null && !decision.Approved && decision.RequestChanges)
-            .AddEdge(reviewChangesAdapter, agentBinding, idempotent: true)
-            // Hard-declined -> terminal
-            .AddEdge<WorkflowReviewDecision>(reviewBinding, terminalDeclined,
-                decision => decision is null || (!decision.Approved && !decision.RequestChanges))
-            // Outputs
-            .WithOutputFrom(scribeOutputMerge)
-            .WithOutputFrom(scribeOutputNoChanges)
-            .WithOutputFrom(terminalSafetyFailed)
-            .WithOutputFrom(terminalDeclined);
+        // Definition-driven full pipeline (Feature 010, wf-maf-binding): the graph is assembled by
+        // ITERATING the default WorkflowDefinition's edges and resolving each (from, to, when) verdict
+        // to the concrete executor wiring + typed predicate, instead of a hand-coded chain. The concrete
+        // executors above hold the real behavior (Principle VII); the binder maps the model onto them.
+        // PARITY-FIRST: the raw edges/predicates/idempotent-flags/outputs the binder emits are identical
+        // to the previous hand-coded wiring, so the collapsed descriptor and executed graph are unchanged.
+        // The child pipeline (above) is intentionally left hand-coded for this stage.
+        var fullBuilder = new GraphDescriptorBuilder(agentInputStorer);
+        RunWorkflowGraphBinder.WireFull(
+            fullBuilder,
+            Workflows.BuiltInWorkflows.Default.Definition!,
+            new RunWorkflowBindings(
+                AgentInputStorer: agentInputStorer,
+                AgentBinding: agentBinding,
+                RaiBinding: raiBinding,
+                RaiRevisionAdapter: raiRevisionAdapter,
+                TerminalSafetyFailed: terminalSafetyFailed,
+                TerminalNoOp: terminalNoOp,
+                ScribeInputNoChanges: scribeInputNoChanges,
+                ScribeBindingNoChanges: scribeBindingNoChanges,
+                ScribeOutputNoChanges: scribeOutputNoChanges,
+                ReviewAdapter: reviewAdapter,
+                ReviewBinding: reviewBinding,
+                MergeAdapter: mergeAdapter,
+                MergeBinding: mergeBinding,
+                TerminalMerge: terminalMerge,
+                ScribeInputMerge: scribeInputMerge,
+                ScribeBindingMerge: scribeBindingMerge,
+                ScribeOutputMerge: scribeOutputMerge,
+                BlockedAdapter: blockedAdapter,
+                ReviewChangesAdapter: reviewChangesAdapter,
+                TerminalDeclined: terminalDeclined,
+                MaxIterations: MaxIterations));
 
         var wf = fullBuilder.Build();
         var descriptor = fullBuilder.BuildDescriptor("agentweaver-workflow-full", "full");

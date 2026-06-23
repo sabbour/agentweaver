@@ -231,6 +231,14 @@ const useStyles = makeStyles({
 
 type Step = 'cast' | 'review' | 'confirm';
 
+// Order-insensitive set comparison of two role-id lists. Used to decide whether the
+// user overrode a template's default roles via the Roles checkboxes.
+function sameRoleSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every((id) => setB.has(id));
+}
+
 function buildRationale(proposal: CastProposalDto | null, selectedTemplate: TeamTemplateDto | null): string {
   if (!proposal) return '';
   if (proposal.rationale) return proposal.rationale;
@@ -405,7 +413,15 @@ export function CastingWizardPage() {
       setCastLoading(true);
       setCastError(null);
       try {
-        const req: CreateProposalRequest = { mode: 'scenario', template_id: selectedTemplateId };
+        // Detect whether the user overrode the template's default roles via the Roles
+        // checkboxes. If unchanged, keep the scenario branch (preserves the template's
+        // description/rationale in review). If overridden, switch to manual + role_ids so
+        // the proposal/review/cast reflect the exact selected set.
+        const templateRoleIds = selectedTemplate?.roles.map((r) => r.id) ?? [];
+        const overridden = !sameRoleSet(selectedRoleIds, templateRoleIds);
+        const req: CreateProposalRequest = overridden
+          ? { mode: 'manual', role_ids: selectedRoleIds }
+          : { mode: 'scenario', template_id: selectedTemplateId };
         if (universe) req.universe = universe;
         const p = await apiClient.createProposal(projectId, req);
         setProposal(p);
@@ -422,9 +438,13 @@ export function CastingWizardPage() {
     }
   };
 
+  const templateDefaultRoleIds =
+    templates.find((t) => t.id === selectedTemplateId)?.roles.map((r) => r.id) ?? [];
+  const templateRolesOverridden = !sameRoleSet(selectedRoleIds, templateDefaultRoleIds);
+
   const canCastTeam =
     (activePanel === 'formulate' && formulateProposal !== null) ||
-    (activePanel === 'template' && selectedTemplateId !== '') ||
+    (activePanel === 'template' && selectedTemplateId !== '' && (!templateRolesOverridden || selectedRoleIds.length > 0)) ||
     (activePanel === 'analyze' && analyzeProposal !== null);
 
   const handleRemoveMember = async (member: ProposedMemberDto) => {

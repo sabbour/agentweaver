@@ -265,5 +265,11 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
 
         public Task UpdatePickupSettingsAsync(ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdatePickupSettingsAsync(id, maxReadyPerHeartbeat, autopilot, autoApproveTools, updatedAt, ct);
+
+        public Task UpdateDefaultWorkflowAsync(ProjectId id, string? workflowId, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            _inner.UpdateDefaultWorkflowAsync(id, workflowId, updatedAt, ct);
+
+        public Task UpdateActiveReviewPolicyAsync(ProjectId id, string? policyName, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            _inner.UpdateActiveReviewPolicyAsync(id, policyName, updatedAt, ct);
     }
 }

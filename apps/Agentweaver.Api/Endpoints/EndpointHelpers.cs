@@ -55,17 +55,24 @@ internal static SandboxPolicyDto ToSandboxPolicyDto(SandboxPolicy policy) => new
     MaxOutputBytes             = policy.MaxOutputBytes,
 };
 
-internal static SandboxPolicy ToSandboxPolicyDomain(SandboxPolicyDto dto) => new()
+/// <summary>
+/// Applies a partial <see cref="SandboxPolicyUpdateRequest"/> onto the EXISTING stored policy
+/// (PATCH/preserve semantics). For each field: a provided (non-null) value is applied; an omitted
+/// (null) field preserves the existing value. An explicitly provided empty array clears that list —
+/// only a missing array preserves it. This is what makes a minimal partial PUT (e.g. only
+/// shell_enabled) flip that field and leave repo roots / blocked patterns / the other flags intact.
+/// </summary>
+internal static SandboxPolicy MergeSandboxPolicy(SandboxPolicy existing, SandboxPolicyUpdateRequest request) => existing with
 {
-    RepositoryPath             = dto.RepositoryPath,
-    ShellEnabled               = dto.ShellEnabled,
-    Direct                     = dto.Direct,
-    NetworkEnabled             = dto.NetworkEnabled,
-    AllowedRepositoryRoots     = dto.AllowedRepositoryRoots,
-    DestructiveCommandPatterns = dto.DestructiveCommandPatterns,
-    RequireApprovalForAllShell = dto.RequireApprovalForAllShell,
-    RedactPii                  = dto.RedactPii,
-    MaxOutputBytes             = dto.MaxOutputBytes,
+    RepositoryPath             = request.RepositoryPath,
+    ShellEnabled               = request.ShellEnabled ?? existing.ShellEnabled,
+    Direct                     = request.Direct ?? existing.Direct,
+    NetworkEnabled             = request.NetworkEnabled ?? existing.NetworkEnabled,
+    AllowedRepositoryRoots     = request.AllowedRepositoryRoots ?? existing.AllowedRepositoryRoots,
+    DestructiveCommandPatterns = request.DestructiveCommandPatterns ?? existing.DestructiveCommandPatterns,
+    RequireApprovalForAllShell = request.RequireApprovalForAllShell ?? existing.RequireApprovalForAllShell,
+    RedactPii                  = request.RedactPii ?? existing.RedactPii,
+    MaxOutputBytes             = request.MaxOutputBytes ?? existing.MaxOutputBytes,
 };
 
 /// <summary>

@@ -753,3 +753,264 @@ export interface WorkflowStagesResponse {
   available: boolean;
   stages: WorkflowStageDto[];
 }
+
+// A single executed diagnostic probe with its outcome (FR-016). snake_case wire.
+export interface DiagnosticsCheckDto {
+  name: string;
+  status: string; // "pass" | "warn" | "fail"
+  detail: string;
+  duration_ms: number;
+}
+
+// Global system diagnostics snapshot (FR-016). All fields sourced from live state.
+export interface SystemDiagnosticsDto {
+  api_version: string;
+  process_started_utc: string;
+  uptime_seconds: number;
+  total_projects: number;
+  total_runs: number;
+  active_runs: number;
+  generated_utc: string;
+  total_duration_ms: number;
+  checks: DiagnosticsCheckDto[];
+}
+
+// Project-scoped diagnostics snapshot for one project's workspace/config (FR-016).
+export interface ProjectDiagnosticsDto {
+  project_id: string;
+  project_name: string;
+  generated_utc: string;
+  total_duration_ms: number;
+  checks: DiagnosticsCheckDto[];
+}
+
+// One heartbeat tick outcome in the ring buffer (FR-017).
+export interface HeartbeatTickDto {
+  timestamp_utc: string;
+  acted_count: number;
+  error_count: number;
+  duration_ms: number;
+  error: string | null;
+}
+
+// One real background automation running in the API process (FR-017).
+export interface HeartbeatAutomationDto {
+  name: string;
+  description: string;
+  cadence_seconds: number;
+  last_run_utc: string | null;
+  last_acted_count: number | null;
+  status: string;
+}
+
+// Read-only snapshot of the coordinator heartbeat service (FR-017).
+export interface HeartbeatStatusDto {
+  enabled: boolean;
+  interval_seconds: number;
+  last_tick_utc: string | null;
+  service_status: string;
+  last_error: string | null;
+  recent_activity: HeartbeatTickDto[];
+  automations: HeartbeatAutomationDto[];
+}
+
+// ── Workflow definitions (Spec 010, FR-039/041) ──────────────────────────────
+// Trigger descriptor in workflow responses (snake_case over the wire).
+export interface WorkflowTriggerDto {
+  type: string;
+  event?: string | null;
+}
+
+// A workflow in the project's list response: identity, trigger, validation.
+export interface WorkflowSummaryDto {
+  id: string | null;
+  name: string | null;
+  description: string | null;
+  trigger: WorkflowTriggerDto | null;
+  source: string;
+  valid: boolean;
+  error: string | null;
+  is_built_in: boolean;
+  is_default: boolean;
+}
+
+// Response body for GET/POST the project's workflows list.
+export interface WorkflowListResponse {
+  default_workflow_id: string;
+  workflows: WorkflowSummaryDto[];
+}
+
+// Response body for PUT a per-task workflow override (Feature 010, FR-042).
+export interface WorkflowOverrideResponse {
+  task_id: string;
+  workflow_override_id: string | null;
+}
+
+// A node in a workflow detail response.
+export interface WorkflowNodeDto {
+  id: string;
+  type: string;
+  label: string;
+  role?: string | null;
+  kind?: string | null;
+  agent?: string | null;
+  prompt?: string | null;
+  target?: string | null;
+  steps?: string[] | null;
+  branches?: string[] | null;
+}
+
+// An edge in a workflow detail response.
+export interface WorkflowEdgeDto {
+  from: string;
+  to: string;
+  when?: string | null;
+}
+
+// Full definition for GET a single workflow.
+export interface WorkflowDetailDto {
+  id: string;
+  name: string;
+  description: string | null;
+  trigger: WorkflowTriggerDto;
+  start: string;
+  source: string;
+  is_built_in: boolean;
+  is_default: boolean;
+  nodes: WorkflowNodeDto[];
+  edges: WorkflowEdgeDto[];
+}
+
+// ── Review policies (Spec 010, FR-025/027/033) ───────────────────────────────
+// A single review step within a policy (snake_case over the wire).
+export interface ReviewStepDto {
+  kind: string;
+  label?: string | null;
+}
+
+// A review policy in the project's list response: identity, validation, source.
+export interface ReviewPolicySummaryDto {
+  name: string | null;
+  description: string | null;
+  source: string;
+  valid: boolean;
+  error: string | null;
+  is_built_in: boolean;
+  is_active: boolean;
+}
+
+// Response body for GET/POST the project's review-policies list.
+export interface ReviewPolicyListResponse {
+  active_policy_name: string;
+  policies: ReviewPolicySummaryDto[];
+}
+
+// Full definition for GET a single review policy (its ordered review steps).
+export interface ReviewPolicyDetailDto {
+  name: string;
+  description: string | null;
+  source: string;
+  is_built_in: boolean;
+  is_active: boolean;
+  steps: ReviewStepDto[];
+}
+
+// Request body for PUT the project's active review policy (null clears to default).
+export interface SetActiveReviewPolicyRequest {
+  name: string | null;
+}
+
+// ── Metrics: Dashboard + Overview (web IA reorg) ─────────────────────────────
+// Mirrors Agentweaver.Api.Metrics DTOs (snake_case over the wire). All values are
+// sourced from live stores; cost and per-workflow health are intentionally absent.
+
+// Per-project dashboard headline counters.
+export interface DashboardSummaryDto {
+  runs_this_week: number;
+  runs_total: number;
+  active_runs: number;
+  active_agents: number;
+  tasks_done_this_week: number;
+}
+
+// One day in the 30-day throughput series.
+export interface ThroughputPointDto {
+  date: string;
+  created: number;
+  done: number;
+}
+
+// Per-agent activity + quality on a single project.
+export interface AgentLeaderboardEntryDto {
+  agent: string;
+  runs_this_week: number;
+  runs_total: number;
+  success_rate: number;        // [0,1]
+  avg_duration_ms: number | null;
+}
+
+// Response body for GET /api/projects/{id}/dashboard.
+export interface ProjectDashboardDto {
+  project_id: string;
+  project_name: string;
+  generated_utc: string;
+  summary: DashboardSummaryDto;
+  throughput: ThroughputPointDto[];
+  agent_leaderboard: AgentLeaderboardEntryDto[];
+}
+
+// Global overview "at a glance" counters.
+export interface AtAGlanceDto {
+  in_flight: number;
+  queued_work: number;
+  done_today: number;
+  active_projects: number;
+  health: string;              // "healthy" | "degraded"
+}
+
+// An active run surfaced as a live session.
+export interface LiveSessionDto {
+  project_id: string;
+  project_name: string;
+  agent: string | null;
+  status: string;
+  started_utc: string;
+  last_activity_utc: string;
+}
+
+// An in-progress/pending orchestration run.
+export interface ActiveWorkflowRunDto {
+  project_id: string;
+  project_name: string;
+  trigger: string;
+  status: string;
+  started_utc: string;
+}
+
+// Per-project rollup of active + queued work.
+export interface ActiveProjectDto {
+  project_id: string;
+  project_name: string;
+  active_count: number;
+  queued_count: number;
+  last_activity_utc: string | null;
+}
+
+// A recent run/orchestration lifecycle event.
+export interface RecentActivityDto {
+  project_id: string;
+  project_name: string;
+  label: string;
+  kind: string;
+  timestamp_utc: string;
+}
+
+// Response body for GET /api/overview.
+export interface OverviewDto {
+  generated_utc: string;
+  at_a_glance: AtAGlanceDto;
+  live_sessions: LiveSessionDto[];
+  active_workflow_runs: ActiveWorkflowRunDto[];
+  active_projects: ActiveProjectDto[];
+  recent_activity: RecentActivityDto[];
+}

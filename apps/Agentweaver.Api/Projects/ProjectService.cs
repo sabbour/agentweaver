@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Projects;
@@ -78,6 +79,12 @@ public sealed class ProjectService
             if (appCreatedDir) TryDeleteDirectory(workingDir);
             throw;
         }
+
+        // Materialize the default workflow into the new project (Feature 010). Best-effort: never fail
+        // creation if this write fails — the loader regenerates the default from DefaultWorkflowTemplate
+        // at runtime. A blank project is empty, so this always writes default.yaml.
+        TryMaterializeDefaultWorkflow(workingDir);
+        TryMaterializeDefaultReviewPolicy(workingDir);
 
         var project = new Project
         {
@@ -159,6 +166,13 @@ public sealed class ProjectService
             if (dirWasCreated) TryDeleteDirectory(workingDir);
             throw;
         }
+
+        // Materialize the default workflow into the cloned project (Feature 010). Best-effort and
+        // non-clobbering: TryMaterialize skips the write when .scaffolders/workflows/default.yaml
+        // already exists, so a repo that ships its own workflows is never overwritten. Never fails
+        // creation; the loader regenerates the default from DefaultWorkflowTemplate at runtime.
+        TryMaterializeDefaultWorkflow(workingDir);
+        TryMaterializeDefaultReviewPolicy(workingDir);
 
         var project = new Project
         {
@@ -388,5 +402,43 @@ public sealed class ProjectService
         {
             _logger.LogWarning(ex, "Failed to clean up directory {Path} during rollback", path);
         }
+    }
+
+    /// <summary>
+    /// Best-effort materialization of the default workflow into the project's working directory at
+    /// <c>.scaffolders/workflows/default.yaml</c> (Feature 010). Non-clobbering and never throws:
+    /// project creation must not fail if this write fails, because the workflow loader regenerates the
+    /// default from <see cref="DefaultWorkflowTemplate"/> at runtime.
+    /// </summary>
+    private void TryMaterializeDefaultWorkflow(string workingDir)
+    {
+        var written = DefaultWorkflowTemplate.TryMaterialize(workingDir, out var error);
+        if (error is not null)
+            _logger.LogWarning(
+                "Failed to materialize the default workflow into {Path} ({Error}); the runtime default will be used instead.",
+                Path.Combine(workingDir, DefaultWorkflowTemplate.RelativeFilePath), error);
+        else if (written)
+            _logger.LogInformation(
+                "Materialized the default workflow into {Path}.",
+                Path.Combine(workingDir, DefaultWorkflowTemplate.RelativeFilePath));
+    }
+
+    /// <summary>
+    /// Best-effort materialization of the default review policy into the project's working directory at
+    /// <c>.scaffolders/review-policies/default.yaml</c> (Feature 010, FR-032). Non-clobbering and never
+    /// throws: project creation must not fail if this write fails, because the review-policy registry
+    /// regenerates the default from <see cref="ReviewPolicies.DefaultReviewPolicyTemplate"/> at runtime.
+    /// </summary>
+    private void TryMaterializeDefaultReviewPolicy(string workingDir)
+    {
+        var written = ReviewPolicies.DefaultReviewPolicyTemplate.TryMaterialize(workingDir, out var error);
+        if (error is not null)
+            _logger.LogWarning(
+                "Failed to materialize the default review policy into {Path} ({Error}); the runtime default will be used instead.",
+                Path.Combine(workingDir, ReviewPolicies.DefaultReviewPolicyTemplate.RelativeFilePath), error);
+        else if (written)
+            _logger.LogInformation(
+                "Materialized the default review policy into {Path}.",
+                Path.Combine(workingDir, ReviewPolicies.DefaultReviewPolicyTemplate.RelativeFilePath));
     }
 }

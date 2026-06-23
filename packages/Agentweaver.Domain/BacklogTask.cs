@@ -24,4 +24,11 @@ public sealed record BacklogTask
     public DateTimeOffset? ClaimedAt { get; init; }
     /// <summary>The 1:1 coordinator run this task produced. Non-null iff State == Claimed.</summary>
     public RunId? RunId { get; init; }
+
+    /// <summary>
+    /// Optional per-task workflow override, referenced by workflow id/name (Feature 010, FR-042).
+    /// Selects a non-default available workflow for this specific task while it is in Backlog or Ready.
+    /// Null means "use the project default workflow".
+    /// </summary>
+    public string? WorkflowOverrideId { get; init; }
 }

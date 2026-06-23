@@ -22,4 +22,19 @@ public sealed record Project
     /// <summary>Auto-approve allow-with-approval tools ONLY on heartbeat-created runs; never the
     /// destructive/irreversible safety floor (Principle X). Default off.</summary>
     public bool PickupAutoApproveTools { get; init; } = false;
+
+    /// <summary>
+    /// The project's default workflow, referenced by workflow id/name (Feature 010, FR-041). Selects
+    /// which available YAML/predefined workflow applies to the project's work items absent a per-task
+    /// override. Null means "use the built-in default workflow".
+    /// </summary>
+    public string? DefaultWorkflowId { get; init; }
+
+    /// <summary>
+    /// The project's active review policy, referenced BY NAME (Feature 010, FR-027/033). Selects which
+    /// available review policy (from <c>.scaffolders/review-policies/</c> or the built-in default)
+    /// injects its review steps into the project's runs. Null means "use the built-in default policy"
+    /// (Rubber-duck + RAI, FR-032).
+    /// </summary>
+    public string? ActiveReviewPolicyName { get; init; }
 }

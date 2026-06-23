@@ -67,6 +67,23 @@ describe('KanbanBoard — dynamic columns (FR-013/015/016/019)', () => {
     expect(within(screen.getByTestId('column-ready')).getByText('Ready task')).toBeTruthy();
   });
 
+  it('exposes a board zoom control (Ctrl+Scroll hint, +/- buttons, % readout)', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+
+    expect(screen.getByText('Ctrl + Scroll to zoom')).toBeTruthy();
+    expect(screen.getByText('100%')).toBeTruthy();
+    const zoomOut = screen.getByLabelText('Zoom out');
+    const zoomIn = screen.getByLabelText('Zoom in') as HTMLButtonElement;
+
+    // At 100% (max) zoom-in is disabled; zooming out lowers the readout.
+    expect(zoomIn.disabled).toBe(true);
+    fireEvent.click(zoomOut);
+    expect(screen.getByText('90%')).toBeTruthy();
+  });
+
   it('renders an extra/changed workflow stage as an extra column without code changes (FR-015/SC-004)', async () => {
     getBoardMock().mockResolvedValue(makeBoard());
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);

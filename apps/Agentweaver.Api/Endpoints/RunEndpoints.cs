@@ -1607,7 +1607,7 @@ app.MapGet("/api/sandbox-policy", async (
 });
 
 app.MapPut("/api/sandbox-policy", async (
-    SandboxPolicyDto request,
+    SandboxPolicyUpdateRequest request,
     ISandboxPolicyStore policyStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -1615,10 +1615,12 @@ app.MapPut("/api/sandbox-policy", async (
     if (string.IsNullOrWhiteSpace(request.RepositoryPath))
         return Results.BadRequest(new { error = "repository_path is required." });
 
-    var policy = EndpointHelpers.ToSandboxPolicyDomain(request);
-
     try
     {
+        // PATCH/preserve: load the existing policy and only change the fields the request actually
+        // provides, so a partial PUT never wipes unspecified repo roots / blocked patterns / flags.
+        var existing = await policyStore.GetPolicyAsync(request.RepositoryPath, ct);
+        var policy = EndpointHelpers.MergeSandboxPolicy(existing, request);
         await policyStore.SetPolicyAsync(policy, ct);
         var saved = await policyStore.GetPolicyAsync(policy.RepositoryPath, ct);
         return Results.Json(EndpointHelpers.ToSandboxPolicyDto(saved));

@@ -59,6 +59,14 @@ public interface IBacklogTaskStore
         ProjectId projectId, BacklogTaskId id, BacklogTaskState expectedState, string newOrderKey, CancellationToken ct = default);
 
     /// <summary>
+    /// Sets (or clears, when <paramref name="workflowId"/> is null) the per-task workflow override
+    /// (Feature 010, FR-042). Gated on project_id AND state IN ('backlog','ready') — an override may
+    /// only be chosen while the task is unclaimed. Returns false if Claimed or not found in project.
+    /// </summary>
+    Task<bool> UpdateWorkflowOverrideAsync(
+        ProjectId projectId, BacklogTaskId id, string? workflowId, CancellationToken ct = default);
+
+    /// <summary>
     /// Atomic, exactly-once claim + coordinator-run reservation. In ONE transaction:
     /// (a) Ready -> Claimed gated on project_id AND state='ready' AND run_id IS NULL, binding run_id;
     /// (b) INSERT the coordinator <paramref name="coordinatorRun"/> row gated on the project being

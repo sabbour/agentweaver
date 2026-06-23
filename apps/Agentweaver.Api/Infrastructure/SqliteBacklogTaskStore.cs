@@ -27,9 +27,11 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.CommandText =
             """
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
-                                       captured_by, created_at, committed_at, claimed_at, run_id)
+                                       captured_by, created_at, committed_at, claimed_at, run_id,
+                                       workflow_override_id)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
-                    $capturedBy, $createdAt, $committedAt, $claimedAt, $runId);
+                    $capturedBy, $createdAt, $committedAt, $claimedAt, $runId,
+                    $workflowOverrideId);
             """;
         BindFullRow(command, task);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -94,6 +96,23 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """;
         command.Parameters.AddWithValue("$title", title);
         command.Parameters.AddWithValue("$description", (object?)description ?? DBNull.Value);
+        command.Parameters.AddWithValue("$taskId", id.ToString());
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
+    }
+
+    public async Task<bool> UpdateWorkflowOverrideAsync(
+        ProjectId projectId, BacklogTaskId id, string? workflowId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE backlog_tasks SET workflow_override_id = $workflowOverrideId
+             WHERE task_id = $taskId AND project_id = $projectId
+               AND state IN ('backlog','ready') AND run_id IS NULL;
+            """;
+        command.Parameters.AddWithValue("$workflowOverrideId", (object?)workflowId ?? DBNull.Value);
         command.Parameters.AddWithValue("$taskId", id.ToString());
         command.Parameters.AddWithValue("$projectId", projectId.ToString());
         return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
@@ -404,14 +423,16 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$committedAt", NullableTs(task.CommittedAt));
         command.Parameters.AddWithValue("$claimedAt", NullableTs(task.ClaimedAt));
         command.Parameters.AddWithValue("$runId", (object?)task.RunId?.ToString() ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowOverrideId", (object?)task.WorkflowOverrideId ?? DBNull.Value);
     }
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
-    //           6=captured_by 7=created_at 8=committed_at 9=claimed_at 10=run_id
+    //           6=captured_by 7=created_at 8=committed_at 9=claimed_at 10=run_id 11=workflow_override_id
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
-               captured_by, created_at, committed_at, claimed_at, run_id
+               captured_by, created_at, committed_at, claimed_at, run_id,
+               workflow_override_id
           FROM backlog_tasks
         """;
 
@@ -428,6 +449,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         CommittedAt = r.IsDBNull(8)  ? null : DateTimeOffset.Parse(r.GetString(8),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         ClaimedAt   = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         RunId       = r.IsDBNull(10) ? null : RunId.Parse(r.GetString(10)),
+        WorkflowOverrideId = r.IsDBNull(11) ? null : r.GetString(11),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

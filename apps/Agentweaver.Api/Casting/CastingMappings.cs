@@ -61,7 +61,7 @@ public static class CastingMappings
     };
 
     private static readonly HashSet<string> BuiltInAgents =
-        new(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai" };
+        new(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai", "Coordinator" };
 
     public static TeamDto ToDto(Team team, SquadLayoutInfo layout) => new()
     {
