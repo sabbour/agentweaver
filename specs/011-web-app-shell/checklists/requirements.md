@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,11 +31,12 @@
 
 ## Notes
 
-- Five open questions (C1-C5) remain as [NEEDS CLARIFICATION] markers and require a
-  `/speckit.clarify` pass before `/speckit.plan`. They concern: section placement of
-  Memories (C1), whether Diagnostics/Heartbeat endpoints are built this iteration (C2),
-  health-dot semantics (C3), shell scope for deep run pages (C4), and project-switcher
-  creation affordances (C5).
+- All five clarifications (C1-C5) were resolved in the 2026-06-22 Clarifications session
+  and encoded into the requirements; zero [NEEDS CLARIFICATION] markers remain.
+  Resolutions: Memories under SQUAD (C1, FR-002/FR-009); Diagnostics and Heartbeat
+  read-only API endpoints + pages built this iteration with MCP parity (C2,
+  FR-016/FR-016a/FR-017/FR-017a/FR-018); status dot = API reachability only (C3, FR-013);
+  deep run pages render inside the shell (C4, FR-006); switch-only project switcher (C5, FR-011).
 - The spec intentionally references existing code paths (e.g., `apps/web/src/App.tsx`,
   `CoordinatorHeartbeatService`) as grounding citations, not as implementation prescriptions;
   requirements remain technology-agnostic about HOW the shell is built.
