@@ -25,8 +25,8 @@ public sealed class GitHubOrgAuthorizationMiddleware
     private static readonly string[] ExemptPrefixes =
     [
         "/health",
-        "/auth/",
-        "/api/auth/",
+        "/auth",
+        "/api/auth",
         "/mcp",
     ];
 
@@ -140,11 +140,9 @@ public sealed class GitHubOrgAuthorizationMiddleware
     {
         foreach (var prefix in ExemptPrefixes)
         {
+            // StartsWithSegments requires the char after the match to be '/' or end-of-string,
+            // so "/auth" correctly matches "/auth", "/auth/github/authorize", etc.
             if (path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // Also match exact "/health" (no trailing slash)
-            if (path.Value?.Equals(prefix.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) == true)
                 return true;
         }
         return false;
