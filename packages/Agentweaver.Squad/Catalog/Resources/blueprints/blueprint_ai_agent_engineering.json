@@ -1,0 +1,9 @@
+{
+  "id": "blueprint-ai-agent-engineering",
+  "name": "AI Agent Engineering",
+  "description": "A specialized team for designing, building, evaluating, and safely deploying AI agent systems.",
+  "roster": ["agent-architect", "prompt-engineer", "agent-evaluator", "ai-safety-reviewer", "backend-engineer", "qa-engineer", "docs-writer"],
+  "workflows": ["agent-evaluation", "software-delivery", "bug-fix"],
+  "review_policy": "default",
+  "sandbox_profile": "default"
+}

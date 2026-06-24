@@ -1,0 +1,14 @@
+{
+  "id": "ai-agent-engineering",
+  "title": "AI Agent Engineering",
+  "description": "A grouping for teams focused on building, evaluating, and governing AI agent systems.",
+  "roles": [
+    "agent-architect",
+    "prompt-engineer",
+    "agent-evaluator",
+    "ai-safety-reviewer",
+    "backend-engineer",
+    "qa-engineer",
+    "docs-writer"
+  ]
+}
