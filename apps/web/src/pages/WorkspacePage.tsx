@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   Badge,
+  Button,
   Dropdown,
   Option,
   Spinner,
@@ -9,12 +10,14 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { BranchRegular } from '@fluentui/react-icons';
+import { BranchRegular, TasksAppRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
-import type { Project, WorkspaceNode, WorkspaceRef } from '../api/types';
+import { ApiError } from '../api/client';
+import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { FilesTabPanel } from '../components/ArtifactBrowser';
 import { FileViewer } from '../components/FileViewer';
+import { DecomposePreviewDialog } from '../components/DecomposePreviewDialog';
 
 // Project-scoped, read-only Workspace browser (WORK section). Browses the project
 // repo at its current branch and lets the user switch to active run worktrees or
@@ -104,6 +107,21 @@ const useStyles = makeStyles({
     padding: tokens.spacingHorizontalXXL,
     textAlign: 'center',
   },
+  fileViewerWrapper: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+  },
+  fileViewerToolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    flexShrink: 0,
+  },
   spinnerWrapper: {
     display: 'flex',
     justifyContent: 'center',
@@ -138,6 +156,48 @@ export function WorkspacePage() {
   const [nodesError, setNodesError] = useState<string | null>(null);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  const [decomposePreviewOpen, setDecomposePreviewOpen] = useState(false);
+  const [decomposeItems, setDecomposeItems] = useState<ProposedBacklogItem[]>([]);
+  const [decomposeWasCapped, setDecomposeWasCapped] = useState(false);
+  const [decomposeTotal, setDecomposeTotal] = useState(0);
+  const [decomposeLoading, setDecomposeLoading] = useState(false);
+  const [decomposeError, setDecomposeError] = useState<string | null>(null);
+
+  const handleImport = async () => {
+    if (!selectedPath || !projectId) return;
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    setDecomposeItems([]);
+    setDecomposePreviewOpen(true);
+    try {
+      const result = await apiClient.decomposeSpec(projectId, selectedPath, false);
+      setDecomposeItems(result.proposedItems);
+      setDecomposeWasCapped(result.wasCapped);
+      setDecomposeTotal(result.totalFound);
+    } catch (err) {
+      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
+
+  const handleDecomposeConfirm = async () => {
+    if (!selectedPath || !projectId) return;
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    try {
+      const result = await apiClient.decomposeSpec(projectId, selectedPath, true);
+      setDecomposeItems(result.proposedItems);
+      setDecomposeWasCapped(result.wasCapped);
+      setDecomposeTotal(result.totalFound);
+      setDecomposePreviewOpen(false);
+    } catch (err) {
+      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
 
   // Load the available refs (base branch + active run worktrees) for the project.
   useEffect(() => {
@@ -282,11 +342,25 @@ export function WorkspacePage() {
         </div>
         <div className={styles.rightPanel}>
           {selectedPath !== null ? (
-            <FileViewer
-              runId={projectId}
-              filePath={selectedPath}
-              getContent={getContent}
-            />
+            <div className={styles.fileViewerWrapper}>
+              {selectedPath.endsWith('.md') && (
+                <div className={styles.fileViewerToolbar}>
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    icon={<TasksAppRegular />}
+                    onClick={() => void handleImport()}
+                  >
+                    Import to backlog
+                  </Button>
+                </div>
+              )}
+              <FileViewer
+                runId={projectId}
+                filePath={selectedPath}
+                getContent={getContent}
+              />
+            </div>
           ) : (
             <div className={styles.rightPanelEmpty}>
               <Text>
@@ -298,6 +372,17 @@ export function WorkspacePage() {
           )}
         </div>
       </div>
+
+      <DecomposePreviewDialog
+        isOpen={decomposePreviewOpen}
+        onClose={() => setDecomposePreviewOpen(false)}
+        onConfirm={handleDecomposeConfirm}
+        proposedItems={decomposeItems}
+        wasCapped={decomposeWasCapped}
+        totalFound={decomposeTotal}
+        isLoading={decomposeLoading}
+        error={decomposeError}
+      />
     </div>
   );
 }

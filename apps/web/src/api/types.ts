@@ -1124,8 +1124,8 @@ export interface OverviewDto {
 // GET /api/projects/{id}/workspace/files — scoped file tree for the project sandbox.
 export interface WorkspaceFileNode {
   name: string;
-  relativePath: string;
-  isDirectory: boolean;
+  relative_path: string;
+  is_directory: boolean;
   children?: WorkspaceFileNode[];
 }
 

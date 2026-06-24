@@ -84,7 +84,7 @@ export function DecomposePreviewDialog({
   isOpen,
   onClose,
   onConfirm,
-  proposedItems,
+  proposedItems = [],
   wasCapped,
   totalFound,
   isLoading,

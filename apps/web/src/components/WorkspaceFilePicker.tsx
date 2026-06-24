@@ -104,7 +104,7 @@ function FileTreeNode({ node, depth, selectedPath, onSelect }: FileTreeNodeProps
   const [expanded, setExpanded] = useState(false);
   const indent = depth * 16;
 
-  if (node.isDirectory) {
+  if (node.is_directory) {
     return (
       <>
         <div
@@ -127,7 +127,7 @@ function FileTreeNode({ node, depth, selectedPath, onSelect }: FileTreeNodeProps
         </div>
         {expanded && node.children?.map((child) => (
           <FileTreeNode
-            key={child.relativePath}
+            key={child.relative_path}
             node={child}
             depth={depth + 1}
             selectedPath={selectedPath}
@@ -138,17 +138,17 @@ function FileTreeNode({ node, depth, selectedPath, onSelect }: FileTreeNodeProps
     );
   }
 
-  const isSelected = selectedPath === node.relativePath;
+  const isSelected = selectedPath === node.relative_path;
   return (
     <div
       className={`${styles.nodeRow} ${isSelected ? styles.nodeRowSelected : ''}`}
       style={{ paddingLeft: `${indent + 20}px` }}
-      onClick={() => onSelect(node.relativePath)}
+      onClick={() => onSelect(node.relative_path)}
       role="option"
       aria-selected={isSelected}
       aria-label={node.name}
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(node.relativePath); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(node.relative_path); }}
     >
       <span className={styles.nodeIcon}><DocumentRegular /></span>
       <Text className={styles.nodeName}>{node.name}</Text>
@@ -203,7 +203,7 @@ export function WorkspaceFilePicker({ projectId, selectedPath, onSelect }: Works
           ) : (
             nodes.map((node) => (
               <FileTreeNode
-                key={node.relativePath}
+              key={node.relative_path}
                 node={node}
                 depth={0}
                 selectedPath={selectedPath}
