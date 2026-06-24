@@ -44,6 +44,8 @@ spec:
               value: /data/agentweaver.db
             - name: Workspace__Path
               value: /workspace
+            - name: Auth__GitHub__AllowedOrg
+              value: microsoft
             # GitHub Copilot token — sourced from Key Vault via the CSI driver.
             # SecretProviderClass syncs the KV secret into the agentweaver-secrets
             # Kubernetes Secret; the CSI volume mount below triggers that sync.
