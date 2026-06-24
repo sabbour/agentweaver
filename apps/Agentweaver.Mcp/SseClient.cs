@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace Agentweaver.Mcp;
 
 /// <summary>One parsed server-sent event frame.</summary>
-public readonly record struct SseEvent(string? Id, string Data);
+public readonly record struct SseEvent(string? Id, string? EventType, string Data);
 
 /// <summary>
 /// Minimal server-sent events client over <see cref="HttpClient"/>. Streams
@@ -58,7 +58,9 @@ public sealed class SseClient(HttpClient http, string apiKey)
             }
 
             string? currentId = lastEventId;
+            string? currentEventType = null;
             var dataLines = new List<string>();
+            bool done = false;
 
             while (true)
             {
@@ -84,11 +86,18 @@ public sealed class SseClient(HttpClient http, string apiKey)
 
                 if (line.Length == 0)
                 {
-                    if (dataLines.Count > 0)
+                    if (dataLines.Count > 0 || currentEventType is not null)
                     {
                         lastEventId = currentId;
-                        yield return new SseEvent(currentId, string.Join("\n", dataLines));
+                        var evt = new SseEvent(currentId, currentEventType, string.Join("\n", dataLines));
                         dataLines.Clear();
+                        currentEventType = null;
+                        yield return evt;
+                        if (evt.EventType == "done")
+                        {
+                            done = true;
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -102,10 +111,21 @@ public sealed class SseClient(HttpClient http, string apiKey)
                 {
                     currentId = line[3..].TrimStart();
                 }
+                else if (line.StartsWith("event:", StringComparison.Ordinal))
+                {
+                    currentEventType = line[6..].TrimStart();
+                }
                 else if (line.StartsWith("data:", StringComparison.Ordinal))
                 {
                     dataLines.Add(line[5..].TrimStart());
                 }
+            }
+
+            if (done)
+            {
+                reader.Dispose();
+                stream?.Dispose();
+                yield break;
             }
 
             reader.Dispose();

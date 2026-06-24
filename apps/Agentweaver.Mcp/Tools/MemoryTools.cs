@@ -32,7 +32,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
-            $"api/projects/{project_id}/inbox",
+            $"api/projects/{project_id}/decisions/inbox",
             new { agent_name, slug, type, title, content, rationale }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -46,7 +46,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/inbox{BuildQs(("agent", agent), ("type", type), ("status", status))}", ct);
+            $"api/projects/{project_id}/decisions/inbox{BuildQs(("agent", agent), ("type", type), ("status", status))}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -56,7 +56,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Inbox entry ID")] string entry_id,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>($"api/projects/{project_id}/inbox/{entry_id}/merge", null, ct);
+        var result = await api.PostAsync<object>($"api/projects/{project_id}/decisions/inbox/{entry_id}/merge", null, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -66,7 +66,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Inbox entry ID")] string entry_id,
         CancellationToken ct = default)
     {
-        await api.PostAsync($"api/projects/{project_id}/inbox/{entry_id}/reject", null, ct);
+        await api.PostAsync($"api/projects/{project_id}/decisions/inbox/{entry_id}/reject", null, ct);
         return "rejected";
     }
 
@@ -128,7 +128,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
-            $"api/projects/{project_id}/agents/{agent_name}/memory",
+            $"api/projects/{project_id}/agents/{Uri.EscapeDataString(agent_name)}/memory",
             new { type, content, importance, tags }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -142,7 +142,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/agents/{agent_name}/memory{BuildQs(("type", type), ("importance", importance))}", ct);
+            $"api/projects/{project_id}/agents/{Uri.EscapeDataString(agent_name)}/memory{BuildQs(("type", type), ("importance", importance))}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -154,7 +154,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/agents/{agent_name}/memory/{memory_id}", ct);
+            $"api/projects/{project_id}/agents/{Uri.EscapeDataString(agent_name)}/memory/{memory_id}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 

@@ -32,22 +32,25 @@ public sealed class TeamTools(AgentweaverApiClient api)
         [Description("Goal description for the new team (required unless confirm_proposal_id is set)")] string? goal,
         [Description("ID of an existing proposal to confirm (skips creation)")] string? confirm_proposal_id,
         [Description("Automatically confirm the newly created proposal (default false)")] bool confirm,
-        CancellationToken ct)
+        [Description("Casting mode: 'free_text' (default), 'scenario', 'analysis', or 'manual'")] string mode = "free_text",
+        [Description("Intent for confirmation: 'new' (default) replaces the team, 'merge' adds to existing")] string intent = "new",
+        CancellationToken ct = default)
     {
         try
         {
             if (confirm_proposal_id is not null)
             {
+                var confirmBody = new { intent };
                 var confirmResult = await api.PostAsync<JsonElement>(
-                    $"/api/projects/{project_id}/casting/proposals/{confirm_proposal_id}/confirm",
-                    null, ct);
+                    $"/api/projects/{project_id}/casting/proposals/{Uri.EscapeDataString(confirm_proposal_id)}/confirm",
+                    confirmBody, ct);
                 return JsonSerializer.Serialize(confirmResult, JsonOpts);
             }
 
             if (string.IsNullOrWhiteSpace(goal))
                 throw new McpApiException(400, "Either goal or confirm_proposal_id must be provided.");
 
-            var body = new { goal };
+            var body = new { goal, mode };
             var proposal = await api.PostAsync<JsonElement>(
                 $"/api/projects/{project_id}/casting/proposals", body, ct);
 
@@ -62,9 +65,10 @@ public sealed class TeamTools(AgentweaverApiClient api)
             if (proposalId is null)
                 throw new McpApiException(0, "API did not return a proposal_id in the proposal response.");
 
+            var confirmAutoBody = new { intent };
             var confirmed = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/casting/proposals/{proposalId}/confirm",
-                null, ct);
+                $"/api/projects/{project_id}/casting/proposals/{Uri.EscapeDataString(proposalId)}/confirm",
+                confirmAutoBody, ct);
             return JsonSerializer.Serialize(confirmed, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -75,13 +79,13 @@ public sealed class TeamTools(AgentweaverApiClient api)
     public async Task<string> TeamMemberAddAsync(
         [Description("Project ID")] string project_id,
         [Description("Member name")] string name,
-        [Description("Role ID from the catalog")] string role,
-        [Description("Model ID override (optional)")] string? model,
+        [Description("Role ID from the catalog")] string role_id,
+        [Description("Model ID override (optional)")] string? model_id,
         CancellationToken ct)
     {
         try
         {
-            var body = new { name, role, model };
+            var body = new { name, role_id, model_id };
             var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/team/members", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
@@ -97,7 +101,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
     {
         try
         {
-            await api.DeleteAsync($"/api/projects/{project_id}/team/members/{member_name}", ct);
+            await api.DeleteAsync($"/api/projects/{project_id}/team/members/{Uri.EscapeDataString(member_name)}", ct);
             return $"Team member '{member_name}' retired successfully.";
         }
         catch (McpApiException) { throw; }
@@ -113,7 +117,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
         try
         {
             var result = await api.GetAsync<JsonElement>(
-                $"/api/projects/{project_id}/team/members/{member_name}/charter", ct);
+                $"/api/projects/{project_id}/team/members/{Uri.EscapeDataString(member_name)}/charter", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

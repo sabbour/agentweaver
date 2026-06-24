@@ -39,8 +39,8 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
-        [Description("Local repository path")] string repository_path,
-        [Description("Model source (optional, e.g. github_copilot or microsoft_foundry)")] string? model_source,
+        [Description("Local working directory path")] string working_directory,
+        [Description("Project origin: 'blank' (default) or 'github'")] string? origin,
         [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id,
         [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint,
         CancellationToken ct)
@@ -50,9 +50,9 @@ public sealed class ProjectTools(AgentweaverApiClient api)
             var bodyNode = new JsonObject
             {
                 ["name"] = name,
-                ["repository_path"] = repository_path,
+                ["working_directory"] = working_directory,
             };
-            if (model_source is not null) bodyNode["model_source"] = model_source;
+            if (origin is not null) bodyNode["origin"] = origin;
             if (blueprint_id is not null) bodyNode["blueprint_id"] = blueprint_id;
             if (blueprint.HasValue) bodyNode["blueprint"] = JsonNode.Parse(blueprint.Value.GetRawText());
 
@@ -79,15 +79,15 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "project_relink"), Description("Relink a project to a new local repository path.")]
+    [McpServerTool(Name = "project_relink"), Description("Relink a project to a new local working directory path.")]
     public async Task<string> ProjectRelinkAsync(
         [Description("Project ID")] string project_id,
-        [Description("New repository path")] string repository_path,
+        [Description("New working directory path")] string working_directory,
         CancellationToken ct)
     {
         try
         {
-            var body = new { repository_path };
+            var body = new { working_directory };
             var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/relink", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
@@ -102,7 +102,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     {
         try
         {
-            await api.DeleteAsync($"/api/projects/{project_id}", ct);
+            await api.DeleteAsync($"/api/projects/{project_id}?confirm=true", ct);
             return "Project deleted successfully.";
         }
         catch (McpApiException) { throw; }
@@ -112,13 +112,14 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     [McpServerTool(Name = "project_configure"), Description("Configure the AI model provider settings for a project.")]
     public async Task<string> ProjectConfigureAsync(
         [Description("Project ID")] string project_id,
-        [Description("Model source (e.g. github_copilot or microsoft_foundry)")] string model_source,
-        [Description("Specific model ID (optional)")] string? model,
+        [Description("Default model provider (e.g. github_copilot or microsoft_foundry)")] string default_provider,
+        [Description("Model ID for GitHub Copilot provider (optional)")] string? default_model_github_copilot,
+        [Description("Model ID for Microsoft Foundry provider (optional)")] string? default_model_microsoft_foundry,
         CancellationToken ct)
     {
         try
         {
-            var body = new { model_source, model };
+            var body = new { default_provider, default_model_github_copilot, default_model_microsoft_foundry };
             await api.PutAsync($"/api/projects/{project_id}/provider-settings", body, ct);
             return "Project provider settings updated successfully.";
         }
