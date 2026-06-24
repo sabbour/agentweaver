@@ -577,6 +577,8 @@ public sealed record ProjectResponse
     [JsonPropertyName("state")] public required string State { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
     [JsonPropertyName("updated_at")] public required DateTimeOffset UpdatedAt { get; init; }
+    [JsonPropertyName("source_blueprint_id")] public string? SourceBlueprintId { get; init; }
+    [JsonPropertyName("source_blueprint_type")] public string? SourceBlueprintType { get; init; }
 }
 
 public sealed record CreateProjectRunRequest

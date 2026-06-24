@@ -144,6 +144,15 @@ app.MapPost("/api/projects/{id}/casting/proposals", async (
     }
 });
 
+// GET /api/projects/{id}/casting/proposals — list active proposals for a project
+app.MapGet("/api/projects/{id}/casting/proposals", (
+    string id,
+    CastProposalStore proposalStore) =>
+{
+    var proposals = proposalStore.ListByProject(id);
+    return Results.Ok(proposals.Select(p => CastingMappings.ToDto(p.Proposal)));
+});
+
 // GET /api/projects/{id}/casting/proposals/{proposalId} — get proposal
 app.MapGet("/api/projects/{id}/casting/proposals/{proposalId}", (
     string id,
@@ -161,7 +170,8 @@ app.MapMethods("/api/projects/{id}/casting/proposals/{proposalId}", ["PATCH"], a
     string proposalId,
     AmendProposalRequest request,
     CastingService castingService,
-    CatalogReader catalog) =>
+    CatalogReader catalog,
+    CancellationToken ct) =>
 {
     IReadOnlyList<Agentweaver.Squad.Model.ProposedMember>? members = null;
     if (request.Members is not null)
@@ -190,16 +200,24 @@ app.MapMethods("/api/projects/{id}/casting/proposals/{proposalId}", ["PATCH"], a
 
     try
     {
-        var updated = castingService.AmendProposal(id, proposalId, members, request.Universe);
+        var updated = await castingService.AmendProposalAsync(id, proposalId, members, request.Universe, ct);
         return Results.Ok(CastingMappings.ToDto(updated));
     }
     catch (ProposalNotFoundException)
     {
         return Results.NotFound();
     }
+    catch (ProjectNotFoundException)
+    {
+        return Results.NotFound();
+    }
+    catch (ProjectUnavailableException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "project_unavailable" });
+    }
     catch (ArgumentException ex)
     {
-        return Results.BadRequest(new { error = ex.Message });
+        return Results.UnprocessableEntity(new { error = ex.Message });
     }
 });
 

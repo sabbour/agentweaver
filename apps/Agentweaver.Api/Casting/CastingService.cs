@@ -26,6 +26,7 @@ public sealed class CastingService
     private readonly ProjectSignalScanner _signalScanner;
     private readonly ILogger<CastingService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly SqliteRunStore _runStore;
 
     public CastingService(
         IProjectStore projectStore,
@@ -34,7 +35,8 @@ public sealed class CastingService
         IAgentRunner agentRunner,
         ProjectSignalScanner signalScanner,
         ILogger<CastingService> logger,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        SqliteRunStore runStore)
     {
         _projectStore = projectStore;
         _catalog = catalog;
@@ -43,6 +45,7 @@ public sealed class CastingService
         _signalScanner = signalScanner;
         _logger = logger;
         _scopeFactory = scopeFactory;
+        _runStore = runStore;
     }
 
     // -----------------------------------------------------------------------
@@ -61,6 +64,10 @@ public sealed class CastingService
 
         if (project.State == ProjectState.Deleting)
             throw new ProjectUnavailableException(projectId);
+
+        if (!Directory.Exists(project.WorkingDirectory))
+            throw new ProjectUnavailableException(projectId,
+                $"Project workspace is unavailable — the working directory '{project.WorkingDirectory}' does not exist.");
 
         return (project, project.Owner);
     }
@@ -237,13 +244,15 @@ public sealed class CastingService
         var compiler = new CharterCompiler(_catalog);
         var proposedMembers = new List<ProposedMember>();
 
+        var unknownRoleIds = new List<string>();
+
         for (var i = 0; i < roleIds.Count; i++)
         {
             var roleId = roleIds[i];
             var role = _catalog.LoadRole(roleId);
             if (role is null)
             {
-                _logger.LogWarning("Manual cast: unknown role id '{RoleId}'; skipping", roleId);
+                unknownRoleIds.Add(roleId);
                 continue;
             }
 
@@ -267,6 +276,12 @@ public sealed class CastingService
                 DefaultModel: role.DefaultModel,
                 Justification: $"Manually selected role: {role.Title}"));
         }
+
+        if (unknownRoleIds.Count > 0)
+            throw new ArgumentException(
+                $"Unrecognized role id(s): {string.Join(", ", unknownRoleIds)}. " +
+                "Use GET /api/catalog/roles to list available roles.",
+                nameof(roleIds));
 
         var proposal = new CastProposal(
             ProposalId: Guid.NewGuid().ToString("N"),
@@ -423,7 +438,32 @@ public sealed class CastingService
             prompt = buildPrompt!(availableRoles);
         }
 
-        var runId = Guid.NewGuid().ToString("N");
+        var castRunId = RunId.New();
+        var runRecord = new Run
+        {
+            Id = castRunId,
+            RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = "casting",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = $"casting: {mode} proposal for project {projectId}",
+            SubmittingUser = owner,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.TryParse(projectId, out var pid) ? pid : null,
+            AgentName = "casting",
+            WorkflowRunId = castRunId.ToString(),
+            Origin = RunOrigin.Interactive,
+        };
+        try
+        {
+            await _runStore.InsertAsync(runRecord, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to create casting run record {RunId} — proceeding without DB record", castRunId);
+        }
+
+        var runId = castRunId.ToString();
 
         string result;
         await using var runtime = new AgentweaverAgentRuntime(_agentRunner, project.WorkingDirectory, modelId);
@@ -435,6 +475,8 @@ public sealed class CastingService
         {
             _logger.LogWarning(ex,
                 "Model-assisted casting run {RunId} failed for project {ProjectId}", runId, projectId);
+            try { await _runStore.UpdateResultAsync(castRunId, RunStatus.Failed, ex.Message, DateTimeOffset.UtcNow, ct).ConfigureAwait(false); }
+            catch { /* best-effort */ }
             throw new ModelRunFailedException("The casting model run failed to complete.");
         }
 
@@ -444,6 +486,8 @@ public sealed class CastingService
             _logger.LogWarning(
                 "Model-assisted casting run {RunId} produced no parseable role selections for project {ProjectId}",
                 runId, projectId);
+            try { await _runStore.UpdateResultAsync(castRunId, RunStatus.Failed, "No parseable role selections", DateTimeOffset.UtcNow, ct).ConfigureAwait(false); }
+            catch { /* best-effort */ }
             throw new ModelRunFailedException("The casting model did not return a valid role selection.");
         }
 
@@ -462,7 +506,11 @@ public sealed class CastingService
         }
 
         if (resolved.Count == 0)
+        {
+            try { await _runStore.UpdateResultAsync(castRunId, RunStatus.Failed, "No recognized role ids selected", DateTimeOffset.UtcNow, ct).ConfigureAwait(false); }
+            catch { /* best-effort */ }
             throw new ModelRunFailedException("The casting model selected no recognized role ids.");
+        }
 
         var allocations = allocator.AllocateNames(universe, reservedNames, resolved.Count);
 
@@ -505,6 +553,18 @@ public sealed class CastingService
             Rationale: rationale);
 
         _proposalStore.Store(projectId, proposal, owner);
+
+        // Mark the casting run as completed so it surfaces in /api/projects/{id}/runs
+        try
+        {
+            await _runStore.UpdateResultAsync(castRunId, RunStatus.Completed,
+                $"Proposed {proposedMembers.Count} member(s), proposal {proposal.ProposalId}",
+                DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to finalize casting run record {RunId}", castRunId);
+        }
 
         _logger.LogInformation(
             "Created {Mode} proposal {ProposalId} for project {ProjectId} from run {RunId} with {Count} members",
@@ -610,21 +670,79 @@ public sealed class CastingService
 
     /// <summary>
     /// Updates members or universe on a pending proposal. Does not write any files.
+    /// Validates role IDs against the catalog, validates the universe against the allowlist,
+    /// and recompiles charters from template (ignores raw client-supplied charter markdown).
     /// </summary>
-    public CastProposal AmendProposal(
+    public async Task<CastProposal> AmendProposalAsync(
         string projectId,
         string proposalId,
         IReadOnlyList<ProposedMember>? members,
-        string? universe)
+        string? universe,
+        CancellationToken ct)
     {
         var (existing, owner) = _proposalStore.Get(projectId, proposalId);
         if (existing is null)
             throw new ProposalNotFoundException(proposalId);
 
+        IReadOnlyList<ProposedMember> finalMembers = existing.Members;
+        string finalUniverse = existing.Universe;
+
+        if (members is not null)
+        {
+            // Validate every role id against the catalog; collect unknown ids
+            var unknownRoleIds = members
+                .Where(m => _catalog.LoadRole(m.Role.Id) is null)
+                .Select(m => m.Role.Id)
+                .ToList();
+
+            if (unknownRoleIds.Count > 0)
+                throw new ArgumentException(
+                    $"Unrecognized role id(s): {string.Join(", ", unknownRoleIds)}. " +
+                    "Use GET /api/catalog/roles to list available roles.",
+                    nameof(members));
+
+            // Recompile charters from the catalog template — never accept raw client charter markdown
+            var compiler = new CharterCompiler(_catalog);
+            var recompiled = new List<ProposedMember>();
+            foreach (var m in members)
+            {
+                var role = _catalog.LoadRole(m.Role.Id)!;
+                string charter;
+                try
+                {
+                    charter = compiler.Compile(role.Id, m.ProposedName);
+                }
+                catch (InvalidOperationException)
+                {
+                    charter = compiler.CompileCustom(m.ProposedName, role.Title, role.Summary,
+                        role.Capabilities, role.Responsibilities, role.Boundaries);
+                }
+
+                recompiled.Add(m with { Role = role, CharterMarkdown = charter });
+            }
+
+            finalMembers = recompiled;
+        }
+
+        if (universe is not null)
+        {
+            // Validate universe against the project's casting-policy allowlist
+            var (project, _) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+            var reader = new SquadReader(project.WorkingDirectory);
+            var policy = reader.ReadPolicy();
+            var allocator = new UniverseAllocator(policy);
+            if (!allocator.IsValidUniverse(universe))
+                throw new ArgumentException(
+                    $"Universe '{universe}' is not in the allowlist. Use GET /api/projects/{{id}}/casting/universes to see available options.",
+                    nameof(universe));
+
+            finalUniverse = universe;
+        }
+
         var updated = existing with
         {
-            Members = members ?? existing.Members,
-            Universe = universe ?? existing.Universe,
+            Members = finalMembers,
+            Universe = finalUniverse,
         };
 
         _proposalStore.Store(projectId, updated, owner!);
@@ -1373,8 +1491,14 @@ public sealed class CastingService
 public sealed class ProjectNotFoundException(string projectId)
     : Exception($"Project '{projectId}' not found.");
 
-public sealed class ProjectUnavailableException(string projectId)
-    : Exception($"Project '{projectId}' is unavailable (being deleted).");
+public sealed class ProjectUnavailableException : Exception
+{
+    public ProjectUnavailableException(string projectId)
+        : base($"Project '{projectId}' is unavailable (being deleted).") { }
+
+    public ProjectUnavailableException(string projectId, string reason)
+        : base(reason) { }
+}
 
 public sealed class SquadLayoutConflictException(string message)
     : Exception(message);

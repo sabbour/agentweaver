@@ -128,11 +128,18 @@ public sealed class BlueprintService
 
         var pid = ProjectId.Parse(projectId);
         var now = DateTimeOffset.UtcNow;
+        // PARTIAL-APPLY RISK: if any of the following store operations fail, previously-applied steps
+        // are NOT automatically reverted. The casting proposal was already confirmed above; if a step
+        // below fails the roster will have been seeded but project settings may be partially updated.
+        // The endpoint wraps ApplyAsync in a try/catch that rolls back the entire project on failure.
         await _projectStore.UpdateDefaultWorkflowAsync(pid, blueprint.Workflow, now, ct).ConfigureAwait(false);
+        // PARTIAL-APPLY RISK: review policy update; prior step (workflow) is not reverted on failure.
         await _projectStore.UpdateActiveReviewPolicyAsync(pid, blueprint.ReviewPolicy, now, ct).ConfigureAwait(false);
+        // PARTIAL-APPLY RISK: sandbox profile update; prior steps not reverted on failure.
         await _projectStore.UpdateSandboxProfileAsync(pid, blueprint.SandboxProfile, now, ct).ConfigureAwait(false);
         var project = await _projectStore.GetAsync(pid, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Project '{projectId}' was not found.");
+        // PARTIAL-APPLY RISK: sandbox policy file write; prior steps not reverted on failure.
         await _sandboxPolicyStore.SetPolicyAsync(
             CreateSandboxPolicy(blueprint.SandboxProfile, project.WorkingDirectory),
             ct).ConfigureAwait(false);

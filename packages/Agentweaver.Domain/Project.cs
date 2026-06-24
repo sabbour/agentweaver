@@ -44,4 +44,17 @@ public sealed record Project
     /// gating posture for the project's runs. Null means "use the built-in default sandbox posture".
     /// </summary>
     public string? SandboxProfile { get; init; }
+
+    /// <summary>
+    /// The id of the blueprint applied when the project was created (Feature 012). For predefined
+    /// blueprints this is the blueprint id (e.g. "web-fullstack"); for inline blueprints it is
+    /// "inline". Null when no blueprint was applied.
+    /// </summary>
+    public string? SourceBlueprintId { get; init; }
+
+    /// <summary>
+    /// The type of blueprint source: "predefined" for catalog blueprints, "inline" for request-body
+    /// blueprints, null when no blueprint was applied.
+    /// </summary>
+    public string? SourceBlueprintType { get; init; }
 }
