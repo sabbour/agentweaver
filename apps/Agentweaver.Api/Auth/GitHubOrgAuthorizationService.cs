@@ -97,7 +97,8 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             var publicResult = await CheckEndpointAsync(
                 accessToken,
                 $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/public_members/{Uri.EscapeDataString(login)}",
-                ct).ConfigureAwait(false);
+                ct,
+                sendAuthHeader: false).ConfigureAwait(false);
 
             if (publicResult != CheckResult.Member)
             {
@@ -152,7 +153,8 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
     private enum CheckResult { Member, NotMember, OrgAccessNotGranted }
 
-    private async Task<CheckResult> CheckEndpointAsync(string accessToken, string url, CancellationToken ct)
+    private async Task<CheckResult> CheckEndpointAsync(string accessToken, string url, CancellationToken ct,
+        bool sendAuthHeader = true)
     {
         // "github-authz" is registered with AllowAutoRedirect = false so a 302 (private org,
         // requester not a member) is treated as non-membership rather than a silent 200.
@@ -160,14 +162,13 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         using var http = _httpClientFactory.CreateClient("github-authz");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        if (sendAuthHeader)
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.UserAgent.ParseAdd("Agentweaver/1.0");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
 
         using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
 
-        // 403 = OAuth app not authorized for this org (org has third-party restrictions).
-        // Distinct from 302/404 which mean the user is simply not a member.
         if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
             return CheckResult.OrgAccessNotGranted;
 
