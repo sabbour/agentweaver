@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -190,64 +190,6 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
-    // Proactive stuck-child sweep (active loop).
-    // -----------------------------------------------------------------------
-
-    [Fact]
-    public async Task Sweep_ActiveDispatch_WithStuckChild_EmitsStallDetectedAndCompletesChildStream()
-    {
-        // Child run started 2 hours ago; reconciler threshold is 60 minutes → child is stalled.
-        var coord = RunId.New().ToString();
-        var childRunId = await SeedChildRunAsync(RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddMinutes(-120));
-        await SeedCoordinatorRunAsync(coord);
-        await SeedPlanAsync(coord, new[] { (SubtaskStatus.Running, (string?)childRunId) });
-
-        _streamStore.Create(coord, "owner");
-        _streamStore.Create(childRunId, "owner");
-
-        var dispatch = new RecordingDispatch { Active = true }; // live loop; don't re-arm
-        var reconciler = BuildReconciler(dispatch, stallTimeoutMinutes: 60);
-
-        var reArmed = await reconciler.SweepAsync(default);
-
-        reArmed.Should().Be(0, "active coordinators are not re-armed — only their stuck children are nudged");
-
-        _streamStore.Get(childRunId)!.IsCompleted.Should().BeTrue(
-            "the stalled child stream is force-completed so the dispatch loop resolves it");
-        _streamStore.Get(childRunId)!.GetSnapshotSince(0).Events
-            .Should().Contain(e => e.Type == EventTypes.RunCancelled,
-                "run.cancelled is emitted to the child stream on stall detection");
-
-        _streamStore.Get(coord)!.GetSnapshotSince(0).Events
-            .Should().Contain(e => e.Type == EventTypes.CoordinatorChildStallDetected,
-                "coordinator.child_stall_detected audit event is emitted to the coordinator stream");
-    }
-
-    [Fact]
-    public async Task Sweep_ActiveDispatch_ChildWithinThreshold_DoesNotForceComplete()
-    {
-        // Child run started 30 minutes ago; reconciler threshold is 60 minutes → not yet stalled.
-        var coord = RunId.New().ToString();
-        var childRunId = await SeedChildRunAsync(RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddMinutes(-30));
-        await SeedCoordinatorRunAsync(coord);
-        await SeedPlanAsync(coord, new[] { (SubtaskStatus.Running, (string?)childRunId) });
-
-        _streamStore.Create(coord, "owner");
-        _streamStore.Create(childRunId, "owner");
-
-        var dispatch = new RecordingDispatch { Active = true };
-        var reconciler = BuildReconciler(dispatch, stallTimeoutMinutes: 60);
-
-        await reconciler.SweepAsync(default);
-
-        _streamStore.Get(childRunId)!.IsCompleted.Should().BeFalse(
-            "a child within the stall threshold must not be force-completed");
-        _streamStore.Get(coord)!.GetSnapshotSince(0).Events
-            .Should().NotContain(e => e.Type == EventTypes.CoordinatorChildStallDetected,
-                "no stall audit event should be emitted when the child is within the threshold");
-    }
-
-    // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
 
@@ -272,17 +214,10 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
             runOptions: null, autopilot: null, configuration: config);
     }
 
-    private CoordinatorReconciler BuildReconciler(RecordingDispatch dispatch, double stallTimeoutMinutes = 15)
+    private CoordinatorReconciler BuildReconciler(RecordingDispatch dispatch)
     {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Coordinator:SubtaskStallTimeoutMinutes"] = stallTimeoutMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            })
-            .Build();
         return new CoordinatorReconciler(
-            _scopeFactory, _runStore, _streamStore, dispatch, NullLogger<CoordinatorReconciler>.Instance,
-            configuration: config);
+            _scopeFactory, _runStore, _streamStore, dispatch, NullLogger<CoordinatorReconciler>.Instance);
     }
 
     private static CoordinatorDispatchContext Context(string coord) =>

@@ -41,8 +41,7 @@ public sealed class CoordinatorReconciler
         SqliteRunStore runStore,
         RunStreamStore streamStore,
         ICoordinatorDispatch dispatch,
-        ILogger<CoordinatorReconciler> logger,
-        IConfiguration? configuration = null)
+        ILogger<CoordinatorReconciler> logger)
     {
         _scopeFactory = scopeFactory;
         _runStore = runStore;
