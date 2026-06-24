@@ -273,5 +273,8 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
             _inner.UpdateActiveReviewPolicyAsync(id, policyName, updatedAt, ct);
         public Task UpdateSandboxProfileAsync(ProjectId id, string? sandboxProfile, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdateSandboxProfileAsync(id, sandboxProfile, updatedAt, ct);
+
+        public Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            _inner.UpdateSourceBlueprintAsync(id, blueprintId, blueprintType, updatedAt, ct);
     }
 }

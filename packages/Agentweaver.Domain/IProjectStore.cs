@@ -36,4 +36,9 @@ public interface IProjectStore
     /// applied when a blueprint is selected at creation (Feature 012).
     /// </summary>
     Task UpdateSandboxProfileAsync(ProjectId id, string? sandboxProfile, DateTimeOffset updatedAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sets the blueprint provenance on a project (Feature 012).
+    /// </summary>
+    Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default);
 }

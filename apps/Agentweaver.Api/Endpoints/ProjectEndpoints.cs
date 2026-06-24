@@ -34,6 +34,9 @@ app.MapPost("/api/projects", async (
     CreateProjectRequest request,
     ProjectService projectService,
     BlueprintService blueprintService,
+    SqliteRunStore runStore,
+    RunWorkflowRegistry workflowRegistry,
+    IProjectStore projectStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -80,6 +83,20 @@ app.MapPost("/api/projects", async (
             return Results.BadRequest(new { error = "invalid_blueprint", details = validation.Errors });
     }
 
+    // Track blueprint provenance for SetSourceBlueprint call after creation
+    string? blueprintSourceId = null;
+    string? blueprintSourceType = null;
+    if (!string.IsNullOrWhiteSpace(request.BlueprintId))
+    {
+        blueprintSourceId = request.BlueprintId;
+        blueprintSourceType = "predefined";
+    }
+    else if (request.Blueprint is not null)
+    {
+        blueprintSourceId = "inline";
+        blueprintSourceType = "inline";
+    }
+
     try
     {
         Agentweaver.Domain.Project project;
@@ -100,7 +117,33 @@ app.MapPost("/api/projects", async (
 
         if (blueprintToApply is not null)
         {
-            await blueprintService.ApplyAsync(project.Id.ToString(), blueprintToApply, ct);
+            try
+            {
+                await blueprintService.ApplyAsync(project.Id.ToString(), blueprintToApply, ct);
+            }
+            catch (Exception blueprintEx)
+            {
+                // Rollback: blueprint application failed — delete the orphaned project
+                logger.LogError(blueprintEx,
+                    "Blueprint application failed for project {ProjectId}; rolling back project creation",
+                    project.Id);
+                try
+                {
+                    await projectService.DeleteAsync(project.Id, runStore, workflowRegistry, ct);
+                }
+                catch (Exception rollbackEx)
+                {
+                    logger.LogError(rollbackEx,
+                        "Rollback delete failed for orphaned project {ProjectId}", project.Id);
+                }
+                throw;
+            }
+
+            // Record blueprint provenance
+            var pid = ProjectId.Parse(project.Id.ToString());
+            await projectStore.UpdateSourceBlueprintAsync(
+                pid, blueprintSourceId, blueprintSourceType, DateTimeOffset.UtcNow, ct);
+
             // Re-read so the response reflects the workflow/review/sandbox defaults the blueprint set.
             var view = await projectService.GetViewAsync(project.Id, ct);
             if (view is not null)
@@ -310,11 +353,15 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
     CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
 {
-    if (!ProjectId.TryParse(id, out _))
+    if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
 
     var run = await runStore.GetByWorkflowRunIdAsync(workflowRunId, ct);
     if (run is null) return Results.NotFound();
+
+    // Cross-project data-leak guard: the run must belong to the requested project.
+    if (run.ProjectId is null || run.ProjectId.ToString() != projectId.ToString())
+        return Results.NotFound();
 
     string? coordinatorStatus = null;
     var isCoordinatorRun = run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
@@ -564,5 +611,7 @@ static ProjectResponse MapProject(Project p, bool available) => new()
     State = p.State == ProjectState.Active ? "active" : "deleting",
     CreatedAt = p.CreatedAt,
     UpdatedAt = p.UpdatedAt,
+    SourceBlueprintId = p.SourceBlueprintId,
+    SourceBlueprintType = p.SourceBlueprintType,
 };
 }

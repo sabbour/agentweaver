@@ -13,7 +13,7 @@ namespace Agentweaver.Tests.Workflows;
 /// HTTP integration tests for the workflow-selection endpoints (Feature 010, FR-041/FR-042): setting a
 /// project's default workflow and a per-task workflow override. Runs against a real in-process API host
 /// (<see cref="ProjectsWebApplicationFactory"/>) over a real SQLite DB and the real
-/// <c>WorkflowRegistry</c> reading each project's materialized <c>.scaffolders/workflows/</c> — no mocks
+/// <c>WorkflowRegistry</c> reading each project's materialized <c>.agentweaver/workflows/</c> — no mocks
 /// (Principle VII). Owner-authorized like the sibling workflow endpoints.
 /// </summary>
 public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<ProjectsWebApplicationFactory>
@@ -216,7 +216,7 @@ public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<Projects
         var yaml = Agentweaver.Api.Workflows.DefaultWorkflowTemplate.Yaml
             .Replace("id: default", $"id: {workflowId}")
             .Replace("name: Default Run Workflow", $"name: Custom {workflowId}");
-        var dir = Path.Combine(workingDir, ".scaffolders", "workflows");
+        var dir = Path.Combine(workingDir, ".agentweaver", "workflows");
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(Path.Combine(dir, "custom.yaml"), yaml);
     }

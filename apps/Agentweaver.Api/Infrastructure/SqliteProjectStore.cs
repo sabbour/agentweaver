@@ -21,13 +21,15 @@ public sealed class SqliteProjectStore : IProjectStore
                                   default_provider, default_model_copilot, default_model_foundry,
                                   state, created_at, updated_at,
                                   max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
-                                  default_workflow_id, active_review_policy_name, sandbox_profile)
+                                  default_workflow_id, active_review_policy_name, sandbox_profile,
+                                  source_blueprint_id, source_blueprint_type)
             VALUES ($projectId, $name, $originKind, $sourceRepository,
                     $workingDirectory, $defaultBranch, $owner,
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
                     $state, $createdAt, $updatedAt,
                     $maxReadyPerHeartbeat, $pickupAutopilot, $pickupAutoApproveTools,
-                    $defaultWorkflowId, $activeReviewPolicyName, $sandboxProfile);
+                    $defaultWorkflowId, $activeReviewPolicyName, $sandboxProfile,
+                    $sourceBlueprintId, $sourceBlueprintType);
             """;
         command.Parameters.AddWithValue("$projectId", project.Id.ToString());
         command.Parameters.AddWithValue("$name", project.Name);
@@ -48,6 +50,8 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$defaultWorkflowId", (object?)project.DefaultWorkflowId ?? DBNull.Value);
         command.Parameters.AddWithValue("$activeReviewPolicyName", (object?)project.ActiveReviewPolicyName ?? DBNull.Value);
         command.Parameters.AddWithValue("$sandboxProfile", (object?)project.SandboxProfile ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceBlueprintId", (object?)project.SourceBlueprintId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceBlueprintType", (object?)project.SourceBlueprintType ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -216,18 +220,39 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET source_blueprint_id = $sourceBlueprintId,
+                   source_blueprint_type = $sourceBlueprintType,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$sourceBlueprintId", (object?)blueprintId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceBlueprintType", (object?)blueprintType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     // Ordinals: 0=project_id 1=name 2=origin_kind 3=source_repository 4=working_directory
     //           5=default_branch 6=owner 7=default_provider 8=default_model_copilot
     //           9=default_model_foundry 10=state 11=created_at 12=updated_at
     //           13=max_ready_per_heartbeat 14=pickup_autopilot 15=pickup_auto_approve_tools
     //           16=default_workflow_id 17=active_review_policy_name 18=sandbox_profile
+    //           19=source_blueprint_id 20=source_blueprint_type
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
                default_branch, owner, default_provider, default_model_copilot,
                default_model_foundry, state, created_at, updated_at,
                max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
-               default_workflow_id, active_review_policy_name, sandbox_profile
+               default_workflow_id, active_review_policy_name, sandbox_profile,
+               source_blueprint_id, source_blueprint_type
           FROM projects
         """;
 
@@ -261,6 +286,8 @@ public sealed class SqliteProjectStore : IProjectStore
             DefaultWorkflowId      = r.IsDBNull(16) ? null : r.GetString(16),
             ActiveReviewPolicyName = r.IsDBNull(17) ? null : r.GetString(17),
             SandboxProfile         = r.IsDBNull(18) ? null : r.GetString(18),
+            SourceBlueprintId      = r.IsDBNull(19) ? null : r.GetString(19),
+            SourceBlueprintType    = r.IsDBNull(20) ? null : r.GetString(20),
         };
     }
 

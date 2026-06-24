@@ -113,6 +113,10 @@ public sealed class SqliteDb
         // A named preset (e.g. 'default' | 'restricted'). NULL means "use the built-in default posture".
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN sandbox_profile TEXT;", ct);
 
+        // Blueprint provenance — track which blueprint was applied at project creation (Feature 012).
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN source_blueprint_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN source_blueprint_type TEXT;", ct);
+
         // Off-board archiving for runs/backlog tasks. NULL means active/non-archived, preserving all
         // existing rows. Archived Ready tasks are excluded from heartbeat pickup and board queries.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN archived_at TEXT;", ct);
@@ -125,6 +129,21 @@ public sealed class SqliteDb
                 ON backlog_tasks (project_id, state, order_key)
                 WHERE state IN ('backlog','ready') AND archived_at IS NULL;
             """, ct);
+
+        // Cast proposals persistence (proposal store backed by SQLite so proposals survive restarts).
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS cast_proposals (
+                id           TEXT PRIMARY KEY,
+                project_id   TEXT NOT NULL,
+                owner        TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                expires_at   TEXT NOT NULL,
+                proposal_json TEXT NOT NULL
+            );
+            """, ct);
+        await TryAlterAsync(connection,
+            "CREATE INDEX IF NOT EXISTS idx_cast_proposals_project ON cast_proposals (project_id);", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
