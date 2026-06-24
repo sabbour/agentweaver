@@ -157,22 +157,11 @@ public static class WorkflowDefinitionLoader
             }
         }
 
-        // Executor-binding support check: reject at load time any node type the run binder cannot
-        // wire yet. This surfaces a clear, actionable error at load time instead of an opaque
-        // InvalidOperationException when the first run using this workflow is dispatched.
-        // Built-in workflows are exempt — they are authored to match the binder exactly.
-        if (!isBuiltIn)
-        {
-            foreach (var node in nodes)
-            {
-                if (!IsBindableNodeType(node.Type))
-                    return Fail(source,
-                        $"node '{node.Id}' uses type '{node.Type}' which is not yet supported by the run executor " +
-                        "(supported types: prompt, check, merge, scribe, terminal). " +
-                        "Remove or replace this node to use the workflow.",
-                        out error);
-            }
-        }
+        // Feature 015 US1: the generalized RunWorkflowGraphBinder resolves a node's executor from its
+        // TYPE (not a fixed id vocabulary), so fan_out/fan_in/serial/peer_review/coordinator_composed are
+        // no longer rejected at load time. A node whose type cannot be wired to a runtime executor fails
+        // closed at BUILD time with a node-scoped WorkflowBindException (the binder is the single guard),
+        // rather than the loader pre-rejecting an entire authored workflow.
 
         // Parse optional explicit board stage definitions (FR-kanban-dynamic-columns).
         var stages = new List<WorkflowStageDefinition>();
@@ -207,28 +196,6 @@ public static class WorkflowDefinitionLoader
         error = $"{source}: {message}";
         return false;
     }
-
-    /// <summary>
-    /// Returns true for node types the <see cref="RunWorkflowGraphBinder"/> can currently wire.
-    /// FanOut, FanIn, PeerReview, CoordinatorComposed, and Serial are parsed and round-tripped by the
-    /// schema but not yet bound to MAF executor wiring; a workflow containing them is rejected at load
-    /// time so the error is surfaced early rather than at first-run dispatch.
-    /// </summary>
-    private static bool IsBindableNodeType(WorkflowNodeType type) => type switch
-    {
-        WorkflowNodeType.Prompt              => true,
-        WorkflowNodeType.Check               => true,
-        WorkflowNodeType.Merge               => true,
-        WorkflowNodeType.Scribe              => true,
-        WorkflowNodeType.Terminal            => true,
-        // Not yet wired in RunWorkflowGraphBinder:
-        WorkflowNodeType.FanOut              => false,
-        WorkflowNodeType.FanIn               => false,
-        WorkflowNodeType.PeerReview          => false,
-        WorkflowNodeType.CoordinatorComposed => false,
-        WorkflowNodeType.Serial              => false,
-        _                                    => false,
-    };
 
     private static string Normalize(string raw) =>
         raw.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();

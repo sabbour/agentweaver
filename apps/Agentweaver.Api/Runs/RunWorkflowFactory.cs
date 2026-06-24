@@ -33,6 +33,7 @@ public sealed class RunWorkflowFactory
     private readonly IWorktreeOperations _worktreeOps;
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
+    private readonly IRunEventStream? _eventStream;
     private readonly SqliteRunStore _runStore;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -82,7 +83,8 @@ public sealed class RunWorkflowFactory
         ILoggerFactory loggerFactory,
         IServiceScopeFactory scopeFactory,
         IWorkflowAgentFactory agentFactory,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IRunEventStream? eventStream = null)
         : this(
             agentRunner,
             copilotClientFactory,
@@ -101,7 +103,8 @@ public sealed class RunWorkflowFactory
             configuration,
             projectStore: null,
             workflowRegistry: null,
-            reviewPolicyRegistry: null)
+            reviewPolicyRegistry: null,
+            eventStream: eventStream)
     {
     }
 
@@ -123,7 +126,8 @@ public sealed class RunWorkflowFactory
         IConfiguration configuration,
         IProjectStore? projectStore,
         WorkflowRegistry? workflowRegistry,
-        ReviewPolicyRegistry? reviewPolicyRegistry)
+        ReviewPolicyRegistry? reviewPolicyRegistry,
+        IRunEventStream? eventStream = null)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
@@ -135,6 +139,7 @@ public sealed class RunWorkflowFactory
         _worktreeOps = worktreeOps;
         _mergeCoordinator = mergeCoordinator;
         _streamStore = streamStore;
+        _eventStream = eventStream;
         _runStore = runStore;
         _loggerFactory = loggerFactory;
         _scopeFactory = scopeFactory;
@@ -165,7 +170,7 @@ public sealed class RunWorkflowFactory
     public ChannelWriter<RunEvent>? GetRecordingWriter(string runId)
     {
         var entry = _streamStore.Get(runId);
-        return entry is not null ? new RecordingChannelWriter(entry) : null;
+        return entry is not null ? new RecordingChannelWriter(entry, runId, _eventStream) : null;
     }
 
     /// <summary>
@@ -182,7 +187,7 @@ public sealed class RunWorkflowFactory
         var parentEntry = _streamStore.Get(parentRunId);
         var owner = parentEntry?.Owner ?? "system";
         var entry = _streamStore.Create(subRunId, owner);
-        return new RecordingChannelWriter(entry);
+        return new RecordingChannelWriter(entry, subRunId, _eventStream);
     }
 
     public void CompleteSubStream(string subRunId)
@@ -194,43 +199,62 @@ public sealed class RunWorkflowFactory
     /// <summary>
     /// Persists the in-memory event history for <paramref name="runId"/> to the
     /// <see cref="RunEventRecord"/> table so the Watch page can replay them after the
-    /// stream entry is evicted from <see cref="RunStreamStore"/>. Idempotent: already-
-    /// persisted sequences are skipped via a pre-check. Fire-and-forget safe.
+    /// stream entry is evicted from <see cref="RunStreamStore"/>, and signals run completion
+    /// to the durable event stream so live subscribers terminate cleanly.
+    /// Idempotent: already-persisted sequences are skipped. Fire-and-forget safe.
+    /// With per-append durability (016-run-event-stream) most events are already persisted;
+    /// this serves as a terminal backfill safety net and the channel-close signal.
     /// </summary>
     public async Task PersistRunEventsAsync(string runId)
     {
         try
         {
             var entry = _streamStore.Get(runId);
-            if (entry is null) return;
+            var events = entry?.GetSnapshotSince(0).Events ?? [];
 
-            var events = entry.GetSnapshotSince(0).Events;
-            if (events.Count == 0) return;
-
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-            var existingSeqs = db.RunEvents
-                .Where(e => e.RunId == runId)
-                .Select(e => e.Sequence)
-                .ToHashSet();
-
-            var toInsert = events
-                .Where(e => !existingSeqs.Contains(e.Sequence))
-                .Select(e => new RunEventRecord
+            if (events.Count > 0)
+            {
+                if (_eventStream is not null)
                 {
-                    RunId = runId,
-                    Sequence = e.Sequence,
-                    EventType = e.Type,
-                    PayloadJson = JsonSerializer.Serialize(e.Payload),
-                    CreatedAt = DateTime.UtcNow,
-                })
-                .ToList();
+                    // Durable write-through is idempotent on the unique (RunId, Sequence) index,
+                    // so re-appending the full history reconciles any gaps left by a dropped
+                    // per-append mirror without duplicating rows.
+                    foreach (var e in events)
+                        await _eventStream.AppendAsync(runId, e).ConfigureAwait(false);
+                }
+                else
+                {
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
-            if (toInsert.Count == 0) return;
+                    var existingSeqs = db.RunEvents
+                        .Where(e => e.RunId == runId)
+                        .Select(e => e.Sequence)
+                        .ToHashSet();
 
-            db.RunEvents.AddRange(toInsert);
-            await db.SaveChangesAsync().ConfigureAwait(false);
+                    var toInsert = events
+                        .Where(e => !existingSeqs.Contains(e.Sequence))
+                        .Select(e => new RunEventRecord
+                        {
+                            RunId = runId,
+                            Sequence = e.Sequence,
+                            EventType = e.Type,
+                            PayloadJson = JsonSerializer.Serialize(e.Payload),
+                            CreatedAt = DateTime.UtcNow,
+                        })
+                        .ToList();
+
+                    if (toInsert.Count > 0)
+                    {
+                        db.RunEvents.AddRange(toInsert);
+                        await db.SaveChangesAsync().ConfigureAwait(false);
+                    }
+                }
+            }
+
+            // Close the live channel so any IRunEventStream subscribers drain and complete.
+            if (_eventStream is not null)
+                await _eventStream.CompleteAsync(runId).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -937,12 +961,48 @@ public sealed class RunWorkflowFactory
 
 /// <summary>
 /// Adapts a RunStreamEntry into a ChannelWriter for the agent runner's token streaming.
+/// When constructed with an <see cref="IRunEventStream"/>, each written event is also durably
+/// written-through to the run event log (Layer 1) using the sequence the entry assigned, so the
+/// persisted log stays aligned with in-memory history on a per-append basis (016-run-event-stream).
 /// </summary>
-internal sealed class RecordingChannelWriter(RunStreamEntry entry) : ChannelWriter<RunEvent>
+internal sealed class RecordingChannelWriter : ChannelWriter<RunEvent>
 {
+    private readonly RunStreamEntry _entry;
+    private readonly string? _runId;
+    private readonly IRunEventStream? _eventStream;
+
+    public RecordingChannelWriter(RunStreamEntry entry)
+        : this(entry, null, null)
+    {
+    }
+
+    public RecordingChannelWriter(RunStreamEntry entry, string? runId, IRunEventStream? eventStream)
+    {
+        _entry = entry;
+        _runId = runId;
+        _eventStream = eventStream;
+    }
+
     public override bool TryWrite(RunEvent item)
     {
-        entry.RecordNext(item.Type, item.Payload);
+        var sequence = _entry.RecordNext(item.Type, item.Payload);
+
+        // Durable write-through. The entry-assigned sequence keeps the persisted log aligned with
+        // in-memory history. Best-effort: a durable-write failure must not break live streaming;
+        // PersistRunEventsAsync provides a terminal backfill safety net for any gaps.
+        if (sequence > 0 && _runId is not null && _eventStream is not null)
+        {
+            try
+            {
+                _eventStream.AppendAsync(_runId, new RunEvent(sequence, item.Type, item.Payload))
+                    .AsTask().GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // Swallow: durability is reconciled by the terminal PersistRunEventsAsync backfill.
+            }
+        }
+
         return true;
     }
 
