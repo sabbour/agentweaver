@@ -121,6 +121,13 @@ public sealed class GitHubOrgAuthorizationMiddleware
                 await _next(context).ConfigureAwait(false);
                 return;
 
+            case OrgAuthResult.OrgAccessNotGranted:
+                await WriteForbiddenAsync(context,
+                    "Could not verify membership of the required GitHub organization. " +
+                    "Ensure your org membership is set to Public in GitHub org settings, " +
+                    "or have an org owner approve this app under Org Settings → Third-party Access.").ConfigureAwait(false);
+                return;
+
             case OrgAuthResult.NotConfigured:
                 await WriteForbiddenAsync(context,
                     "Authorization not configured. Set Auth:GitHub:AllowedOrg.").ConfigureAwait(false);
