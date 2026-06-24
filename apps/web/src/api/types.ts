@@ -894,6 +894,11 @@ export interface WorkflowTriggerDto {
   event?: string | null;
 }
 
+// Response body for GET raw YAML content of a project workflow file (US7).
+export interface WorkflowYamlResponse {
+  yaml: string;
+}
+
 // A workflow in the project's list response: identity, trigger, validation.
 export interface WorkflowSummaryDto {
   id: string | null;

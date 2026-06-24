@@ -1,5 +1,8 @@
 using System.Text.Encodings.Web;
+using k8s;
 using LibGit2Sharp;
+using Agentweaver.Api.Sandbox;
+using Agentweaver.SandboxExec;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
@@ -123,6 +126,26 @@ builder.Services.AddSingleton<Agentweaver.Api.Metrics.MetricsService>();
 
 // Agent runtime
 builder.Services.AddAgentRuntime();
+
+// In-cluster: override ISandboxExecutor with KubernetesSandboxExecutor (017-US2).
+// The last AddSingleton<ISandboxExecutor> registration wins for GetRequiredService<ISandboxExecutor>.
+if (SandboxExecutorFactory.IsInCluster)
+{
+    builder.Services.AddSingleton<ISandboxExecutor>(sp =>
+    {
+        var config = KubernetesClientConfiguration.InClusterConfig();
+        var k8sClient = new Kubernetes(config);
+        var sandboxOptions = new KubernetesSandboxOptions
+        {
+            Namespace = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver",
+            TemplateRef = builder.Configuration["Sandbox:Kubernetes:TemplateRef"] ?? "agentweaver-sandbox",
+            TimeoutSeconds = int.TryParse(
+                builder.Configuration["Sandbox:Kubernetes:TimeoutSeconds"], out int t) ? t : 600,
+        };
+        var logger = sp.GetRequiredService<ILogger<KubernetesSandboxExecutor>>();
+        return new KubernetesSandboxExecutor(k8sClient, sandboxOptions, logger);
+    });
+}
 
 // Authentication
 builder.Services.AddSingleton<ApiKeyRegistry>();

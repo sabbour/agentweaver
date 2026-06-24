@@ -561,6 +561,25 @@ export class AgentweaverApiClient {
     return this.request<import('./types').WorkflowOverrideResponse>('PUT', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/workflow-override`, { workflow_id: workflowId });
   }
 
+  // Get the raw YAML content of a project workflow file (US7). Returns the YAML string; throws
+  // ApiError 404 when the workflow has no on-disk file (e.g. a built-in workflow).
+  getWorkflowYaml(projectId: string, workflowId: string): Promise<string> {
+    return this.request<import('./types').WorkflowYamlResponse>(
+      'GET',
+      `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/yaml`,
+    ).then((r) => r.yaml);
+  }
+
+  // Save (create or update) a workflow by its YAML content (US7). Returns the parsed WorkflowDetailDto
+  // on success. Throws ApiError 400 with body { error: string, line?: number } on validation failure.
+  saveWorkflowYaml(projectId: string, workflowId: string, yaml: string): Promise<import('./types').WorkflowDetailDto> {
+    return this.request<import('./types').WorkflowDetailDto>(
+      'PUT',
+      `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`,
+      { yaml },
+    );
+  }
+
   // Review policies (Spec 010, FR-025/027/033). Project-scoped, owner-authorized.
   // List discovered policies + active selection; Get returns one policy's steps;
   // SetActive selects the active policy by name (null clears to the built-in

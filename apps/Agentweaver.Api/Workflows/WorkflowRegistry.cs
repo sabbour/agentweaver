@@ -1,13 +1,14 @@
 using System.Collections.Concurrent;
 using Agentweaver.Domain;
+using Agentweaver.Squad.Catalog;
 
 namespace Agentweaver.Api.Workflows;
 
 /// <summary>
-/// The discovered + validated workflows for a single project: the built-in default plus every
-/// <c>.agentweaver/workflows/</c> file, each with its validation status (Feature 010). Immutable: a
-/// Sync produces a fresh set, so a run that captured the previous set completes on the definition it
-/// started with (FR-006).
+/// The discovered + validated workflows for a single project: the built-in default, catalog library
+/// workflows, and every <c>.agentweaver/workflows/</c> file, each with its validation status
+/// (Feature 010). Immutable: a Sync produces a fresh set, so a run that captured the previous set
+/// completes on the definition it started with (FR-006).
 /// </summary>
 public sealed record ProjectWorkflowSet
 {
@@ -23,17 +24,23 @@ public sealed record ProjectWorkflowSet
 
 /// <summary>
 /// Discovers, validates, and caches the workflows available to each project (Feature 010,
-/// FR-001/002/003/006/007). Definitions are loaded once per project on first access and cached;
-/// <see cref="Sync"/> is the ONLY refresh path (no file-watch, no per-heartbeat reload). All
-/// discovery, validation, and resolution is server-side (Principles III, IV). Reads only from the
-/// project's own <c>.agentweaver/workflows/</c> directory and never follows references that escape the
-/// project sandbox (FR-007, Principle X).
+/// FR-001/002/003/006/007). Includes the built-in default, all catalog library workflows (Feature
+/// 015 US3), and any project-authored <c>.agentweaver/workflows/</c> files. Definitions are loaded
+/// once per project on first access and cached; <see cref="Sync"/> is the ONLY refresh path. All
+/// discovery, validation, and resolution is server-side (Principles III, IV).
 /// </summary>
 public sealed class WorkflowRegistry
 {
     public const string WorkflowsRelativePath = ".agentweaver/workflows";
 
     private readonly ConcurrentDictionary<ProjectId, ProjectWorkflowSet> _cache = new();
+    private readonly CatalogReader? _catalog;
+
+    /// <summary>Parameterless constructor for tests and back-compat; no catalog library workflows loaded.</summary>
+    public WorkflowRegistry() { }
+
+    /// <summary>Production constructor: catalog library workflows are loaded alongside the built-in default.</summary>
+    public WorkflowRegistry(CatalogReader catalog) { _catalog = catalog; }
 
     /// <summary>Returns the cached set for the project, loading it once on first access (FR-006).</summary>
     public ProjectWorkflowSet GetOrLoad(Project project) =>
@@ -70,7 +77,7 @@ public sealed class WorkflowRegistry
             ?? BuiltInWorkflows.Default;
     }
 
-    private static ProjectWorkflowSet Build(Project project)
+    private ProjectWorkflowSet Build(Project project)
     {
         var results = new List<WorkflowLoadResult>();
         var idToIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -79,6 +86,15 @@ public sealed class WorkflowRegistry
         // (FR-005). A project-authored file with the same id replaces it (project customization).
         results.Add(BuiltInWorkflows.Default);
         idToIndex[BuiltInWorkflows.Default.Definition!.Id] = 0;
+
+        // Catalog library workflows (Feature 015 US3) are available to every project without
+        // requiring any project-local files. A project-authored file with the same id overrides the
+        // catalog definition (project customization over library).
+        if (_catalog is not null)
+        {
+            foreach (var (yaml, source) in _catalog.LoadAllWorkflowYamls())
+                AddResult(WorkflowDefinitionLoader.Load(yaml, source, isBuiltIn: true), results, idToIndex);
+        }
 
         var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows");
         foreach (var file in EnumerateWorkflowFiles(dir))
@@ -99,35 +115,43 @@ public sealed class WorkflowRegistry
                 result = WorkflowLoadResult.Invalid(source, $"{source}: could not read file — {ex.Message}");
             }
 
-            if (!result.IsValid || result.Definition is null)
-            {
-                results.Add(result);
-                continue;
-            }
-
-            var id = result.Definition.Id;
-            if (idToIndex.TryGetValue(id, out var existingIndex))
-            {
-                if (results[existingIndex].IsBuiltIn)
-                {
-                    // Project file overrides the built-in default deterministically.
-                    results[existingIndex] = result;
-                }
-                else
-                {
-                    // Deterministic conflict resolution: first valid file wins; later duplicate excluded.
-                    results.Add(WorkflowLoadResult.Invalid(
-                        source,
-                        $"{source}: duplicate workflow id '{id}' already defined by '{results[existingIndex].Source}'."));
-                }
-                continue;
-            }
-
-            idToIndex[id] = results.Count;
-            results.Add(result);
+            AddResult(result, results, idToIndex);
         }
 
         return new ProjectWorkflowSet { Results = results };
+    }
+
+    private static void AddResult(
+        WorkflowLoadResult result,
+        List<WorkflowLoadResult> results,
+        Dictionary<string, int> idToIndex)
+    {
+        if (!result.IsValid || result.Definition is null)
+        {
+            results.Add(result);
+            return;
+        }
+
+        var id = result.Definition.Id;
+        if (idToIndex.TryGetValue(id, out var existingIndex))
+        {
+            if (results[existingIndex].IsBuiltIn)
+            {
+                // Project file / later catalog entry overrides the built-in / earlier catalog entry.
+                results[existingIndex] = result;
+            }
+            else
+            {
+                // Deterministic conflict resolution: first valid non-built-in file wins.
+                results.Add(WorkflowLoadResult.Invalid(
+                    result.Source,
+                    $"{result.Source}: duplicate workflow id '{id}' already defined by '{results[existingIndex].Source}'."));
+            }
+            return;
+        }
+
+        idToIndex[id] = results.Count;
+        results.Add(result);
     }
 
     /// <summary>

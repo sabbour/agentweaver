@@ -603,10 +603,119 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     }
 
     // -----------------------------------------------------------------------
-    // Observation — read the child's existing run stream (no double-consume).
+    // Observation — subscribe to the child's IRunEventStream (push-based, no polling).
     // -----------------------------------------------------------------------
 
+    /// <summary>
+    /// Subscribes to the child run's event stream via <see cref="IRunEventStream.SubscribeAsync"/>
+    /// and <c>await foreach</c>es events, bubbling interaction gates onto the coordinator stream via
+    /// <see cref="BubbleChildInteraction"/> and returning on the first terminal event.
+    ///
+    /// <para>Stall detection: if no event arrives within <see cref="_stallTimeout"/> from the last
+    /// received event (or from subscription start), the loop returns <see cref="ChildOutcome.Stalled"/>
+    /// so the coordinator can reconcile without an unbounded wait.</para>
+    ///
+    /// <para>Crash / restart safety: <see cref="IRunEventStream.SubscribeAsync"/> replays all
+    /// persisted events from <paramref name="lastSeq"/> before tailing the live channel, so
+    /// observation resumes correctly even when the child's process has restarted.</para>
+    ///
+    /// <para>When <see cref="_eventStream"/> is not wired (test harnesses that do not inject
+    /// <see cref="IRunEventStream"/>), falls back to the legacy <see cref="RunStreamStore"/>
+    /// snapshot poll so existing tests continue to pass unmodified.</para>
+    /// </summary>
     private async Task<ChildResult> ObserveChildAsync(string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
+    {
+        // Fast path: child already reached a terminal state before observation begins.
+        if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } alreadyDone)
+            return new ChildResult(subtaskId, childRunId, alreadyDone);
+
+        // When IRunEventStream is available use the push-based path; otherwise fall back to the
+        // legacy RunStreamStore snapshot+poll path so existing tests that do not inject the stream
+        // continue to work without modification.
+        if (_eventStream is not null)
+            return await ObserveViaEventStreamAsync(coordinatorRunId, subtaskId, childRunId, ct)
+                .ConfigureAwait(false);
+
+        return await ObserveViaStreamStoreAsync(coordinatorRunId, subtaskId, childRunId, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Push-based observation via <see cref="IRunEventStream.SubscribeAsync"/>. Uses a
+    /// <see cref="CancellationTokenSource"/> reset per event so the stall TTL measures time since
+    /// the last received event, not time since subscription start.
+    /// </summary>
+    private async Task<ChildResult> ObserveViaEventStreamAsync(
+        string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
+    {
+        var lastSeq = 0;
+
+        while (!ct.IsCancellationRequested)
+        {
+            // Per-iteration linked CTS: fires after _stallTimeout from the moment we start waiting
+            // for the NEXT event. Broken and recreated on every non-terminal event so the stall
+            // timer resets to a fresh window each time activity is observed.
+            using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (_stallTimeout > TimeSpan.Zero)
+                stallCts.CancelAfter(_stallTimeout);
+
+            bool receivedEvent = false;
+            ChildOutcome? terminalOutcome = null;
+
+            try
+            {
+                await foreach (var evt in _eventStream!.SubscribeAsync(childRunId, lastSeq, stallCts.Token)
+                    .ConfigureAwait(false))
+                {
+                    lastSeq = evt.Sequence;
+                    receivedEvent = true;
+
+                    BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
+
+                    if (TryMapTerminalEvent(evt, out var outcome))
+                    {
+                        terminalOutcome = outcome;
+                        break;
+                    }
+
+                    // Non-terminal event received — break and restart with a fresh stall timer.
+                    break;
+                }
+            }
+            catch (OperationCanceledException) when (stallCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                // Stall TTL expired: child emitted no event within the configured window.
+                _logger.LogWarning(
+                    "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) emitted no event " +
+                    "within the stall TTL ({Timeout}); treating as stalled",
+                    childRunId, subtaskId, _stallTimeout);
+                return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled, DateTimeOffset.UtcNow);
+            }
+
+            if (terminalOutcome.HasValue)
+                return new ChildResult(subtaskId, childRunId, terminalOutcome.Value);
+
+            if (!receivedEvent)
+            {
+                // SubscribeAsync completed with no events (channel was closed without a terminal
+                // event) — fall back to the store for a definitive status.
+                var storeOutcome = await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false);
+                return new ChildResult(subtaskId, childRunId, storeOutcome ?? ChildOutcome.Failed);
+            }
+
+            // Non-terminal event received, stall timer reset — continue the outer loop.
+        }
+
+        return new ChildResult(subtaskId, childRunId, ChildOutcome.Failed);
+    }
+
+    /// <summary>
+    /// Legacy observation path via <see cref="RunStreamStore"/> snapshot + <see cref="RunStreamEntry.WaitForChangeAsync"/>.
+    /// Used as a fallback when <see cref="_eventStream"/> is not injected (existing test harnesses).
+    /// Retains the original stall detection (via DB last-activity) for orphaned children.
+    /// </summary>
+    private async Task<ChildResult> ObserveViaStreamStoreAsync(
+        string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
     {
         var entry = _streamStore.Get(childRunId);
         var lastSeq = 0;
@@ -616,14 +725,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             entry ??= _streamStore.Get(childRunId);
             if (entry is null)
             {
-                // Entry not visible yet (or already evicted) — fall back to the persisted run status.
-                var byStore = await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false);
-                if (byStore is { } outcomeNow)
-                    return new ChildResult(subtaskId, childRunId, outcomeNow);
-
-                // Non-terminal in the store with NO live stream entry (evicted / post-restart /
-                // orphaned): nothing is driving this child. If it has made no progress past the stall
-                // threshold, treat it as stalled/orphaned so the reconciling loop never polls forever.
+                // Non-terminal in the store with no live stream entry: check the stall threshold.
                 var staleSince = await StaleSinceAsync(childRunId, ct).ConfigureAwait(false);
                 if (staleSince is { } since)
                     return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled, since);
@@ -636,12 +738,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             foreach (var evt in snapshot.Events)
             {
                 lastSeq = evt.Sequence;
-
-                // Bubble mid-run child questions / approval gates onto the coordinator stream so
-                // the operator (and, later, Autopilot) can resolve them. The answer/approval flows
-                // back to the CHILD run's gate, so we carry childRunId + requestId verbatim.
                 BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
-
                 if (TryMapTerminalEvent(evt, out var outcome))
                     return new ChildResult(subtaskId, childRunId, outcome);
             }
@@ -656,6 +753,39 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
 
         return new ChildResult(subtaskId, childRunId, ChildOutcome.Failed);
+    }
+
+    /// <summary>
+    /// Returns the last-activity time when an orphaned child run (non-terminal in the store with
+    /// no live stream entry) has made no progress for longer than <see cref="_stallTimeout"/>, or
+    /// null when still within the threshold. Used by the legacy store-poll fallback only.
+    /// </summary>
+    private async Task<DateTimeOffset?> StaleSinceAsync(string childRunId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(childRunId, out var parsed))
+            return null;
+        var run = await _runStore.GetAsync(parsed, ct).ConfigureAwait(false);
+        if (run is null)
+            return null;
+
+        var lastActivity = run.StartedAt;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var latest = await db.RunEvents
+                .Where(e => e.RunId == childRunId)
+                .OrderByDescending(e => e.CreatedAt)
+                .Select(e => (DateTime?)e.CreatedAt)
+                .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+            if (latest is { } le)
+            {
+                var leOffset = new DateTimeOffset(DateTime.SpecifyKind(le, DateTimeKind.Utc));
+                if (leOffset > lastActivity)
+                    lastActivity = leOffset;
+            }
+        }
+
+        return DateTimeOffset.UtcNow - lastActivity >= _stallTimeout ? lastActivity : null;
     }
 
     /// <summary>
@@ -759,44 +889,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         };
     }
 
-    /// <summary>
-    /// Returns the last-activity timestamp when an orphaned child run (non-terminal in the store with
-    /// no live watch loop) has made no progress for longer than <see cref="_stallTimeout"/>, or null
-    /// when it is still within the threshold (or cannot be resolved). Last activity is the later of the
-    /// child run's start time and its most recent persisted run event, so a child that emitted recent
-    /// events is never considered stalled.
-    /// </summary>
-    private async Task<DateTimeOffset?> StaleSinceAsync(string childRunId, CancellationToken ct)
-    {
-        if (!RunId.TryParse(childRunId, out var parsed))
-            return null;
-        var run = await _runStore.GetAsync(parsed, ct).ConfigureAwait(false);
-        if (run is null)
-            return null;
-
-        var lastActivity = run.StartedAt;
-        using (var scope = _scopeFactory.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var latest = await db.RunEvents
-                .Where(e => e.RunId == childRunId)
-                .OrderByDescending(e => e.CreatedAt)
-                .Select(e => (DateTime?)e.CreatedAt)
-                .FirstOrDefaultAsync(ct).ConfigureAwait(false);
-            if (latest is { } le)
-            {
-                var leOffset = new DateTimeOffset(DateTime.SpecifyKind(le, DateTimeKind.Utc));
-                if (leOffset > lastActivity)
-                    lastActivity = leOffset;
-            }
-        }
-
-        return DateTimeOffset.UtcNow - lastActivity >= _stallTimeout ? lastActivity : null;
-    }
 
     // -----------------------------------------------------------------------
     // EF access (scoped DbContext — all writes on the dispatch-loop task)
     // -----------------------------------------------------------------------
+
 
     private async Task<(int? WorkPlanId, List<Subtask> Subtasks, List<(int, int)> Edges)> LoadPlanAsync(
         string coordinatorRunId, CancellationToken ct)

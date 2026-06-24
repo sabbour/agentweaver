@@ -1,5 +1,6 @@
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using YamlDotNet.Core;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -134,6 +135,123 @@ public static class WorkflowDefinitionEndpoints
                 WorkflowOverrideId = updated.WorkflowOverrideId,
             });
         });
+
+        // GET /api/projects/{projectId}/workflows/{workflowId}/yaml — raw YAML content on disk (US7).
+        // Returns 404 for built-in workflows (no on-disk file) and for unknown workflow ids.
+        app.MapGet("/api/projects/{projectId}/workflows/{workflowId}/yaml", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            IProjectStore projectStore,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+
+            if (!IsValidWorkflowId(workflowId))
+                return Results.BadRequest(new { error = "Invalid workflow id." });
+
+            var dir = Path.Combine(project!.WorkingDirectory, ".agentweaver", "workflows");
+            var yaml = await TryReadWorkflowYamlAsync(dir, workflowId, ct);
+            if (yaml is null) return Results.NotFound();
+
+            return Results.Ok(new WorkflowYamlResponse { Yaml = yaml });
+        });
+
+        // PUT /api/projects/{projectId}/workflows/{workflowId} — parse, binder dry-run, save (US7).
+        // Returns 200 WorkflowDetailDto on success; 400 { error, line? } on parse/validation failure.
+        // The YAML's declared 'id' must match the route {workflowId}.
+        app.MapPut("/api/projects/{projectId}/workflows/{workflowId}", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            SaveWorkflowRequest request,
+            IProjectStore projectStore,
+            WorkflowRegistry registry,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+
+            if (!IsValidWorkflowId(workflowId))
+                return Results.BadRequest(new { error = "Invalid workflow id." });
+
+            // Step 1: Attempt a pre-parse to capture YamlException line numbers before the loader
+            // normalises the message.
+            int? errorLine = null;
+            try
+            {
+                var preDeserializer = new YamlDotNet.Serialization.DeserializerBuilder()
+                    .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
+                    .IgnoreUnmatchedProperties()
+                    .Build();
+                preDeserializer.Deserialize<object>(request.Yaml);
+            }
+            catch (YamlException ex)
+            {
+                errorLine = (int)ex.Start.Line;
+                return Results.BadRequest(new { error = $"YAML parse error at line {ex.Start.Line}: {ex.Message}", line = errorLine });
+            }
+
+            // Step 2: Full load + structural validation via the real loader.
+            var loadResult = WorkflowDefinitionLoader.Load(request.Yaml, workflowId);
+            if (!loadResult.IsValid || loadResult.Definition is null)
+                return Results.BadRequest(new { error = loadResult.Error ?? "Workflow validation failed.", line = errorLine });
+
+            var definition = loadResult.Definition;
+
+            // Step 3: Route id must match the YAML's declared id (prevents mismatched saves).
+            if (!string.Equals(definition.Id, workflowId, StringComparison.Ordinal))
+                return Results.BadRequest(new
+                {
+                    error = $"Workflow id '{definition.Id}' in YAML does not match route id '{workflowId}'. " +
+                            "Update the 'id' field in the YAML to match, or use the correct route.",
+                    line = errorLine
+                });
+
+            // Step 4: Binder dry-run — classify every node and reject types not yet wired to a
+            // runtime executor. This fails-closed before the file is written, consistent with the
+            // binder's governance guarantee.
+            foreach (var node in definition.Nodes)
+            {
+                var kind = NodeClassifier.Classify(node);
+                if (kind is NodeKind.FanOut or NodeKind.FanIn or NodeKind.Serial
+                         or NodeKind.PeerReview or NodeKind.CoordinatorComposed)
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = $"Node '{node.Id}' (type '{WorkflowDtoMapper.NodeTypeToApi(node.Type)}') is accepted " +
+                                "by the schema but is not yet wired to a runtime executor. Use " +
+                                "prompt/check/merge/scribe/terminal nodes in authored workflows.",
+                        line = errorLine
+                    });
+                }
+            }
+
+            // Step 5: Write to the project workspace.
+            var workflowsDir = Path.Combine(project!.WorkingDirectory, ".agentweaver", "workflows");
+            try
+            {
+                Directory.CreateDirectory(workflowsDir);
+                var filePath = Path.Combine(workflowsDir, $"{workflowId}.yaml");
+                await File.WriteAllTextAsync(filePath, request.Yaml, ct);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.Problem($"Could not write workflow file: {ex.Message}",
+                    statusCode: StatusCodes.Status500InternalServerError);
+            }
+
+            // Step 6: Sync the registry and return the reloaded definition.
+            var refreshedSet = registry.Sync(project);
+            var saved = refreshedSet.FindById(workflowId);
+            if (saved?.Definition is null)
+                return Results.Problem(
+                    "Workflow was written but could not be re-loaded after sync. Check file permissions.",
+                    statusCode: StatusCodes.Status500InternalServerError);
+
+            return Results.Ok(WorkflowDtoMapper.ToDetail(saved, EffectiveDefaultId(project)));
+        });
     }
 
     /// <summary>Normalizes an incoming workflow id: trims and treats empty/whitespace as null (clear).</summary>
@@ -173,5 +291,33 @@ public static class WorkflowDefinitionEndpoints
             return (null, Results.StatusCode(StatusCodes.Status403Forbidden));
 
         return (project, null);
+    }
+
+    /// <summary>Returns true when <paramref name="id"/> is a safe workflow id: no path separators or
+    /// directory traversal sequences, so it can be used directly as a filename component.</summary>
+    private static bool IsValidWorkflowId(string id) =>
+        !string.IsNullOrWhiteSpace(id) &&
+        !id.Contains('/') && !id.Contains('\\') && !id.Contains("..");
+
+    /// <summary>Attempts to read a workflow's raw YAML from <paramref name="dir"/>/<paramref
+    /// name="workflowId"/>.yaml (or .yml). Returns null when neither file exists.</summary>
+    private static async Task<string?> TryReadWorkflowYamlAsync(string dir, string workflowId, CancellationToken ct)
+    {
+        foreach (var ext in new[] { ".yaml", ".yml" })
+        {
+            var path = Path.Combine(dir, $"{workflowId}{ext}");
+            try
+            {
+                if (File.Exists(path))
+                    return await File.ReadAllTextAsync(path, ct);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // File exists but is unreadable — surface as not found; the registry error covers
+                // the validation side.
+                _ = ex;
+            }
+        }
+        return null;
     }
 }

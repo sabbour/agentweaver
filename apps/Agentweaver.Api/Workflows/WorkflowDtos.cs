@@ -83,6 +83,18 @@ public sealed record WorkflowDetailDto
     [JsonPropertyName("edges")] public required IReadOnlyList<WorkflowEdgeDto> Edges { get; init; }
 }
 
+/// <summary>Request body to save (create or update) a workflow definition by YAML (US7).</summary>
+public sealed record SaveWorkflowRequest
+{
+    [JsonPropertyName("yaml")] public required string Yaml { get; init; }
+}
+
+/// <summary>Response body for GET raw YAML content of a project workflow file (US7).</summary>
+public sealed record WorkflowYamlResponse
+{
+    [JsonPropertyName("yaml")] public required string Yaml { get; init; }
+}
+
 /// <summary>Maps the workflow domain model to API DTOs (server-side only, Principles III/IV).</summary>
 public static class WorkflowDtoMapper
 {

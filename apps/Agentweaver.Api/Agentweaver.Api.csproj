@@ -24,6 +24,7 @@
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
+    <PackageReference Include="KubernetesClient" Version="19.0.2" />
   </ItemGroup>
 
   <PropertyGroup>

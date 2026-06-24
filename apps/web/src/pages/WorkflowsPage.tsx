@@ -16,11 +16,12 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ArrowSyncRegular, ChevronDownRegular } from '@fluentui/react-icons';
+import { AddRegular, ArrowSyncRegular, ChevronDownRegular, EditRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { Project, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
+import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { WorkflowEditor, BLANK_TEMPLATE } from '../components/WorkflowEditor';
 
 // Spec 010 (FR-039/041) — project Workflows management page. Lists the workflows
 // discovered from .agentweaver/workflows/ with their validation status, marks the
@@ -119,6 +120,13 @@ export function WorkflowsPage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [settingDefault, setSettingDefault] = useState(false);
 
+  // Editor state: null = list view, non-null = editor open.
+  const [editorState, setEditorState] = useState<{
+    workflowId: string;
+    initialYaml: string;
+  } | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+
   const formatError = (err: unknown): string =>
     err instanceof ApiError
       ? `API error ${err.status}: ${err.body}`
@@ -191,6 +199,36 @@ export function WorkflowsPage() {
     }
   }, [projectId]);
 
+  const handleEdit = useCallback(async (wf: WorkflowSummaryDto) => {
+    if (!wf.id || !projectId) return;
+    setEditLoading(true);
+    setError(null);
+    try {
+      const yamlContent = await apiClient.getWorkflowYaml(projectId, wf.id);
+      setEditorState({ workflowId: wf.id, initialYaml: yamlContent });
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setEditLoading(false);
+    }
+  }, [projectId]);
+
+  const handleNewWorkflow = useCallback(() => {
+    setEditorState({ workflowId: 'my-workflow', initialYaml: BLANK_TEMPLATE });
+  }, []);
+
+  const handleEditorSave = useCallback((saved: WorkflowDetailDto) => {
+    // Refresh the workflow list so the saved workflow is visible.
+    if (!projectId) return;
+    setSyncMessage(`Workflow "${saved.name}" saved.`);
+    void apiClient.listWorkflows(projectId).then(setData).catch(() => undefined);
+    setEditorState(null);
+  }, [projectId]);
+
+  const handleEditorClose = useCallback(() => {
+    setEditorState(null);
+  }, []);
+
   if (!projectId) return null;
 
   const workflows = data?.workflows ?? [];
@@ -213,6 +251,14 @@ export function WorkflowsPage() {
         }
         actions={
           <>
+            <Button
+              appearance="primary"
+              icon={<AddRegular />}
+              onClick={handleNewWorkflow}
+              disabled={editLoading}
+            >
+              New workflow
+            </Button>
             <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Button
@@ -267,54 +313,81 @@ export function WorkflowsPage() {
         </MessageBar>
       )}
 
-      {loading && <Spinner label="Loading workflows" />}
+      {editLoading && <Spinner label="Loading workflow" />}
 
-      {!loading && !error && workflows.length === 0 && (
-        <div className={styles.emptyState}>
-          <Title3>No workflows found</Title3>
-          <Text>Sync to load from .agentweaver/workflows/.</Text>
-          <Button
-            appearance="primary"
-            icon={<ArrowSyncRegular />}
-            disabled={syncing}
-            onClick={() => { void handleSync(); }}
-          >
-            Sync
-          </Button>
-        </div>
+      {editorState && (
+        <WorkflowEditor
+          projectId={projectId}
+          workflowId={editorState.workflowId}
+          initialYaml={editorState.initialYaml}
+          onSave={handleEditorSave}
+          onClose={handleEditorClose}
+        />
       )}
 
-      {!loading && workflows.length > 0 && (
-        <div className={styles.list}>
-          {workflows.map((wf, index) => (
-            <div key={wf.id ?? `invalid-${index}`} className={styles.card}>
-              <div className={styles.cardHeader}>
-                <span className={styles.cardName}>{wf.name ?? wf.id ?? 'Unnamed workflow'}</span>
-                {wf.id && <span className={styles.cardId}>{wf.id}</span>}
-                <div className={styles.badges}>
-                  {wf.is_default && <Badge appearance="filled" color="brand">Default</Badge>}
-                  {wf.is_built_in && <Badge appearance="outline" color="informative">Built-in</Badge>}
-                  <Badge appearance="tint" color={wf.valid ? 'success' : 'danger'}>
-                    {wf.valid ? 'Valid' : 'Invalid'}
-                  </Badge>
-                </div>
-              </div>
+      {!editorState && (
+        <>
+          {loading && <Spinner label="Loading workflows" />}
 
-              {wf.description && <Text>{wf.description}</Text>}
-
-              <div className={styles.meta}>
-                <span>{describeTrigger(wf)}</span>
-                <span>Source: {wf.source}</span>
-              </div>
-
-              {!wf.valid && wf.error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{wf.error}</MessageBarBody>
-                </MessageBar>
-              )}
+          {!loading && !error && workflows.length === 0 && (
+            <div className={styles.emptyState}>
+              <Title3>No workflows found</Title3>
+              <Text>Sync to load from .agentweaver/workflows/.</Text>
+              <Button
+                appearance="primary"
+                icon={<ArrowSyncRegular />}
+                disabled={syncing}
+                onClick={() => { void handleSync(); }}
+              >
+                Sync
+              </Button>
             </div>
-          ))}
-        </div>
+          )}
+
+          {!loading && workflows.length > 0 && (
+            <div className={styles.list}>
+              {workflows.map((wf, index) => (
+                <div key={wf.id ?? `invalid-${index}`} className={styles.card}>
+                  <div className={styles.cardHeader}>
+                    <span className={styles.cardName}>{wf.name ?? wf.id ?? 'Unnamed workflow'}</span>
+                    {wf.id && <span className={styles.cardId}>{wf.id}</span>}
+                    <div className={styles.badges}>
+                      {wf.is_default && <Badge appearance="filled" color="brand">Default</Badge>}
+                      {wf.is_built_in && <Badge appearance="outline" color="informative">Built-in</Badge>}
+                      <Badge appearance="tint" color={wf.valid ? 'success' : 'danger'}>
+                        {wf.valid ? 'Valid' : 'Invalid'}
+                      </Badge>
+                    </div>
+                    {wf.id && !wf.is_built_in && (
+                      <Button
+                        appearance="subtle"
+                        icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <EditRegular />}
+                        size="small"
+                        disabled={editLoading}
+                        onClick={() => { void handleEdit(wf); }}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                  </div>
+
+                  {wf.description && <Text>{wf.description}</Text>}
+
+                  <div className={styles.meta}>
+                    <span>{describeTrigger(wf)}</span>
+                    <span>Source: {wf.source}</span>
+                  </div>
+
+                  {!wf.valid && wf.error && (
+                    <MessageBar intent="error">
+                      <MessageBarBody>{wf.error}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
