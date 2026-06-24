@@ -58,7 +58,6 @@ public sealed class RunWatchLoopService
         StreamingRun streamingRun,
         RunStreamEntry entry,
         string ownerUser,
-        int expectedGeneration,
         CancellationToken runCt)
     {
         _ = Task.Run(async () =>
@@ -66,7 +65,7 @@ public sealed class RunWatchLoopService
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
             try
             {
-                await WatchAsync(runId, streamingRun, entry, ownerUser, expectedGeneration, linkedCts.Token).ConfigureAwait(false);
+                await WatchAsync(runId, streamingRun, entry, ownerUser, linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
             {
@@ -89,7 +88,6 @@ public sealed class RunWatchLoopService
         StreamingRun streamingRun,
         RunStreamEntry entry,
         string ownerUser,
-        int expectedGeneration,
         CancellationToken ct)
     {
         await foreach (var evt in streamingRun.WatchStreamAsync(ct))
@@ -144,7 +142,7 @@ public sealed class RunWatchLoopService
                     break;
 
                 case WorkflowOutputEvent woe:
-                        var isTerminal = await HandleTerminalOutputAsync(runId, woe, entry, expectedGeneration, ct).ConfigureAwait(false);
+                        var isTerminal = await HandleTerminalOutputAsync(runId, woe, entry, ct).ConfigureAwait(false);
                         if (isTerminal)
                         {
                             _registry.Abandon(runId);
@@ -219,17 +217,8 @@ public sealed class RunWatchLoopService
         string runId,
         WorkflowOutputEvent woe,
         RunStreamEntry entry,
-        int expectedGeneration,
         CancellationToken ct)
     {
-        if (entry.Generation != expectedGeneration)
-        {
-            _logger.LogWarning(
-                "Ignoring terminal output from stale workflow generation for run {RunId}. ExpectedGeneration={ExpectedGeneration} ActualGeneration={ActualGeneration}",
-                runId, expectedGeneration, entry.Generation);
-            return false;
-        }
-
         var parsedRunId = RunId.Parse(runId);
 
         if (woe.Is<MergeOutput>(out var mergeOutput))

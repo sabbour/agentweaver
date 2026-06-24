@@ -225,7 +225,7 @@ public sealed class WorkflowRestartService
                 }
 
                 // Start the supervised watch loop.
-                _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
+                _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser, runCt);
             }
             catch (Exception ex)
             {

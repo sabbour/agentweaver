@@ -1108,12 +1108,8 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     workflowFactory.DeleteCheckpoints(id);
 
     // c. Clear the awaiting-review flag so the stream entry reads as live again.
-    //    ClearAwaitingReview also refreshes LastActiveAt so the entry is not immediately
-    //    eligible for stale eviction if the review wait exceeded maxInProgressAge.
-    //    Returns false if the entry was already evicted; StartRevisionAsync will recreate it.
     var streamEntry = streamStore.Get(id);
-    if (streamEntry is not null && !streamEntry.ClearAwaitingReview())
-        logger.LogWarning("Stream entry for run {RunId} was already evicted before ClearAwaitingReview; StartRevisionAsync will create a fresh entry.", id);
+    streamEntry?.ClearAwaitingReview();
 
     // d. Clear run-scoped shell approvals so stale approvals cannot silently re-apply.
     shellApprovalStore.Clear(id);

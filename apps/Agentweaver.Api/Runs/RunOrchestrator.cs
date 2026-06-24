@@ -121,7 +121,7 @@ public sealed class RunOrchestrator
         var runCts = new CancellationTokenSource();
         var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
     }
 
     /// <summary>
@@ -187,7 +187,7 @@ public sealed class RunOrchestrator
         var runCts = new CancellationTokenSource();
         var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
     }
 
     /// <summary>
@@ -236,18 +236,18 @@ public sealed class RunOrchestrator
         var runCts = new CancellationTokenSource();
         var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
     }
 
     /// <summary>
     /// Starts a fresh workflow execution against the SAME worktree for a revision cycle
     /// (B3 / request-changes, and Feature 008 Phase 2 child steering injection). Skips worktree
     /// creation — the existing worktree and branch are reused so the agent builds on top of prior
-    /// commits. The stream entry is reused (or recreated if evicted) to preserve full event history
-    /// for replay. The caller is responsible for the CAS transition, checkpoint deletion, and audit
-    /// row insertion BEFORE invoking this method. When <paramref name="isChild"/> is true the
-    /// revised turn runs the TRIMMED coordinator child pipeline (agent + RAI, no review/merge/scribe
-    /// gate), matching how the child was originally launched via <see cref="StartChildRunAsync"/>;
+    /// commits. The stream entry is reused to preserve full event history for replay. The caller
+    /// is responsible for the CAS transition, checkpoint deletion, and audit row insertion BEFORE
+    /// invoking this method. When <paramref name="isChild"/> is true the revised turn runs the
+    /// TRIMMED coordinator child pipeline (agent + RAI, no review/merge/scribe gate), matching how
+    /// the child was originally launched via <see cref="StartChildRunAsync"/>;
     /// this is the mechanism a queued <c>redirect</c>/<c>amend</c> steering directive uses to inject
     /// the steered instruction at the child's next turn boundary.
     /// </summary>
@@ -259,22 +259,8 @@ public sealed class RunOrchestrator
             throw new InvalidOperationException($"Run {run.Id} has no worktree branch; cannot start revision.");
 
         // Reuse the existing stream entry so prior events are preserved for replay.
-        // If the entry was evicted (rare but possible: TryMarkEvicted ran between Get and
-        // BumpGeneration), discard the dead entry and create a fresh live one so that
-        // RecordNext calls from the new revision are not silently dropped.
         var entry = _streamStore.Get(run.Id.ToString())
             ?? _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
-
-        var (bumped, generation) = entry.TryBumpGeneration();
-        if (!bumped)
-        {
-            _logger.LogWarning(
-                "Stream entry for run {RunId} was evicted before BumpGeneration; recreating a fresh entry.",
-                run.Id);
-            _streamStore.Remove(run.Id.ToString());
-            entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
-            generation = entry.BumpGeneration();
-        }
 
         var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
             run with { Task = revisedTask }, ct);
@@ -300,7 +286,7 @@ public sealed class RunOrchestrator
         var runCts = new CancellationTokenSource();
         var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, generation, runCt);
+        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
     }
 
     private async Task<Microsoft.Agents.AI.Workflows.StreamingRun> StartWorkflowOrFailAsync(
