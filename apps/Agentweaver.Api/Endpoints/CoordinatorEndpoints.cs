@@ -468,8 +468,8 @@ app.MapGet("/api/runs/{id}/assembly/workspace", async (
 // branch (agentweaver/integration/{id}) tip, so the review modal's Preview/source tab can render an
 // assembled file. The coordinator owns NO worktree (its changes live on the integration branch), so
 // the worktree-backed /workspace/files/{**path}/content endpoint 409s for coordinator runs; this
-// reads the blob from the branch tip instead. Whitelisted to the collective changed-file set so it
-// cannot read arbitrary repo files, and returns 404 (never 409) before the integration branch exists.
+// reads the blob from the branch tip instead. This serves any tracked file on that integration branch
+// because the Files tab displays the full assembled tree, not just the changed-file set.
 app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     HttpContext httpContext,
     string id,
@@ -495,32 +495,10 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
     if (string.IsNullOrEmpty(run.RepositoryPath)) return Results.NotFound();
 
-    var normalizedPath = path.Replace('\\', '/').TrimEnd('/');
-    if (string.IsNullOrEmpty(normalizedPath))
+    if (!EndpointHelpers.TryValidateRelativePath(path, out var normalizedPath))
         return Results.BadRequest(new { error = "Invalid file path." });
 
     var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
-
-    // Whitelist: only serve paths present in the collective changed-file set (same guard as the
-    // per-file diff endpoint). This is also the natural "is there anything to preview yet?" gate —
-    // before assembly builds the integration branch the diff is empty, so we 404 rather than 409.
-    string? aggregateDiff;
-    try
-    {
-        aggregateDiff = worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to compute assembly diff for run {RunId} path {Path}", runId, normalizedPath);
-        return Results.Problem("Failed to compute assembly diff.", statusCode: 500);
-    }
-
-    if (string.IsNullOrEmpty(aggregateDiff))
-        return Results.NotFound();
-
-    var entries = WorkspaceFileEntryParser.ParseUnifiedDiffEntries(aggregateDiff);
-    if (!entries.Any(e => string.Equals(e.Path, normalizedPath, StringComparison.Ordinal)))
-        return Results.NotFound();
 
     try
     {

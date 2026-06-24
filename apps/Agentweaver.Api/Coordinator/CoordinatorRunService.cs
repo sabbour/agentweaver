@@ -601,6 +601,7 @@ public sealed class CoordinatorRunService
                 run.Id, terminal, DateTimeOffset.UtcNow, spec?.Status ?? "confirmed", ct).ConfigureAwait(false);
             entry0.RecordNext(EventTypes.RunCompleted, new { result = spec?.Status ?? "confirmed" });
             _streamStore.Complete(runId);
+            _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
             _factory.DeleteCheckpoints(runId);
             return;
         }
@@ -654,6 +655,7 @@ public sealed class CoordinatorRunService
                 await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Completed, DateTimeOffset.UtcNow, "complete", ct).ConfigureAwait(false);
                 entry.RecordNext(EventTypes.RunCompleted, new { result = "complete" });
                 _streamStore.Complete(runId);
+                _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
                 _factory.DeleteCheckpoints(runId);
                 break;
 
@@ -662,6 +664,7 @@ public sealed class CoordinatorRunService
                     run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, run.Result ?? planState.Status, ct).ConfigureAwait(false);
                 entry.RecordNext(EventTypes.RunFailed, new { reason = run.Result ?? planState.Status });
                 _streamStore.Complete(runId);
+                _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
                 _factory.DeleteCheckpoints(runId);
                 break;
         }

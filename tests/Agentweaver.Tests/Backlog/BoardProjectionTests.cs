@@ -74,8 +74,13 @@ public sealed class BoardProjectionTests : IAsyncDisposable
     /// Seeds a work plan for a coordinator run plus its subtasks (persona, status, title). Used by the
     /// Phase 2 per-agent work-queue rollup tests to populate <c>agent_queues</c> across runs.
     /// </summary>
-    private async Task SeedWorkPlanWithSubtasksAsync(
+    private Task SeedWorkPlanWithSubtasksAsync(
         ProjectId projectId, RunId coordinatorRunId, string status,
+        params (string Agent, string Status, string Title)[] subtasks) =>
+        SeedWorkPlanWithSubtasksAsync(projectId, coordinatorRunId, status, "g", subtasks);
+
+    private async Task SeedWorkPlanWithSubtasksAsync(
+        ProjectId projectId, RunId coordinatorRunId, string status, string goal,
         params (string Agent, string Status, string Title)[] subtasks)
     {
         using var scope = _provider.CreateScope();
@@ -84,7 +89,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         {
             ProjectId        = projectId.ToString(),
             CoordinatorRunId = coordinatorRunId.ToString(),
-            Goal             = "g",
+            Goal             = goal,
             DesiredOutcome   = "o",
             Scope            = "s",
             Assumptions      = "a",
@@ -131,7 +136,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         board.Columns.Single(c => c.Id == columnId).Cards.ToList();
 
     [Fact]
-    public async Task GetBoard_RendersIntakeFirst_DescriptorColumns_AndMapsRunCardToItsStage()
+    public async Task GetBoard_RendersFixedBuckets_AndMapsRunCardToCanonicalBucket()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var projects = new SqliteProjectStore(testDb.Db);
@@ -171,26 +176,25 @@ public sealed class BoardProjectionTests : IAsyncDisposable
 
         var board = await service.GetBoardAsync(projectA.Id, includeTerminalHistory: false, default);
 
-        // FR-019 available; intake columns first, then descriptor-driven workflow columns.
+        // Fixed bucket model: intake columns first, then canonical run buckets.
         board.WorkflowStagesAvailable.Should().BeTrue();
-        board.Columns[0].Id.Should().Be("backlog");
+        board.Columns.Select(c => c.Label).Should().Equal(
+            "Backlog", "Ready", "Problems", "Human Review", "Active", "Done");
         board.Columns[0].Kind.Should().Be("intake");
-        board.Columns[1].Id.Should().Be("ready");
         board.Columns[1].Kind.Should().Be("intake");
-        board.Columns.Skip(2).Select(c => c.Id).Should().Equal(projector.GetStages().Select(s => s.Id));
         board.Columns.Skip(2).Should().OnlyContain(c => c.Kind == "workflow");
 
         // Intake cards land in their buckets.
         CardsIn(board, "backlog").Cast<TaskCardDto>().Single().TaskId.Should().Be(backlogTask.Id.ToString());
         CardsIn(board, "ready").Cast<TaskCardDto>().Single().TaskId.Should().Be(readyTask.Id.ToString());
 
-        // FR-016: the claimed task's coordinator run card sits in its current stage column, linked
+        // FR-016: the claimed task's coordinator run card sits in its canonical bucket, linked
         // back to the originating backlog task.
-        var raiCards = CardsIn(board, CoordinatorGraphDescriptor.AssemblyRaiNodeId).Cast<RunCardDto>().ToList();
-        var card = raiCards.Single();
+        var activeCards = CardsIn(board, WorkflowStageProjector.ActiveStageId).Cast<RunCardDto>().ToList();
+        var card = activeCards.Single();
         card.RunId.Should().Be(runId.ToString());
         card.BacklogTaskId.Should().Be(claimTask.Id.ToString());
-        card.StageId.Should().Be(CoordinatorGraphDescriptor.AssemblyRaiNodeId);
+        card.StageId.Should().Be(WorkflowStageProjector.ActiveStageId);
         card.WorkPlanStatus.Should().Be(WorkPlanStatus.Assembling);
         card.AssemblyStage.Should().Be(AssemblyStage.Rai);
 
@@ -204,6 +208,33 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var allRunIds = board.Columns.SelectMany(c => c.Cards).OfType<RunCardDto>().Select(r => r.RunId);
         allTaskIds.Should().NotContain(bTask.Id.ToString());
         allRunIds.Should().NotContain(bRunId.ToString());
+    }
+
+    [Fact]
+    public async Task GetBoard_MapsProblemAndReviewRuns_ToCanonicalBuckets()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory);
+
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+
+        var problemRun = await ClaimRunAsync(backlogStore, project.Id, "a");
+        await SeedWorkPlanAsync(project.Id, problemRun, WorkPlanStatus.AssemblyBlocked, null);
+
+        var reviewRun = await ClaimRunAsync(backlogStore, project.Id, "b");
+        await SeedWorkPlanAsync(project.Id, reviewRun, WorkPlanStatus.InReview, AssemblyStage.Review);
+
+        var board = await service.GetBoardAsync(project.Id, includeTerminalHistory: false, default);
+
+        board.Columns.Single(c => c.Label == "Problems").Cards.Cast<RunCardDto>()
+            .Single().RunId.Should().Be(problemRun.ToString());
+        board.Columns.Single(c => c.Label == "Human Review").Cards.Cast<RunCardDto>()
+            .Single().RunId.Should().Be(reviewRun.ToString());
+        CardsIn(board, WorkflowStageProjector.ActiveStageId).Should().BeEmpty();
     }
 
     [Fact]
@@ -231,9 +262,43 @@ public sealed class BoardProjectionTests : IAsyncDisposable
 
         var board = await service.GetBoardAsync(project.Id, includeTerminalHistory: false, default);
 
-        CardsIn(board, WorkflowStageProjector.TerminalStageId).Cast<RunCardDto>()
+        CardsIn(board, WorkflowStageProjector.DoneStageId).Cast<RunCardDto>()
             .Single().RunId.Should().Be(runId.ToString());
-        CardsIn(board, CoordinatorGraphDescriptor.CoordinatorNodeId).Should().BeEmpty();
+        CardsIn(board, WorkflowStageProjector.ActiveStageId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetBoard_ArchivedTaskAndRun_DoNotAppearInAnyColumn()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory);
+
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+
+        var backlogTask = MakeBacklogTask(project.Id, "a");
+        await backlogStore.InsertAsync(backlogTask);
+        (await backlogStore.TryArchiveAsync(project.Id, backlogTask.Id, DateTimeOffset.UtcNow))
+            .Should().BeTrue();
+
+        var claimedTask = MakeReadyTask(project.Id, "b");
+        await backlogStore.InsertAsync(claimedTask);
+        var runId = RunId.New();
+        (await backlogStore.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id, claimedTask.Id, MakeCoordinatorRun(project.Id, runId), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
+        (await backlogStore.TryArchiveAsync(project.Id, claimedTask.Id, DateTimeOffset.UtcNow))
+            .Should().BeTrue();
+
+        var board = await service.GetBoardAsync(project.Id, includeTerminalHistory: false, default);
+
+        board.Columns.SelectMany(c => c.Cards).OfType<TaskCardDto>()
+            .Should().NotContain(t => t.TaskId == backlogTask.Id.ToString());
+        board.Columns.SelectMany(c => c.Cards).OfType<RunCardDto>()
+            .Should().NotContain(r => r.RunId == runId.ToString());
     }
 
     [Fact]
@@ -327,6 +392,77 @@ public sealed class BoardProjectionTests : IAsyncDisposable
 
         // Ordering: Tank (more load) sorts before Trinity.
         board.AgentQueues[0].AgentName.Should().Be("Tank");
+    }
+
+    [Fact]
+    public async Task GetBoard_AgentQueues_GroupedByOrchestration_PerRunBuckets_TitleAndOrdering()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory);
+
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+
+        var run1 = await ClaimRunAsync(backlogStore, project.Id, "a");
+        var run2 = await ClaimRunAsync(backlogStore, project.Id, "b");
+        var run3 = await ClaimRunAsync(backlogStore, project.Id, "c");
+
+        // run1: heavier load for Tank (active + queued + blocked) and a named objective.
+        await SeedWorkPlanWithSubtasksAsync(project.Id, run1, WorkPlanStatus.Planned, "Build the inbox",
+            ("Tank", "dispatched", "Tank wires the endpoint"),   // active
+            ("Tank", "pending", "Tank writes the migration"),    // queued
+            ("Tank", "failed", "Tank's flaky attempt"),          // blocked
+            ("Tank", "pending", "Tank writes the migration"));   // duplicate queued title (dedupe check)
+
+        // run2: lighter load for Tank, distinct objective.
+        await SeedWorkPlanWithSubtasksAsync(project.Id, run2, WorkPlanStatus.Planned, "Polish the board",
+            ("Tank", "running", "Tank streams the board"));      // active
+
+        // run3: an orchestration with no human objective (blank goal) -> title must be null.
+        await SeedWorkPlanWithSubtasksAsync(project.Id, run3, WorkPlanStatus.Planned, "   ",
+            ("Tank", "pending", "Tank triages the queue"));      // queued
+
+        var board = await service.GetBoardAsync(project.Id, includeTerminalHistory: false, default);
+
+        var tank = board.AgentQueues.Single(q => q.AgentName == "Tank");
+        tank.Orchestrations.Should().HaveCount(3);
+
+        // Per-orchestration buckets sum to the agent-level totals.
+        tank.Orchestrations.Sum(o => o.Active).Should().Be(tank.Active);
+        tank.Orchestrations.Sum(o => o.Queued).Should().Be(tank.Queued);
+        tank.Orchestrations.Sum(o => o.Blocked).Should().Be(tank.Blocked);
+        tank.Orchestrations.Sum(o => o.Done).Should().Be(tank.Done);
+
+        var o1 = tank.Orchestrations.Single(o => o.RunId == run1.ToString());
+        o1.Active.Should().Be(1);
+        o1.Queued.Should().Be(2);
+        o1.Blocked.Should().Be(1);
+        o1.Done.Should().Be(0);
+        o1.Title.Should().Be("Build the inbox");
+        // sample_titles scoped to this run, in-flight only, deduped (the repeated queued title appears once).
+        o1.SampleTitles.Should().BeEquivalentTo(new[] { "Tank wires the endpoint", "Tank writes the migration" });
+        o1.SampleTitles.Should().NotContain("Tank's flaky attempt"); // blocked is not in-flight
+
+        var o2 = tank.Orchestrations.Single(o => o.RunId == run2.ToString());
+        o2.Active.Should().Be(1);
+        o2.Queued.Should().Be(0);
+        o2.Title.Should().Be("Polish the board");
+        o2.SampleTitles.Should().Equal("Tank streams the board");
+
+        var o3 = tank.Orchestrations.Single(o => o.RunId == run3.ToString());
+        o3.Queued.Should().Be(1);
+        o3.Title.Should().BeNull(); // no objective available -> null, web falls back to a short run id
+
+        // Ordering: most-loaded orchestration first. run1 (load 4+4+1=9) > run2 (load 4) > run3 (load 2).
+        tank.Orchestrations[0].RunId.Should().Be(run1.ToString());
+        tank.Orchestrations[1].RunId.Should().Be(run2.ToString());
+        tank.Orchestrations[2].RunId.Should().Be(run3.ToString());
+
+        // Back-compat: top-level run_ids stays the sorted distinct set of the orchestrations' run ids.
+        tank.RunIds.Should().BeEquivalentTo(new[] { run1.ToString(), run2.ToString(), run3.ToString() });
     }
 
     [Fact]

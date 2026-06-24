@@ -9,10 +9,10 @@ using Agentweaver.Domain;
 namespace Agentweaver.Api.Runs;
 
 /// <summary>
-/// Composes the Kanban board read model in one response: the intake columns (Backlog + Ready tasks
-/// in priority order) and the descriptor-driven workflow columns (coordinator-run cards placed in
-/// their current stage). Reads only committed server state (Principle VII). The terminal column
-/// collapses older runs unless the full history is requested (FR-016a).
+/// Composes the Kanban board read model in one response: Backlog + Ready intake tasks and
+/// run-backed cards folded into the fixed Problems / Human Review / Active / Done buckets.
+/// Reads only committed server state (Principle VII). The Done column collapses older runs unless
+/// the full history is requested (FR-016a).
 /// </summary>
 public sealed class BoardProjectionService
 {
@@ -40,17 +40,8 @@ public sealed class BoardProjectionService
         var tasks = await _backlogStore.ListByProjectAsync(projectId, ct).ConfigureAwait(false);
         var runs = await _runStore.GetRunsByProjectAsync(projectId, includeChildren: false, ct).ConfigureAwait(false);
 
-        // FR-019 fallback: if the coordinator topology cannot be resolved into stages, expose only the
-        // intake columns and signal unavailability.
-        IReadOnlyList<WorkflowStage> stages;
-        try
-        {
-            stages = _stageProjector.GetStages();
-        }
-        catch
-        {
-            stages = Array.Empty<WorkflowStage>();
-        }
+        // Fixed canonical workflow buckets; no topology-derived columns are exposed on the board.
+        var stages = _stageProjector.GetStages();
         var workflowAvailable = stages.Count > 0;
 
         var columns = new List<BoardColumnDto>
@@ -88,7 +79,8 @@ public sealed class BoardProjectionService
                 if (!byStage.TryGetValue(stageId, out var bucket))
                     continue;   // defensive: unknown stage id never surfaces a broken column
 
-                if (!string.Equals(stageId, WorkflowStageProjector.TerminalStageId, StringComparison.Ordinal))
+                if (!string.Equals(stageId, WorkflowStageProjector.DoneStageId, StringComparison.Ordinal)
+                    && !string.Equals(stageId, WorkflowStageProjector.ProblemsStageId, StringComparison.Ordinal))
                     activeRunIds.Add(run.Id.ToString());
 
                 runToTask.TryGetValue(run.Id.ToString(), out var backlogTaskId);
@@ -106,13 +98,14 @@ public sealed class BoardProjectionService
                     RetriedFrom = run.RetriedFrom,
                     StartedAt = run.StartedAt,
                     EndedAt = run.EndedAt,
+                    ArchivedAt = run.ArchivedAt,
                 });
             }
 
             foreach (var stage in stages)
             {
                 var cards = byStage[stage.Id];
-                if (string.Equals(stage.Id, WorkflowStageProjector.TerminalStageId, StringComparison.Ordinal))
+                if (string.Equals(stage.Id, WorkflowStageProjector.DoneStageId, StringComparison.Ordinal))
                 {
                     columns.Add(BuildTerminalColumn(stage, cards, includeTerminalHistory));
                 }
@@ -156,6 +149,7 @@ public sealed class BoardProjectionService
                 CapturedBy = t.CapturedBy,
                 CreatedAt = t.CreatedAt,
                 CommittedAt = t.CommittedAt,
+                ArchivedAt = t.ArchivedAt,
             })
             .ToList();
         return new BoardColumnDto { Id = id, Kind = "intake", Label = label, Cards = cards };
@@ -251,25 +245,37 @@ public sealed class BoardProjectionService
                 byAgent[agent] = acc;
             }
 
+            if (!acc.ByRun.TryGetValue(row.CoordinatorRunId, out var runAcc))
+            {
+                runAcc = new OrchestrationAccumulator();
+                acc.ByRun[row.CoordinatorRunId] = runAcc;
+            }
+
             var bucket = SubtaskStatusToBucket(row.Status);
             switch (bucket)
             {
-                case Bucket.Active: acc.Active++; break;
-                case Bucket.Queued: acc.Queued++; break;
-                case Bucket.Blocked: acc.Blocked++; break;
-                case Bucket.Done: acc.Done++; break;
+                case Bucket.Active: acc.Active++; runAcc.Active++; break;
+                case Bucket.Queued: acc.Queued++; runAcc.Queued++; break;
+                case Bucket.Blocked: acc.Blocked++; runAcc.Blocked++; break;
+                case Bucket.Done: acc.Done++; runAcc.Done++; break;
             }
 
             acc.RunIds.Add(row.CoordinatorRunId);
 
             // sample_titles prefer in-flight (queued + active) work; dedup, cap at 3.
-            if ((bucket == Bucket.Queued || bucket == Bucket.Active)
-                && acc.SampleTitles.Count < 3
-                && !string.IsNullOrWhiteSpace(row.Title))
-            {
+            var inFlight = bucket == Bucket.Queued || bucket == Bucket.Active;
+            if (inFlight && acc.SampleTitles.Count < 3 && !string.IsNullOrWhiteSpace(row.Title))
                 acc.SampleTitles.Add(row.Title);
-            }
+
+            // Per-orchestration sample_titles: same in-flight rule, deduped within the orchestration.
+            if (inFlight && runAcc.SampleTitles.Count < 3 && !string.IsNullOrWhiteSpace(row.Title)
+                && runAcc.SeenTitles.Add(row.Title))
+                runAcc.SampleTitles.Add(row.Title);
         }
+
+        // One batched query for a human orchestration name per coordinator run (the run's objective).
+        // Runs without an outcome spec map to null so the web can fall back to a short run id.
+        var runTitles = await GetOrchestrationTitlesAsync(db, activeRunIds, ct).ConfigureAwait(false);
 
         var result = byAgent
             .Select(kvp => new AgentQueueDto
@@ -281,6 +287,21 @@ public sealed class BoardProjectionService
                 Done = kvp.Value.Done,
                 RunIds = kvp.Value.RunIds.OrderBy(x => x, StringComparer.Ordinal).ToList(),
                 SampleTitles = kvp.Value.SampleTitles.Take(3).ToList(),
+                Orchestrations = kvp.Value.ByRun
+                    .Select(run => new AgentOrchestrationQueueDto
+                    {
+                        RunId = run.Key,
+                        Title = runTitles.TryGetValue(run.Key, out var title) ? title : null,
+                        Active = run.Value.Active,
+                        Queued = run.Value.Queued,
+                        Blocked = run.Value.Blocked,
+                        Done = run.Value.Done,
+                        SampleTitles = run.Value.SampleTitles.Take(3).ToList(),
+                    })
+                    // Most-loaded orchestration first, with a stable run-id tie-break.
+                    .OrderByDescending(o => o.Active * 4 + o.Queued * 2 + o.Blocked)
+                    .ThenBy(o => o.RunId, StringComparer.Ordinal)
+                    .ToList(),
             })
             // Most-loaded agents first (mirrors the web ordering), with a stable name tie-break.
             .OrderByDescending(a => a.Active * 4 + a.Queued * 2 + a.Blocked)
@@ -288,6 +309,30 @@ public sealed class BoardProjectionService
             .ToList();
 
         return result;
+    }
+
+    /// <summary>
+    /// Reads a human orchestration name (the coordinator run's outcome-spec goal) for the supplied run
+    /// ids in ONE batched query. Run ids without an outcome spec are omitted, so the caller resolves
+    /// them to null. When a run has more than one spec row the first by id wins (deterministic).
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<string, string>> GetOrchestrationTitlesAsync(
+        MemoryDbContext db, IReadOnlyCollection<string> coordinatorRunIds, CancellationToken ct)
+    {
+        var rows = await db.OutcomeSpecs.AsNoTracking()
+            .Where(o => coordinatorRunIds.Contains(o.CoordinatorRunId))
+            .OrderBy(o => o.Id)
+            .Select(o => new { o.CoordinatorRunId, o.Goal })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var titles = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Goal)) continue;
+            titles.TryAdd(row.CoordinatorRunId, row.Goal);
+        }
+        return titles;
     }
 
     /// <summary>
@@ -317,5 +362,16 @@ public sealed class BoardProjectionService
         public int Done;
         public readonly HashSet<string> RunIds = new(StringComparer.Ordinal);
         public readonly List<string> SampleTitles = new();
+        public readonly Dictionary<string, OrchestrationAccumulator> ByRun = new(StringComparer.Ordinal);
+    }
+
+    private sealed class OrchestrationAccumulator
+    {
+        public int Active;
+        public int Queued;
+        public int Blocked;
+        public int Done;
+        public readonly List<string> SampleTitles = new();
+        public readonly HashSet<string> SeenTitles = new(StringComparer.Ordinal);
     }
 }

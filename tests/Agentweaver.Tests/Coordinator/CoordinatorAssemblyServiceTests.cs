@@ -73,7 +73,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     public async Task RunAssembly_BlocksAndStops_WhenASubtaskIsIneligible()
     {
         const string coordinatorRunId = "coord-block-1";
-        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
         _streamStore.Create(coordinatorRunId, "alice");
 
@@ -88,6 +88,41 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var state = await _assemblyStore.GetAsync(workPlanId, default);
         state!.Status.Should().Be(WorkPlanStatus.AssemblyBlocked);
         _streamStore.Get(coordinatorRunId)!.IsCompleted.Should().BeTrue("a blocked assembly stream is terminal");
+
+        // The blocked subtask is the second one (status "failed"); the first is "completed".
+        var blockedId = subtaskIds[1];
+
+        // The emitted block payload names WHICH subtasks blocked (id + title + status + agent), and
+        // keeps the back-compat id-only list.
+        var blockedEvent = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.CoordinatorAssemblyBlocked);
+        var payload = System.Text.Json.JsonSerializer.SerializeToNode(blockedEvent.Payload)!.AsObject();
+        payload["reason"]!.GetValue<string>().Should().Be("ineligible_subtasks");
+        payload["ineligibleSubtaskIds"]!.AsArray().Select(n => n!.GetValue<int>())
+            .Should().Equal(blockedId);
+        var detail = payload["ineligibleSubtasks"]!.AsArray();
+        detail.Should().HaveCount(1);
+        var entry = detail[0]!.AsObject();
+        entry["id"]!.GetValue<int>().Should().Be(blockedId);
+        entry["title"]!.GetValue<string>().Should().Be("t1");
+        entry["status"]!.GetValue<string>().Should().Be("failed");
+        entry["agent"]!.GetValue<string>().Should().Be("morpheus");
+
+        // The block event is PERSISTED to RunEvents so a page reload replays the same detail.
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var persisted = await db.RunEvents
+            .Where(e => e.RunId == coordinatorRunId && e.EventType == EventTypes.CoordinatorAssemblyBlocked)
+            .ToListAsync();
+        persisted.Should().HaveCount(1, "the blocked detail must survive in-memory stream eviction");
+        using var doc = System.Text.Json.JsonDocument.Parse(persisted[0].PayloadJson);
+        var persistedDetail = doc.RootElement.GetProperty("ineligibleSubtasks");
+        persistedDetail.GetArrayLength().Should().Be(1);
+        var persistedEntry = persistedDetail[0];
+        persistedEntry.GetProperty("id").GetInt32().Should().Be(blockedId);
+        persistedEntry.GetProperty("title").GetString().Should().Be("t1");
+        persistedEntry.GetProperty("status").GetString().Should().Be("failed");
+        persistedEntry.GetProperty("agent").GetString().Should().Be("morpheus");
     }
 
     // ── Happy path: event sequence + node-flip ──────────────────────────────────────────────────
@@ -314,6 +349,49 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         persisted.Result.Should().Be("assembly_complete");
     }
 
+    // ── coordinator decision promotion ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAssembly_Approved_Coordinator_PromotesPendingArchitecturalAndScopeDecisions()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var projectId = ProjectId.New();
+        var projectKey = projectId.Value.ToString();
+
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedInboxEntryAsync(projectKey, "use-event-sourcing", "architectural", "Adopt event sourcing");
+        await SeedInboxEntryAsync(projectKey, "exclude-billing", "scope", "Billing is out of scope");
+        await SeedInboxEntryAsync(projectKey, "cache-gotcha", "learning", "Cache invalidation gotcha");
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", projectId);
+        var run = _sut.RunAssemblyAsync(context, default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var decisions = await db.Decisions
+            .Where(d => d.ProjectId == projectKey && d.Status == "active")
+            .ToListAsync();
+        decisions.Select(d => d.Type).Should().BeEquivalentTo(new[] { "architectural", "scope" });
+
+        var arch = await db.DecisionInbox.SingleAsync(e => e.Slug == "use-event-sourcing");
+        arch.Status.Should().Be("merged");
+        var boundary = await db.DecisionInbox.SingleAsync(e => e.Slug == "exclude-billing");
+        boundary.Status.Should().Be("merged");
+
+        // The learning entry is the per-run Scribe's responsibility, not the coordinator backstop.
+        var learning = await db.DecisionInbox.SingleAsync(e => e.Slug == "cache-gotcha");
+        learning.Status.Should().Be("pending");
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private static CoordinatorDispatchContext Context(string coordinatorRunId) =>
@@ -333,6 +411,25 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         for (var i = 0; i < 200 && !_reviewGate.IsArmed(coordinatorRunId); i++)
             await Task.Delay(25);
         _reviewGate.IsArmed(coordinatorRunId).Should().BeTrue("the pipeline should arm the review gate");
+    }
+
+    private async Task SeedInboxEntryAsync(string projectId, string slug, string type, string title)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.DecisionInbox.Add(new DecisionInboxEntry
+        {
+            ProjectId = projectId,
+            AgentName = "morpheus",
+            Slug = slug,
+            Type = type,
+            Title = title,
+            Content = $"Content for {slug}",
+            Status = "pending",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
     }
 
     private async Task SeedCoordinatorRunAsync(string coordinatorRunId)

@@ -1,8 +1,7 @@
 import type { AgentQueueDto, BoardDto } from '../../api/types';
 
-// Minimal board fixture mirroring GET /api/projects/{id}/board (design 5.7).
-// Backlog + Ready intake columns first, then server-ordered workflow columns
-// (including an extra/custom stage to prove dynamic rendering — FR-015/SC-004).
+// Minimal board fixture mirroring GET /api/projects/{id}/board.
+// Backlog + Ready intake columns first, then the canonical workflow buckets only.
 export function makeBoard(overrides?: Partial<BoardDto>): BoardDto {
   return {
     project_id: 'proj-1',
@@ -26,21 +25,27 @@ export function makeBoard(overrides?: Partial<BoardDto>): BoardDto {
         ],
       },
       {
-        id: 'coordinator',
+        id: 'problems',
         kind: 'workflow',
-        label: 'Coordinator',
-        cards: [
-          { kind: 'run', run_id: 'r1', workflow_run_id: 'wr1', backlog_task_id: 't9', task: 'Run-backed work', status: 'in_progress', work_plan_status: 'planned', assembly_stage: null, stage_id: 'coordinator', agent_name: 'Coordinator', started_at: '2026-01-01T00:03:00Z' },
-        ],
-      },
-      {
-        id: 'planned:assembly-custom',
-        kind: 'workflow',
-        label: 'Custom Stage',
+        label: 'Problems',
         cards: [],
       },
       {
-        id: 'terminal',
+        id: 'human-review',
+        kind: 'workflow',
+        label: 'Human Review',
+        cards: [],
+      },
+      {
+        id: 'active',
+        kind: 'workflow',
+        label: 'Active',
+        cards: [
+          { kind: 'run', run_id: 'r1', workflow_run_id: 'wr1', backlog_task_id: 't9', task: 'Run-backed work', status: 'in_progress', work_plan_status: 'planned', assembly_stage: null, stage_id: 'active', agent_name: 'Coordinator', started_at: '2026-01-01T00:03:00Z' },
+        ],
+      },
+      {
+        id: 'done',
         kind: 'workflow',
         label: 'Done',
         cards: [],
@@ -48,6 +53,34 @@ export function makeBoard(overrides?: Partial<BoardDto>): BoardDto {
       },
     ],
     ...overrides,
+  };
+}
+
+export function makeBoardWithArchivedItems(): BoardDto {
+  const board = makeBoard();
+  return {
+    ...board,
+    columns: board.columns.map((column) => {
+      if (column.id === 'backlog') {
+        return {
+          ...column,
+          cards: [
+            ...column.cards,
+            { kind: 'task', task_id: 'archived-task', title: 'Archived task', description: null, state: 'backlog', order_key: 'z', captured_by: 'alice', created_at: '2026-01-01T00:04:00Z', archived_at: '2026-01-02T00:00:00Z' },
+          ],
+        };
+      }
+      if (column.id === 'done') {
+        return {
+          ...column,
+          cards: [
+            ...column.cards,
+            { kind: 'run', run_id: 'archived-run', task: 'Archived run', status: 'merged', stage_id: 'done', agent_name: 'Coordinator', started_at: '2026-01-01T00:05:00Z', ended_at: '2026-01-01T00:06:00Z', archived_at: '2026-01-02T00:00:00Z' },
+          ],
+        };
+      }
+      return column;
+    }),
   };
 }
 
@@ -73,6 +106,7 @@ export function makeAgentQueueDto(overrides?: Partial<AgentQueueDto>): AgentQueu
     done:          3,
     run_ids:       ['r1'],
     sample_titles: ['Task A', 'Task B'],
+    orchestrations: [],
     ...overrides,
   };
 }

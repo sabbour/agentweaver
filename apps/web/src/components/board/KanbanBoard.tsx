@@ -11,13 +11,10 @@ import { useCtrlScrollZoom, ZoomControls } from './useCtrlScrollZoom';
 import { useBoard } from '../../api/board';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import { fromDto } from '../../api/agentQueues';
-import { AgentRail } from '../AgentRail';
 import { KanbanColumn } from './KanbanColumn';
-import { columnAccentColor } from './columnMeta';
+import { columnAccentColor, fixedBoardColumns } from './columnMeta';
 import { CaptureTaskForm } from './CaptureTaskForm';
 import { PickupSettings } from './PickupSettings';
-import type { BoardColumnDto, RunCardDto } from '../../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -64,11 +61,6 @@ const useStyles = makeStyles({
     // Zoom origin: anchor to the top-left so zooming out keeps Backlog in place.
     transformOrigin: 'top left',
   },
-  agentRail: {
-    padding: `${tokens.spacingVerticalXS} 0`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    paddingBottom: tokens.spacingVerticalS,
-  },
 });
 
 export interface KanbanBoardProps {
@@ -77,10 +69,10 @@ export interface KanbanBoardProps {
   pollIntervalMs?: number;
 }
 
-// Per-project homepage Kanban board (FR-013). Columns are built dynamically from the
-// board API response (FR-015) — Backlog and Ready first (server-ordered), then the
-// coordinator workflow-stage columns. Drag is constrained to Backlog<->Ready by the
-// column drop handlers and the server (workflow columns never accept a task move).
+// Per-project homepage Kanban board. The board API remains stage-aware, but the UI
+// presents a stable six-bucket view: Backlog, Ready, Problems, Human Review, Active,
+// Done. Drag is constrained to Backlog<->Ready by the column drop handlers and the
+// server (workflow columns never accept a task move).
 export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const styles = useStyles();
   const [includeTerminalHistory, setIncludeTerminalHistory] = useState(false);
@@ -92,51 +84,21 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [rejectMessage, setRejectMessage] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
 
   // Board zoom (board-zoom). Ctrl+Scroll over the columns adjusts the zoom so the
   // user can fit all workflow columns on screen; +/- controls do the same.
   const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
 
-  // Derive AgentQueueItems from the board's agent_queues field (Phase 2 — optional).
-  const agentItems = useMemo(
-    () => (board?.agent_queues ?? []).map(fromDto),
-    [board?.agent_queues],
-  );
+  const visibleColumns = useMemo(() => (board ? fixedBoardColumns(board.columns) : []), [board]);
 
-  // When an agent is selected, build the set of run_ids they own for O(1) lookup.
-  const selectedRunIds = useMemo<Set<string> | null>(() => {
-    if (!selectedAgent) return null;
-    const item = agentItems.find((a) => a.agentName === selectedAgent);
-    return item?.runIds ? new Set(item.runIds) : null;
-  }, [selectedAgent, agentItems]);
-
-  // Filter each column's cards: when a filter is active, show only RunCardDto cards
-  // whose run_id appears in the selected agent's run_ids. Task cards (no run_id) are
-  // hidden while a filter is active because they belong to the intake queue, not to
-  // any specific agent.
-  const filteredColumns = useMemo<BoardColumnDto[]>(() => {
-    if (!board) return [];
-    if (!selectedRunIds) return board.columns;
-    return board.columns.map((col) => ({
-      ...col,
-      cards: col.cards.filter(
-        (card): card is RunCardDto =>
-          card.kind === 'run' && selectedRunIds.has(card.run_id),
-      ),
-    }));
-  }, [board, selectedRunIds]);
-
-  // Deterministic accent palette keyed by each column's position among the workflow
-  // columns (backlog/ready are fixed). Computed once per board layout so colors are
-  // stable across renders. The mapping itself lives in columnAccentColor (KanbanColumn).
+  // Deterministic accent palette keyed by each visible fixed column.
   const columnsWithAccent = useMemo(() => {
     let workflowIndex = 0;
-    return filteredColumns.map((col) => ({
+    return visibleColumns.map((col) => ({
       col,
       accent: columnAccentColor(col.id, col.id === 'backlog' || col.id === 'ready' ? 0 : workflowIndex++),
     }));
-  }, [filteredColumns]);
+  }, [visibleColumns]);
 
   const handleDropTask = async (taskId: string, sourceColumnId: string, targetColumnId: string, targetIndex: number) => {
     setDraggingTaskId(null);
@@ -186,7 +148,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       {board && !board.workflow_stages_available && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            Workflow columns are unavailable. Showing Backlog and Ready only.
+            Workflow columns are unavailable. Workflow buckets may be empty until the API recovers.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -201,20 +163,6 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         <MessageBar intent="error">
           <MessageBarBody>{mutationError}</MessageBarBody>
         </MessageBar>
-      )}
-
-      {board && (
-        <div className={styles.agentRail}>
-          <AgentRail
-            agents={agentItems}
-            title="Agents"
-            selectedAgent={selectedAgent ?? undefined}
-            onSelectAgent={(name) => setSelectedAgent(name)}
-          />
-          {selectedAgent && (
-            <span data-testid="agent-rail-filter-active" style={{ display: 'none' }} aria-hidden="true" />
-          )}
-        </div>
       )}
 
       {board && (
@@ -244,7 +192,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         </>
       )}
 
-      {board && filteredColumns.length === 0 && !selectedAgent && <Text>No columns to display.</Text>}
+      {board && columnsWithAccent.length === 0 && <Text>No columns to display.</Text>}
     </div>
   );
 }

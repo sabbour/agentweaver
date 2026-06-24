@@ -9,10 +9,8 @@ import {
   DialogSurface,
   DialogTitle,
   Spinner,
-  Switch,
   Text,
   Title2,
-  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -39,6 +37,8 @@ import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/da
 import { RunWatcher } from '../components/RunWatcher';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
+import { AutomationToggle } from '../components/AutomationToggle';
+import { AUTOMATION_HELP } from '../components/automationHelp';
 import {
   workflowNodeTypes,
   workflowEdgeTypes,
@@ -684,18 +684,14 @@ export function WorkflowRunPage() {
         <span className={styles.runIdLabel}>{shortId}</span>
         {(loading || isConnecting) && <Spinner size="extra-tiny" aria-label="Loading" />}
         {!isChild && runActive && (
-          <Tooltip
-            content="Auto-approve tool permission requests for this run. Dangerous tools remain blocked by policy."
-            relationship="description"
-          >
-            <Switch
-              checked={autoApprove}
-              disabled={autoApproveBusy}
-              onChange={(_, d) => toggleAutoApprove(d.checked)}
-              label="Auto-approve tools"
-              labelPosition="before"
-            />
-          </Tooltip>
+          <AutomationToggle
+            label="Auto-approve tools"
+            info={AUTOMATION_HELP.autoApproveRun}
+            checked={autoApprove}
+            disabled={autoApproveBusy}
+            onChange={(checked) => toggleAutoApprove(checked)}
+            labelPosition="before"
+          />
         )}
       </div>
 

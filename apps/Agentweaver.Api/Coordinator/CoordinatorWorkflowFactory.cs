@@ -96,7 +96,10 @@ public sealed class CoordinatorWorkflowFactory
             streamStore,
             scopeFactory,
             loggerFactory,
-            configuration["Providers:GitHubCopilot:Model"] ?? "gpt-4o");
+            configuration["Providers:GitHubCopilot:Model"] ?? "gpt-4o",
+            configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000",
+            configuration["Auth:ApiKey"]
+                ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"]);
     }
 
     /// <summary>The request-port id surfaced to the resume seam when the run suspends.</summary>

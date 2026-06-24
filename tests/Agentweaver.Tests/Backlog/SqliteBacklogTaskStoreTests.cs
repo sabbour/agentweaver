@@ -236,4 +236,30 @@ public sealed class SqliteBacklogTaskStoreTests
         (await store.ListReadyForClaimAsync(project.Id, 100)).Should().ContainSingle()
             .Which.OrderKey.Should().Be("n");
     }
+
+    [Fact]
+    public async Task Archive_RemovesReadyTaskFromActiveLists_AndKeepsOtherReadyClaimable()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+
+        var archivedReady = MakeReadyTask(project.Id, "n");
+        var liveReady = MakeReadyTask(project.Id, "t");
+        await store.InsertAsync(archivedReady);
+        await store.InsertAsync(liveReady);
+
+        var archivedAt = DateTimeOffset.UtcNow;
+        (await store.TryArchiveAsync(project.Id, archivedReady.Id, archivedAt)).Should().BeTrue();
+
+        (await store.GetAsync(project.Id, archivedReady.Id))!.ArchivedAt.Should().NotBeNull();
+        (await store.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.Id.Should().Be(liveReady.Id);
+        (await store.ListReadyForClaimAsync(project.Id, 10)).Should().ContainSingle()
+            .Which.Id.Should().Be(liveReady.Id);
+
+        var newReadyReusingOrderKey = MakeReadyTask(project.Id, "n");
+        await store.InsertAsync(newReadyReusingOrderKey);
+        (await store.ListReadyForClaimAsync(project.Id, 10)).Select(t => t.Id)
+            .Should().Equal(newReadyReusingOrderKey.Id, liveReady.Id);
+    }
 }

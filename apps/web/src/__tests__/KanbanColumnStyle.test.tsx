@@ -90,22 +90,23 @@ describe('KanbanColumn — Squadboard restyle', () => {
     expect(screen.queryByText('No items')).toBeNull();
   });
 
-  it('omits the subtitle for a dynamic workflow stage without known copy (no "undefined")', () => {
-    const column: BoardColumnDto = { id: 'planned:assembly-custom', kind: 'workflow', label: 'Custom Stage', cards: [] };
-    renderColumn(column, columnAccentColor('planned:assembly-custom', 0));
+  it('renders canonical workflow bucket descriptions without "undefined"', () => {
+    const column: BoardColumnDto = { id: 'human-review', kind: 'workflow', label: 'Human Review', cards: [] };
+    renderColumn(column, columnAccentColor('human-review', 0));
 
-    const section = screen.getByTestId('column-planned:assembly-custom');
+    const section = screen.getByTestId('column-human-review');
+    expect(within(section).getByText(STAGE_DESCRIPTIONS['human-review'])).toBeTruthy();
     expect(within(section).queryByText('undefined')).toBeNull();
-    // Dynamic workflow stages cycle the palette (first one = marigold/orange).
-    expect(section.getAttribute('data-accent-color')).toBe(columnAccentColor('planned:assembly-custom', 0));
   });
 });
 
 describe('columnAccentColor — palette mapping', () => {
-  it('maps backlog -> gray, ready -> blue, and cycles the workflow palette', () => {
+  it('maps the fixed board columns to stable accents', () => {
     expect(columnAccentColor('backlog', 0)).toBe(tokens.colorNeutralStroke1);
     expect(columnAccentColor('ready', 0)).toBe(tokens.colorPaletteBlueBorderActive);
-    expect(columnAccentColor('coordinator', 0)).toBe(tokens.colorPaletteMarigoldBorderActive);
-    expect(columnAccentColor('in-review', 1)).toBe(tokens.colorPalettePurpleBorderActive);
+    expect(columnAccentColor('problems', 0)).toBe(tokens.colorPaletteRedBorderActive);
+    expect(columnAccentColor('human-review', 1)).toBe(tokens.colorPalettePurpleBorderActive);
+    expect(columnAccentColor('active', 2)).toBe(tokens.colorPaletteTealBorderActive);
+    expect(columnAccentColor('done', 3)).toBe(tokens.colorPaletteGreenBorderActive);
   });
 });

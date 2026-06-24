@@ -12,7 +12,6 @@ import {
   MessageBarBody,
   Spinner,
   Text,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -21,9 +20,10 @@ import { ArrowSyncRegular, ChevronDownRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { Project, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
 
 // Spec 010 (FR-039/041) — project Workflows management page. Lists the workflows
-// discovered from .scaffolders/workflows/ with their validation status, marks the
+// discovered from .agentweaver/workflows/ with their validation status, marks the
 // project default, and offers a Sync action that re-reads from disk. A "Set as
 // default" picker writes the project default via PUT .../workflows/default (a null
 // selection clears back to the built-in default).
@@ -44,16 +44,6 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  actions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
   },
   list: {
     display: 'flex',
@@ -170,7 +160,7 @@ export function WorkflowsPage() {
     try {
       const refreshed = await apiClient.syncWorkflows(projectId);
       setData(refreshed);
-      setSyncMessage(`Synced ${refreshed.workflows.length} workflow${refreshed.workflows.length === 1 ? '' : 's'} from .scaffolders/workflows/.`);
+      setSyncMessage(`Synced ${refreshed.workflows.length} workflow${refreshed.workflows.length === 1 ? '' : 's'} from .agentweaver/workflows/.`);
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -207,20 +197,23 @@ export function WorkflowsPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
-          {project?.name ?? projectId}
-        </Link>
-        <span>/</span>
-        <span>Workflows</span>
-      </div>
-
-      <div className={styles.pageHeader}>
-        <Title2>Workflows</Title2>
-        <div className={styles.actions}>
-          <Menu>
+      <PageHeader
+        title="Workflows"
+        subtitle="Reusable pipeline definitions."
+        breadcrumb={
+          <div className={styles.breadcrumb}>
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
+              {project?.name ?? projectId}
+            </Link>
+            <span>/</span>
+            <span>Workflows</span>
+          </div>
+        }
+        actions={
+          <>
+            <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Button
                 appearance="secondary"
@@ -258,8 +251,9 @@ export function WorkflowsPage() {
           >
             {syncing ? 'Syncing' : 'Sync'}
           </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {syncMessage && (
         <MessageBar intent="success">
@@ -278,7 +272,7 @@ export function WorkflowsPage() {
       {!loading && !error && workflows.length === 0 && (
         <div className={styles.emptyState}>
           <Title3>No workflows found</Title3>
-          <Text>Sync to load from .scaffolders/workflows/.</Text>
+          <Text>Sync to load from .agentweaver/workflows/.</Text>
           <Button
             appearance="primary"
             icon={<ArrowSyncRegular />}

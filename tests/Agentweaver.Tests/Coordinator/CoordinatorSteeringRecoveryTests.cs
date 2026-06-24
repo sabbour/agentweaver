@@ -122,7 +122,7 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
             SubtaskStatus.Completed,     // no-change subtask — left intact
         });
 
-        await _sut.SteerAsync(coord, "amend", null, "Rebase onto the latest integration branch to avoid the conflict.", "owner", default);
+        await _sut.SteerAsync(coord, "redirect", null, "Rebase onto the latest integration branch to avoid the conflict.", "owner", default);
 
         var s0 = await GetSubtaskAsync(ids[0]);
         var s1 = await GetSubtaskAsync(ids[1]);
@@ -155,19 +155,24 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Redirect_OnLiveLoop_StillQueues_AndDoesNotReset()
+    public async Task Redirect_OnOrphanedDispatch_ReArms_AndQueues_WithoutResetting()
     {
         var coord = RunId.New().ToString();
-        // A live, in-progress orchestration: run InProgress, plan dispatching, a running child.
+        // An ORPHANED orchestration: run InProgress, plan dispatching, a running child, but NO active
+        // dispatch loop (the in-memory loop died / never re-armed after a restart). A queued directive
+        // would drain into the void, so steering must re-arm dispatch.
         await SeedTerminalCoordinatorRunAsync(coord, RunStatus.InProgress, result: "");
         var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.Dispatching, new[] { SubtaskStatus.Running });
         _streamStore.Create(coord, "owner");
+        _dispatch.Active = false; // no live loop — orphaned
 
         var view = await _sut.SteerAsync(coord, "redirect", "child-1", "use the v2 API", "owner", default);
 
-        view.Status.Should().Be(SteeringStatus.Queued, "a live loop drains the directive at the next turn boundary");
-        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Running, "a live subtask is never reset");
-        _dispatch.StartDispatchCalls.Should().BeEmpty("a live loop is not re-armed");
+        view.Status.Should().Be(SteeringStatus.Queued, "the directive queues to drain at the re-armed loop's next boundary");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Running,
+            "an orphan's in-flight subtask is re-observed by the re-armed loop, not reset");
+        _dispatch.StartDispatchCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord,
+            "an orphaned coordinator is re-armed so the queued directive can drain");
     }
 
     [Fact]
@@ -183,6 +188,93 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
 
         view.Status.Should().Be(SteeringStatus.Queued, "recovery must not mutate subtasks while a loop owns them");
         _dispatch.StartDispatchCalls.Should().BeEmpty();
+    }
+
+    // -----------------------------------------------------------------------
+    // Redirect vs Amend: distinct behavior on parked (AssemblyFailed) coordinators.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Redirect_OnParkedCoordinator_WithFailedSubtasks_ResetsAndReArms()
+    {
+        // AssemblyFailed (not AssemblyBlocked) — the plan dead-ended without rai_flagged.
+        // Redirect must treat failed subtasks the same as rai_flagged: reset to pending and re-arm.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "failed: subtask_failed");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyFailed, new[] { SubtaskStatus.Failed });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = false;
+
+        var view = await _sut.SteerAsync(coord, "redirect", null, "try a different approach", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied, "redirect on a parked coordinator resumes immediately");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Pending,
+            "redirect resets failed subtasks to pending for re-dispatch");
+        _dispatch.StartDispatchCalls.Should().ContainSingle("redirect re-arms the dispatch loop");
+    }
+
+    [Fact]
+    public async Task Amend_OnParkedCoordinator_WithOnlyFailedSubtasks_DoesNotResetSubtasks()
+    {
+        // AssemblyFailed, only Failed subtasks (no rai_flagged). Amend is additive: it must NOT reset
+        // failed subtasks. With nothing to unblock it falls through to queue.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "failed: subtask_failed");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyFailed, new[] { SubtaskStatus.Failed });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = false;
+
+        var view = await _sut.SteerAsync(coord, "amend", null, "extend the scope", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Queued,
+            "amend does not reset failed subtasks — no rai_flagged gate to unblock, falls through to queue");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed,
+            "amend must not reset failed subtasks");
+        _dispatch.StartDispatchCalls.Should().BeEmpty("amend does not re-arm without an unblockable gate");
+    }
+
+    [Fact]
+    public async Task Amend_OnLiveCoordinator_DoesNotCancelInFlightWork()
+    {
+        // Live coordinator (Dispatching + active loop). Amend must queue for the next boundary;
+        // no subtask reset or stream cancellation must occur.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.InProgress, "");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.Dispatching, new[] { SubtaskStatus.Running });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = true;
+
+        var view = await _sut.SteerAsync(coord, "amend", null, "add extra criteria", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Queued, "amend queues for the next turn boundary");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Running,
+            "amend must not cancel or reset in-flight work");
+        _dispatch.StartDispatchCalls.Should().BeEmpty("amend on a live coordinator does not re-arm");
+    }
+
+    [Fact]
+    public async Task Redirect_WithSpecificChildTarget_ForceCompletesChildStream()
+    {
+        // Redirect targeting a specific in-progress child must force-complete that child's stream
+        // so the dispatch observer resolves it as failed/cancelled and drains the queued redirect.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.InProgress, "");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.Dispatching, new[] { SubtaskStatus.Running });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = true;
+
+        var childRunId = (await GetSubtaskAsync(ids[0])).ChildRunId!;
+        childRunId.Should().NotBeNull("SeedPlanAsync assigns a ChildRunId for Running subtasks");
+        _streamStore.Create(childRunId, "owner");
+
+        var view = await _sut.SteerAsync(coord, "redirect", childRunId, "take a new approach", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Queued, "redirect queues to drain at the dispatch loop boundary");
+        _streamStore.Get(childRunId)!.IsCompleted.Should().BeTrue(
+            "redirect force-completes the targeted child stream so the dispatch loop resolves it");
+        _streamStore.Get(childRunId)!.GetSnapshotSince(0).Events
+            .Should().Contain(e => e.Type == EventTypes.RunCancelled,
+                "run.cancelled is emitted to the child stream so the dispatch loop resolves the child as failed");
     }
 
     // -----------------------------------------------------------------------

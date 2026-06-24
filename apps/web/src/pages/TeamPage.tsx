@@ -25,7 +25,6 @@ import {
   TabList,
   Text,
   Textarea,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -45,6 +44,7 @@ import type {
   Project,
 } from '../api/types';
 import { SyncPanel } from '../components/SyncPanel';
+import { PageHeader } from '../components/PageHeader';
 
 type FilterTab = 'all' | 'active' | 'retired';
 type PanelTab = 'overview' | 'charter' | 'capabilities';
@@ -65,16 +65,6 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  actions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
   },
   emptyState: {
     display: 'flex',
@@ -867,29 +857,32 @@ export function TeamPage() {
       )}
 
       {!loading && (
-        <div className={styles.pageHeader}>
-          <Title2>Team</Title2>
-          <div className={styles.actions}>
-            {team && (
-              <AddMemberDialog
-                projectId={projectId}
-                onAdded={handleMemberAdded}
-              />
-            )}
-            <Button
-              appearance="secondary"
-              onClick={() => { setShowSync((v) => !v); }}
-            >
-              {showSync ? 'Hide sync' : 'Sync'}
-            </Button>
-            <Button
-              appearance="primary"
-              onClick={() => { navigate(`/projects/${projectId}/team/cast`); }}
-            >
-              Cast team
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="Agents"
+          subtitle="The cast working on this project."
+          actions={
+            <>
+              {team && (
+                <AddMemberDialog
+                  projectId={projectId}
+                  onAdded={handleMemberAdded}
+                />
+              )}
+              <Button
+                appearance="secondary"
+                onClick={() => { setShowSync((v) => !v); }}
+              >
+                {showSync ? 'Hide sync' : 'Sync'}
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={() => { navigate(`/projects/${projectId}/team/cast`); }}
+              >
+                Cast team
+              </Button>
+            </>
+          }
+        />
       )}
 
       {showSync && <SyncPanel projectId={projectId} />}

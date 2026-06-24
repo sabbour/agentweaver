@@ -196,11 +196,25 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var ineligible = AssemblyPlanning.IneligibleSubtasks(statusById);
         if (ineligible.Count > 0)
         {
+            // Enrich the block with the offending subtasks (id + title + status + agent) so the UI can
+            // name WHICH subtasks blocked assembly and WHY, instead of showing only the opaque code.
+            // ineligibleSubtaskIds is retained for back-compat. camelCase member names are preserved
+            // verbatim by the event serializer, matching the existing coordinator payload convention.
+            var ineligibleSubtasks = ineligible
+                .OrderBy(id => id)
+                .Select(id =>
+                {
+                    var s = subtasks.First(x => x.Id == id);
+                    return new { id = s.Id, title = s.Title, status = s.Status, agent = s.AssignedAgent };
+                })
+                .ToList();
+
             await BlockAsync(context, workPlanId, edges, "ineligible_subtasks", new
             {
                 workPlanId,
                 reason = "ineligible_subtasks",
                 ineligibleSubtaskIds = ineligible,
+                ineligibleSubtasks,
             }, ct).ConfigureAwait(false);
             return;
         }
@@ -339,7 +353,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Declined, declineReason, ct).ConfigureAwait(false);
-        _streamStore.Complete(context.CoordinatorRunId);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly: run {RunId} declined", context.CoordinatorRunId);
     }
 
@@ -382,7 +396,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             await TerminalizeCoordinatorRunAsync(
                 context.CoordinatorRunId, RunStatus.MergeFailed, $"assembly_merge_failed: {mergeReason}", ct)
                 .ConfigureAwait(false);
-            _streamStore.Complete(context.CoordinatorRunId);
+            await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
             _logger.LogWarning("Collective assembly: merge failed for run {RunId} ({Reason})",
                 context.CoordinatorRunId, merge.Reason);
             return;
@@ -419,6 +433,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
 
+        // ── Coordinator decision promotion ───────────────────────────────────────────────────────
+        // The per-run Scribe auto-merges only learning/pattern/update entries; architectural and
+        // scope entries are deliberately left for the Coordinator. Promote the still-pending ones
+        // here so they become active decisions (visible in the UI and injected into agent context).
+        // Best-effort and idempotent: a failure must not fail the already-merged assembly.
+        await PromoteCoordinatorDecisionsAsync(context, ct).ConfigureAwait(false);
+
         // ── Complete ─────────────────────────────────────────────────────────────────────────────
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Complete, AssemblyStage.Done, ct).ConfigureAwait(false);
@@ -435,8 +456,39 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Completed, "assembly_complete", ct).ConfigureAwait(false);
 
-        _streamStore.Complete(context.CoordinatorRunId);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly complete for run {RunId}", context.CoordinatorRunId);
+    }
+
+    /// <summary>
+    /// Deterministic backstop for the Coordinator's autonomous decision review: promotes every
+    /// still-pending architectural/scope inbox entry for the run's project into an active decision,
+    /// using the same mapping as the <c>/merge</c> endpoint. Best-effort and non-blocking — mirrors
+    /// <see cref="PostRunScribeService"/>: any failure is logged and the run completes regardless.
+    /// </summary>
+    private async Task PromoteCoordinatorDecisionsAsync(CoordinatorDispatchContext context, CancellationToken ct)
+    {
+        var projectId = context.ProjectId?.Value.ToString();
+        if (string.IsNullOrEmpty(projectId))
+            return;
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var promoted = await DecisionPromotion
+                .PromotePendingCoordinatorDecisionsAsync(db, projectId, ct)
+                .ConfigureAwait(false);
+            if (promoted > 0)
+                _logger.LogInformation(
+                    "Coordinator promoted {Count} architectural/scope decision(s) for run {RunId}",
+                    promoted, context.CoordinatorRunId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Coordinator decision promotion failed for run {RunId} (non-fatal)", context.CoordinatorRunId);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -504,7 +556,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Failed, $"assembly_blocked: {reason}", ct).ConfigureAwait(false);
-        _streamStore.Complete(context.CoordinatorRunId);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogWarning("Collective assembly blocked for run {RunId}: {Reason}", context.CoordinatorRunId, reason);
     }
 
@@ -545,7 +597,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
         await TerminalizeCoordinatorRunAsync(context.CoordinatorRunId, RunStatus.Failed, reason, ct)
             .ConfigureAwait(false);
-        _streamStore.Complete(context.CoordinatorRunId);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -564,6 +616,60 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
     private void Emit(string coordinatorRunId, string eventType, object payload) =>
         _streamStore.Get(coordinatorRunId)?.RecordNext(eventType, StampTimestamp(payload));
+
+    /// <summary>
+    /// Persists the coordinator run's in-memory assembly events to the RunEvents table, then marks
+    /// the stream complete. Assembly events (including <c>coordinator.assembly_blocked</c>) otherwise
+    /// live only in the evictable in-memory stream; once it is gone a page reload replays nothing, so
+    /// the blocked/failed detail is lost. Best-effort: a persistence fault must not stop the stream
+    /// from completing. Mirrors <see cref="RunWorkflowFactory.PersistRunEventsAsync"/>, inlined here
+    /// to avoid a constructor dependency on the workflow factory.
+    /// </summary>
+    private async Task PersistAndCompleteStreamAsync(string coordinatorRunId)
+    {
+        try
+        {
+            var entry = _streamStore.Get(coordinatorRunId);
+            var events = entry?.GetSnapshotSince(0).Events;
+            if (events is { Count: > 0 })
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+                var existingSeqs = db.RunEvents
+                    .Where(e => e.RunId == coordinatorRunId)
+                    .Select(e => e.Sequence)
+                    .ToHashSet();
+
+                var toInsert = events
+                    .Where(e => !existingSeqs.Contains(e.Sequence))
+                    .Select(e => new RunEventRecord
+                    {
+                        RunId = coordinatorRunId,
+                        Sequence = e.Sequence,
+                        EventType = e.Type,
+                        PayloadJson = System.Text.Json.JsonSerializer.Serialize(e.Payload),
+                        CreatedAt = DateTime.UtcNow,
+                    })
+                    .ToList();
+
+                if (toInsert.Count > 0)
+                {
+                    db.RunEvents.AddRange(toInsert);
+                    await db.SaveChangesAsync().ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Collective assembly: failed to persist run events for {RunId}", coordinatorRunId);
+        }
+        finally
+        {
+            _streamStore.Complete(coordinatorRunId);
+        }
+    }
 
     // Adds a server-side wall-clock `timestamp_utc` (ISO-8601 "O") to every assembly event so the
     // frontend can derive live count-up timers for each stage (RAI, Review, Merge, Scribe) the same

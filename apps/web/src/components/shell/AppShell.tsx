@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { makeStyles, tokens } from '@fluentui/react-components';
 import { LeftNav } from './LeftNav';
 import { TopBar } from './TopBar';
+import { StartOrchestrationFab } from '../StartOrchestrationFab';
 import { resolveActiveKey } from './navConfig';
 import {
   clearLastActiveProjectId,
@@ -100,8 +101,13 @@ export function AppShell({ children }: AppShellProps) {
           isFallbackProject={isFallbackProject}
           onFallbackProjectMissing={clearFallbackProject}
         />
-        <main className={styles.main}>{children}</main>
+        {/* Remount the routed page when the active project changes so it re-fetches
+            cleanly for the new project (key is projectId only — switching runId
+            within the same project keeps the page mounted, and the nav/top bar
+            never remount). Global pages share a stable key. */}
+        <main className={styles.main} key={routeProjectId ?? '__global__'}>{children}</main>
       </div>
+      <StartOrchestrationFab currentProjectId={effectiveProjectId} />
     </div>
   );
 }

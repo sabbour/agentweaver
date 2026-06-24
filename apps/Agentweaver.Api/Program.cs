@@ -6,6 +6,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
@@ -106,6 +107,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
     sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
 builder.Services.AddSingleton<Agentweaver.Api.Runs.BoardProjectionService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorPickupService>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorReconciler>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.HeartbeatStatusStore>();
 builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbeatService>();
 
@@ -135,6 +137,7 @@ builder.Services.AddDbContext<MemoryDbContext>(opts =>
 });
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
+builder.Services.AddSingleton<Agentweaver.Api.Projects.ProjectWorkspaceService>();
 
 // Checkpoint GC background service (Guardrail 8)
 builder.Services.AddHostedService<CheckpointGcService>();
@@ -145,9 +148,14 @@ builder.Services.AddSingleton<CastProposalStore>();
 builder.Services.AddSingleton<ProjectSignalScanner>();
 builder.Services.AddSingleton<CastingService>();
 
+// Blueprints (Feature 012)
+builder.Services.AddSingleton<IBlueprintGenerator, CopilotBlueprintGenerator>();
+builder.Services.AddSingleton<BlueprintService>();
+
 var app = builder.Build();
 
 await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
+
 using (var scope = app.Services.CreateScope())
 {
     var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -207,6 +215,11 @@ await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(Can
 // workflow from checkpoint, instead of failing interrupted orchestrations.
 await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorRunService>()
     .RecoverInterruptedRunsAsync(CancellationToken.None);
+// Immediate watchdog sweep at startup: re-arm any coordinator whose work plan is still dispatching
+// but has no active loop (orphaned after a crash/restart that the run-status recovery above did not
+// re-arm), so a restart recovers stuck dispatch fast instead of waiting for the first heartbeat tick.
+await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorReconciler>()
+    .SweepAsync(CancellationToken.None);
 
 app.UseExceptionHandler(err => err.Run(async context =>
 {
@@ -220,9 +233,11 @@ app.UseMiddleware<ApiKeyAuthMiddleware>();
 
 app.MapRunEndpoints();
 app.MapProjectEndpoints();
+app.MapProjectWorkspaceEndpoints();
 app.MapBacklogEndpoints();
 app.MapCoordinatorEndpoints();
 app.MapCastingEndpoints();
+app.MapBlueprintEndpoints();
 app.MapTeamEndpoints();
 app.MapAuthEndpoints();
 app.MapDecisionsEndpoints();

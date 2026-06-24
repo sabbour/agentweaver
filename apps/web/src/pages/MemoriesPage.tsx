@@ -5,14 +5,14 @@ import {
   Tab,
   TabList,
   Text,
-  Title2,
   Badge,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import type { SelectTabData } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
-import type { DecisionDto, AgentMemoryDto } from '../api/types';
+import type { DecisionDto, AgentMemoryDto, DecisionInboxEntryDto } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -34,12 +34,6 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
-  },
-  subtitle: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-    lineHeight: '1.4',
-    maxWidth: '640px',
   },
   tabContent: {
     marginTop: tokens.spacingVerticalM,
@@ -89,6 +83,32 @@ const useStyles = makeStyles({
     fontStyle: 'italic',
     lineHeight: '1.5',
   },
+  proposedSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    marginTop: tokens.spacingVerticalL,
+  },
+  proposedHeading: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground2,
+  },
+  proposedCaption: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: '1.4',
+    maxWidth: '640px',
+  },
+  proposedItem: {
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -101,6 +121,7 @@ export function MemoriesPage() {
 
   const [selectedTab, setSelectedTab] = useState<'decisions' | 'memory'>('decisions');
   const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
+  const [inbox,       setInbox]       = useState<DecisionInboxEntryDto[] | null>(null);
   const [memory,      setMemory]      = useState<AgentMemoryDto[] | null>(null);
   const [loading,     setLoading]     = useState(false);
 
@@ -110,9 +131,11 @@ export function MemoriesPage() {
 
     if (selectedTab === 'decisions') {
       if (decisions !== null) { setLoading(false); return; }
-      apiClient.getDecisions(projectId)
-        .then(d => setDecisions(d))
-        .catch(() => setDecisions([]))
+      Promise.all([
+        apiClient.getDecisions(projectId).catch(() => [] as DecisionDto[]),
+        apiClient.getDecisionsInbox(projectId).catch(() => [] as DecisionInboxEntryDto[]),
+      ])
+        .then(([d, i]) => { setDecisions(d); setInbox(i); })
         .finally(() => setLoading(false));
     } else {
       if (memory !== null) { setLoading(false); return; }
@@ -123,23 +146,24 @@ export function MemoriesPage() {
     }
   }, [projectId, selectedTab, decisions, memory]);
 
+  const pending = (inbox ?? []).filter(e => e.status === 'pending');
+  const hasActiveDecisions = decisions !== null && decisions.length > 0;
+
   return (
     <div className={styles.root}>
-      {/* Breadcrumb */}
-      <nav className={styles.breadcrumb} aria-label="Breadcrumb">
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>Project</Link>
-        <span>/</span>
-        <span>Team Memory</span>
-      </nav>
-
-      <Title2>Team Memory</Title2>
-      <Text className={styles.subtitle}>
-        Scribe maintains team-wide decisions, session logs, and cross-agent memory across every run.
-        The Agent Memory tab shows what each agent (including the coordinator's Scribe pass) has
-        recorded; Rai's responsible-AI audit entries appear here too.
-      </Text>
+      <PageHeader
+        title="Team Memory"
+        subtitle="Decisions and learnings the team has captured."
+        breadcrumb={
+          <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>Project</Link>
+            <span>/</span>
+            <span>Team Memory</span>
+          </nav>
+        }
+      />
 
       {/* Tabs */}
       <TabList
@@ -154,25 +178,54 @@ export function MemoriesPage() {
         {loading && <Spinner size="small" label="Loading…" />}
 
         {!loading && selectedTab === 'decisions' && (
-          decisions === null || decisions.length === 0
+          !hasActiveDecisions && pending.length === 0
             ? <Text className={styles.empty}>No decisions recorded yet.</Text>
             : (
-              <div className={styles.itemList}>
-                {decisions.map(d => (
-                  <div key={d.id} className={styles.item}>
-                    <div className={styles.itemHeader}>
-                      <span className={styles.itemTitle}>{d.title}</span>
-                      <Badge appearance="tint" color="informative">{d.type}</Badge>
-                      <Badge appearance="outline">{d.agent_name}</Badge>
-                      <span className={styles.itemMeta}>{new Date(d.created_at).toLocaleString()}</span>
-                    </div>
-                    <span className={styles.itemContent}>{d.content}</span>
-                    {d.rationale && (
-                      <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
-                    )}
+              <>
+                {hasActiveDecisions && (
+                  <div className={styles.itemList}>
+                    {decisions!.map(d => (
+                      <div key={d.id} className={styles.item}>
+                        <div className={styles.itemHeader}>
+                          <span className={styles.itemTitle}>{d.title}</span>
+                          <Badge appearance="tint" color="informative">{d.type}</Badge>
+                          <Badge appearance="outline">{d.agent_name}</Badge>
+                          <span className={styles.itemMeta}>{new Date(d.created_at).toLocaleString()}</span>
+                        </div>
+                        <span className={styles.itemContent}>{d.content}</span>
+                        {d.rationale && (
+                          <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+
+                {pending.length > 0 && (
+                  <section className={styles.proposedSection} aria-label="Proposed decisions awaiting Coordinator">
+                    <span className={styles.proposedHeading}>Proposed — awaiting Coordinator</span>
+                    <Text className={styles.proposedCaption}>
+                      The built-in Coordinator agent promotes these proposals into active Team Memory
+                      on its own. No action is needed from you.
+                    </Text>
+                    {pending.map(e => (
+                      <div key={e.id} className={styles.proposedItem}>
+                        <div className={styles.itemHeader}>
+                          <span className={styles.itemTitle}>{e.title}</span>
+                          <Badge appearance="tint" color="warning">Proposed</Badge>
+                          <Badge appearance="tint" color="informative">{e.type}</Badge>
+                          <Badge appearance="outline">{e.agent_name}</Badge>
+                          <span className={styles.itemMeta}>{new Date(e.created_at).toLocaleString()}</span>
+                        </div>
+                        <span className={styles.itemContent}>{e.content}</span>
+                        {e.rationale && (
+                          <span className={styles.itemRationale}>Rationale: {e.rationale}</span>
+                        )}
+                      </div>
+                    ))}
+                  </section>
+                )}
+              </>
             )
         )}
 

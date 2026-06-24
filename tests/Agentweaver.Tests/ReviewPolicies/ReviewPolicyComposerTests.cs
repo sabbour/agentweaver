@@ -6,11 +6,9 @@ namespace Agentweaver.Tests.ReviewPolicies;
 
 /// <summary>
 /// Tests for <see cref="ReviewPolicyComposer"/> (Feature 010, FR-026/028/030/032). The composer is the
-/// pure-logic heart of review policies: given a workflow and a named policy it injects the policy's
-/// review steps immediately before the merge node, in declared order. These tests prove correct
-/// placement and ordering for the safe default (Rubber-duck + RAI) and the human-review opt-in case,
-/// and that the produced graph is structurally valid (every check verdict has a matching edge; every
-/// edge endpoint exists).
+/// pure-logic heart of review policies: given a workflow and a named policy it absorbs already-present
+/// gates and injects only missing review steps immediately before the merge node. These tests prove the
+/// default identity overlay, runtime-safe unbound-gate diagnostics, and structural validity.
 /// </summary>
 public sealed class ReviewPolicyComposerTests
 {
@@ -27,18 +25,97 @@ public sealed class ReviewPolicyComposerTests
     };
 
     [Fact]
-    public void DefaultBuiltInPolicy_IsRubberduckAndRai_HumanReviewIsOptIn()
+    public void DefaultBuiltInPolicy_IsRaiAndHumanReview_RubberduckIsOptIn()
     {
-        // FR-028/FR-032: the safe default is the Rubber-duck and RAI steps; human-review is NOT default.
+        // Stage 2 Option B: the safe default mirrors the baked-in RAI + human-review workflow gates.
         var kinds = DefaultPolicy.Steps.Select(s => s.Kind).ToList();
-        kinds.Should().Equal(ReviewStepKind.Rai, ReviewStepKind.Rubberduck);
-        kinds.Should().NotContain(ReviewStepKind.HumanReview);
+        kinds.Should().Equal(ReviewStepKind.Rai, ReviewStepKind.HumanReview);
+        kinds.Should().NotContain(ReviewStepKind.Rubberduck);
     }
 
     [Fact]
-    public void Compose_DefaultPolicy_InjectsRaiThenRubberduckImmediatelyBeforeMerge()
+    public void NormalizeLegacyMaterializedDefault_RewritesOnlyUntouchedLegacyDefault()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "stage2-policy-normalization-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var legacyPath = Path.Combine(root, "default.yaml");
+            File.WriteAllText(legacyPath, DefaultReviewPolicyTemplate.LegacyRubberduckDefaultYaml);
+
+            var normalized = DefaultReviewPolicyTemplate.TryNormalizeLegacyMaterializedDefault(
+                legacyPath,
+                File.ReadAllText(legacyPath),
+                out var yamlToLoad,
+                out var error);
+
+            normalized.Should().BeTrue();
+            error.Should().BeNull();
+            yamlToLoad.Should().Be(DefaultReviewPolicyTemplate.Yaml);
+            File.ReadAllText(legacyPath).Should().Be(DefaultReviewPolicyTemplate.Yaml);
+
+            var result = ReviewPolicyLoader.Load(yamlToLoad, "default.yaml");
+            result.Policy!.Steps.Select(s => s.Kind).Should().Equal(ReviewStepKind.Rai, ReviewStepKind.HumanReview);
+
+            var customizedDir = Path.Combine(root, "customized");
+            Directory.CreateDirectory(customizedDir);
+            var customizedPath = Path.Combine(customizedDir, "default.yaml");
+            var customized = DefaultReviewPolicyTemplate.LegacyRubberduckDefaultYaml + Environment.NewLine + "# user customization";
+            File.WriteAllText(customizedPath, customized);
+
+            DefaultReviewPolicyTemplate.TryNormalizeLegacyMaterializedDefault(
+                    customizedPath,
+                    File.ReadAllText(customizedPath),
+                    out var customizedYaml,
+                    out var customizedError)
+                .Should().BeFalse();
+            customizedError.Should().BeNull();
+            customizedYaml.Should().Be(customized);
+            File.ReadAllText(customizedPath).Should().Be(customized);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Compose_DefaultPolicy_AbsorbsExistingRaiAndHumanReviewAsIdentity()
     {
         var composition = ReviewPolicyComposer.Compose(DefaultWorkflow, DefaultPolicy);
+
+        composition.AnchorMergeNodeId.Should().Be("merge");
+        composition.InjectedNodeIds.Should().BeEmpty();
+        composition.AbsorbedStepKinds.Should().Equal(ReviewStepKind.Rai, ReviewStepKind.HumanReview);
+        composition.Effective.Should().BeSameAs(DefaultWorkflow);
+    }
+
+    [Fact]
+    public void ComposeForRuntime_DefaultPolicy_ReturnsIdentityWithoutPolicyHookFailure()
+    {
+        var composition = ReviewPolicyComposer.ComposeForRuntime(DefaultWorkflow, DefaultPolicy);
+
+        composition.Effective.Should().BeSameAs(DefaultWorkflow);
+        composition.InjectedNodeIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Compose_InjectsMissingRaiThenRubberduckImmediatelyBeforeMerge_ForDefinitionOnly()
+    {
+        var workflow = DefaultWorkflow with
+        {
+            Nodes = DefaultWorkflow.Nodes
+                .Where(n => n.Id is not "rai" and not "review" and not "terminal-safety-failed" and not "terminal-declined")
+                .ToList(),
+            Edges =
+            [
+                new WorkflowEdge { From = "agent", To = "merge" },
+                new WorkflowEdge { From = "merge", To = "scribe", When = "merged" },
+                new WorkflowEdge { From = "scribe", To = "done" },
+            ],
+        };
+
+        var composition = ReviewPolicyComposer.Compose(workflow, PolicyOf(ReviewStepKind.Rai, ReviewStepKind.Rubberduck));
 
         composition.AnchorMergeNodeId.Should().Be("merge");
         composition.InjectedNodeIds.Should().Equal("policy-rai", "policy-rubberduck");
@@ -60,10 +137,50 @@ public sealed class ReviewPolicyComposerTests
     }
 
     [Fact]
+    public void ComposeForRuntime_AllowsSupportedInjectedRubberduckGate()
+    {
+        var workflow = DefaultWorkflow with
+        {
+            Nodes = DefaultWorkflow.Nodes
+                .Where(n => n.Id is not "rai" and not "review" and not "terminal-safety-failed" and not "terminal-declined")
+                .ToList(),
+            Edges =
+            [
+                new WorkflowEdge { From = "agent", To = "merge" },
+                new WorkflowEdge { From = "merge", To = "scribe", When = "merged" },
+                new WorkflowEdge { From = "scribe", To = "done" },
+            ],
+        };
+
+        var composition = ReviewPolicyComposer.ComposeForRuntime(
+            workflow,
+            PolicyOf(ReviewStepKind.Rai, ReviewStepKind.Rubberduck, ReviewStepKind.HumanReview));
+
+        composition.InjectedNodeIds.Should().Equal("policy-rai", "policy-rubberduck", "policy-human-review");
+    }
+
+    [Fact]
     public void Compose_RaiStep_FailsSafeToTerminalAndLoopsToProducer()
     {
         // FR-030: an RAI step preserves content-safety failure on a dedicated stop path.
-        var composition = ReviewPolicyComposer.Compose(DefaultWorkflow, PolicyOf(ReviewStepKind.Rai));
+        var workflowWithoutRai = DefaultWorkflow with
+        {
+            Nodes = DefaultWorkflow.Nodes
+                .Where(n => n.Id is not "rai" and not "terminal-safety-failed")
+                .ToList(),
+            Edges =
+            [
+                new WorkflowEdge { From = "agent", To = "review" },
+                new WorkflowEdge { From = "review", To = "merge", When = "approved" },
+                new WorkflowEdge { From = "review", To = "agent", When = "request-changes" },
+                new WorkflowEdge { From = "review", To = "terminal-declined", When = "declined" },
+                new WorkflowEdge { From = "merge", To = "scribe", When = "merged" },
+                new WorkflowEdge { From = "merge", To = "review", When = "blocked" },
+                new WorkflowEdge { From = "scribe", To = "done" },
+            ],
+        };
+
+        var composition = ReviewPolicyComposer.Compose(workflowWithoutRai, PolicyOf(ReviewStepKind.Rai));
         var effective = composition.Effective;
 
         var safetyEdge = effective.Edges.Should()
@@ -71,17 +188,33 @@ public sealed class ReviewPolicyComposerTests
         effective.Nodes.Should().Contain(n => n.Id == safetyEdge.To && n.Type == WorkflowNodeType.Terminal);
 
         // request-changes loops back to the producer (the workflow start node).
-        effective.Edges.Should().ContainSingle(e => e.From == "policy-rai" && e.To == DefaultWorkflow.Start && e.When == "revise");
+        effective.Edges.Should().ContainSingle(e => e.From == "policy-rai" && e.To == workflowWithoutRai.Start && e.When == "revise");
     }
 
     [Fact]
     public void Compose_HumanReviewOptIn_PlacedLastGatingMergeOnApproval()
     {
         // FR-029/FR-032: human-review is opt-in; when configured it is the final gate before merge.
-        var policy = PolicyOf(ReviewStepKind.Rai, ReviewStepKind.Rubberduck, ReviewStepKind.HumanReview);
-        var composition = ReviewPolicyComposer.Compose(DefaultWorkflow, policy);
+        var workflowWithoutHumanReview = DefaultWorkflow with
+        {
+            Nodes = DefaultWorkflow.Nodes
+                .Where(n => n.Id is not "review" and not "terminal-declined")
+                .ToList(),
+            Edges =
+            [
+                new WorkflowEdge { From = "agent", To = "rai" },
+                new WorkflowEdge { From = "rai", To = "agent", When = "revise" },
+                new WorkflowEdge { From = "rai", To = "terminal-safety-failed", When = "safety-failed" },
+                new WorkflowEdge { From = "rai", To = "scribe", When = "no-changes" },
+                new WorkflowEdge { From = "rai", To = "merge", When = "review" },
+                new WorkflowEdge { From = "merge", To = "scribe", When = "merged" },
+                new WorkflowEdge { From = "scribe", To = "done" },
+            ],
+        };
+        var policy = PolicyOf(ReviewStepKind.Rai, ReviewStepKind.HumanReview);
+        var composition = ReviewPolicyComposer.Compose(workflowWithoutHumanReview, policy);
 
-        composition.InjectedNodeIds.Should().Equal("policy-rai", "policy-rubberduck", "policy-human-review");
+        composition.InjectedNodeIds.Should().Equal("policy-human-review");
 
         var effective = composition.Effective;
 
@@ -124,7 +257,7 @@ public sealed class ReviewPolicyComposerTests
     [Fact]
     public void Compose_ProducesStructurallyValidGraph()
     {
-        var policy = PolicyOf(ReviewStepKind.Rai, ReviewStepKind.Rubberduck, ReviewStepKind.HumanReview);
+        var policy = PolicyOf(ReviewStepKind.Rai, ReviewStepKind.HumanReview);
         var effective = ReviewPolicyComposer.Compose(DefaultWorkflow, policy).Effective;
 
         var nodeIds = effective.Nodes.Select(n => n.Id).ToHashSet();

@@ -10,6 +10,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
@@ -36,6 +37,9 @@ public sealed class RunWorkflowFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IWorkflowAgentFactory _agentFactory;
+    private readonly IProjectStore? _projectStore;
+    private readonly WorkflowRegistry? _workflowRegistry;
+    private readonly ReviewPolicyRegistry? _reviewPolicyRegistry;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
     private readonly string? _apiBaseUrl;
@@ -79,6 +83,47 @@ public sealed class RunWorkflowFactory
         IServiceScopeFactory scopeFactory,
         IWorkflowAgentFactory agentFactory,
         IConfiguration configuration)
+        : this(
+            agentRunner,
+            copilotClientFactory,
+            scopeProvider,
+            sandboxExecutor,
+            sandboxPolicyStore,
+            approvalStore,
+            toolApprovalGate,
+            worktreeOps,
+            mergeCoordinator,
+            streamStore,
+            runStore,
+            loggerFactory,
+            scopeFactory,
+            agentFactory,
+            configuration,
+            projectStore: null,
+            workflowRegistry: null,
+            reviewPolicyRegistry: null)
+    {
+    }
+
+    public RunWorkflowFactory(
+        IAgentRunner agentRunner,
+        GitHubCopilotClientFactory copilotClientFactory,
+        IGitHubTokenScopeProvider scopeProvider,
+        ISandboxExecutor sandboxExecutor,
+        ISandboxPolicyStore sandboxPolicyStore,
+        IShellApprovalStore approvalStore,
+        IToolApprovalGate toolApprovalGate,
+        IWorktreeOperations worktreeOps,
+        IMergeCoordinator mergeCoordinator,
+        RunStreamStore streamStore,
+        SqliteRunStore runStore,
+        ILoggerFactory loggerFactory,
+        IServiceScopeFactory scopeFactory,
+        IWorkflowAgentFactory agentFactory,
+        IConfiguration configuration,
+        IProjectStore? projectStore,
+        WorkflowRegistry? workflowRegistry,
+        ReviewPolicyRegistry? reviewPolicyRegistry)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
@@ -94,6 +139,9 @@ public sealed class RunWorkflowFactory
         _loggerFactory = loggerFactory;
         _scopeFactory = scopeFactory;
         _agentFactory = agentFactory;
+        _projectStore = projectStore;
+        _workflowRegistry = workflowRegistry;
+        _reviewPolicyRegistry = reviewPolicyRegistry;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -201,7 +249,9 @@ public sealed class RunWorkflowFactory
     /// <summary>Maximum revision iterations before capping (Rai or Review).</summary>
     private const int MaxIterations = 3;
 
-    private (Workflow Workflow, GraphDescriptor Descriptor, IReadOnlyDictionary<string, ExecutorNodeMeta> ExecutorMeta) BuildWorkflow(bool isChild = false)
+    private (Workflow Workflow, GraphDescriptor Descriptor, IReadOnlyDictionary<string, ExecutorNodeMeta> ExecutorMeta) BuildWorkflow(
+        bool isChild = false,
+        WorkflowDefinition? effectiveDefinition = null)
     {
         // A fresh worker agent per workflow build (per run), resolved through the injectable
         // IWorkflowAgentFactory seam. In production this builds a CopilotAIAgent — an AIAgent the
@@ -252,8 +302,37 @@ public sealed class RunWorkflowFactory
                     agentOutput.WorktreePath,
                     agentOutput.WorktreeBranch,
                     agentOutput.RepositoryPath,
-                    agentOutput.OriginatingBranch);
+                    agentOutput.OriginatingBranch,
+                    ReviewedBy: decision.ReviewedBy);
             });
+
+        ExecutorBinding policyAgentOutputAdapter = new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnOutput>(
+            "policy-agent-output-adapter", "policy-agent-output-adapter", "Policy gate input", "plumbing", "action", true,
+            async (decision, ctx, ct) =>
+            {
+                var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
+                    .ConfigureAwait(false);
+                return agentOutput!;
+            });
+
+        ExecutorBinding policyAgentTurnStorer = new VisualFunctionExecutor<AgentTurnOutput, AgentTurnOutput>(
+            "policy-agent-turn-storer", "policy-agent-turn-storer", "Policy agent output", "plumbing", "action", true,
+            async (output, ctx, ct) =>
+            {
+                await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct)
+                    .ConfigureAwait(false);
+                return output;
+            });
+
+        ExecutorBinding policyDirectMergeAdapter = new VisualFunctionExecutor<AgentTurnOutput, MergeInput>(
+            "policy-direct-merge-adapter", "policy-direct-merge-adapter", "Policy direct merge", "plumbing", "action", true,
+            (output, ctx, ct) => new ValueTask<MergeInput>(new MergeInput(
+                output.RunId,
+                output.TreeHash,
+                output.WorktreePath,
+                output.WorktreeBranch,
+                output.RepositoryPath,
+                output.OriginatingBranch)));
 
         ExecutorBinding terminalNoOp = new VisualFunctionExecutor<AgentTurnOutput, NoChangesOutput>(
             "terminal-no-op", "terminal-no-op", "No changes", "plumbing", "terminal", true,
@@ -465,6 +544,8 @@ public sealed class RunWorkflowFactory
         ExecutorBinding agentBinding = agentTurnExecutor;
         ExecutorBinding mergeBinding = mergeExecutor;
         ExecutorBinding reviewBinding = reviewPort;
+        var fullDefinition = effectiveDefinition ?? Workflows.BuiltInWorkflows.Default.Definition!;
+        var policyGateBindings = BuildPolicyGateBindings(fullDefinition);
 
         // Rai REVISE adapter: reads stored agent-input, appends Rai feedback to Task,
         // increments Iteration so the agent knows it's a revision pass.
@@ -500,6 +581,19 @@ public sealed class RunWorkflowFactory
             {
                 var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct)
                     .ConfigureAwait(false);
+                if (agentInput is not null && RunId.TryParse(agentInput.RunId, out var parsedRunId))
+                {
+                    try
+                    {
+                        await _runStore.TryTransitionReviewToInProgressAsync(parsedRunId, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _loggerFactory.CreateLogger<RunWorkflowFactory>()
+                            .LogWarning(ex, "Review-change policy loop could not transition run {RunId} to in_progress", agentInput.RunId);
+                    }
+                }
                 var nextIteration = (agentInput?.Iteration ?? 0) + 1;
                 var revisedTask = string.IsNullOrEmpty(decision.Feedback)
                     ? agentInput?.Task ?? string.Empty
@@ -553,7 +647,7 @@ public sealed class RunWorkflowFactory
         var fullBuilder = new GraphDescriptorBuilder(agentInputStorer);
         RunWorkflowGraphBinder.WireFull(
             fullBuilder,
-            Workflows.BuiltInWorkflows.Default.Definition!,
+            fullDefinition,
             new RunWorkflowBindings(
                 AgentInputStorer: agentInputStorer,
                 AgentBinding: agentBinding,
@@ -566,6 +660,10 @@ public sealed class RunWorkflowFactory
                 ScribeOutputNoChanges: scribeOutputNoChanges,
                 ReviewAdapter: reviewAdapter,
                 ReviewBinding: reviewBinding,
+                PolicyAgentTurnStorer: policyAgentTurnStorer,
+                PolicyAgentOutputAdapter: policyAgentOutputAdapter,
+                PolicyDirectMergeAdapter: policyDirectMergeAdapter,
+                PolicyGateBindings: policyGateBindings,
                 MergeAdapter: mergeAdapter,
                 MergeBinding: mergeBinding,
                 TerminalMerge: terminalMerge,
@@ -583,6 +681,65 @@ public sealed class RunWorkflowFactory
         return (wf, descriptor, fullBuilder.BuildExecutorMetaMap());
     }
 
+    private IReadOnlyDictionary<string, ExecutorBinding> BuildPolicyGateBindings(WorkflowDefinition definition)
+    {
+        var bindings = new Dictionary<string, ExecutorBinding>(StringComparer.Ordinal);
+
+        foreach (var node in definition.Nodes.Where(n => n.Type == WorkflowNodeType.Check))
+        {
+            var gateKind = GateKindOf(node);
+            if (gateKind is null) continue;
+
+            if (string.Equals(node.Id, "rai", StringComparison.Ordinal) ||
+                string.Equals(node.Id, "review", StringComparison.Ordinal))
+                continue;
+
+            bindings[node.Id] = gateKind switch
+            {
+                "rai" => new RaiTurnExecutor(
+                    _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+                    _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter,
+                    name: $"{node.Id}-turn",
+                    createSubStream: CreateSubStreamWriter,
+                    completeSubStream: CompleteSubStream,
+                    agentFactory: _agentFactory,
+                    logicalNodeId: node.Id,
+                    displayLabel: node.Label,
+                    subStreamSuffix: "rai"),
+
+                "rubberduck" => new RubberduckTurnExecutor(
+                    _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+                    _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter,
+                    name: $"{node.Id}-turn",
+                    logicalNodeId: node.Id,
+                    displayLabel: node.Label,
+                    createSubStream: CreateSubStreamWriter,
+                    completeSubStream: CompleteSubStream,
+                    agentFactory: _agentFactory),
+
+                "human-review" => RequestPort.Create<WorkflowReviewRequest, WorkflowReviewDecision>($"{node.Id}-gate"),
+
+                _ => throw new ReviewPolicyCompositionException(
+                    "review_policy_unsupported_gate",
+                    $"Workflow '{definition.Id}' contains unsupported review-policy gate kind '{gateKind}' on node '{node.Id}'."),
+            };
+        }
+
+        return bindings;
+    }
+
+    private static string? GateKindOf(WorkflowNode node)
+    {
+        var raw = !string.IsNullOrWhiteSpace(node.GateKind) ? node.GateKind! : node.Id;
+        return raw.Trim().Replace('_', '-').Replace(' ', '-').ToLowerInvariant() switch
+        {
+            "rai" => "rai",
+            "review" or "human-review" => "human-review",
+            "rubberduck" or "rubber-duck" => "rubberduck",
+            _ => null,
+        };
+    }
+
     /// <summary>
     /// Launches a new streaming workflow run. When <paramref name="isChild"/> is true
     /// (the run carries <c>ParentRunId</c>), the trimmed coordinator CHILD pipeline is used:
@@ -590,7 +747,10 @@ public sealed class RunWorkflowFactory
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false)
     {
-        var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild);
+        var effectiveDefinition = isChild
+            ? null
+            : await ResolveEffectiveDefinitionAsync(input.ProjectId, ct).ConfigureAwait(false);
+        var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild, effectiveDefinition);
         // Capture the executorId -> render-metadata map so the watch loop can translate MAF executor
         // lifecycle events into workflow.step UI events for nodes without a dedicated self-emitter.
         _runExecutorMeta[runId] = executorMeta;
@@ -611,13 +771,26 @@ public sealed class RunWorkflowFactory
     public GraphDescriptor GetGraphDescriptor(bool isChild) => BuildWorkflow(isChild).Descriptor;
 
     /// <summary>
+    /// Builds the run graph descriptor using the persisted run's selected project workflow and active
+    /// review policy, matching the graph used by <see cref="StartAsync"/>.
+    /// </summary>
+    public async Task<GraphDescriptor> GetGraphDescriptorAsync(Agentweaver.Domain.Run run, CancellationToken ct)
+    {
+        var isChild = run.ParentRunId is not null;
+        var effectiveDefinition = isChild
+            ? null
+            : await ResolveEffectiveDefinitionAsync(run.ProjectId?.ToString(), ct).ConfigureAwait(false);
+        return BuildWorkflow(isChild, effectiveDefinition).Descriptor;
+    }
+
+    /// <summary>
     /// Test seam (drift-guard): builds the workflow AND its descriptor for a variant so the test can
     /// reflect the built MAF graph (ReflectExecutors/ReflectEdges) and assert the descriptor stays in
     /// sync with the wired executors. Reflection is used ONLY by that build-time test, never at runtime.
     /// </summary>
-    internal (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflowForTest(bool isChild)
+    internal (Workflow Workflow, GraphDescriptor Descriptor) BuildWorkflowForTest(bool isChild, WorkflowDefinition? effectiveDefinition = null)
     {
-        var (workflow, descriptor, _) = BuildWorkflow(isChild);
+        var (workflow, descriptor, _) = BuildWorkflow(isChild, effectiveDefinition);
         return (workflow, descriptor);
     }
 
@@ -628,6 +801,43 @@ public sealed class RunWorkflowFactory
     /// </summary>
     internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(bool isChild) =>
         BuildWorkflow(isChild).ExecutorMeta;
+
+    private async Task<WorkflowDefinition> ResolveEffectiveDefinitionAsync(string? projectId, CancellationToken ct)
+    {
+        var fallback = Workflows.BuiltInWorkflows.Default.Definition!;
+        if (_projectStore is null || _workflowRegistry is null || _reviewPolicyRegistry is null)
+            return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
+
+        if (string.IsNullOrWhiteSpace(projectId) || !ProjectId.TryParse(projectId, out var pid))
+            return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
+
+        var project = await _projectStore.GetAsync(pid, ct).ConfigureAwait(false);
+        if (project is null)
+            return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
+
+        var workflowResult = _workflowRegistry.ResolveDefault(project);
+        if (!workflowResult.IsValid || workflowResult.Definition is null)
+            throw new ReviewPolicyCompositionException(
+                "workflow_resolution_failed",
+                $"Project '{project.Id}' default workflow could not be resolved: {workflowResult.Error ?? "unknown workflow error"}");
+
+        var policyResult = _reviewPolicyRegistry.ResolveActive(project);
+        if (!policyResult.IsValid || policyResult.Policy is null)
+            throw new ReviewPolicyCompositionException(
+                "review_policy_resolution_failed",
+                $"Project '{project.Id}' active review policy could not be resolved: {policyResult.Error ?? "unknown review-policy error"}");
+
+        try
+        {
+            return ReviewPolicyComposer.ComposeForRuntime(workflowResult.Definition, policyResult.Policy).Effective;
+        }
+        catch (ReviewPolicyCompositionException ex)
+        {
+            throw new ReviewPolicyCompositionException(
+                ex.Code,
+                $"{ex.Message} Workflow source={workflowResult.Source}; review policy source={policyResult.Source}.");
+        }
+    }
 
     /// <summary>
     /// Resumes a workflow run from checkpoint. The pipeline shape (full vs trimmed child)
@@ -641,6 +851,13 @@ public sealed class RunWorkflowFactory
         {
             var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
             isChild = run?.ParentRunId is not null;
+            var effectiveDefinition = isChild
+                ? null
+                : await ResolveEffectiveDefinitionAsync(run?.ProjectId?.ToString(), ct).ConfigureAwait(false);
+            var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(isChild, effectiveDefinition);
+            _runExecutorMeta[checkpointInfo.SessionId] = executorMetaForRun;
+            return await InProcessExecution.ResumeStreamingAsync(
+                workflowForRun, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
         }
         var (workflow, _, executorMeta) = BuildWorkflow(isChild);
         _runExecutorMeta[checkpointInfo.SessionId] = executorMeta;

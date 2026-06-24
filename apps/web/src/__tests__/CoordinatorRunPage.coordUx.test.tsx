@@ -107,7 +107,7 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
     // The session now reuses the standard rich run Timeline over the coordinator's own stream,
     // so the coordinator's agent messages render like every other agent's "view run".
     expect(text).toContain('Decomposing the outcome into subtasks.');
-    // Steering lives in the graph toolbar (Stop/Redirect/Amend), reused instead of a standalone panel.
+    // Steering lives in the graph toolbar (collapsed to a single Send action + Stop).
     expect(text).toContain('Steer coordinator:');
     // Compact automation toolbar (no oversized session panel/heading).
     expect(text).toContain('Autopilot');
@@ -267,6 +267,87 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     expect(text).toContain('src/shared/util.ts');
   });
 
+  it('lists the blocking subtasks (title, agent, status badge) for an ineligible_subtasks block', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.assembly_blocked',
+        payload: {
+          reason: 'ineligible_subtasks',
+          ineligibleSubtasks: [
+            { id: 42, title: 'Validate implementation', status: 'rai_flagged', agent: 'Cobb' },
+          ],
+        },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Validate implementation'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    // The all-or-nothing explanation replaces the bare reason code.
+    expect(text).toContain('there is no partial assembly');
+    // The blocking subtask row surfaces title, agent, status badge, and a per-status hint.
+    expect(text).toContain('Validate implementation');
+    expect(text).toContain('Cobb');
+    expect(text).toContain('RAI-flagged');
+    expect(text).toContain('RAI flagged this subtask');
+    // The bare reason code is not shown verbatim.
+    expect(text).not.toContain('assembly_blocked: ineligible_subtasks');
+  });
+
+  it('normalizes the run-result reason prefix ("assembly_blocked: ineligible_subtasks")', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.assembly_blocked',
+        payload: {
+          reason: 'assembly_blocked: ineligible_subtasks',
+          ineligibleSubtasks: [
+            { id: 7, title: 'Build the API', status: 'failed', agent: 'Mal' },
+          ],
+        },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Build the API'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('there is no partial assembly');
+    expect(text).toContain('Failed');
+    expect(text).toContain('This subtask failed');
+  });
+
+  it('falls back to the single-message blocked panel when ineligibleSubtasks is absent', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.assembly_blocked',
+        payload: { reason: 'ineligible_subtasks' },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('there is no partial assembly'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    // The panel still renders with the steer controls and does not crash.
+    expect(text).toContain('Use the controls below to redirect the coordinator');
+  });
+
   it('shows a live count-up timer on the Merge stage once it has started', async () => {
     // The Merge stage has no distinct orchestration phase, so its timer must come from the
     // assembly_merge_started timestamp_utc. Started ~2m5s ago → "2m 5s".
@@ -331,10 +412,9 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     );
   });
 
-  it('Merge "Browse files" switches the review rail to the Files tab (integration-branch tree)', async () => {
-    // Regression: "Browse files" must surface the assembled filesystem from a git perspective — i.e.
-    // flip the artifact browser to the Files tab and fetch the integration-branch workspace tree —
-    // rather than only scrolling to the Changes diff.
+  it('Merge "Browse files" routes to Workspace with the integration branch selected', async () => {
+    // Regression: "Browse files" must leave the orchestration page and land in the project Workspace
+    // with enough context to preserve refresh/back behavior for the assembled integration branch.
     const t0 = new Date(Date.now() - 60_000).toISOString();
     currentEvents = [
       { sequence: 1, type: 'coordinator.assembly_merge_started', payload: { workPlanId: 1, timestamp_utc: t0 } },
@@ -350,13 +430,12 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
       return el as HTMLButtonElement;
     }, { timeout: 4000 });
 
-    expect(apiClient.getAssemblyWorkspace).not.toHaveBeenCalled();
     fireEvent.click(btn);
 
-    await waitFor(
-      () => expect(apiClient.getAssemblyWorkspace).toHaveBeenCalledWith('coord-run-1'),
-      { timeout: 4000 },
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/projects/p1/workspace?run=coord-run-1&ref=agentweaver%2Fintegration%2Fcoord-run-1',
     );
+    expect(apiClient.getAssemblyWorkspace).not.toHaveBeenCalled();
   });
 });
 
@@ -536,6 +615,97 @@ describe('CoordinatorRunPage — automation toggles (autopilot + auto-approve)',
     fireEvent.click(boxes()[1]);
     await waitFor(
       () => expect(vi.mocked(apiClient.setAutoApprove)).toHaveBeenCalledWith('coord-run-1', true),
+      { timeout: 4000 },
+    );
+  });
+
+  it('exposes a visible info affordance explaining what Autopilot does', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'running', parent_run_id: null,
+      autopilot: true, auto_approve_tools: false,
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    // The (i) info button is rendered next to the toggle (not a hover-only tooltip).
+    const infoButton = await waitFor(() => {
+      const btn = container.querySelector('button[aria-label="About Autopilot"]') as HTMLButtonElement | null;
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }, { timeout: 4000 });
+
+    // Opening it reveals the explanation copy.
+    fireEvent.click(infoButton);
+    await waitFor(
+      () => expect(document.body.textContent).toContain("Auto-answers the coordinator"),
+      { timeout: 4000 },
+    );
+  });
+});
+
+describe('CoordinatorRunPage — collapsed steer bar', () => {
+  it('exposes Send, Redirect, and Amend actions plus Stop and the broadcast scope note', async () => {
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Steer coordinator:'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Applies to all active subtasks.');
+
+    const buttons = Array.from(container.querySelectorAll('button')).map((b) => (b.textContent ?? '').trim());
+    // All three steering verbs are distinctly selectable, plus Stop.
+    expect(buttons.some((t) => t === 'Send')).toBe(true);
+    expect(buttons.some((t) => t === 'Redirect')).toBe(true);
+    expect(buttons.some((t) => t === 'Amend')).toBe(true);
+    expect(buttons.some((t) => t.includes('Stop'))).toBe(true);
+  });
+
+  it('Send sends with kind=send and surfaces the queued/applied confirmation', async () => {
+    vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'queued' });
+
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Steer coordinator:'),
+      { timeout: 4000 },
+    );
+
+    const input = container.querySelector('input[type=text]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Target the v2 API instead.' } });
+
+    const sendBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => (b.textContent ?? '').trim() === 'Send',
+    ) as HTMLButtonElement;
+    fireEvent.click(sendBtn);
+
+    await waitFor(
+      () => expect(vi.mocked(apiClient.steerCoordinator)).toHaveBeenCalledWith(
+        'coord-run-1',
+        { kind: 'send', instruction: 'Target the v2 API instead.' },
+      ),
+      { timeout: 4000 },
+    );
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Queued — applies at the next step.'),
+      { timeout: 4000 },
+    );
+  });
+
+  it('exposes a visible info affordance explaining what Send does', async () => {
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const infoButton = await waitFor(() => {
+      const btn = container.querySelector('button[aria-label="About steering the coordinator"]') as HTMLButtonElement | null;
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }, { timeout: 4000 });
+
+    fireEvent.click(infoButton);
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Sends a course-correction to the coordinator'),
       { timeout: 4000 },
     );
   });

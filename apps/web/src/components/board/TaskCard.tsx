@@ -14,7 +14,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { CheckmarkRegular, DeleteRegular, DismissRegular, EditRegular, FlowRegular } from '@fluentui/react-icons';
+import { ArchiveRegular, CheckmarkRegular, DismissRegular, EditRegular, FlowRegular } from '@fluentui/react-icons';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { TaskCardDto, WorkflowSummaryDto } from '../../api/types';
@@ -152,7 +152,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
     }
   };
 
-  const handleDelete = async () => {
+  const handleArchive = async () => {
     setBusy(true);
     setError(null);
     try {
@@ -230,7 +230,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
             </MenuPopover>
           </Menu>
           <Button appearance="subtle" size="small" icon={<EditRegular />} aria-label="Edit task" disabled={busy} onClick={() => setEditing(true)} />
-          <Button appearance="subtle" size="small" icon={<DeleteRegular />} aria-label="Delete task" disabled={busy} onClick={() => void handleDelete()} />
+          <Button appearance="subtle" size="small" icon={<ArchiveRegular />} aria-label="Archive task" disabled={busy} onClick={() => void handleArchive()} />
         </div>
       </div>
       {card.description && <Text className={styles.description}>{card.description}</Text>}

@@ -1,0 +1,9 @@
+{
+  "id": "blueprint-product-management",
+  "name": "Product Management",
+  "description": "A product team for discovery, prototyping, and product documentation. Generalizes the product-feature-delivery grouping.",
+  "roster": ["lead-pm", "customer-researcher", "prototype-designer", "docs-writer"],
+  "workflow": "default",
+  "review_policy": "default",
+  "sandbox_profile": "restricted"
+}

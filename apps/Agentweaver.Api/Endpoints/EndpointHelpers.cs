@@ -130,4 +130,72 @@ internal static string? DetectLanguage(string path)
         _                                       => null
     };
 }
+
+/// <summary>
+/// Recursively enumerates a git <see cref="Tree"/> into a flat list of <see cref="WorkspaceNode"/>
+/// (folders and blobs, forward-slash relative paths, no diff status). Shared by the run workspace
+/// endpoint and the project workspace service so commit-tree listing has a single implementation.
+/// </summary>
+internal static void EnumerateGitTree(Tree tree, string prefix, List<WorkspaceNode> nodes)
+{
+    foreach (var entry in tree)
+    {
+        var entryPath = string.IsNullOrEmpty(prefix) ? entry.Name : $"{prefix}/{entry.Name}";
+        if (entry.TargetType == TreeEntryTargetType.Tree)
+        {
+            nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = true, Status = null });
+            EnumerateGitTree((Tree)entry.Target, entryPath, nodes);
+        }
+        else if (entry.TargetType == TreeEntryTargetType.Blob)
+        {
+            nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = false, Status = null });
+        }
+    }
+}
+
+/// <summary>
+/// Validates a relative file path from a route parameter. Normalizes percent-encoded
+/// separators (%2F, %5C) that ASP.NET Core does not decode in catch-all route params,
+/// then rejects null bytes, control characters (including DEL and C1), rooted paths,
+/// UNC paths, device paths, drive-relative paths, parent-traversal segments, and on
+/// Windows, Alternate Data Stream specifiers. Returns false on any violation; sets
+/// normalizedPath to the canonical relative form on success. Shared by the run file
+/// endpoint and the project workspace service.
+/// </summary>
+internal static bool TryValidateRelativePath(string? rawPath, out string normalizedPath)
+{
+    normalizedPath = string.Empty;
+    if (string.IsNullOrEmpty(rawPath)) return false;
+
+    rawPath = rawPath.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase)
+                     .Replace("%5C", "/", StringComparison.OrdinalIgnoreCase);
+
+    foreach (var c in rawPath)
+    {
+        if (c == '\0' || c < ' ') return false;
+        if (c == '\u007F' || (c >= '\u0080' && c <= '\u009F')) return false;
+    }
+
+    if (rawPath.StartsWith(@"\\", StringComparison.Ordinal)) return false;
+
+    var normalized = rawPath.Replace('\\', '/');
+
+    if (Path.IsPathRooted(normalized)) return false;
+
+    if (normalized.StartsWith("//", StringComparison.Ordinal)) return false;
+
+    if (normalized.Length >= 2 && char.IsLetter(normalized[0]) && normalized[1] == ':')
+        return false;
+
+    foreach (var segment in normalized.Split('/'))
+    {
+        if (segment == "..") return false;
+    }
+
+    if (OperatingSystem.IsWindows() && normalized.Contains(':', StringComparison.Ordinal))
+        return false;
+
+    normalizedPath = normalized;
+    return true;
+}
 }

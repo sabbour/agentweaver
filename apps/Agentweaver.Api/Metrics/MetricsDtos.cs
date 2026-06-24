@@ -39,11 +39,21 @@ public sealed record ThroughputPointDto
 public sealed record AgentLeaderboardEntryDto
 {
     [JsonPropertyName("agent")]          public required string  Agent         { get; init; }
+    [JsonPropertyName("role_title")]     public string?          RoleTitle     { get; init; }
     [JsonPropertyName("runs_this_week")] public required int     RunsThisWeek  { get; init; }
     [JsonPropertyName("runs_total")]     public required int     RunsTotal     { get; init; }
-    /// <summary>terminal-success runs (merged or completed) / total runs, in [0,1].</summary>
+    /// <summary>
+    /// Successful terminal runs / terminal runs, in [0,1]. Non-terminal runs are excluded.
+    /// Successful terminal statuses are merged, completed, and assemble_ready.
+    /// </summary>
     [JsonPropertyName("success_rate")]   public required double  SuccessRate   { get; init; }
-    /// <summary>Average wall-clock duration of FINISHED runs (ended_at set); null when none finished.</summary>
+    [JsonPropertyName("successful_runs")] public required int     SuccessfulRuns { get; init; }
+    [JsonPropertyName("terminal_runs")]   public required int     TerminalRuns   { get; init; }
+    /// <summary>
+    /// Average wall-clock duration of FINISHED runs (ended_at set), EXCLUDING time the run spent
+    /// parked in the awaiting_review human-review gate (subtracts the accrued review_wait_ms,
+    /// clamped at 0). Null when no runs have finished.
+    /// </summary>
     [JsonPropertyName("avg_duration_ms")] public required double? AvgDurationMs { get; init; }
 }
 

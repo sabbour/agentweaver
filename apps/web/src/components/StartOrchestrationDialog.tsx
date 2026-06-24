@@ -72,11 +72,11 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   return (
     <Dialog open={open} onOpenChange={(_, s) => { setOpen(s.open); if (!s.open) reset(); }}>
       <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary" icon={<FlowRegular />}>Start orchestration</Button>
+        <Button appearance="primary" icon={<FlowRegular />}>Start task</Button>
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Start an orchestration</DialogTitle>
+          <DialogTitle>Start a task</DialogTitle>
           <DialogContent>
             <div className={styles.fields}>
               <Text>

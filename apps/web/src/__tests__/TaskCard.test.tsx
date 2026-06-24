@@ -39,7 +39,7 @@ const list: WorkflowListResponse = {
       name: 'Nightly Sweep',
       description: null,
       trigger: { type: 'manual', event: null },
-      source: '.scaffolders/workflows/nightly.yaml',
+      source: '.agentweaver/workflows/nightly.yaml',
       valid: true,
       error: null,
       is_built_in: false,

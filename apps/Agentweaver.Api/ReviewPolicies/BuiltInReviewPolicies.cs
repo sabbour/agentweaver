@@ -5,9 +5,8 @@ namespace Agentweaver.Api.ReviewPolicies;
 /// canonical source is the code-embedded <see cref="DefaultReviewPolicyTemplate"/> (NOT a checked-in
 /// repo file): it is parsed through the SAME real loader as any project-authored policy (no
 /// mocks/placeholders, Principle VII), which doubles as the strongest correctness test of the schema.
-/// A project with no materialized <c>.scaffolders/review-policies/</c> falls back to this default so
-/// runs still receive the safe RAI + rubber-duck gates and existing projects keep working without a
-/// migration.
+/// A project with no materialized <c>.agentweaver/review-policies/</c> falls back to this default so
+/// runs receive the safe RAI + human-review gates already baked into the default workflow.
 /// </summary>
 public static class BuiltInReviewPolicies
 {

@@ -30,4 +30,10 @@ public interface IProjectStore
     /// name (Feature 010, FR-027/033).
     /// </summary>
     Task UpdateActiveReviewPolicyAsync(ProjectId id, string? policyName, DateTimeOffset updatedAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sets (or clears, when <paramref name="sandboxProfile"/> is null) the project's sandbox profile,
+    /// applied when a blueprint is selected at creation (Feature 012).
+    /// </summary>
+    Task UpdateSandboxProfileAsync(ProjectId id, string? sandboxProfile, DateTimeOffset updatedAt, CancellationToken ct = default);
 }

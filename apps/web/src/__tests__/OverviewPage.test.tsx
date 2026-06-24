@@ -26,7 +26,8 @@ const dto: OverviewDto = {
     { project_id: 'p1', project_name: 'Demo', active_count: 2, queued_count: 1, last_activity_utc: new Date().toISOString() },
   ],
   recent_activity: [
-    { project_id: 'p1', project_name: 'Demo', label: 'Run completed', kind: 'run', timestamp_utc: new Date().toISOString() },
+    { project_id: 'p1', project_name: 'Demo', label: 'Run completed', kind: 'completed', timestamp_utc: new Date().toISOString() },
+    { project_id: 'p1', project_name: 'Demo', label: 'Run started', kind: 'in_progress', timestamp_utc: new Date().toISOString() },
   ],
 };
 
@@ -55,6 +56,10 @@ describe('OverviewPage', () => {
     expect(screen.getByText('Active workflow runs')).toBeDefined();
     expect(screen.getByText('Recent activity')).toBeDefined();
     expect(screen.getByText('Run completed', { exact: false })).toBeDefined();
+    // Raw status kinds are humanized for the activity status chip.
+    expect(screen.getByText('In progress')).toBeDefined();
     expect(screen.getByText('healthy')).toBeDefined();
+    // Liveness: the header shows a countdown to the next auto-refresh.
+    expect(screen.getByText(/Next refresh in/)).toBeDefined();
   });
 });

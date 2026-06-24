@@ -13,7 +13,8 @@ export type RunStatus =
   | 'merging'
   | 'merged'
   | 'declined'
-  | 'merge_failed';
+  | 'merge_failed'
+  | 'assemble_ready';
 
 export interface RunSandboxInfo {
   backend: string;
@@ -131,6 +132,22 @@ export interface WorkspaceNode {
   status: 'added' | 'modified' | 'deleted' | null;
 }
 
+// Project Workspace browsing (read-only). A ref is either the project's base
+// branch or an active run's worktree branch, selectable in the Workspace page.
+export interface WorkspaceRef {
+  kind: 'base' | 'worktree' | 'assembly';
+  branch: string;
+  label: string;
+  run_id?: string;
+  run_status?: string;
+  originating_branch?: string;
+}
+
+export interface WorkspaceRefsResponse {
+  current_branch: string;
+  refs: WorkspaceRef[];
+}
+
 export interface CommitResponse {
   run_id: string;
   status: string;
@@ -164,6 +181,28 @@ export interface Project {
   updated_at: string;
 }
 
+export interface Blueprint {
+  id: string;
+  name: string;
+  description: string;
+  roster: string[];
+  workflow: string;
+  review_policy: string;
+  sandbox_profile: string;
+}
+
+export interface ListBlueprintsResponse {
+  blueprints: Blueprint[];
+}
+
+export interface GenerateBlueprintRequest {
+  description: string;
+}
+
+export interface GenerateBlueprintResponse {
+  blueprint: Blueprint;
+}
+
 export interface CreateProjectRequest {
   name: string;
   origin: ProjectOrigin;
@@ -172,6 +211,8 @@ export interface CreateProjectRequest {
   default_provider?: ModelSource;
   default_model_github_copilot?: string;
   default_model_microsoft_foundry?: string;
+  blueprint_id?: string;
+  blueprint?: Blueprint;
 }
 
 export interface UpdateProjectProviderSettingsRequest {
@@ -212,6 +253,7 @@ export interface WorkflowRunDto {
   // present only once the backend adds it, so render the bare status as a fallback.
   coordinator_status?: string;
   coordinator_status_reason?: string;
+  archived_at?: string | null;
 }
 
 export interface DecisionDto {
@@ -223,6 +265,19 @@ export interface DecisionDto {
   content: string;
   rationale?: string;
   tags?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DecisionInboxEntryDto {
+  id: string;
+  agent_name: string;
+  slug: string;
+  type: string;
+  title: string;
+  content: string;
+  rationale?: string;
+  status: string;
   created_at: string;
   updated_at: string;
 }
@@ -599,12 +654,16 @@ export interface CoordinatorChildResponse {
   stepCount: number;
 }
 
-export type SteerKind = 'stop' | 'redirect' | 'amend';
+export type SteerKind = 'send' | 'redirect' | 'amend' | 'stop';
 
 // POST /api/runs/{coordinatorRunId}/steer body.
+// kind "send"     {instruction}                         — informational; no re-plan, no subtask mutation.
+// kind "redirect" {instruction, target_child_run_id?}   — re-plans/re-arms; a target child is force-completed to unblock it.
+// kind "amend"    {instruction}                          — additive; extends the outcome spec/plan; never discards in-flight work.
+// kind "stop"     {}                                     — stop the orchestration.
 export interface SteerCoordinatorRequest {
   kind: SteerKind;
-  targetChildRunId?: string;
+  target_child_run_id?: string;
   instruction?: string;
 }
 
@@ -671,6 +730,7 @@ export interface BacklogTaskDto {
   committed_at?: string | null;
   claimed_at?: string | null;
   run_id?: string | null;
+  archived_at?: string | null;
 }
 
 // A Backlog/Ready intake card (board column kind === "intake").
@@ -684,6 +744,7 @@ export interface TaskCardDto {
   captured_by: string;
   created_at: string;
   committed_at?: string | null;
+  archived_at?: string | null;
 }
 
 // A coordinator-run card placed in a workflow column (read-only).
@@ -701,6 +762,7 @@ export interface RunCardDto {
   agent_name?: string | null;
   started_at: string;
   ended_at?: string | null;
+  archived_at?: string | null;
 }
 
 export type BoardCardDto = TaskCardDto | RunCardDto;
@@ -717,6 +779,16 @@ export interface BoardColumnDto {
 
 // Per-agent load summary rolled up across all coordinator runs in the project.
 // Added by the backend as board.agent_queues (FR-phase2-rail).
+export interface AgentOrchestrationQueueDto {
+  run_id:        string;
+  title:         string | null;
+  active:        number;
+  queued:        number;
+  blocked:       number;
+  done:          number;
+  sample_titles: string[];   // up to 3 subtask titles for THIS orchestration
+}
+
 export interface AgentQueueDto {
   agent_name:    string;
   active:        number;
@@ -725,6 +797,7 @@ export interface AgentQueueDto {
   done:          number;
   run_ids:       string[];   // coordinator run ids with ≥1 subtask for this agent
   sample_titles: string[];   // up to 3 subtask titles
+  orchestrations: AgentOrchestrationQueueDto[]; // per-orchestration breakdown of this agent's work
 }
 
 // Response body for GET /api/projects/{projectId}/board.
@@ -853,6 +926,7 @@ export interface WorkflowNodeDto {
   label: string;
   role?: string | null;
   kind?: string | null;
+  gate_kind?: string | null;
   agent?: string | null;
   prompt?: string | null;
   target?: string | null;
@@ -943,9 +1017,12 @@ export interface ThroughputPointDto {
 // Per-agent activity + quality on a single project.
 export interface AgentLeaderboardEntryDto {
   agent: string;
+  role_title?: string | null;
   runs_this_week: number;
   runs_total: number;
-  success_rate: number;        // [0,1]
+  success_rate: number;        // successful terminal runs / terminal runs, [0,1]
+  successful_runs: number;
+  terminal_runs: number;
   avg_duration_ms: number | null;
 }
 

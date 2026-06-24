@@ -1,4 +1,33 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, Project, CreateProjectRequest, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto } from './types';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isBlueprint(value: unknown): value is Blueprint {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.description === 'string'
+    && isStringArray(value.roster)
+    && typeof value.workflow === 'string'
+    && typeof value.review_policy === 'string'
+    && typeof value.sandbox_profile === 'string';
+}
+
+export function normalizeBlueprintList(payload: unknown): Blueprint[] {
+  const list = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.blueprints)
+      ? payload.blueprints
+      : [];
+
+  return list.filter(isBlueprint);
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -126,6 +155,15 @@ export class AgentweaverApiClient {
     return this.request<Project>('POST', '/api/projects', req);
   }
 
+  listBlueprints(): Promise<Blueprint[]> {
+    return this.request<Blueprint[] | ListBlueprintsResponse>('GET', '/api/blueprints')
+      .then(normalizeBlueprintList);
+  }
+
+  generateBlueprint(description: string): Promise<GenerateBlueprintResponse> {
+    return this.request<GenerateBlueprintResponse>('POST', '/api/blueprints/generate', { description });
+  }
+
   renameProject(projectId: string, name: string): Promise<void> {
     return this.request<void>('PATCH', `/api/projects/${encodeURIComponent(projectId)}`, { name });
   }
@@ -154,8 +192,20 @@ export class AgentweaverApiClient {
     return this.request<CreateProjectRunResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/runs`, request);
   }
 
-  getProjectRuns(projectId: string): Promise<WorkflowRunDto[]> {
-    return this.request<WorkflowRunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
+  getProjectRuns(projectId: string, options?: {
+    agentName?: string;
+    terminalOnly?: boolean;
+    includeChildren?: boolean;
+    limit?: number;
+  }): Promise<WorkflowRunDto[]> {
+    const query = new URLSearchParams();
+    if (options?.agentName) query.set('agent', options.agentName);
+    if (options?.terminalOnly) query.set('terminal_only', 'true');
+    if (options?.includeChildren) query.set('include_children', 'true');
+    if (options?.limit != null) query.set('limit', String(options.limit));
+    const queryString = query.toString();
+    const suffix = queryString ? `?${queryString}` : '';
+    return this.request<WorkflowRunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs${suffix}`);
   }
 
   getWorkflowRun(projectId: string, workflowRunId: string): Promise<WorkflowRunDto> {
@@ -258,6 +308,10 @@ export class AgentweaverApiClient {
     return this.request<import('./types').DecisionDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/decisions`);
   }
 
+  getDecisionsInbox(projectId: string): Promise<import('./types').DecisionInboxEntryDto[]> {
+    return this.request<import('./types').DecisionInboxEntryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox`);
+  }
+
   getAgentMemory(projectId: string, agentName: string): Promise<import('./types').AgentMemoryDto[]> {
     return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`);
   }
@@ -278,6 +332,23 @@ export class AgentweaverApiClient {
   // Orchestration (Feature 008 — Squad Coordinator Agent)
   startOrchestration(projectId: string, goal: string): Promise<StartOrchestrationResponse> {
     return this.request<StartOrchestrationResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/orchestrations`, { goal });
+  }
+
+  // Project Workspace browsing (read-only). The backend exposes the project repo
+  // at its current branch plus active run worktree branches as selectable refs.
+  getProjectWorkspaceRefs(projectId: string): Promise<WorkspaceRefsResponse> {
+    return this.request<WorkspaceRefsResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace/refs`);
+  }
+
+  getProjectWorkspace(projectId: string, ref?: string): Promise<WorkspaceNode[]> {
+    const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    return this.request<WorkspaceNode[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace${query}`);
+  }
+
+  getProjectWorkspaceFileContent(projectId: string, path: string, ref?: string): Promise<WorkspaceFileContent> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    return this.request<WorkspaceFileContent>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace/files/${encoded}/content${query}`);
   }
 
   getOutcomeSpec(runId: string): Promise<OutcomeSpec> {
@@ -463,7 +534,7 @@ export class AgentweaverApiClient {
   }
 
   // Workflow definitions (Spec 010, FR-039). Project-scoped, owner-authorized.
-  // List discovered workflows + validation status; Sync re-reads .scaffolders/
+  // List discovered workflows + validation status; Sync re-reads .agentweaver/
   // workflows/ from disk and returns the refreshed set; Get returns one full
   // definition.
   listWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
@@ -493,7 +564,7 @@ export class AgentweaverApiClient {
   // Review policies (Spec 010, FR-025/027/033). Project-scoped, owner-authorized.
   // List discovered policies + active selection; Get returns one policy's steps;
   // SetActive selects the active policy by name (null clears to the built-in
-  // default); Sync re-reads .scaffolders/review-policies/ and returns the set.
+  // default); Sync re-reads .agentweaver/review-policies/ and returns the set.
   listReviewPolicies(projectId: string): Promise<import('./types').ReviewPolicyListResponse> {
     return this.request<import('./types').ReviewPolicyListResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/review-policies`);
   }

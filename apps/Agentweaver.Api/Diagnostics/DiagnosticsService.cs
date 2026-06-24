@@ -358,11 +358,11 @@ public sealed class DiagnosticsService
     private static DiagnosticsCheckDto CheckWorkflowsDirectory(Project project)
     {
         var sw = Stopwatch.StartNew();
-        var dir = Path.Combine(project.WorkingDirectory, ".scaffolders", "workflows");
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows");
         sw.Stop();
         if (!Directory.Exists(dir))
             return Warn("workflows_directory",
-                $".scaffolders/workflows/ not present — built-in default workflow in use", sw);
+                $".agentweaver/workflows/ not present — built-in default workflow in use", sw);
 
         int count;
         try
@@ -373,19 +373,19 @@ public sealed class DiagnosticsService
         }
         catch (Exception ex)
         {
-            return Warn("workflows_directory", $"Could not enumerate .scaffolders/workflows/: {ex.Message}", sw);
+            return Warn("workflows_directory", $"Could not enumerate .agentweaver/workflows/: {ex.Message}", sw);
         }
-        return Pass("workflows_directory", $".scaffolders/workflows/ present; {count} YAML file(s)", sw);
+        return Pass("workflows_directory", $".agentweaver/workflows/ present; {count} YAML file(s)", sw);
     }
 
     private static DiagnosticsCheckDto CheckReviewPoliciesDirectory(Project project)
     {
         var sw = Stopwatch.StartNew();
-        var dir = Path.Combine(project.WorkingDirectory, ".scaffolders", "review-policies");
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "review-policies");
         sw.Stop();
         if (!Directory.Exists(dir))
             return Warn("review_policies_directory",
-                $".scaffolders/review-policies/ not present — built-in default policy in use", sw);
+                $".agentweaver/review-policies/ not present — built-in default policy in use", sw);
 
         int count;
         try
@@ -396,9 +396,9 @@ public sealed class DiagnosticsService
         }
         catch (Exception ex)
         {
-            return Warn("review_policies_directory", $"Could not enumerate .scaffolders/review-policies/: {ex.Message}", sw);
+            return Warn("review_policies_directory", $"Could not enumerate .agentweaver/review-policies/: {ex.Message}", sw);
         }
-        return Pass("review_policies_directory", $".scaffolders/review-policies/ present; {count} YAML file(s)", sw);
+        return Pass("review_policies_directory", $".agentweaver/review-policies/ present; {count} YAML file(s)", sw);
     }
 
     private async Task<DiagnosticsCheckDto> CheckActiveWorkflowAsync(Project project, CancellationToken ct)

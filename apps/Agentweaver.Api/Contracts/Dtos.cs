@@ -178,6 +178,9 @@ public sealed record RunResponse
     /// </summary>
     [JsonPropertyName("autopilot")]
     public bool Autopilot { get; init; }
+
+    [JsonPropertyName("archived_at")]
+    public DateTimeOffset? ArchivedAt { get; init; }
 }
 
 /// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>
@@ -213,6 +216,9 @@ public sealed record WorkflowRunSummary
 
     [JsonPropertyName("result")]
     public string? Result { get; init; }
+
+    [JsonPropertyName("archived_at")]
+    public DateTimeOffset? ArchivedAt { get; init; }
 
     /// <summary>
     /// Orchestration status of a COORDINATOR run, sourced from its work plan (planned | dispatching |
@@ -530,6 +536,12 @@ public sealed record CreateProjectRequest
     [JsonPropertyName("default_provider")] public string? DefaultProvider { get; init; }
     [JsonPropertyName("default_model_github_copilot")] public string? DefaultModelGitHubCopilot { get; init; }
     [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
+
+    /// <summary>Optional predefined blueprint id to apply on creation (Feature 012).</summary>
+    [JsonPropertyName("blueprint_id")] public string? BlueprintId { get; init; }
+
+    /// <summary>Optional inline blueprint (file/generated, catalog roles only) to apply on creation (Feature 012).</summary>
+    [JsonPropertyName("blueprint")] public Agentweaver.Api.Blueprints.BlueprintDto? Blueprint { get; init; }
 }
 
 public sealed record UpdateProjectNameRequest
@@ -942,7 +954,7 @@ public sealed record CoordinatorChildResponse
 public sealed record SteerRequest
 {
     [JsonPropertyName("kind")] public string? Kind { get; init; }
-    [JsonPropertyName("targetChildRunId")] public string? TargetChildRunId { get; init; }
+    [JsonPropertyName("target_child_run_id")] public string? TargetChildRunId { get; init; }
     [JsonPropertyName("instruction")] public string? Instruction { get; init; }
 }
 
@@ -1015,6 +1027,7 @@ public sealed record BacklogTaskDto
     [JsonPropertyName("committed_at")] public DateTimeOffset? CommittedAt { get; init; }
     [JsonPropertyName("claimed_at")] public DateTimeOffset? ClaimedAt { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
 }
 
 /// <summary>Per-project pickup settings (FR-008a + unattended seeding).</summary>
@@ -1051,6 +1064,7 @@ public sealed record TaskCardDto
     [JsonPropertyName("captured_by")] public required string CapturedBy { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
     [JsonPropertyName("committed_at")] public DateTimeOffset? CommittedAt { get; init; }
+    [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
 }
 
 /// <summary>A coordinator-run card placed in a workflow column.</summary>
@@ -1069,6 +1083,7 @@ public sealed record RunCardDto
     [JsonPropertyName("retried_from")] public string? RetriedFrom { get; init; }
     [JsonPropertyName("started_at")] public required DateTimeOffset StartedAt { get; init; }
     [JsonPropertyName("ended_at")] public DateTimeOffset? EndedAt { get; init; }
+    [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
 }
 
 /// <summary>A board column with its cards (TaskCardDto for intake, RunCardDto for workflow).</summary>
@@ -1113,6 +1128,36 @@ public sealed record AgentQueueDto
     [JsonPropertyName("blocked")] public required int Blocked { get; init; }   // failed | rai_flagged
     [JsonPropertyName("done")] public required int Done { get; init; }         // completed | assemble_ready | merged
     [JsonPropertyName("run_ids")] public required IReadOnlyList<string> RunIds { get; init; }
+    [JsonPropertyName("sample_titles")] public required IReadOnlyList<string> SampleTitles { get; init; }
+
+    /// <summary>
+    /// The same per-agent rollup grouped by orchestration (coordinator run): one entry per active
+    /// coordinator run this agent has subtask work in. Each entry's buckets sum to the agent-level
+    /// totals above. Ordered most-loaded orchestration first. Empty (never null) when the agent has
+    /// no in-flight work.
+    /// </summary>
+    [JsonPropertyName("orchestrations")] public required IReadOnlyList<AgentOrchestrationQueueDto> Orchestrations { get; init; }
+}
+
+/// <summary>
+/// One agent's subtask rollup within a single orchestration (coordinator run), so the Flow page can
+/// attribute queued work to the orchestration it belongs to. Buckets use the same status mapping as
+/// <see cref="AgentQueueDto"/>; summed across an agent's orchestrations they equal the agent totals.
+/// </summary>
+public sealed record AgentOrchestrationQueueDto
+{
+    [JsonPropertyName("run_id")] public required string RunId { get; init; }
+
+    /// <summary>Human orchestration name (the coordinator run's objective). Null when no objective is
+    /// available for the run; the web falls back to a short run id.</summary>
+    [JsonPropertyName("title")] public string? Title { get; init; }
+
+    [JsonPropertyName("active")] public required int Active { get; init; }
+    [JsonPropertyName("queued")] public required int Queued { get; init; }
+    [JsonPropertyName("blocked")] public required int Blocked { get; init; }
+    [JsonPropertyName("done")] public required int Done { get; init; }
+
+    /// <summary>This orchestration's top-3 in-flight (queued + active) subtask titles, deduped.</summary>
     [JsonPropertyName("sample_titles")] public required IReadOnlyList<string> SampleTitles { get; init; }
 }
 

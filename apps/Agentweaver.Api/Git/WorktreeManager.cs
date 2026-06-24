@@ -91,12 +91,21 @@ public sealed class WorktreeManager
 
         Commands.Stage(repo, "*");
 
+        // Check whether staging produced any actual changes vs HEAD. Creating an empty commit when
+        // the agent wrote nothing causes the child branch to diverge from the origin with a
+        // zero-diff commit that masquerades as delivered work — the assembly diff ends up empty and
+        // the review panel shows "No changes." If nothing was staged, return the HEAD tree hash so
+        // HasChanges evaluates to false and the child is correctly flagged as a no-change subtask.
+        var headTree = repo.Head.Tip?.Tree;
+        using var stagedDiff = repo.Diff.Compare<TreeChanges>(headTree, DiffTargets.Index);
+        if (stagedDiff.Count == 0)
+            return headTree?.Sha ?? string.Empty;
+
         var signature = WithTimestamp();
         var commit = repo.Commit(
             $"Agentweaver run {runId}",
             signature,
-            signature,
-            new CommitOptions { AllowEmptyCommit = true });
+            signature);
 
         return commit.Tree.Sha;
     }

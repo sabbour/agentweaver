@@ -10,7 +10,6 @@ import {
   DialogTrigger,
   Field,
   SpinButton,
-  Switch,
   Text,
   makeStyles,
   tokens,
@@ -19,6 +18,8 @@ import { SettingsRegular } from '@fluentui/react-icons';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { BacklogSettingsDto } from '../../api/types';
+import { AutomationToggle } from '../AutomationToggle';
+import { AUTOMATION_HELP } from '../automationHelp';
 
 const useStyles = makeStyles({
   fields: {
@@ -93,17 +94,19 @@ export function PickupSettings({ projectId }: PickupSettingsProps) {
                   }}
                 />
               </Field>
-              <Switch
+              <AutomationToggle
                 label="Autopilot"
+                info={AUTOMATION_HELP.autopilotPickup}
                 checked={settings?.pickup_autopilot ?? false}
                 disabled={!settings || busy}
-                onChange={(_, d) => settings && setSettings({ ...settings, pickup_autopilot: d.checked })}
+                onChange={(checked) => settings && setSettings({ ...settings, pickup_autopilot: checked })}
               />
-              <Switch
+              <AutomationToggle
                 label="Auto-approve tools"
+                info={AUTOMATION_HELP.autoApprovePickup}
                 checked={settings?.pickup_auto_approve_tools ?? false}
                 disabled={!settings || busy}
-                onChange={(_, d) => settings && setSettings({ ...settings, pickup_auto_approve_tools: d.checked })}
+                onChange={(checked) => settings && setSettings({ ...settings, pickup_auto_approve_tools: checked })}
               />
               {error && <Text className={styles.error}>{error}</Text>}
             </div>

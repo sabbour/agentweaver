@@ -35,7 +35,7 @@ public sealed class ComposeChildSystemPromptTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void WithoutCharter_ReturnsBoundaryOnly_NeverNull(string? charter)
+    public void WithoutCharter_ReturnsBoundaryAndDeliverableCapture_NeverNull(string? charter)
     {
         var prompt = RunOrchestrator.ComposeChildSystemPrompt(charter);
 
@@ -43,8 +43,13 @@ public sealed class ComposeChildSystemPromptTests
         prompt.Should().NotBeEmpty();
         prompt.Should().ContainEquivalentOf("working directory");
         prompt.Should().ContainEquivalentOf("session-state");
-        prompt.Should().NotContain("---",
-            "with no charter there is no charter/boundary separator — only the boundary remains");
+        // Without a charter there is a boundary + deliverable-capture section (separator between them).
+        prompt.Should().Contain("---",
+            "boundary and deliverable-capture sections are always separated by a divider");
+        prompt.Should().ContainEquivalentOf("deliverable",
+            "the deliverable capture instruction must always be present");
+        prompt.Should().ContainEquivalentOf("committed",
+            "the prompt must explain that files are committed when the turn ends");
     }
 
     private static int CountOccurrences(string haystack, string needle)

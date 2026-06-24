@@ -1,9 +1,11 @@
 {
   "id": "quick-software-development",
   "title": "Quick Software Development",
-  "description": "A focused team for fast software delivery: frontend and backend.",
+  "description": "A focused team for fast software delivery: frontend, backend, security, and operations.",
   "roles": [
     "frontend-engineer",
-    "backend-engineer"
+    "backend-engineer",
+    "security-engineer",
+    "devops-engineer"
   ]
 }

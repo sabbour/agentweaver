@@ -63,6 +63,71 @@ public sealed class MetricsServiceTests
         Origin            = origin,
     };
 
+    private static void WriteTeam(Project project, params (string Name, string Role)[] members)
+    {
+        var squadDir = Path.Combine(project.WorkingDirectory, ".squad");
+        Directory.CreateDirectory(squadDir);
+
+        var lines = new List<string>
+        {
+            "# Squad Team",
+            "",
+            $"> {project.Name}",
+            "",
+            "## Coordinator",
+            "",
+            "| Name | Role | Notes |",
+            "|------|------|-------|",
+            "| Squad | Coordinator | Routes work, enforces handoffs and reviewer gates. |",
+            "",
+            "## Members",
+            "",
+            "| Name | Role | Charter | Status |",
+            "|------|------|---------|--------|",
+        };
+
+        lines.AddRange(members.Select(m =>
+            $"| {m.Name} | {m.Role} | .squad/agents/{m.Name}/charter.md | active |"));
+        lines.Add("");
+        lines.Add("## Project Context");
+        lines.Add("");
+        lines.Add($"- **Project:** {project.Name}");
+        lines.Add("- **Universe:** test");
+
+        File.WriteAllLines(Path.Combine(squadDir, "team.md"), lines);
+    }
+
+    private static void WriteRegistry(Project project, params (string RegistryName, string PersistentName)[] members)
+    {
+        var castingDir = Path.Combine(project.WorkingDirectory, ".squad", "casting");
+        Directory.CreateDirectory(castingDir);
+
+        var entries = members.Select(m =>
+            $$"""
+                "{{m.RegistryName}}": {
+                  "name": "{{m.RegistryName}}",
+                  "persistentName": "{{m.PersistentName}}",
+                  "universe": "test",
+                  "defaultModel": "",
+                  "status": "Active",
+                  "createdAt": "2026-01-01T00:00:00Z",
+                  "previousName": null,
+                  "succeededBy": null,
+                  "retiredAt": null,
+                  "charterPath": ".squad/agents/{{m.PersistentName.ToLowerInvariant()}}/charter.md"
+                }
+            """);
+
+        File.WriteAllText(Path.Combine(castingDir, "registry.json"),
+            $$"""
+            {
+              "agents": {
+            {{string.Join(",\n", entries)}}
+              }
+            }
+            """);
+    }
+
     [Fact]
     public async Task Dashboard_ComputesSummaryThroughputAndLeaderboard_FromRealRuns()
     {
@@ -74,6 +139,9 @@ public sealed class MetricsServiceTests
         var now = DateTimeOffset.UtcNow;
         var project = MakeProject(ProjectId.New());
         await projectStore.InsertAsync(project);
+        WriteTeam(project,
+            ("morpheus", "Core Implementer"),
+            ("tank", "Quality Reviewer"));
 
         // A: morpheus, merged, this week, finished (10 min duration)
         await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Merged,
@@ -107,17 +175,86 @@ public sealed class MetricsServiceTests
         dto.AgentLeaderboard.Should().HaveCount(2);
         var morpheus = dto.AgentLeaderboard[0];
         morpheus.Agent.Should().Be("morpheus"); // sorted by runs_total desc
+        morpheus.RoleTitle.Should().Be("Core Implementer");
         morpheus.RunsTotal.Should().Be(3);       // A, B, D
         morpheus.RunsThisWeek.Should().Be(2);    // A, B
-        morpheus.SuccessRate.Should().BeApproximately(2.0 / 3.0, 1e-9); // A, D merged of 3
+        morpheus.SuccessfulRuns.Should().Be(2);  // A, D merged
+        morpheus.TerminalRuns.Should().Be(2);    // B is in_progress and excluded
+        morpheus.SuccessRate.Should().Be(1.0);   // successful terminal runs / terminal runs
         morpheus.AvgDurationMs.Should().NotBeNull();
         morpheus.AvgDurationMs!.Value.Should().BeApproximately((10 + 20) / 2.0 * 60_000, 1.0);
 
         var tank = dto.AgentLeaderboard[1];
         tank.Agent.Should().Be("tank");
+        tank.RoleTitle.Should().Be("Quality Reviewer");
         tank.RunsTotal.Should().Be(1);
+        tank.SuccessfulRuns.Should().Be(0);
+        tank.TerminalRuns.Should().Be(1);
         tank.SuccessRate.Should().Be(0d);
         tank.AvgDurationMs!.Value.Should().BeApproximately(4 * 60_000, 1.0);
+    }
+
+    [Fact]
+    public async Task Dashboard_MapsRoles_FromNormalizedTeamRosterRegistryAndCoordinator()
+    {
+        await using var test = await TestSqliteDb.CreateAsync();
+        var runStore = new SqliteRunStore(test.Db);
+        var projectStore = new SqliteProjectStore(test.Db);
+        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+
+        var now = DateTimeOffset.UtcNow;
+        var project = MakeProject(ProjectId.New());
+        await projectStore.InsertAsync(project);
+        WriteTeam(project,
+            ("Harry Potter", "Full-stack Engineer"),
+            ("Dumbledore", "Systems Architect"));
+        WriteRegistry(project, ("dumbledore-architect", "Dumbledore"));
+
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Completed,
+            now.AddMinutes(-30), now.AddMinutes(-20), agent: "harry-potter"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Completed,
+            now.AddMinutes(-20), now.AddMinutes(-10), agent: "dumbledore-architect"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Merged,
+            now.AddMinutes(-10), now.AddMinutes(-1), agent: "Coordinator"));
+
+        var dto = await service.GetProjectDashboardAsync(project);
+
+        dto.AgentLeaderboard.Single(e => e.Agent == "harry-potter").RoleTitle.Should().Be("Full-stack Engineer");
+        dto.AgentLeaderboard.Single(e => e.Agent == "dumbledore-architect").RoleTitle.Should().Be("Systems Architect");
+        dto.AgentLeaderboard.Single(e => e.Agent == "Coordinator").RoleTitle.Should().Be("Coordinator");
+    }
+
+    [Fact]
+    public async Task Dashboard_SuccessRate_UsesTerminalRunsOnly_AndHandlesZeroTerminalRuns()
+    {
+        await using var test = await TestSqliteDb.CreateAsync();
+        var runStore = new SqliteRunStore(test.Db);
+        var projectStore = new SqliteProjectStore(test.Db);
+        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+
+        var now = DateTimeOffset.UtcNow;
+        var project = MakeProject(ProjectId.New());
+        await projectStore.InsertAsync(project);
+
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Merged,        now.AddMinutes(-70), now.AddMinutes(-69), agent: "neo"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Completed,     now.AddMinutes(-60), now.AddMinutes(-59), agent: "neo"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.AssembleReady, now.AddMinutes(-50), now.AddMinutes(-49), agent: "neo"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Failed,        now.AddMinutes(-40), now.AddMinutes(-39), agent: "neo"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.AwaitingReview, now.AddMinutes(-30), agent: "neo"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.InProgress,    now.AddMinutes(-20), agent: "trinity"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Pending,       now.AddMinutes(-10), agent: "trinity"));
+
+        var dto = await service.GetProjectDashboardAsync(project);
+
+        var neo = dto.AgentLeaderboard.Single(e => e.Agent == "neo");
+        neo.SuccessfulRuns.Should().Be(3);
+        neo.TerminalRuns.Should().Be(4);
+        neo.SuccessRate.Should().BeApproximately(0.75, 1e-9);
+
+        var trinity = dto.AgentLeaderboard.Single(e => e.Agent == "trinity");
+        trinity.SuccessfulRuns.Should().Be(0);
+        trinity.TerminalRuns.Should().Be(0);
+        trinity.SuccessRate.Should().Be(0d);
     }
 
     [Fact]
@@ -243,4 +380,48 @@ public sealed class MetricsServiceTests
         ClaimedAt   = null,
         RunId       = null,
     };
+
+    private const char Ellipsis = '\u2026';
+
+    [Fact]
+    public void Truncate_LongMultiWordTask_EndsWithEllipsis_AndNotMidWord()
+    {
+        var value = "Refactor the authentication middleware and update the dependent integration tests across services";
+
+        var result = MetricsService.Truncate(value, 80);
+
+        result.Length.Should().BeLessThanOrEqualTo(80);
+        result.Should().EndWith(Ellipsis.ToString());
+
+        // The text before the ellipsis must be whole words only (a prefix of the original split on
+        // spaces), i.e. no partial trailing token.
+        var body = result[..^1];
+        var originalWords = value.Split(' ');
+        var bodyWords = body.Split(' ');
+        originalWords.Take(bodyWords.Length).Should().Equal(bodyWords);
+        body.Should().NotEndWith(" ");
+    }
+
+    [Fact]
+    public void Truncate_ShortTask_ReturnedUnchanged_NoEllipsis()
+    {
+        var value = "Do the thing";
+
+        var result = MetricsService.Truncate(value, 80);
+
+        result.Should().Be(value);
+        result.Should().NotContain(Ellipsis.ToString());
+    }
+
+    [Fact]
+    public void Truncate_UnbrokenTokenLongerThanMax_StillTruncatesWithEllipsis()
+    {
+        var value = new string('x', 200);
+
+        var result = MetricsService.Truncate(value, 80);
+
+        result.Length.Should().Be(80);
+        result.Should().EndWith(Ellipsis.ToString());
+        result[..^1].Should().Be(new string('x', 79));
+    }
 }

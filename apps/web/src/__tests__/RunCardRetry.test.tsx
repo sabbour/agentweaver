@@ -9,6 +9,7 @@ import type { RunCardDto } from '../api/types';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     retryRun: vi.fn(),
+    deleteRun: vi.fn(),
   },
 }));
 
@@ -122,5 +123,82 @@ describe('RunCard — Retry button', () => {
     await waitFor(() =>
       expect(mockNavigate).toHaveBeenCalledWith('/projects/proj-1/orchestrations/new-run-456'),
     );
+  });
+});
+
+describe('RunCard — card navigation', () => {
+  it('clicking the card navigates to the orchestration detail', () => {
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ status: 'in_progress' })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    const card = screen.getByTestId('run-card-run-123');
+    fireEvent.click(card);
+    expect(mockNavigate).toHaveBeenCalledWith('/projects/proj-1/orchestrations/run-123');
+  });
+
+  describe('RunCard — archive action', () => {
+    it('archives the run without triggering card navigation and calls onMutated', async () => {
+      const onMutated = vi.fn();
+      vi.mocked(apiClient.deleteRun).mockResolvedValue(undefined);
+
+      render(
+        <Wrapper>
+          <RunCard card={makeCard({ status: 'completed' })} projectId="proj-1" onMutated={onMutated} />
+        </Wrapper>,
+      );
+
+      fireEvent.click(screen.getByLabelText('Archive run'));
+
+      await waitFor(() =>
+        expect(vi.mocked(apiClient.deleteRun)).toHaveBeenCalledWith('run-123'),
+      );
+      await waitFor(() => expect(onMutated).toHaveBeenCalled());
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+  });
+
+  it('the card container is a div, not an anchor (no nested anchor violation)', () => {
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ status: 'in_progress' })} projectId="proj-1" />
+      </Wrapper>,
+    );
+    const card = screen.getByTestId('run-card-run-123');
+    expect(card.tagName.toLowerCase()).toBe('div');
+  });
+
+  it('the "Retried from" inner link is a valid anchor inside the div container', () => {
+    render(
+      <Wrapper>
+        <RunCard
+          card={makeCard({ status: 'in_progress', retried_from: 'old-run-aabbccdd' })}
+          projectId="proj-1"
+        />
+      </Wrapper>,
+    );
+    const card = screen.getByTestId('run-card-run-123');
+    const innerAnchor = card.querySelector('a');
+    expect(innerAnchor).toBeTruthy();
+    // The card itself is not an anchor, so there is no nested <a> inside <a>.
+    expect(card.tagName.toLowerCase()).toBe('div');
+  });
+
+  it('clicking the "Retried from" link does NOT trigger card navigation', () => {
+    render(
+      <Wrapper>
+        <RunCard
+          card={makeCard({ status: 'in_progress', retried_from: 'old-run-aabbccdd' })}
+          projectId="proj-1"
+        />
+      </Wrapper>,
+    );
+    const card = screen.getByTestId('run-card-run-123');
+    const innerAnchor = card.querySelector('a')!;
+    fireEvent.click(innerAnchor);
+    // Card navigation must not fire (stopPropagation on the inner link)
+    expect(mockNavigate).not.toHaveBeenCalledWith('/projects/proj-1/orchestrations/run-123');
   });
 });

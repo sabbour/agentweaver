@@ -5,7 +5,7 @@ namespace Agentweaver.Api.Workflows;
 
 /// <summary>
 /// The discovered + validated workflows for a single project: the built-in default plus every
-/// <c>.scaffolders/workflows/</c> file, each with its validation status (Feature 010). Immutable: a
+/// <c>.agentweaver/workflows/</c> file, each with its validation status (Feature 010). Immutable: a
 /// Sync produces a fresh set, so a run that captured the previous set completes on the definition it
 /// started with (FR-006).
 /// </summary>
@@ -26,12 +26,12 @@ public sealed record ProjectWorkflowSet
 /// FR-001/002/003/006/007). Definitions are loaded once per project on first access and cached;
 /// <see cref="Sync"/> is the ONLY refresh path (no file-watch, no per-heartbeat reload). All
 /// discovery, validation, and resolution is server-side (Principles III, IV). Reads only from the
-/// project's own <c>.scaffolders/workflows/</c> directory and never follows references that escape the
+/// project's own <c>.agentweaver/workflows/</c> directory and never follows references that escape the
 /// project sandbox (FR-007, Principle X).
 /// </summary>
 public sealed class WorkflowRegistry
 {
-    public const string WorkflowsRelativePath = ".scaffolders/workflows";
+    public const string WorkflowsRelativePath = ".agentweaver/workflows";
 
     private readonly ConcurrentDictionary<ProjectId, ProjectWorkflowSet> _cache = new();
 
@@ -39,7 +39,7 @@ public sealed class WorkflowRegistry
     public ProjectWorkflowSet GetOrLoad(Project project) =>
         _cache.GetOrAdd(project.Id, _ => Build(project));
 
-    /// <summary>Re-reads <c>.scaffolders/workflows/</c> from disk and replaces the cached set
+    /// <summary>Re-reads <c>.agentweaver/workflows/</c> from disk and replaces the cached set
     /// (FR-006 explicit Sync). Returns the refreshed set.</summary>
     public ProjectWorkflowSet Sync(Project project)
     {
@@ -54,6 +54,22 @@ public sealed class WorkflowRegistry
     /// <summary>Loads (once) and returns a single valid workflow by id, or null when not found/invalid.</summary>
     public WorkflowLoadResult? Get(Project project, string id) => GetOrLoad(project).FindById(id);
 
+    /// <summary>
+    /// Resolves the project's effective default workflow: the configured id when valid, otherwise the
+    /// built-in default. A missing configured workflow fails safe to the built-in definition.
+    /// </summary>
+    public WorkflowLoadResult ResolveDefault(Project project)
+    {
+        var set = GetOrLoad(project);
+        var id = string.IsNullOrWhiteSpace(project.DefaultWorkflowId)
+            ? BuiltInWorkflows.DefaultWorkflowId
+            : project.DefaultWorkflowId!;
+
+        return set.FindById(id)
+            ?? set.FindById(BuiltInWorkflows.DefaultWorkflowId)
+            ?? BuiltInWorkflows.Default;
+    }
+
     private static ProjectWorkflowSet Build(Project project)
     {
         var results = new List<WorkflowLoadResult>();
@@ -64,7 +80,7 @@ public sealed class WorkflowRegistry
         results.Add(BuiltInWorkflows.Default);
         idToIndex[BuiltInWorkflows.Default.Definition!.Id] = 0;
 
-        var dir = Path.Combine(project.WorkingDirectory, ".scaffolders", "workflows");
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows");
         foreach (var file in EnumerateWorkflowFiles(dir))
         {
             var source = Path.GetFileName(file);

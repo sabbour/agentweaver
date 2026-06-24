@@ -5,7 +5,7 @@ namespace Agentweaver.Api.Workflows;
 
 /// <summary>
 /// Project-scoped workflow-definition endpoints (Feature 010, FR-039/040). Lists the project's
-/// discovered workflows with their validation status, re-reads <c>.scaffolders/workflows/</c> on an
+/// discovered workflows with their validation status, re-reads <c>.agentweaver/workflows/</c> on an
 /// explicit Sync, and returns a single workflow's effective definition. All discovery, validation, and
 /// resolution is server-side (Principles III, IV); the clients only render the results. Owner-scoped
 /// like the other project endpoints: 404 when the project is missing, 403 when the caller is not the

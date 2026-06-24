@@ -109,6 +109,24 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    [Fact]
+    public async Task ArchiveTask_RemovesTaskFromBoard()
+    {
+        var projectId = await CreateProjectAsync();
+        var task = await CaptureAsync(projectId, "archive me");
+        var taskId = task.GetProperty("task_id").GetString();
+
+        var resp = await _client.PostAsync(
+            $"/api/projects/{projectId}/backlog/tasks/{taskId}/archive", content: null);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var archived = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        archived.GetProperty("archived_at").GetString().Should().NotBeNullOrWhiteSpace();
+
+        var board = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/board");
+        CountCardsInColumn(board, "backlog").Should().Be(0);
+        CountCardsInColumn(board, "ready").Should().Be(0);
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================

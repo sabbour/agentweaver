@@ -90,6 +90,13 @@ public sealed record WorkflowNode
     /// <summary>Render kind (e.g. "live", "action", "terminal", "agent", "gate").</summary>
     public string? Kind { get; init; }
 
+    /// <summary>
+    /// Canonical review-policy gate kind for deduplication (e.g. "rai", "human-review",
+    /// "rubberduck"). Null for non-review gates and older workflow files; the composer falls back to
+    /// legacy built-in ids for backward compatibility.
+    /// </summary>
+    public string? GateKind { get; init; }
+
     /// <summary>The agent name that performs this step (prompt / peer-review).</summary>
     public string? Agent { get; init; }
 

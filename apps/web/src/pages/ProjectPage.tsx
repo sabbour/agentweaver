@@ -10,15 +10,10 @@ import {
   DialogSurface,
   DialogTitle,
   DialogTrigger,
-  Field,
-  Input,
   MessageBar,
   MessageBarBody,
-  Select,
   Spinner,
   Text,
-  Textarea,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -27,9 +22,10 @@ import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
+import { PageHeader } from '../components/PageHeader';
 import { KanbanBoard } from '../components/board/KanbanBoard';
 import { isCoordinatorRun } from '../utils/runKind';
-import type { CreateRunRequest, Project, WorkflowRunDto, TeamMemberDto } from '../api/types';
+import type { Project, WorkflowRunDto } from '../api/types';
 
 // Map a coordinator orchestration status (Feature 008) to a human label. Optional —
 // the backend adds coordinator_status concurrently, so callers fall back to the bare
@@ -65,21 +61,6 @@ const useStyles = makeStyles({
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
   },
-  infoGrid: {
-    display: 'grid',
-    gridTemplateColumns: '160px 1fr',
-    gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
-    alignItems: 'start',
-  },
-  infoLabel: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-  },
-  infoValue: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    wordBreak: 'break-all',
-  },
   runList: {
     display: 'flex',
     flexDirection: 'column',
@@ -106,139 +87,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     whiteSpace: 'nowrap',
   },
-  actions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
-  },
   dialogFields: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
 });
-
-function StartRunDialog({ projectId, onStarted }: { projectId: string; onStarted: (runId: string) => void }) {
-  const styles = useStyles();
-  const [open, setOpen] = useState(false);
-  const [task, setTask] = useState('');
-  const [agentName, setAgentName] = useState('');
-  const [branch, setBranch] = useState('main');
-  const [members, setMembers] = useState<TeamMemberDto[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    apiClient.getTeam(projectId)
-      .then((t) => {
-        if (!cancelled) {
-          const active = (t?.members ?? []).filter((m) => m.status === 'active' && !m.is_built_in);
-          setMembers(active);
-          if (active.length > 0 && !agentName) setAgentName(active[0].name);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  // agentName intentionally excluded — only reset on open
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, projectId]);
-
-  const reset = () => {
-    setTask('');
-    setAgentName('');
-    setBranch('main');
-    setMembers([]);
-    setError(null);
-    setSaving(false);
-  };
-
-  const handleSubmit = async () => {
-    if (!task.trim()) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const req: CreateRunRequest = {
-        originating_branch: branch.trim() || 'main',
-        task: task.trim(),
-        agent_name: agentName || undefined,
-      };
-      const result = await apiClient.createProjectRun(projectId, req);
-      setOpen(false);
-      reset();
-      onStarted(result.workflow_run_id);
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error
-            ? err.message
-            : String(err),
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(_, s) => { setOpen(s.open); if (!s.open) reset(); }}>
-      <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary">Start run</Button>
-      </DialogTrigger>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>Start a run</DialogTitle>
-          <DialogContent>
-            <div className={styles.dialogFields}>
-              <Field label="Agent" required>
-                <Select
-                  value={agentName}
-                  onChange={(_, v) => setAgentName(v.value)}
-                  disabled={members.length === 0}
-                >
-                  {members.length === 0 && <option value="">No active agents</option>}
-                  {members.map((m) => (
-                    <option key={m.name} value={m.name}>{m.name} — {m.role_title}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Task" required>
-                <Textarea
-                  value={task}
-                  onChange={(_, v) => setTask(v.value)}
-                  placeholder="Describe what the agent should do..."
-                  rows={4}
-                />
-              </Field>
-              <Field label="Branch">
-                <Input value={branch} onChange={(_, v) => setBranch(v.value)} placeholder="main" />
-              </Field>
-              {error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{error}</MessageBarBody>
-                </MessageBar>
-              )}
-            </div>
-          </DialogContent>
-          <DialogActions>
-            <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary" disabled={saving}>Cancel</Button>
-            </DialogTrigger>
-            <Button
-              appearance="primary"
-              disabled={!task.trim() || members.length === 0 || saving}
-              onClick={() => void handleSubmit()}
-            >
-              {saving ? 'Starting' : 'Start'}
-            </Button>
-            {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
-  );
-}
 
 function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId: string; onDeleted: (workflowRunId: string) => void }) {
   const styles = useStyles();
@@ -435,12 +289,6 @@ export function ProjectPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <span>{project?.name ?? projectId}</span>
-      </div>
-
       {loading && <Spinner label="Loading project" />}
 
       {error && (
@@ -460,52 +308,27 @@ export function ProjectPage() {
 
       {project && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Title2>{project.name}</Title2>
-            <div className={styles.actions}>
-              <Link to={`/projects/${projectId}/settings`} style={{ textDecoration: 'none' }}>
-                <Button appearance="secondary">Settings</Button>
-              </Link>
-              <Link to={`/projects/${projectId}/team`} style={{ textDecoration: 'none' }}>
-                <Button appearance="secondary">Team</Button>
-              </Link>
-              <StartOrchestrationDialog
-                projectId={projectId}
-                onStarted={(runId) => navigate(`/projects/${projectId}/orchestrations/${runId}`)}
-              />
-              <StartRunDialog
-                projectId={projectId}
-                onStarted={(runId) => navigate(`/projects/${projectId}/runs/${runId}/workflow`)}
-              />
-            </div>
-          </div>
+          <PageHeader
+            title={project.name}
+            subtitle="Backlog, Ready, and in-flight work."
+            breadcrumb={
+              <div className={styles.breadcrumb}>
+                <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+                <span>/</span>
+                <span>{project.name}</span>
+              </div>
+            }
+            actions={
+              <>
+                <StartOrchestrationDialog
+                  projectId={projectId}
+                  onStarted={(runId) => navigate(`/projects/${projectId}/orchestrations/${runId}`)}
+                />
+              </>
+            }
+          />
 
           <KanbanBoard projectId={projectId} />
-
-          <div className={styles.infoGrid}>
-            <Text className={styles.infoLabel}>Origin</Text>
-            <Badge appearance="tint" color="informative">{project.origin}</Badge>
-
-            {project.source_repository && (
-              <>
-                <Text className={styles.infoLabel}>Repository</Text>
-                <Text className={styles.infoValue}>{project.source_repository}</Text>
-              </>
-            )}
-
-            <Text className={styles.infoLabel}>Repository path</Text>
-            <Text className={styles.infoValue}>{project.working_directory}</Text>
-
-            <Text className={styles.infoLabel}>Default branch</Text>
-            <Text className={styles.infoValue}>{project.default_branch}</Text>
-
-            {project.default_model_github_copilot && (
-              <>
-                <Text className={styles.infoLabel}>Copilot model</Text>
-                <Text className={styles.infoValue}>{project.default_model_github_copilot}</Text>
-              </>
-            )}
-          </div>
 
           <Title3>Runs</Title3>
           {runs.length === 0 ? (

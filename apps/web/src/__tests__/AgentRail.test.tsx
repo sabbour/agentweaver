@@ -49,6 +49,7 @@ function makeAgents(overrides: Partial<AgentQueueItem>[] = []): AgentQueueItem[]
     queued: 0,
     blocked: 0,
     done: 0,
+    orchestrations: [],
     ...o,
   }));
 }

@@ -5,7 +5,7 @@ namespace Agentweaver.Api.Workflows;
 /// The canonical source is the code-embedded <see cref="DefaultWorkflowTemplate"/> (NOT a checked-in
 /// repo file): it is parsed through the SAME real loader as any project-authored workflow (no
 /// mocks/placeholders, Principle VII), which doubles as the strongest correctness test of the schema
-/// (FR-008). A project with no materialized <c>.scaffolders/workflows/</c> falls back to this default
+/// (FR-008). A project with no materialized <c>.agentweaver/workflows/</c> falls back to this default
 /// so runs still execute and existing projects keep working without a migration.
 /// </summary>
 public static class BuiltInWorkflows

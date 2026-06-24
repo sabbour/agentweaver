@@ -34,6 +34,11 @@ public interface IBacklogTaskStore
     /// Returns false if Claimed (cannot delete a run-backed task) or not found in project.</summary>
     Task<bool> TryDeleteAsync(ProjectId projectId, BacklogTaskId id, CancellationToken ct = default);
 
+    /// <summary>Archives a task off the active board. Claimed tasks archive their linked coordinator run
+    /// in the same transaction so the run card also disappears from board projections.</summary>
+    Task<bool> TryArchiveAsync(
+        ProjectId projectId, BacklogTaskId id, DateTimeOffset archivedAt, CancellationToken ct = default);
+
     /// <summary>Atomic Backlog -> Ready. Sets committed_at and the destination order_key. Gated on
     /// project_id AND state = 'backlog'. Retries on order_key UNIQUE conflict.</summary>
     Task<bool> TryMoveToReadyAsync(

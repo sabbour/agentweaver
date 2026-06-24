@@ -153,4 +153,18 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
+
+    [McpServerTool(Name = "run_archive"), Description("Archive a run off active project board/list projections.")]
+    public async Task<string> RunArchiveAsync(
+        [Description("Run ID")] string run_id,
+        CancellationToken ct)
+    {
+        try
+        {
+        var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/archive", body: null, ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
 }

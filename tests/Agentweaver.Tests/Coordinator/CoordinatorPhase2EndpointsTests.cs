@@ -232,6 +232,28 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     // =========================================================================
+    // steer: redirect with snake_case target_child_run_id is deserialized correctly.
+    // Regression guard: frontend sends target_child_run_id (snake_case); the DTO must
+    // bind it so the targeted force-complete path receives the child run id.
+    // =========================================================================
+    [Fact]
+    public async Task Steer_Redirect_SnakeCaseTargetChildRunId_IsDeserializedAndReturned()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        const string childRunId = "child-abc-123";
+
+        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"use the v2 API"}""";
+        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var resp = await _owner.PostAsync($"/api/runs/{runId}/steer", content);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created, "a valid redirect with target_child_run_id must succeed");
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive.Should().NotBeNull();
+        directive!.TargetChildRunId.Should().Be(childRunId,
+            "the snake_case target_child_run_id from the request body must be bound to TargetChildRunId");
+    }
+
+    // =========================================================================
     // Feature 008: coordinator orchestration status + failure reason surfacing.
     // A coordinator run parked at a terminal assembly status must expose the work-plan status on the
     // run detail (coordinator_status) and the failure reason on the work-plan (statusReason), so the

@@ -6,8 +6,10 @@ using Agentweaver.Squad.Model;
 namespace Agentweaver.Squad.Catalog;
 
 /// <summary>
-/// Reads the embedded scenario catalog: team templates, role archetypes, and charter templates.
-/// Resource names map directory separators to dots; hyphenated ids map to underscored file names.
+/// Reads the embedded scenario catalog: team templates, role archetypes, charter templates, and
+/// blueprints. Resource names map directory separators to dots; hyphenated ids map to underscored
+/// file names. The role set is fixed at build time: blueprints may roster only roles that exist in
+/// the catalog (blueprints never mint roles).
 /// </summary>
 public sealed class CatalogReader
 {
@@ -88,14 +90,66 @@ public sealed class CatalogReader
         var roleNames = _asm.GetManifestResourceNames()
             .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal));
 
-        var result = new List<Role>();
+        var byId = new Dictionary<string, Role>(StringComparer.OrdinalIgnoreCase);
         foreach (var resourceName in roleNames)
         {
             var id = resourceName[prefix.Length..^".json".Length].Replace('_', '-');
             var role = LoadRole(id);
-            if (role is not null) result.Add(role);
+            if (role is not null) byId[role.Id] = role;
+        }
+
+        return byId.Values.ToList();
+    }
+
+    /// <summary>
+    /// Returns whether a role with the given id is in the catalog. Used to enforce the blueprint role
+    /// constraint: blueprints may roster only catalog roles.
+    /// </summary>
+    public bool HasRole(string id) => LoadRole(id) is not null;
+
+    // -----------------------------------------------------------------------
+    // Blueprints
+    // -----------------------------------------------------------------------
+
+    /// <summary>Loads all predefined blueprints embedded under <c>Catalog/Resources/blueprints</c>.</summary>
+    public IReadOnlyList<Blueprint> LoadAllBlueprints()
+    {
+        var prefix = $"{ResourcePrefix}.blueprints.";
+        var names = _asm.GetManifestResourceNames()
+            .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal))
+            .OrderBy(n => n, StringComparer.Ordinal);
+
+        var result = new List<Blueprint>();
+        foreach (var resourceName in names)
+        {
+            var text = ReadResourceText(resourceName);
+            var blueprint = ParseBlueprint(text);
+            if (blueprint is not null) result.Add(blueprint);
         }
         return result;
+    }
+
+    /// <summary>Loads a single predefined blueprint by id, or null when none is embedded.</summary>
+    public Blueprint? LoadBlueprint(string id)
+    {
+        var text = ReadResourceText($"{ResourcePrefix}.blueprints.{Fid(id)}.json");
+        return ParseBlueprint(text);
+    }
+
+    private static Blueprint? ParseBlueprint(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var dto = JsonSerializer.Deserialize<BlueprintDto>(text, _json);
+        if (dto is null || string.IsNullOrWhiteSpace(dto.Id)) return null;
+
+        return new Blueprint(
+            dto.Id!,
+            dto.Name ?? dto.Id!,
+            dto.Description ?? string.Empty,
+            dto.Roster ?? [],
+            dto.Workflow ?? "default",
+            dto.ReviewPolicy ?? "default",
+            dto.SandboxProfile ?? "default");
     }
 
     public string? LoadCharterTemplate(string roleId)
@@ -135,4 +189,13 @@ public sealed class CatalogReader
         [property: JsonPropertyName("capabilities")] IReadOnlyList<string>? Capabilities,
         [property: JsonPropertyName("responsibilities")] IReadOnlyList<string>? Responsibilities,
         [property: JsonPropertyName("boundaries")] IReadOnlyList<string>? Boundaries);
+
+    private sealed record BlueprintDto(
+        [property: JsonPropertyName("id")] string? Id,
+        [property: JsonPropertyName("name")] string? Name,
+        [property: JsonPropertyName("description")] string? Description,
+        [property: JsonPropertyName("roster")] IReadOnlyList<string>? Roster,
+        [property: JsonPropertyName("workflow")] string? Workflow,
+        [property: JsonPropertyName("review_policy")] string? ReviewPolicy,
+        [property: JsonPropertyName("sandbox_profile")] string? SandboxProfile);
 }

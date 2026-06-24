@@ -16,11 +16,11 @@ import {
   Field,
   Input,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Option,
   Spinner,
   Text,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -28,6 +28,9 @@ import {
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubRepo, Project } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
+import { BlueprintPicker, applyBlueprintToRequest, NO_BLUEPRINT, type BlueprintSelection } from '../components/BlueprintPicker';
+import { API_URL } from '../config';
 
 const useStyles = makeStyles({
   root: {
@@ -86,6 +89,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
   const [sourceRepository, setSourceRepository] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [blueprint, setBlueprint] = useState<BlueprintSelection>(NO_BLUEPRINT);
 
   const reset = () => {
     setName('');
@@ -93,6 +97,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
     setSourceRepository('');
     setError(null);
     setSaving(false);
+    setBlueprint(NO_BLUEPRINT);
   };
 
   const handleSubmit = async () => {
@@ -107,6 +112,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
         working_directory: workingDirectory.trim(),
       };
       if (origin === 'github') req.source_repository = sourceRepository.trim();
+      applyBlueprintToRequest(req, blueprint);
       const project = await apiClient.createProject(req);
       onCreated(project);
       setOpen(false);
@@ -128,6 +134,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
     open, setOpen, name, setName, workingDirectory, setWorkingDirectory,
     sourceRepository, setSourceRepository,
     saving, error, handleSubmit, reset,
+    blueprint, setBlueprint,
   };
 }
 
@@ -135,6 +142,7 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
   const styles = useStyles();
   const d = useCreateProjectDialog('blank', onCreated);
   const [folderName, setFolderName] = useState('');
+  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && !d.saving);
 
   const handleFolderChange = (value: string) => {
     setFolderName(value);
@@ -166,6 +174,7 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
                   placeholder="my-repo"
                 />
               </Field>
+              <BlueprintPicker active={d.open} value={d.blueprint} onChange={d.setBlueprint} />
               {d.error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{d.error}</MessageBarBody>
@@ -179,7 +188,7 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
             </DialogTrigger>
             <Button
               appearance="primary"
-              disabled={!d.name.trim() || !folderName.trim() || d.saving}
+              disabled={!canCreate}
               onClick={() => void d.handleSubmit()}
             >
               {d.saving ? 'Creating' : 'Create'}
@@ -195,6 +204,9 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
 function useGitHubRepos(open: boolean) {
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
   const [fetched, setFetched] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [prevOpen, setPrevOpen] = useState(open);
 
   // Derived-state pattern: reset `fetched` when the dialog opens so `loading` is
@@ -202,27 +214,56 @@ function useGitHubRepos(open: boolean) {
   // so it avoids cascading-render concerns.
   if (open !== prevOpen) {
     setPrevOpen(open);
-    if (open) setFetched(false);
+    if (open) {
+      setFetched(false);
+      setAuthRequired(false);
+      setError(null);
+    }
   }
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    setAuthRequired(false);
+    setError(null);
     apiClient.listGitHubRepos()
       .then((data) => { if (!cancelled) { setRepos(data); setFetched(true); } })
-      .catch(() => { if (!cancelled) setFetched(true); });
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        // A 401 means the app has no valid GitHub token — surface a connect path
+        // instead of a silent empty list. Other failures get a retryable error.
+        if (err instanceof ApiError && err.status === 401) {
+          setAuthRequired(true);
+        } else {
+          setError(
+            err instanceof ApiError
+              ? `Error ${err.status}: ${err.body}`
+              : err instanceof Error ? err.message : String(err),
+          );
+        }
+        setRepos([]);
+        setFetched(true);
+      });
     return () => { cancelled = true; };
-  }, [open]);
+  }, [open, reloadKey]);
 
-  return { repos, loading: open && !fetched };
+  const reload = () => {
+    setFetched(false);
+    setReloadKey((k) => k + 1);
+  };
+
+  return { repos, loading: open && !fetched, authRequired, error, reload };
 }
 
 function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('github', onCreated);
-  const { repos, loading: reposLoading } = useGitHubRepos(d.open);
+  const { repos, loading: reposLoading, authRequired, error: reposError, reload: reloadRepos } = useGitHubRepos(d.open);
   const [repoFilter, setRepoFilter] = useState('');
   const [folderName, setFolderName] = useState('');
+  const canCreate = Boolean(
+    d.name.trim() && d.workingDirectory.trim() && d.sourceRepository.trim() && !d.saving,
+  );
 
   const handleFolderChange = (value: string) => {
     setFolderName(value);
@@ -246,7 +287,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
               <Field label="Name" required>
                 <Input value={d.name} onChange={(_, v) => d.setName(v.value)} placeholder="My project" />
               </Field>
-              <Field label="Source repository" required>
+              <Field label="Source repository" required hint="Search GitHub, or type owner/repo manually">
                 <Combobox
                   freeform
                   placeholder={reposLoading ? 'Loading repositories...' : 'Search or enter owner/repo'}
@@ -276,8 +317,30 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   ))}
                 </Combobox>
               </Field>
+              {authRequired && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    Connect your GitHub account to list repositories, or type owner/repo manually.
+                  </MessageBarBody>
+                  <MessageBarActions>
+                    <Button
+                      size="small"
+                      onClick={() => { window.location.href = `${API_URL}/auth/github/authorize`; }}
+                    >
+                      Connect GitHub
+                    </Button>
+                  </MessageBarActions>
+                </MessageBar>
+              )}
+              {reposError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>Could not load repositories: {reposError}</MessageBarBody>
+                  <MessageBarActions>
+                    <Button size="small" onClick={reloadRepos}>Retry</Button>
+                  </MessageBarActions>
+                </MessageBar>
+              )}
               <Field
-                label="Repository folder"
                 required
                 hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
               >
@@ -288,6 +351,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   placeholder="my-repo"
                 />
               </Field>
+              <BlueprintPicker active={d.open} value={d.blueprint} onChange={d.setBlueprint} />
               {d.error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{d.error}</MessageBarBody>
@@ -301,7 +365,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
             </DialogTrigger>
             <Button
               appearance="primary"
-              disabled={!d.name.trim() || !folderName.trim() || !d.sourceRepository.trim() || d.saving}
+              disabled={!canCreate}
               onClick={() => void d.handleSubmit()}
             >
               {d.saving ? 'Creating' : 'Create'}
@@ -379,7 +443,7 @@ export function ProjectGalleryPage() {
 
   return (
     <div className={styles.root}>
-      <Title2>Projects</Title2>
+      <PageHeader title="Projects" subtitle="Your Agentweaver projects." />
 
       {loading && <Spinner label="Loading projects" />}
 

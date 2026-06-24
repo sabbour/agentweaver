@@ -12,6 +12,7 @@ using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
+using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
@@ -220,7 +221,36 @@ app.MapGet("/api/runs/{id}", async (
         CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
         AutoApproveTools = runOptions.Get(run.Id.ToString()).AutoApproveTools,
         Autopilot = runOptions.Get(run.Id.ToString()).Autopilot,
+        ArchivedAt = run.ArchivedAt,
     });
+});
+
+app.MapPost("/api/runs/{id}/archive", async (
+    HttpContext httpContext,
+    string id,
+    SqliteRunStore runStore,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for archive", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var archived = await runStore.ArchiveAsync(runId, DateTimeOffset.UtcNow, ct);
+    if (!archived && run.ArchivedAt is null) return Results.NotFound();
+
+    var updated = await runStore.GetAsync(runId, ct);
+    return updated is null ? Results.NotFound() : Results.Ok(new { run_id = id, archived_at = updated.ArchivedAt });
 });
 
 app.MapDelete("/api/runs/{id}", async (
@@ -294,7 +324,7 @@ app.MapGet("/api/runs/{id}/stream", async (
     var isSubStream = false;
     if (!RunId.TryParse(id, out var runId))
     {
-        var suffixes = new[] { "-rai", "-scribe" };
+        var suffixes = new[] { "-rai", "-scribe", "-rubberduck" };
         var knownSuffix = suffixes.FirstOrDefault(s => id.EndsWith(s, StringComparison.Ordinal));
         if (knownSuffix is null)
         {
@@ -549,8 +579,21 @@ app.MapGet("/api/runs/{id}/graph", async (
             : CoordinatorGraphDescriptor.BuildEmpty(id));
     }
 
-    var descriptor = workflowFactory.GetGraphDescriptor(isChild: run.ParentRunId is not null);
-    return Results.Ok(descriptor);
+    try
+    {
+        var descriptor = await workflowFactory.GetGraphDescriptorAsync(run, ct);
+        return Results.Ok(descriptor);
+    }
+    catch (ReviewPolicyCompositionException ex)
+    {
+        logger.LogError(ex, "Policy hook failed while building graph for run {RunId}", id);
+        return Results.Conflict(new
+        {
+            error = "policy_hook_failed",
+            code = ex.Code,
+            detail = ex.Message,
+        });
+    }
 });
 
 // GET /api/runs/{id}/history — replay persisted session events for terminal runs.
@@ -675,9 +718,10 @@ app.MapPost("/api/runs/{id}/review", async (
 
     if (request.Approved)
     {
-        var startedMerging = await runStore.TryStartMergingAsync(runId, caller.User, ct);
-        if (!startedMerging)
-            return Results.StatusCode(StatusCodes.Status409Conflict);
+        // Live MAF owns the AwaitingReview -> Merging CAS at the actual merge executor. Stage 2
+        // policies can insert executable gates (e.g. rubberduck) after human approval but before merge,
+        // so moving to Merging here would make request-changes loops from those gates inconsistent.
+        // The direct fallback below still performs the merge synchronously.
     }
     else if (request.RequestChanges)
     {
@@ -761,7 +805,8 @@ app.MapPost("/api/runs/{id}/review", async (
     var decision = new WorkflowReviewDecision(
         Approved: request.Approved,
         RequestChanges: request.RequestChanges,
-        Feedback: request.Feedback);
+        Feedback: request.Feedback,
+        ReviewedBy: caller.User);
     var externalResponse = pendingEntry.Request.CreateResponse(decision);
     try
     {

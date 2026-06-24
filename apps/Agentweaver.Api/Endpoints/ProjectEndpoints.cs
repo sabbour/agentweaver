@@ -6,6 +6,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
@@ -32,6 +33,7 @@ app.MapPost("/api/projects", async (
     HttpContext httpContext,
     CreateProjectRequest request,
     ProjectService projectService,
+    BlueprintService blueprintService,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -50,6 +52,34 @@ app.MapPost("/api/projects", async (
     if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
         return Results.BadRequest(new { error = "working_directory is required." });
 
+    // Resolve and validate any selected blueprint BEFORE creating the project so an invalid blueprint
+    // (e.g. a roster role that is neither in the catalog nor supplied as a new role) is rejected
+    // without leaving an orphaned project (Feature 012).
+    if (!string.IsNullOrWhiteSpace(request.BlueprintId) && request.Blueprint is not null)
+        return Results.BadRequest(new { error = "Provide either blueprint_id or an inline blueprint, not both." });
+
+    Agentweaver.Squad.Model.Blueprint? blueprintToApply = null;
+
+    if (!string.IsNullOrWhiteSpace(request.BlueprintId))
+    {
+        blueprintToApply = blueprintService.GetPredefinedById(request.BlueprintId!);
+        if (blueprintToApply is null)
+            return Results.BadRequest(new { error = $"No predefined blueprint with id '{request.BlueprintId}'." });
+    }
+    else if (request.Blueprint is not null)
+    {
+        blueprintToApply = request.Blueprint.ToModel();
+    }
+
+    if (blueprintToApply is not null)
+    {
+        var validation = blueprintService.Validate(
+            blueprintToApply,
+            BlueprintService.ValidationProject(request.WorkingDirectory));
+        if (!validation.Valid)
+            return Results.BadRequest(new { error = "invalid_blueprint", details = validation.Errors });
+    }
+
     try
     {
         Agentweaver.Domain.Project project;
@@ -67,6 +97,16 @@ app.MapPost("/api/projects", async (
                 request.DefaultProvider, request.DefaultModelGitHubCopilot,
                 request.DefaultModelMicrosoftFoundry, caller.User, ct);
         }
+
+        if (blueprintToApply is not null)
+        {
+            await blueprintService.ApplyAsync(project.Id.ToString(), blueprintToApply, ct);
+            // Re-read so the response reflects the workflow/review/sandbox defaults the blueprint set.
+            var view = await projectService.GetViewAsync(project.Id, ct);
+            if (view is not null)
+                return Results.Created($"/api/projects/{project.Id}", MapProject(view.Project, view.Available));
+        }
+
         return Results.Created($"/api/projects/{project.Id}", MapProject(project, available: true));
     }
     catch (ArgumentException ex)
@@ -209,6 +249,10 @@ app.MapDelete("/api/projects/{id}", async (
 // GET /api/projects/{id}/runs — list runs for a project
 app.MapGet("/api/projects/{id}/runs", async (
     string id,
+    string? agent,
+    bool? terminal_only,
+    bool? include_children,
+    int? limit,
     SqliteRunStore runStore,
     CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
@@ -216,7 +260,13 @@ app.MapGet("/api/projects/{id}/runs", async (
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
 
-    var runs = await runStore.GetRunsByProjectAsync(projectId, ct: ct);
+    var runs = await runStore.GetRunsByProjectAsync(projectId, includeChildren: include_children ?? false, ct: ct);
+    if (!string.IsNullOrWhiteSpace(agent))
+        runs = runs.Where(r => string.Equals(r.AgentName, agent, StringComparison.Ordinal)).ToList();
+    if (terminal_only == true)
+        runs = runs.Where(r => IsTerminalHistoryStatus(r.Status)).ToList();
+    if (limit is > 0)
+        runs = runs.Take(Math.Min(limit.Value, 100)).ToList();
 
     // For coordinator runs, surface the work-plan orchestration status so the list can render
     // "Dispatching" / "Awaiting assembly" / "Failed: <reason>" instead of the bare run status.
@@ -243,9 +293,14 @@ app.MapGet("/api/projects/{id}/runs", async (
         Result        = r.Result,
         CoordinatorStatus = coordinatorStatuses.GetValueOrDefault(r.Id.ToString()),
         CoordinatorStatusReason = isCoordinator ? r.Result : null,
+        ArchivedAt = r.ArchivedAt,
         };
     }));
 });
+
+static bool IsTerminalHistoryStatus(RunStatus status) =>
+    status is RunStatus.Completed or RunStatus.Merged or RunStatus.AssembleReady
+        or RunStatus.Declined or RunStatus.Failed or RunStatus.MergeFailed;
 
 // GET /api/projects/{id}/runs/{workflowRunId} — get a single workflow run by its workflow_run_id
 app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
@@ -281,6 +336,7 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
         Result        = run.Result,
         CoordinatorStatus = coordinatorStatus,
         CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
+        ArchivedAt = run.ArchivedAt,
     });
 });
 

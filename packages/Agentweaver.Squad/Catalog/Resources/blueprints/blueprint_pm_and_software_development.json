@@ -1,0 +1,9 @@
+{
+  "id": "blueprint-pm-and-software-development",
+  "name": "Product & Software Delivery",
+  "description": "A combined product and engineering team that takes work from discovery through delivery. Merges the product-management and software-development rosters, deduplicated.",
+  "roster": ["lead-pm", "customer-researcher", "prototype-designer", "lead-architect", "frontend-engineer", "backend-engineer", "security-engineer", "docs-writer"],
+  "workflow": "default",
+  "review_policy": "default",
+  "sandbox_profile": "default"
+}

@@ -52,6 +52,10 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());
 
+    public IWorkflowTurnAgent CreateRubberduckAgent() => new CopilotAIAgent(
+        _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+        _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());
+
     public IWorkflowTurnAgent CreateScribeAgent() => new ScribeAIAgent(
         _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());

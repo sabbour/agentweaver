@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -73,6 +74,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly ILogger<CoordinatorDispatchService> _logger;
     private readonly CancellationToken _appStopping;
 
+    /// <summary>
+    /// How long an orphaned child run (terminal-less in the store, with NO live watch loop) may make
+    /// no progress before the reconciling dispatch loop stall-fails its subtask instead of polling it
+    /// forever. Configurable via <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 15 minutes).
+    /// </summary>
+    private readonly TimeSpan _stallTimeout;
+
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
     public CoordinatorDispatchService(
@@ -85,7 +93,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IHostApplicationLifetime lifetime,
         ILogger<CoordinatorDispatchService> logger,
         IRunOptionsStore? runOptions = null,
-        ICoordinatorAutopilot? autopilot = null)
+        ICoordinatorAutopilot? autopilot = null,
+        IConfiguration? configuration = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -97,6 +106,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _autopilot = autopilot;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+
+        var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 15.0) ?? 15.0;
+        _stallTimeout = TimeSpan.FromMinutes(Math.Max(0, stallMinutes));
     }
 
     /// <summary>
@@ -140,7 +152,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     // Dispatch + observe loop
     // -----------------------------------------------------------------------
 
-    private async Task RunDispatchLoopAsync(CoordinatorDispatchContext context, CancellationToken ct)
+    internal async Task RunDispatchLoopAsync(CoordinatorDispatchContext context, CancellationToken ct)
     {
         var (workPlanId, subtasks, edges) = await LoadPlanAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         if (workPlanId is null)
@@ -170,6 +182,32 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var inFlight = new Dictionary<int, Task<ChildResult>>();
 
+        // RECOVERY-AWARE RE-ARM. A re-armed loop (reconciler sweep, startup recovery, or a manual
+        // steer-resume of an orphan) may find subtasks already dispatched/running from a PRIOR process
+        // whose child runs have since reached a terminal state in the run store. Re-observe each so
+        // ObserveChildAsync store-resolves the child (its in-memory stream entry may be gone after a
+        // restart/eviction) and ApplyChildResultAsync advances the frontier, instead of the loop going
+        // quiescent (inFlight empty -> break) and stranding them. The dispatch loop is the SINGLE
+        // writer of these subtask rows and StartDispatch's _active guard confirms no other loop runs.
+        var reArmed = subtasks
+            .Where(s => (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running)
+                && !string.IsNullOrEmpty(s.ChildRunId))
+            .ToList();
+        foreach (var s in reArmed)
+            inFlight[s.Id] = ObserveChildAsync(context.CoordinatorRunId, s.Id, s.ChildRunId!, ct);
+
+        if (reArmed.Count > 0)
+        {
+            _logger.LogInformation(
+                "Coordinator dispatch re-armed for run {RunId}: re-observing {Count} in-flight subtask(s) [{Ids}] after recovery",
+                context.CoordinatorRunId, reArmed.Count, string.Join(",", reArmed.Select(s => s.Id)));
+            entry?.RecordNext(EventTypes.CoordinatorRecovered, new
+            {
+                reason = "dispatch_rearm",
+                reObservedSubtaskIds = reArmed.Select(s => s.Id).ToList(),
+            });
+        }
+
         while (!ct.IsCancellationRequested)
         {
             // Dispatch the entire current frontier (parallel for independent subtasks).
@@ -192,6 +230,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             var result = await finished.ConfigureAwait(false);
             inFlight.Remove(result.SubtaskId);
 
+            // A re-observed orphaned child that has made no progress past the stall threshold (no live
+            // watch loop, non-terminal in the store) is failed deterministically so the loop never
+            // spins forever and the frontier can advance / the run can settle.
+            if (result.Outcome == ChildOutcome.Stalled)
+            {
+                await ApplyStallFailureAsync(
+                    context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
+                continue;
+            }
+
             // Honest next-turn-boundary steering: the child's current turn has just completed, so a
             // queued redirect/amend for this child can now be applied by injecting a revised task
             // turn (no mid-turn interrupt). Only a child that reached a clean boundary
@@ -203,6 +251,20 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (directive is not null
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false))
+                {
+                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, result.SubtaskId, result.ChildRunId, ct);
+                    continue;
+                }
+            }
+            // A redirect directive targeting this child can also apply when the child was force-cancelled
+            // (by the steering service or the proactive reconciler sweep) to unblock a stuck child.
+            // Amend is not applied on failure — it is additive and requires a clean boundary.
+            else if (result.Outcome == ChildOutcome.Failed)
+            {
+                var redirect = _steering.TryTakeRedirectForChild(context.CoordinatorRunId, result.ChildRunId);
+                if (redirect is not null
+                    && await TryInjectSteeringRevisionAsync(
+                        context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false))
                 {
                     inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, result.SubtaskId, result.ChildRunId, ct);
                     continue;
@@ -280,6 +342,27 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         SeqCounter seq,
         CancellationToken ct)
     {
+        // Idempotency guard: if an active (in_progress or assemble_ready) child run already exists
+        // for this (coordinator, subtask) pair, re-use it instead of creating a second worker.
+        // This can occur when recovery (steering redirect / reconciler re-arm) resets a subtask's
+        // status to Pending with ChildRunId = null while the old child is still executing.
+        var existingActive = await _runStore.FindActiveChildAsync(
+            context.CoordinatorRunId, subtaskId.ToString(), ct).ConfigureAwait(false);
+        if (existingActive is not null)
+        {
+            _logger.LogWarning(
+                "Coordinator dispatch: subtask {SubtaskId} already has an active child run {ChildRunId} " +
+                "(status {Status}); re-observing instead of dispatching a duplicate",
+                subtaskId, existingActive.Id, existingActive.Status);
+
+            var reattached = await UpdateSubtaskAsync(
+                subtaskId, SubtaskStatus.Running, existingActive.Id.ToString(), ct).ConfigureAwait(false);
+            statusById[subtaskId] = SubtaskStatus.Running;
+            if (reattached is not null)
+                EmitSubtask(context, workPlanId, reattached, EventTypes.SubtaskRunning, seq.Next());
+            return existingActive.Id.ToString();
+        }
+
         var childRunId = RunId.New();
 
         // Mark dispatched + record the child run id, then project the lifecycle + topology delta.
@@ -369,6 +452,51 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         statusById[result.SubtaskId] = status;
         if (subtask is not null)
             EmitSubtask(context, workPlanId, subtask, eventType, seq.Next());
+    }
+
+    /// <summary>
+    /// Fails a subtask whose orphaned child run appears stalled (no live watch loop, non-terminal in
+    /// the store, no progress past the stall threshold). Records recovery guidance and bumps the
+    /// per-subtask recovery-attempt counter (capped at <see cref="CoordinatorSteeringService.MaxRecoveryAttempts"/>
+    /// so a persistently stalled subtask cannot be re-dispatched forever). Best-effort: a missing row
+    /// is treated as already failed.
+    /// </summary>
+    private async Task ApplyStallFailureAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        ChildResult result,
+        Dictionary<int, string> statusById,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        Subtask? updated = null;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == result.SubtaskId, ct).ConfigureAwait(false);
+            if (row is not null)
+            {
+                var since = result.StaleSince ?? DateTimeOffset.UtcNow;
+                row.Status = SubtaskStatus.Failed;
+                row.RecoveryGuidance =
+                    $"Child run appears stalled/orphaned; no progress since {since:O}. " +
+                    "The coordinator failed this subtask during reconciliation.";
+                row.RecoveryAttempts = Math.Min(
+                    row.RecoveryAttempts + 1, CoordinatorSteeringService.MaxRecoveryAttempts);
+                row.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                db.Entry(row).State = EntityState.Detached;
+                updated = row;
+            }
+        }
+
+        statusById[result.SubtaskId] = SubtaskStatus.Failed;
+        if (updated is not null)
+            EmitSubtask(context, workPlanId, updated, EventTypes.SubtaskFailed, seq.Next());
+
+        _logger.LogWarning(
+            "Coordinator dispatch: stall-failed subtask {SubtaskId} (child {ChildRunId}) during reconciliation for run {RunId}",
+            result.SubtaskId, result.ChildRunId, context.CoordinatorRunId);
     }
 
     // -----------------------------------------------------------------------
@@ -479,6 +607,14 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 var byStore = await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false);
                 if (byStore is { } outcomeNow)
                     return new ChildResult(subtaskId, childRunId, outcomeNow);
+
+                // Non-terminal in the store with NO live stream entry (evicted / post-restart /
+                // orphaned): nothing is driving this child. If it has made no progress past the stall
+                // threshold, treat it as stalled/orphaned so the reconciling loop never polls forever.
+                var staleSince = await StaleSinceAsync(childRunId, ct).ConfigureAwait(false);
+                if (staleSince is { } since)
+                    return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled, since);
+
                 await Task.Delay(200, ct).ConfigureAwait(false);
                 continue;
             }
@@ -608,6 +744,41 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             RunStatus.MergeFailed => ChildOutcome.Failed,
             _ => null, // still in progress
         };
+    }
+
+    /// <summary>
+    /// Returns the last-activity timestamp when an orphaned child run (non-terminal in the store with
+    /// no live watch loop) has made no progress for longer than <see cref="_stallTimeout"/>, or null
+    /// when it is still within the threshold (or cannot be resolved). Last activity is the later of the
+    /// child run's start time and its most recent persisted run event, so a child that emitted recent
+    /// events is never considered stalled.
+    /// </summary>
+    private async Task<DateTimeOffset?> StaleSinceAsync(string childRunId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(childRunId, out var parsed))
+            return null;
+        var run = await _runStore.GetAsync(parsed, ct).ConfigureAwait(false);
+        if (run is null)
+            return null;
+
+        var lastActivity = run.StartedAt;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var latest = await db.RunEvents
+                .Where(e => e.RunId == childRunId)
+                .OrderByDescending(e => e.CreatedAt)
+                .Select(e => (DateTime?)e.CreatedAt)
+                .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+            if (latest is { } le)
+            {
+                var leOffset = new DateTimeOffset(DateTime.SpecifyKind(le, DateTimeKind.Utc));
+                if (leOffset > lastActivity)
+                    lastActivity = leOffset;
+            }
+        }
+
+        return DateTimeOffset.UtcNow - lastActivity >= _stallTimeout ? lastActivity : null;
     }
 
     // -----------------------------------------------------------------------
@@ -767,9 +938,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             : null;
     }
 
-    private enum ChildOutcome { AssembleReady, RaiFlagged, Completed, Failed }
+    private enum ChildOutcome { AssembleReady, RaiFlagged, Completed, Failed, Stalled }
 
-    private sealed record ChildResult(int SubtaskId, string ChildRunId, ChildOutcome Outcome);
+    private sealed record ChildResult(int SubtaskId, string ChildRunId, ChildOutcome Outcome, DateTimeOffset? StaleSince = null);
 
     /// <summary>Monotonic topology sequence: snapshot is <c>Current</c> (0), each delta is <c>Next()</c>.</summary>
     internal sealed class SeqCounter

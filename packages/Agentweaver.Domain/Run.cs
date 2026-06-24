@@ -58,4 +58,7 @@ public sealed record Run
     /// soft retry-depth cap.
     /// </summary>
     public string? RetriedFrom { get; init; }
+
+    /// <summary>When set, the run is archived off project board/list projections.</summary>
+    public DateTimeOffset? ArchivedAt { get; init; }
 }

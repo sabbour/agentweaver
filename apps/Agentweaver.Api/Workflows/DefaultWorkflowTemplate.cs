@@ -5,10 +5,10 @@ namespace Agentweaver.Api.Workflows;
 /// single source of truth for "the default workflow" — held in code, NOT a checked-in repo file.
 ///
 /// It is materialized per-project at instantiation time into
-/// <c>&lt;projectWorkingDir&gt;/.scaffolders/workflows/default.yaml</c> (see
+/// <c>&lt;projectWorkingDir&gt;/.agentweaver/workflows/default.yaml</c> (see
 /// <see cref="TryMaterialize"/>), mirroring the Scaffolder template materialization pattern: the user
 /// can edit the generated file afterwards. It also doubles as the runtime fallback — a project with no
-/// materialized <c>.scaffolders/workflows/</c> (e.g. created before this feature) still resolves this
+/// materialized <c>.agentweaver/workflows/</c> (e.g. created before this feature) still resolves this
 /// default through <see cref="BuiltInWorkflows"/>, so no migration is required for existing projects.
 ///
 /// The YAML is a behavior-preserving conversion of <c>RunWorkflowFactory.BuildWorkflow</c>: the
@@ -18,7 +18,7 @@ namespace Agentweaver.Api.Workflows;
 public static class DefaultWorkflowTemplate
 {
     /// <summary>The relative path, within a project working directory, where the default is written.</summary>
-    public const string RelativeFilePath = ".scaffolders/workflows/default.yaml";
+    public const string RelativeFilePath = ".agentweaver/workflows/default.yaml";
 
     /// <summary>The canonical default workflow YAML. Parsed through the real loader everywhere it is
     /// used, so it is validated identically to any project-authored workflow (Principle VII).</summary>
@@ -58,6 +58,7 @@ public static class DefaultWorkflowTemplate
             label: Rai
             role: review
             kind: gate
+            gate_kind: rai
             branches:
               - revise
               - safety-failed
@@ -69,6 +70,7 @@ public static class DefaultWorkflowTemplate
             label: Review
             role: review
             kind: gate
+            gate_kind: human-review
             branches:
               - approved
               - request-changes
@@ -158,7 +160,7 @@ public static class DefaultWorkflowTemplate
         error = null;
         try
         {
-            var path = Path.Combine(workingDirectory, ".scaffolders", "workflows", "default.yaml");
+            var path = Path.Combine(workingDirectory, ".agentweaver", "workflows", "default.yaml");
             if (File.Exists(path)) return false;
 
             var dir = Path.GetDirectoryName(path)!;

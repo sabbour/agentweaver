@@ -6,38 +6,28 @@ namespace Agentweaver.Api.Runs;
 /// <summary>A single workflow-stage column derived from the coordinator topology (descriptor-driven).</summary>
 public sealed record WorkflowStage(string Id, string Label, int Order);
 
-/// <summary>
-/// Derives the board's workflow columns from <see cref="CoordinatorGraphDescriptor"/> (never a
-/// hardcoded list) and maps a coordinator run's persisted state to the column it currently occupies.
-/// </summary>
+/// <summary>Maps persisted coordinator/run state into the board's fixed canonical bucket model.</summary>
 public sealed class WorkflowStageProjector : IWorkflowStageProjector
 {
-    public const string TerminalStageId = "terminal";
+    public const string ProblemsStageId = "problems";
+    public const string HumanReviewStageId = "human-review";
+    public const string ActiveStageId = "active";
+    public const string DoneStageId = "done";
+
+    public const string TerminalStageId = DoneStageId;
     public const string TerminalStageLabel = "Done";
 
     /// <summary>
-    /// Builds the canonical, plan-independent coordinator topology and projects its ordered backbone
-    /// nodes into columns. A node projects to a column iff its node_type is not "subtask" (subtask
-    /// nodes are per-run fan-out, rendered nested under their coordinator card). One terminal "Done"
-    /// stage is appended as the FR-016a sink. Throws/returns empty only if the descriptor cannot be
-    /// resolved (the caller then sets workflow_stages_available = false).
+    /// Returns the non-intake canonical buckets. Backlog and Ready are intake columns owned by
+    /// <see cref="BacklogTaskState"/>; all run-backed work folds into these four fixed buckets.
     /// </summary>
-    public IReadOnlyList<WorkflowStage> GetStages()
+    public IReadOnlyList<WorkflowStage> GetStages() => new[]
     {
-        var descriptor = CoordinatorGraphDescriptor.BuildEmpty(Guid.Empty.ToString("D"));
-
-        var stages = new List<WorkflowStage>();
-        var order = 0;
-        foreach (var node in descriptor.Nodes)
-        {
-            if (string.Equals(node.NodeType, "subtask", StringComparison.Ordinal))
-                continue;
-            stages.Add(new WorkflowStage(node.Id, node.Label, order++));
-        }
-
-        stages.Add(new WorkflowStage(TerminalStageId, TerminalStageLabel, order));
-        return stages;
-    }
+        new WorkflowStage(ProblemsStageId, "Problems", 0),
+        new WorkflowStage(HumanReviewStageId, "Human Review", 1),
+        new WorkflowStage(ActiveStageId, "Active", 2),
+        new WorkflowStage(DoneStageId, "Done", 3),
+    };
 
     /// <summary>
     /// Maps a coordinator run's authoritative persisted state to the column id it currently occupies.
@@ -47,23 +37,31 @@ public sealed class WorkflowStageProjector : IWorkflowStageProjector
     /// </summary>
     public string CoordinatorRunToStageId(Run coordinatorRun, CoordinatorWorkPlanStage? planStage)
     {
-        if (coordinatorRun.Status is RunStatus.Completed or RunStatus.Merged or RunStatus.Failed
-            or RunStatus.Declined or RunStatus.MergeFailed)
-            return TerminalStageId;
+        if (coordinatorRun.Status is RunStatus.Failed or RunStatus.Declined or RunStatus.MergeFailed)
+            return ProblemsStageId;
+
+        if (coordinatorRun.Status is RunStatus.Completed or RunStatus.Merged or RunStatus.AssembleReady)
+            return DoneStageId;
+
+        if (coordinatorRun.Status is RunStatus.AwaitingReview)
+            return HumanReviewStageId;
 
         var status = planStage?.Status;
-        if (status is WorkPlanStatus.Complete or WorkPlanStatus.AssemblyBlocked
-            or WorkPlanStatus.AssemblyFailed or WorkPlanStatus.AssemblyDeclined)
-            return TerminalStageId;
+        if (status is WorkPlanStatus.AssemblyBlocked or WorkPlanStatus.AssemblyFailed
+            or WorkPlanStatus.AssemblyDeclined)
+            return ProblemsStageId;
+
+        if (status is WorkPlanStatus.Complete)
+            return DoneStageId;
+
+        if (status is WorkPlanStatus.InReview)
+            return HumanReviewStageId;
 
         return planStage?.AssemblyStage switch
         {
-            AssemblyStage.Rai    => CoordinatorGraphDescriptor.AssemblyRaiNodeId,
-            AssemblyStage.Review => CoordinatorGraphDescriptor.AssemblyReviewNodeId,
-            AssemblyStage.Merge  => CoordinatorGraphDescriptor.AssemblyMergeNodeId,
-            AssemblyStage.Scribe => CoordinatorGraphDescriptor.AssemblyScribeNodeId,
-            AssemblyStage.Done   => TerminalStageId,
-            _ => CoordinatorGraphDescriptor.CoordinatorNodeId,
+            AssemblyStage.Review => HumanReviewStageId,
+            AssemblyStage.Done   => DoneStageId,
+            _ => ActiveStageId,
         };
     }
 }

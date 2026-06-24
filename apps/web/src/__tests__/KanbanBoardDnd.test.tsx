@@ -15,6 +15,7 @@ vi.mock('../api/apiClient', () => ({
     captureBacklogTask: vi.fn(),
     editBacklogTask: vi.fn(),
     deleteBacklogTask: vi.fn(),
+    deleteRun: vi.fn(),
     moveTaskToReady: vi.fn(),
     moveTaskToBacklog: vi.fn(),
     reorderBacklogTask: vi.fn(),
@@ -93,9 +94,9 @@ describe('KanbanBoard — Backlog<->Ready drag constraint (FR-018/018a)', () => 
 
   it('dropping onto a workflow column is rejected: no move API call, MessageBar shown (FR-018)', async () => {
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
-    await waitFor(() => expect(screen.getByTestId('column-coordinator')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('column-active')).toBeTruthy());
 
-    fireEvent.drop(screen.getByTestId('column-coordinator'), { dataTransfer: dataTransferFor('t1', 'backlog') });
+    fireEvent.drop(screen.getByTestId('column-active'), { dataTransfer: dataTransferFor('t1', 'backlog') });
 
     await waitFor(() => expect(screen.getByTestId('reject-message')).toBeTruthy());
     expect(vi.mocked(apiClient.moveTaskToReady)).not.toHaveBeenCalled();

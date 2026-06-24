@@ -167,7 +167,7 @@ public sealed class RunWatchLoopService
     /// terminal handlers below.
     /// </summary>
     private static readonly HashSet<string> DedicatedStepNodes =
-        new(StringComparer.Ordinal) { "agent", "rai", "merge", "scribe", "review" };
+        new(StringComparer.Ordinal) { "agent", "rai", "merge", "scribe", "review", "policy-rai", "policy-rubberduck", "policy-human-review" };
 
     private void EmitExecutorStep(string runId, RunStreamEntry entry, string executorId, string status)
     {
@@ -319,6 +319,20 @@ public sealed class RunWatchLoopService
                 stepCount = assembleReady.StepCount,
                 raiSafetyFlagged = assembleReady.RaiSafetyFlagged,
             });
+
+            // Emit an explicit no-changes signal when the worker produced nothing so the coordinator
+            // and the UI can surface it clearly (the reviewer must not be sent to an empty diff with
+            // no explanation — they need to know this subtask wrote no files to the repository).
+            if (!assembleReady.HasChanges)
+            {
+                entry.RecordNext(EventTypes.RunNoChangesProduced, new
+                {
+                    runId,
+                    subtaskId = child?.SubtaskId,
+                    parentRunId = child?.ParentRunId,
+                    message = "This subtask completed without writing any deliverables to the repository.",
+                });
+            }
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);

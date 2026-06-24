@@ -40,14 +40,11 @@ namespace Agentweaver.AgentRuntime;
 public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnAgent
 {
     /// <summary>
-    /// Agentweaver API tool names that are auto-approved without sandbox governance.
-    /// The HTTP call executes in the function body after approval.
+    /// Agentweaver API/MCP-equivalent tool names that are auto-approved without sandbox governance.
+    /// The HTTP call executes in the function body after approval and still authenticates against
+    /// the loopback API using the configured Agentweaver API key.
     /// </summary>
-    private static readonly HashSet<string> AgentweaverApiToolNames = new(StringComparer.Ordinal)
-    {
-        "submit_decision", "record_memory", "update_session", "submit_inbox_entry",
-        "list_inbox", "merge_inbox_entry", "export_memory",
-    };
+    private static readonly ISet<string> AgentweaverApiToolNames = AgentweaverApiTools.ToolNames;
 
     // Universal runtime contract. Agent identity and tool-usage guidance live in the charter.
 
@@ -91,6 +88,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private SandboxToolContext? _toolContext;
     private ISandboxExecutor? _activeExecutor;
     private SandboxPolicy? _sandboxPolicy;
+    private IReadOnlyList<string> _registeredToolNames = [];
 
     // --- Per-run run-event emission state (reset in SetupAsync) ---
     private StringBuilder _sb = new();
@@ -231,6 +229,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             QuestionGate: _questionGate);
         _toolContext = toolContext;
 
+        var sessionTools = BuildSessionConfigTools(toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey);
+        _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
+
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(_governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
@@ -240,7 +241,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // Deterministic session ID enables history replay via ResumeSessionAsync.
             // Format: "agentweaver-run-{runId}" — unique per run, stable across restarts.
             SessionId = $"agentweaver-run-{runId}",
-            Tools = BuildSessionConfigTools(toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey),
+            Tools = sessionTools,
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
@@ -366,7 +367,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             : AgentBasePrompt.Base + "\n\n" + _systemPromptContext;
         Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext) });
         Emit("agent.task", new { task });
-        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
+        Emit("agent.tools", new { provider = "copilot", tools = _registeredToolNames });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });

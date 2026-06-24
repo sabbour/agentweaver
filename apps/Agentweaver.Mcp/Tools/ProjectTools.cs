@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ModelContextProtocol.Server;
 
 namespace Agentweaver.Mcp.Tools;
@@ -35,17 +36,27 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project.")]
+    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
         [Description("Local repository path")] string repository_path,
         [Description("Model source (optional, e.g. github_copilot or microsoft_foundry)")] string? model_source,
+        [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id,
+        [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint,
         CancellationToken ct)
     {
         try
         {
-            var body = new { name, repository_path, model_source };
-            var result = await api.PostAsync<JsonElement>("/api/projects", body, ct);
+            var bodyNode = new JsonObject
+            {
+                ["name"] = name,
+                ["repository_path"] = repository_path,
+            };
+            if (model_source is not null) bodyNode["model_source"] = model_source;
+            if (blueprint_id is not null) bodyNode["blueprint_id"] = blueprint_id;
+            if (blueprint.HasValue) bodyNode["blueprint"] = JsonNode.Parse(blueprint.Value.GetRawText());
+
+            var result = await api.PostAsync<JsonElement>("/api/projects", bodyNode, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

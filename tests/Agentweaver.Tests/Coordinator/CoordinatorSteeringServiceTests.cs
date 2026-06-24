@@ -161,6 +161,81 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    // send — informational nudge, applied immediately, no plan change.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Send_AppliesImmediately_WithoutQueuingOrDispatchChange()
+    {
+        _streamStore.Create("coord-send", "alice");
+
+        var view = await _sut.SteerAsync("coord-send", "send", null, "note for the operator", "alice", default);
+
+        view.Kind.Should().Be(SteeringKind.Send);
+        view.Status.Should().Be(SteeringStatus.Applied, "send collapses to applied immediately");
+        view.RelayedAt.Should().NotBeNull("an applied send records the relay time");
+        view.TargetChildRunId.Should().BeNull("send is coordinator-level, not child-targeted");
+
+        // Nothing queued in the next-boundary queue.
+        _queue.TryTakeForChild("coord-send", "any-child").Should().BeNull("send never goes through the steering queue");
+
+        // Persisted as applied.
+        var persisted = await GetDirectiveAsync(view.Id);
+        persisted!.Status.Should().Be(SteeringStatus.Applied);
+
+        // A coordinator.steering event is emitted on the run stream.
+        var events = _streamStore.Get("coord-send")!.GetSnapshotSince(0).Events;
+        events.Should().Contain(e => e.Type == EventTypes.CoordinatorSteering,
+            "send must emit a coordinator.steering event for the timeline");
+    }
+
+    [Fact]
+    public async Task Send_DoesNotAlterDispatch_SubtaskStatusUnchanged()
+    {
+        const string coord = "coord-send-nodisrupt";
+        _streamStore.Create(coord, "alice");
+
+        // Seed a subtask in running status — send must leave it unchanged.
+        await SeedActiveChildAsync(coord, "child-send-1", SubtaskStatus.Running);
+
+        var view = await _sut.SteerAsync(coord, "send", null, "context update", "alice", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+
+        // Verify the subtask was not reset.
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtask = await db.Subtasks.FirstAsync();
+        subtask.Status.Should().Be(SubtaskStatus.Running, "send must not alter any subtask status");
+    }
+
+    [Fact]
+    public async Task Send_DoesNotRequireInstruction_AcceptsEmptyString()
+    {
+        _streamStore.Create("coord-send-empty", "alice");
+
+        // send does not require a non-empty instruction (unlike redirect/amend)
+        var view = await _sut.SteerAsync("coord-send-empty", "send", null, "", "alice", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+        (await CountDirectivesAsync()).Should().Be(1);
+    }
+
+    // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // Redirect vs Amend on parked coordinator: distinct subtask-reset behavior.
+    // These tests live in CoordinatorSteeringRecoveryTests (which has the full
+    // SqliteRunStore + ICoordinatorDispatch DI wiring required by
+    // TryResumeParkedCoordinatorAsync).
+    // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Redirect force-cancel: when targeting a specific in-progress child.
+    // (Full dispatch/DI tests for redirect vs amend on parked coordinators are in
+    // CoordinatorSteeringRecoveryTests which has the full SqliteRunStore wiring.)
+    // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
 
     private async Task SeedActiveChildAsync(string coordinatorRunId, string childRunId, string status)
     {

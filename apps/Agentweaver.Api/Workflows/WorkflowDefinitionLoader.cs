@@ -91,6 +91,7 @@ public static class WorkflowDefinitionLoader
                 Label = string.IsNullOrWhiteSpace(n.Label) ? n.Id : n.Label,
                 Role = n.Role,
                 Kind = n.Kind,
+                GateKind = string.IsNullOrWhiteSpace(n.GateKind) ? null : n.GateKind,
                 Agent = n.Agent,
                 Prompt = n.Prompt,
                 Target = n.Target,
@@ -247,6 +248,7 @@ internal sealed class NodeYamlDto
     public string? Label { get; set; }
     public string? Role { get; set; }
     public string? Kind { get; set; }
+    public string? GateKind { get; set; }
     public string? Agent { get; set; }
     public string? Prompt { get; set; }
     public string? Target { get; set; }

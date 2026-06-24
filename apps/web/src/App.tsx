@@ -23,6 +23,7 @@ import { HeartbeatPage } from './pages/HeartbeatPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { FlowPage } from './pages/FlowPage';
 import { OrchestrationsPage } from './pages/OrchestrationsPage';
+import { WorkspacePage } from './pages/WorkspacePage';
 import { OverviewPage } from './pages/OverviewPage';
 import { AppShell } from './components/shell/AppShell';
 import { apiClient } from './api/apiClient';
@@ -41,6 +42,7 @@ function Shell() {
         <Route path="/projects/:projectId/board" element={<ProjectPage />} />
         <Route path="/projects/:projectId/flow" element={<FlowPage />} />
         <Route path="/projects/:projectId/orchestrations" element={<OrchestrationsPage />} />
+        <Route path="/projects/:projectId/workspace" element={<WorkspacePage />} />
         <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
         <Route path="/projects/:projectId/team" element={<TeamPage />} />
         <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />

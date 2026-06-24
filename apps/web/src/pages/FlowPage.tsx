@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   Badge,
   Button,
@@ -7,7 +7,6 @@ import {
   MessageBarBody,
   Spinner,
   Text,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -16,9 +15,11 @@ import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AgentAvatar } from '../components/AgentAvatar';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import { fromDto } from '../api/agentQueues';
 import type { AgentQueueItem } from '../api/agentQueues';
-import type { Project } from '../api/types';
+import type { Project, WorkflowRunDto } from '../api/types';
 
 // Flow — the live "what each agent is working on" view for a project. This is the
 // home of live agent activity (moved out of the per-run coordinator page, which
@@ -43,16 +44,6 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalL,
-  },
-  subtitle: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase300,
   },
   actions: {
     display: 'flex',
@@ -97,6 +88,29 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase200,
   },
+  orchestrations: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  orchestrationGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    borderLeft: `2px solid ${tokens.colorNeutralStroke2}`,
+  },
+  orchestrationTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground1,
+  },
+  orchestrationBadges: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
   runLinks: {
     display: 'flex',
     gap: tokens.spacingHorizontalS,
@@ -118,10 +132,69 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     textAlign: 'center',
   },
+  filterNote: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    color: tokens.colorNeutralForeground2,
+  },
+  archivePanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  archiveList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  archiveItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusSmall,
+  },
+  archiveMeta: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+  },
 });
+
+function terminalStatusColor(status: string): 'success' | 'danger' | 'warning' | 'subtle' {
+  switch (status) {
+    case 'merged':
+    case 'completed':
+    case 'assemble_ready':
+      return 'success';
+    case 'failed':
+    case 'merge_failed':
+      return 'danger';
+    case 'declined':
+      return 'warning';
+    default:
+      return 'subtle';
+  }
+}
+
+function formatEndedAt(run: WorkflowRunDto): string {
+  const timestamp = run.ended_at ?? run.started_at;
+  return new Date(timestamp).toLocaleString();
+}
 
 function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: string }) {
   const styles = useStyles();
+  const hasGroups = agent.orchestrations && agent.orchestrations.length > 0;
   return (
     <div className={styles.card}>
       <div className={styles.cardHeader}>
@@ -139,26 +212,59 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
         )}
       </div>
 
-      {agent.sampleTitles && agent.sampleTitles.length > 0 && (
-        <ul className={styles.titles}>
-          {agent.sampleTitles.map((title, i) => (
-            <li key={i}>{title}</li>
-          ))}
-        </ul>
-      )}
-
-      {agent.runIds && agent.runIds.length > 0 && (
-        <div className={styles.runLinks}>
-          {agent.runIds.map((runId) => (
-            <Link
-              key={runId}
-              to={`/projects/${projectId}/orchestrations/${runId}`}
-              className={styles.runLink}
-            >
-              View orchestration
-            </Link>
+      {hasGroups ? (
+        <div className={styles.orchestrations}>
+          {agent.orchestrations.map((orch) => (
+            <div key={orch.runId} className={styles.orchestrationGroup}>
+              <span className={styles.orchestrationTitle}>
+                {orch.title ?? `Orchestration ${orch.runId.slice(0, 8)}`}
+              </span>
+              <div className={styles.orchestrationBadges}>
+                {orch.active > 0 && <Badge appearance="tint" color="informative">{orch.active} active</Badge>}
+                {orch.queued > 0 && <Badge appearance="tint" color="subtle">{orch.queued} queued</Badge>}
+                {orch.blocked > 0 && <Badge appearance="tint" color="danger">{orch.blocked} blocked</Badge>}
+                {orch.done > 0 && <Badge appearance="tint" color="success">{orch.done} done</Badge>}
+              </div>
+              {orch.sampleTitles && orch.sampleTitles.length > 0 && (
+                <ul className={styles.titles}>
+                  {orch.sampleTitles.map((title, i) => (
+                    <li key={i}>{title}</li>
+                  ))}
+                </ul>
+              )}
+              <Link
+                to={`/projects/${projectId}/orchestrations/${orch.runId}`}
+                className={styles.runLink}
+              >
+                View orchestration
+              </Link>
+            </div>
           ))}
         </div>
+      ) : (
+        <>
+          {agent.sampleTitles && agent.sampleTitles.length > 0 && (
+            <ul className={styles.titles}>
+              {agent.sampleTitles.map((title, i) => (
+                <li key={i}>{title}</li>
+              ))}
+            </ul>
+          )}
+
+          {agent.runIds && agent.runIds.length > 0 && (
+            <div className={styles.runLinks}>
+              {agent.runIds.map((runId) => (
+                <Link
+                  key={runId}
+                  to={`/projects/${projectId}/orchestrations/${runId}`}
+                  className={styles.runLink}
+                >
+                  View orchestration
+                </Link>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -167,11 +273,17 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
 export function FlowPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  const [searchParams] = useSearchParams();
+  const selectedAgent = searchParams.get('agent')?.trim() ?? '';
 
   const [agents, setAgents] = useState<AgentQueueItem[]>([]);
+  const [history, setHistory] = useState<WorkflowRunDto[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -194,6 +306,7 @@ export function FlowPage() {
         if (!cancelled) {
           setAgents((board.agent_queues ?? []).map(fromDto));
           setError(null);
+          setLastRefreshedAt(Date.now());
         }
       } catch (err) {
         if (!cancelled) setError(formatError(err));
@@ -210,6 +323,39 @@ export function FlowPage() {
     };
   }, [projectId]);
 
+  useEffect(() => {
+    if (!projectId || !selectedAgent) {
+      setHistory([]);
+      setHistoryError(null);
+      setHistoryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    apiClient
+      .getProjectRuns(projectId, {
+        agentName: selectedAgent,
+        terminalOnly: true,
+        includeChildren: true,
+        limit: 20,
+      })
+      .then((runs) => {
+        if (!cancelled) setHistory(runs);
+      })
+      .catch((err) => {
+        if (!cancelled) setHistoryError(formatError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, selectedAgent]);
+
   const sorted = useMemo(
     () =>
       [...agents].sort(
@@ -219,42 +365,56 @@ export function FlowPage() {
     [agents],
   );
 
+  const visibleAgents = useMemo(
+    () =>
+      selectedAgent
+        ? sorted.filter((agent) => agent.agentName === selectedAgent)
+        : sorted,
+    [selectedAgent, sorted],
+  );
+
   if (!projectId) return null;
 
   return (
     <div className={styles.root}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
-          {project?.name ?? projectId}
-        </Link>
-        <span>/</span>
-        <span>Flow</span>
-      </div>
-
-      <div className={styles.pageHeader}>
-        <div>
-          <Title2>Flow</Title2>
-          <Text as="p" className={styles.subtitle}>What each agent is working on right now.</Text>
-        </div>
-        <div className={styles.actions}>
-          {loading && <Spinner size="extra-tiny" aria-label="Refreshing" />}
-          <Button
-            appearance="secondary"
-            icon={<ArrowSyncRegular />}
-            onClick={() => {
-              setLoading(true);
-              apiClient.getBoard(projectId)
-                .then((board) => { setAgents((board.agent_queues ?? []).map(fromDto)); setError(null); })
-                .catch((err) => setError(formatError(err)))
-                .finally(() => setLoading(false));
-            }}
-          >
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Flow"
+        subtitle={selectedAgent
+          ? `Live work and terminal-run archive for ${selectedAgent}.`
+          : 'What each agent is working on right now.'}
+        breadcrumb={
+          <div className={styles.breadcrumb}>
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
+              {project?.name ?? projectId}
+            </Link>
+            <span>/</span>
+            <span>Flow</span>
+          </div>
+        }
+        actions={
+          <>
+            {lastRefreshedAt != null && (
+              <RefreshCountdown intervalMs={REFRESH_MS} lastRefreshedAt={lastRefreshedAt} refreshing={loading} />
+            )}
+            {loading && <Spinner size="extra-tiny" aria-label="Refreshing" />}
+            <Button
+              appearance="secondary"
+              icon={<ArrowSyncRegular />}
+              onClick={() => {
+                setLoading(true);
+                apiClient.getBoard(projectId)
+                  .then((board) => { setAgents((board.agent_queues ?? []).map(fromDto)); setError(null); setLastRefreshedAt(Date.now()); })
+                  .catch((err) => setError(formatError(err)))
+                  .finally(() => setLoading(false));
+              }}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {error && (
         <MessageBar intent="error">
@@ -262,19 +422,68 @@ export function FlowPage() {
         </MessageBar>
       )}
 
-      {!loading && !error && sorted.length === 0 && (
-        <div className={styles.emptyState}>
-          <Title3>No active agents</Title3>
-          <Text>No agents are currently working in this project. Start an orchestration to see live activity here.</Text>
+      {selectedAgent && (
+        <div className={styles.filterNote}>
+          <Badge appearance="tint" color="informative">Agent filter</Badge>
+          <Text>{selectedAgent}</Text>
+          <Link to={`/projects/${projectId}/flow`} className={styles.runLink}>Clear filter</Link>
         </div>
       )}
 
-      {sorted.length > 0 && (
+      {!loading && !error && visibleAgents.length === 0 && (
+        <div className={styles.emptyState}>
+          <Title3>{selectedAgent ? `No active work for ${selectedAgent}` : 'No active agents'}</Title3>
+          <Text>
+            {selectedAgent
+              ? 'This agent has no current in-flight subtasks. Its completed work remains in the archive below.'
+              : 'No agents are currently working in this project. Start an orchestration to see live activity here.'}
+          </Text>
+        </div>
+      )}
+
+      {visibleAgents.length > 0 && (
         <div className={styles.list}>
-          {sorted.map((agent) => (
+          {visibleAgents.map((agent) => (
             <AgentCard key={agent.agentName} agent={agent} projectId={projectId} />
           ))}
         </div>
+      )}
+
+      {selectedAgent && (
+        <section className={styles.archivePanel} aria-label="Previous work archive">
+          <Title3>Previous work archive</Title3>
+          <Text>
+            Terminal runs for {selectedAgent}: completed, merged, assemble-ready, declined, failed, and merge-failed work.
+          </Text>
+          {historyLoading && <Spinner size="tiny" label="Loading previous work" />}
+          {historyError && (
+            <MessageBar intent="error">
+              <MessageBarBody>{historyError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {!historyLoading && !historyError && history.length === 0 && (
+            <Text>No terminal runs found for this agent.</Text>
+          )}
+          {history.length > 0 && (
+            <div className={styles.archiveList}>
+              {history.map((run) => (
+                <div key={run.execution_id} className={styles.archiveItem}>
+                  <Link
+                    to={`/projects/${projectId}/runs/${run.workflow_run_id}/execution/${run.execution_id}`}
+                    className={styles.runLink}
+                  >
+                    {run.task || `Run ${run.execution_id.slice(0, 8)}`}
+                  </Link>
+                  <div className={styles.archiveMeta}>
+                    <Badge appearance="tint" color={terminalStatusColor(run.status)}>{run.status}</Badge>
+                    <span>{formatEndedAt(run)}</span>
+                    {run.model_id && <span>{run.model_id}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
     </div>
   );

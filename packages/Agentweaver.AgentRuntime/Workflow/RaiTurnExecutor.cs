@@ -17,9 +17,9 @@ namespace Agentweaver.AgentRuntime.Workflow;
 public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>, IWorkflowNodeMeta
 {
     /// <inheritdoc />
-    public string LogicalNodeId => "rai";
+    public string LogicalNodeId { get; }
     /// <inheritdoc />
-    public string DisplayLabel => "Rai";
+    public string DisplayLabel { get; }
     /// <inheritdoc />
     public string Role => "rai";
     /// <inheritdoc />
@@ -46,6 +46,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
     private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
     private readonly Action<string>? _completeSubStream;
     private readonly IWorkflowAgentFactory? _agentFactory;
+    private readonly string _subStreamSuffix;
 
     public RaiTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -59,9 +60,14 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         string name = "rai-turn",
         Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
         Action<string>? completeSubStream = null,
-        IWorkflowAgentFactory? agentFactory = null)
+        IWorkflowAgentFactory? agentFactory = null,
+        string logicalNodeId = "rai",
+        string displayLabel = "Rai",
+        string subStreamSuffix = "rai")
         : base(name)
     {
+        LogicalNodeId = logicalNodeId;
+        DisplayLabel = displayLabel;
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
@@ -74,6 +80,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         _createSubStream = createSubStream;
         _completeSubStream = completeSubStream;
         _agentFactory = agentFactory;
+        _subStreamSuffix = subStreamSuffix;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -83,15 +90,15 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         if (input is null || input.ContentSafetyFlagged || string.IsNullOrEmpty(input.Diff))
         {
             if (input is not null)
-                WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, input.RunId, "rai", "skipped", "RAI review");
+                WorkflowStepEvents.Emit(_getRecordingWriter(input.RunId), _logger, input.RunId, LogicalNodeId, "skipped", DisplayLabel);
             return input!;
         }
 
         var writer = _getRecordingWriter(input.RunId);
-        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "started", "RAI review");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "started", DisplayLabel);
 
-        var subRunId = input.RunId + "-rai";
-        var subWriter = _createSubStream?.Invoke(subRunId, "rai");
+        var subRunId = input.RunId + "-" + _subStreamSuffix;
+        var subWriter = _createSubStream?.Invoke(subRunId, _subStreamSuffix);
 
         IWorkflowTurnAgent? agent = null;
         try
@@ -161,7 +168,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             {
                 _logger.LogWarning("Rai issued a RED verdict for run {RunId} — flagging content safety", input.RunId);
                 subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "red", runId = input.RunId }));
-                WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
+                WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
                 _completeSubStream?.Invoke(subRunId);
                 return input with { ContentSafetyFlagged = true };
             }
@@ -170,7 +177,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             {
                 _logger.LogInformation("Rai issued a REVISE verdict for run {RunId} — requesting agent revision", input.RunId);
                 subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "revise", runId = input.RunId }));
-                WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "revise", "RAI review");
+                WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "revise", DisplayLabel);
                 _completeSubStream?.Invoke(subRunId);
                 return input with { RaiRevisionRequired = true, RaiFeedback = ExtractFeedback(response) };
             }
@@ -182,7 +189,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         {
             _logger.LogWarning(ex,
                 "Rai RAI review failed for run {RunId} — workflow proceeds normally", input.RunId);
-            WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "failed", "RAI review");
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
         }
         finally
         {
@@ -191,7 +198,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             _completeSubStream?.Invoke(subRunId);
         }
 
-        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "rai", "completed", "RAI review");
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "completed", DisplayLabel);
         return input;
     }
 

@@ -43,8 +43,9 @@ vi.mock('../components/OutcomeSpecPanel', () => ({
 }));
 
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
-import { COORDINATOR_GRAPH_DESCRIPTOR, CHILD_GRAPH_DESCRIPTOR } from './fixtures/graphDescriptor';
+import { COORDINATOR_GRAPH_DESCRIPTOR, CHILD_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -133,8 +134,8 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(text).toContain('Expand pipeline');
   });
 
-  it('shows steering bar with Stop/Redirect/Amend buttons', async () => {
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+  it('shows the steering bar with Send, Redirect, Amend, and Stop verbs', async () => {
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
       () => expect(document.body.textContent).toContain('Steer coordinator'),
@@ -142,9 +143,33 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     );
 
     const text = document.body.textContent ?? '';
+    expect(text).toContain('Send');
     expect(text).toContain('Stop');
-    expect(text).toContain('Redirect');
-    expect(text).toContain('Amend');
+    // All three steering verbs are distinctly selectable, matching the backend contract.
+    const buttonLabels = Array.from(container.querySelectorAll('button')).map((b) => (b.textContent ?? '').trim());
+    expect(buttonLabels.some((t) => t === 'Send')).toBe(true);
+    expect(buttonLabels.some((t) => t === 'Redirect')).toBe(true);
+    expect(buttonLabels.some((t) => t === 'Amend')).toBe(true);
+    // Broadcast scope note is shown next to the bar.
+    expect(text).toContain('Applies to all active subtasks.');
+  });
+
+  it('renders Ctrl+Scroll zoom controls on the orchestration graph', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Coordinator'),
+      { timeout: 4000 },
+    );
+
+    // The shared ZoomControls (Ctrl+Scroll hint + +/- buttons + % readout) render
+    // alongside the orchestration graph, mirroring WorkflowRunPage.
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Ctrl + Scroll to zoom');
+
+    const buttons = Array.from(document.body.querySelectorAll('button'));
+    expect(buttons.some((b) => b.getAttribute('aria-label') === 'Zoom in')).toBe(true);
+    expect(buttons.some((b) => b.getAttribute('aria-label') === 'Zoom out')).toBe(true);
   });
 
   it('renders from REST descriptor even when SSE stream is done (finished coordinator runs)', async () => {
@@ -197,5 +222,75 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
 
     // The expand button should have changed label to Collapse pipeline.
     expect(text).toContain('Collapse pipeline');
+  });
+});
+
+describe('CoordinatorRunPage — graph during outcome-spec drafting', () => {
+  it('hides the assembly pipeline stages and shows a caption while drafting the spec', async () => {
+    // Drafting state: coordinator + planned assembly stages, no subtasks, no confirmed spec.
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Coordinator'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    // Coordinator node still renders live.
+    expect(text).toContain('Coordinator');
+    // The calm caption explains why the pipeline is absent.
+    expect(text).toContain('The execution pipeline appears once you confirm the outcome spec.');
+    // Assembly stages must NOT be presented as committed planned work yet.
+    expect(text).not.toContain('RAI Review');
+    expect(text).not.toContain('Human Review');
+    expect(text).not.toContain('Merge');
+    expect(text).not.toContain('Scribe');
+  });
+
+  it('renders the full pipeline (and drops the caption) once subtasks exist', async () => {
+    // The standard coordinator fixture has subtask nodes → hasSubtaskNodes flips inSpecAuthoring off.
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('RAI Review'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    // Full assembly pipeline renders.
+    expect(text).toContain('RAI Review');
+    expect(text).toContain('Human Review');
+    expect(text).toContain('Scribe');
+    // No drafting caption once the plan exists.
+    expect(text).not.toContain('The execution pipeline appears once you confirm the outcome spec.');
+  });
+});
+
+describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () => {
+  it('renders a graceful empty state and does not hammer the 404 work-plan endpoint', async () => {
+    // No graph descriptor and a 404 work-plan: a stuck/early run with no plan.
+    vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+    vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'running' } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('No work plan available yet.'),
+      { timeout: 4000 },
+    );
+
+    // The graceful state renders instead of an indefinite "Waiting for coordinator graph...".
+    expect(document.body.textContent).toContain('No work plan available yet.');
+
+    // A 404 must NOT trigger a tight retry loop: the lifecycle poll backs off to 30s, so within
+    // a short window the work-plan endpoint is hit only a handful of times (seed + first poll),
+    // not dozens of times.
+    const calls = vi.mocked(apiClient.getWorkPlan).mock.calls.length;
+    expect(calls).toBeLessThan(5);
   });
 });

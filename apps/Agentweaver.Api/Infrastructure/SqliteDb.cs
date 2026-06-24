@@ -77,6 +77,13 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN parent_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN subtask_id TEXT;", ct);
 
+        // Human-review dwell accounting (Feature: exclude human-review time from measured duration).
+        // review_ready_at = timestamp the run MOST RECENTLY entered awaiting_review (NULL when not
+        // currently parked in review). review_wait_ms = cumulative human-review dwell in ms, accrued
+        // on every exit from awaiting_review so revise loops sum correctly.
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN review_ready_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN review_wait_ms INTEGER NOT NULL DEFAULT 0;", ct);
+
         // Durable run-origin marker for backlog-pickup coordinator runs (Feature 009). Existing rows
         // default to 'interactive'; only the claim+reserve transaction writes 'backlog_pickup'.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'interactive';", ct);
@@ -92,15 +99,32 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_auto_approve_tools INTEGER NOT NULL DEFAULT 0;", ct);
 
         // Per-project default workflow + per-task workflow override (Feature 010, FR-041/FR-042).
-        // YAML/predefined workflows are loaded from .scaffolders/workflows/ and referenced here by id.
+        // YAML/predefined workflows are loaded from .agentweaver/workflows/ and referenced here by id.
         // NULL means "use the built-in default" (project) / "use the project default" (task).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_workflow_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_override_id TEXT;", ct);
 
         // Per-project active review policy (Feature 010, FR-027/033). Named review policies are loaded
-        // from .scaffolders/review-policies/ and referenced here BY NAME. NULL means "use the built-in
-        // default policy" (Rubber-duck + RAI, FR-032).
+        // from .agentweaver/review-policies/ and referenced here BY NAME. NULL means "use the built-in
+        // default policy" (RAI + human-review, absorbed by the built-in workflow).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN active_review_policy_name TEXT;", ct);
+
+        // Per-project sandbox profile applied when a blueprint is selected at creation (Feature 012).
+        // A named preset (e.g. 'default' | 'restricted'). NULL means "use the built-in default posture".
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN sandbox_profile TEXT;", ct);
+
+        // Off-board archiving for runs/backlog tasks. NULL means active/non-archived, preserving all
+        // existing rows. Archived Ready tasks are excluded from heartbeat pickup and board queries.
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN archived_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN archived_at TEXT;", ct);
+
+        await TryAlterAsync(connection, "DROP INDEX IF EXISTS idx_backlog_tasks_orderkey_unique;", ct);
+        await TryAlterAsync(connection,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_orderkey_unique
+                ON backlog_tasks (project_id, state, order_key)
+                WHERE state IN ('backlog','ready') AND archived_at IS NULL;
+            """, ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
@@ -127,7 +151,10 @@ public sealed class SqliteDb
             worktree_branch    TEXT,
             tree_hash          TEXT,
             step_count         INTEGER NOT NULL DEFAULT 0,
-            diff               TEXT
+            diff               TEXT,
+            review_ready_at    TEXT,
+            review_wait_ms     INTEGER NOT NULL DEFAULT 0,
+            archived_at        TEXT
         );
 
         CREATE TABLE IF NOT EXISTS run_revisions (
@@ -192,6 +219,7 @@ public sealed class SqliteDb
             committed_at  TEXT,
             claimed_at    TEXT,
             run_id        TEXT,                      -- non-null iff state = 'claimed'
+            archived_at   TEXT,
             FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
         );
 
@@ -203,7 +231,7 @@ public sealed class SqliteDb
         -- are excluded so a stale claimed order_key never blocks a future insert.
         CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_orderkey_unique
             ON backlog_tasks (project_id, state, order_key)
-            WHERE state IN ('backlog','ready');
+            WHERE state IN ('backlog','ready') AND archived_at IS NULL;
 
         -- One-task-to-at-most-one-run invariant at the storage layer.
         CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_run

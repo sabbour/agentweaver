@@ -55,7 +55,9 @@ public sealed record WorkflowReviewDecision(
     /// <summary>True when the reviewer wants the agent to revise rather than hard-declining.</summary>
     bool RequestChanges = false,
     /// <summary>Reviewer's feedback text sent back to the agent for the next iteration.</summary>
-    string? Feedback = null);
+    string? Feedback = null,
+    /// <summary>The human reviewer that approved the irreversible action, when applicable.</summary>
+    string? ReviewedBy = null);
 
 /// <summary>Input to the merge executor.</summary>
 public sealed record MergeInput(
@@ -64,7 +66,8 @@ public sealed record MergeInput(
     string WorktreePath,
     string WorktreeBranch,
     string RepositoryPath,
-    string OriginatingBranch);
+    string OriginatingBranch,
+    string? ReviewedBy = null);
 
 /// <summary>Output from the merge executor (terminal workflow output).</summary>
 public sealed record MergeOutput(string RunId, string Status, string? MergeResult, string? MergeMode = null);

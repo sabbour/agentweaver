@@ -10,7 +10,6 @@ import {
   Tab,
   TabList,
   Text,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -23,6 +22,8 @@ import {
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import type {
   DiagnosticsCheckDto,
   ProjectDiagnosticsDto,
@@ -40,18 +41,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalL,
-    flexWrap: 'wrap',
-  },
-  headerActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
   },
   summaryCards: {
     display: 'grid',
@@ -217,29 +206,39 @@ export function DiagnosticsPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.pageHeader}>
-        <Title2>Diagnostics</Title2>
-        <div className={styles.headerActions}>
-          {active && (
-            <Text className={styles.generated}>
-              Updated {new Date(active.generated_utc).toLocaleTimeString()}
-            </Text>
-          )}
-          <Switch
-            label="Auto-refresh"
-            checked={autoRefresh}
-            onChange={(_, d) => setAutoRefresh(d.checked)}
-          />
-          <Button
-            appearance="secondary"
-            icon={<ArrowClockwiseRegular />}
-            onClick={() => { setLoading(true); void load({ cancelled: false }); }}
-            disabled={loading}
-          >
-            Re-run
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Diagnostics"
+        subtitle="System and project health checks."
+        actions={
+          <>
+            {active && (
+              <Text className={styles.generated}>
+                Updated {new Date(active.generated_utc).toLocaleTimeString()}
+              </Text>
+            )}
+            {active && autoRefresh && (
+              <RefreshCountdown
+                className={styles.generated}
+                intervalMs={REFRESH_MS}
+                lastRefreshedAt={new Date(active.generated_utc)}
+              />
+            )}
+            <Switch
+              label="Auto-refresh"
+              checked={autoRefresh}
+              onChange={(_, d) => setAutoRefresh(d.checked)}
+            />
+            <Button
+              appearance="secondary"
+              icon={<ArrowClockwiseRegular />}
+              onClick={() => { setLoading(true); void load({ cancelled: false }); }}
+              disabled={loading}
+            >
+              Re-run
+            </Button>
+          </>
+        }
+      />
 
       <TabList
         selectedValue={scope}

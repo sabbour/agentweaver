@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { ProjectDashboardDto } from '../api/types';
@@ -29,7 +29,16 @@ const dto: ProjectDashboardDto = {
     { date: '2026-06-02', created: 3, done: 2 },
   ],
   agent_leaderboard: [
-    { agent: 'Ada', runs_this_week: 3, runs_total: 10, success_rate: 0.9, avg_duration_ms: 65000 },
+    {
+      agent: 'Ada',
+      role_title: 'Frontend engineer',
+      runs_this_week: 3,
+      runs_total: 10,
+      success_rate: 0.9,
+      successful_runs: 9,
+      terminal_runs: 10,
+      avg_duration_ms: 65000,
+    },
   ],
 };
 
@@ -59,7 +68,62 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Throughput (last 30 days)')).toBeDefined();
     expect(screen.getByText('Agent leaderboard')).toBeDefined();
     expect(screen.getByText('Ada')).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Ada' }).getAttribute('href'))
+      .toBe('/projects/p1/flow?agent=Ada');
+    expect(screen.getByText('Frontend engineer')).toBeDefined();
+    expect(screen.getByText('Success rate = successful terminal runs / terminal runs (queued, waiting-review, and in-progress excluded).')).toBeDefined();
     expect(screen.getByText('90%')).toBeDefined();
+    expect(screen.getByText('9/10')).toBeDefined();
+
+    const table = screen.getByRole('table', { name: 'Agent leaderboard' });
+    const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).toEqual(['Agent', 'Role', 'Runs this week', 'Runs total', 'Success rate', 'Avg duration']);
+  });
+
+  it('renders a role fallback when the dashboard payload omits role', async () => {
+    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue({
+      ...dto,
+      agent_leaderboard: [
+        {
+          agent: 'Ada',
+          runs_this_week: 3,
+          runs_total: 10,
+          success_rate: 0.9,
+          successful_runs: 9,
+          terminal_runs: 10,
+          avg_duration_ms: 65000,
+        },
+      ],
+    });
+
+    renderPage();
+
+    const table = await screen.findByRole('table', { name: 'Agent leaderboard' });
+    expect(within(table).getByText('—')).toBeDefined();
+  });
+
+  it('renders zero-terminal success rate as unknown with count basis', async () => {
+    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue({
+      ...dto,
+      agent_leaderboard: [
+        {
+          agent: 'Ada',
+          role_title: 'Frontend engineer',
+          runs_this_week: 2,
+          runs_total: 2,
+          success_rate: 0,
+          successful_runs: 0,
+          terminal_runs: 0,
+          avg_duration_ms: null,
+        },
+      ],
+    });
+
+    renderPage();
+
+    const table = await screen.findByRole('table', { name: 'Agent leaderboard' });
+    expect(within(table).getAllByText('—').length).toBeGreaterThan(0);
+    expect(within(table).getByText('0/0')).toBeDefined();
   });
 
   it('surfaces a load error', async () => {

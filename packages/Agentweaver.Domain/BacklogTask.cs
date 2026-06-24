@@ -24,6 +24,8 @@ public sealed record BacklogTask
     public DateTimeOffset? ClaimedAt { get; init; }
     /// <summary>The 1:1 coordinator run this task produced. Non-null iff State == Claimed.</summary>
     public RunId? RunId { get; init; }
+    /// <summary>When set, the task is archived off the active board and no longer claimable.</summary>
+    public DateTimeOffset? ArchivedAt { get; init; }
 
     /// <summary>
     /// Optional per-task workflow override, referenced by workflow id/name (Feature 010, FR-042).

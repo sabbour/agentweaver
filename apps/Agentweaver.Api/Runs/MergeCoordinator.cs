@@ -26,7 +26,10 @@ public sealed class MergeCoordinator : IMergeCoordinator
         _logger = logger;
     }
 
-    public async Task<MergeLockResult> AcquireMergeLockAsync(string runId, string repositoryPath, CancellationToken ct)
+    public Task<MergeLockResult> AcquireMergeLockAsync(string runId, string repositoryPath, CancellationToken ct) =>
+        AcquireMergeLockAsync(runId, repositoryPath, ct, reviewer: null);
+
+    private async Task<MergeLockResult> AcquireMergeLockAsync(string runId, string repositoryPath, CancellationToken ct, string? reviewer)
     {
         string canonicalPath;
         try { canonicalPath = Path.GetFullPath(repositoryPath); }
@@ -39,7 +42,7 @@ public sealed class MergeCoordinator : IMergeCoordinator
         if (lockHandle is null)
             return MergeLockResult.Failed("repository_busy");
 
-        var casSucceeded = await _runStore.TryStartMergingAsync(RunId.Parse(runId), ct: CancellationToken.None).ConfigureAwait(false);
+        var casSucceeded = await _runStore.TryStartMergingAsync(RunId.Parse(runId), reviewer, ct: CancellationToken.None).ConfigureAwait(false);
         if (!casSucceeded)
         {
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
@@ -73,7 +76,7 @@ public sealed class MergeCoordinator : IMergeCoordinator
     /// <inheritdoc />
     public async Task<MergeExecutionResult> ExecuteMergeAsync(MergeInput input, CancellationToken ct)
     {
-        var lockResult = await AcquireMergeLockAsync(input.RunId, input.RepositoryPath, ct).ConfigureAwait(false);
+        var lockResult = await AcquireMergeLockAsync(input.RunId, input.RepositoryPath, ct, input.ReviewedBy).ConfigureAwait(false);
         if (!lockResult.Acquired)
         {
             _logger.LogWarning("Failed to acquire merge lock for run {RunId}: {Reason}", input.RunId, lockResult.Reason);

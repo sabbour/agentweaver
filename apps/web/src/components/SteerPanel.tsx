@@ -10,19 +10,25 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ArrowRoutingRegular, StopRegular } from '@fluentui/react-icons';
+import { ArrowRoutingRegular, EditRegular, SendRegular, StopRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { SteerCoordinatorRequest, SteerKind } from '../api/types';
+import { SteeringLegend } from './SteeringLegend';
 
 // ---------------------------------------------------------------------------
 // Payload builder — contract confirmed by Morpheus 2026-06-22.
 // Update ONLY this function if the verb/body fields ever change.
 // ---------------------------------------------------------------------------
-function buildSteerPayload(kind: SteerKind, instruction: string): SteerCoordinatorRequest {
+function buildSteerPayload(
+  kind: SteerKind,
+  instruction: string,
+  targetChildRunId?: string,
+): SteerCoordinatorRequest {
   return {
     kind,
     instruction: kind === 'stop' ? undefined : instruction || undefined,
+    ...(targetChildRunId ? { target_child_run_id: targetChildRunId } : {}),
   };
 }
 
@@ -91,6 +97,11 @@ export interface SteerPanelProps {
   /** The raw block/fail reason code from the orchestration state. */
   blockReason?: string;
   /**
+   * When set, a Redirect carries this child run id as target_child_run_id so the backend
+   * force-completes that child's stream to unblock it.
+   */
+  targetChildRunId?: string;
+  /**
    * When false, renders a read-only "owner only" note instead of the controls.
    * Defaults to true. Set to false when the viewer is not the run owner.
    */
@@ -101,7 +112,7 @@ export interface SteerPanelProps {
 
 type SteerState = 'idle' | 'pending' | 'success' | 'error';
 
-export function SteerPanel({ runId, blockReason, canSteer = true, onSteered }: SteerPanelProps) {
+export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = true, onSteered }: SteerPanelProps) {
   const styles = useStyles();
   const [instruction, setInstruction] = useState('');
   const [steerState, setSteerState] = useState<SteerState>('idle');
@@ -117,8 +128,10 @@ export function SteerPanel({ runId, blockReason, canSteer = true, onSteered }: S
     setStatusMessage(null);
     setErrorMessage(null);
     const text = instruction.trim() || (kind === 'stop' ? '' : fallbackInstruction);
+    // A child target only applies to a Redirect (force-complete that child to unblock it).
+    const target = kind === 'redirect' ? targetChildRunId : undefined;
     try {
-      const res = await apiClient.steerCoordinator(runId, buildSteerPayload(kind, text));
+      const res = await apiClient.steerCoordinator(runId, buildSteerPayload(kind, text, target));
       setSteerState('success');
       setStatusMessage(successMessage(res.status));
       setInstruction('');
@@ -174,15 +187,35 @@ export function SteerPanel({ runId, blockReason, canSteer = true, onSteered }: S
         </MessageBar>
       )}
 
+      <SteeringLegend />
+
       <div className={styles.actions}>
         <Button
           appearance="primary"
-          icon={isPending ? <Spinner size="tiny" /> : <ArrowRoutingRegular />}
+          icon={isPending ? <Spinner size="tiny" /> : <SendRegular />}
+          disabled={isPending}
+          onClick={() => void submit('send')}
+          data-testid="steer-panel-send"
+        >
+          Send
+        </Button>
+        <Button
+          appearance="outline"
+          icon={<ArrowRoutingRegular />}
           disabled={isPending}
           onClick={() => void submit('redirect')}
-          data-testid="steer-panel-reroute"
+          data-testid="steer-panel-redirect"
         >
-          Reroute to coordinator
+          Redirect
+        </Button>
+        <Button
+          appearance="outline"
+          icon={<EditRegular />}
+          disabled={isPending}
+          onClick={() => void submit('amend')}
+          data-testid="steer-panel-amend"
+        >
+          Amend
         </Button>
         <Button
           appearance="subtle"

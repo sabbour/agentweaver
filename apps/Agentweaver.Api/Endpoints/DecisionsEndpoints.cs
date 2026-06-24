@@ -115,24 +115,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
     var now = DateTimeOffset.UtcNow;
-    entry.Status = "merged";
-    entry.UpdatedAt = now;
-    entry.MergedAt = now;
-
-    // Promote to active decision
-    var decision = new Decision
-    {
-        ProjectId = id,
-        AgentName = entry.AgentName,
-        Type = entry.Type,
-        Status = "active",
-        Title = entry.Title,
-        Content = entry.Content,
-        Rationale = entry.Rationale,
-        CreatedAt = now,
-        UpdatedAt = now,
-    };
-    memoryDb.Decisions.Add(decision);
+    var decision = DecisionPromotion.PromoteEntry(memoryDb, entry, now);
     await memoryDb.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
     return Results.Ok(new { entry.Id, entry.Status, decisionId = decision.Id });

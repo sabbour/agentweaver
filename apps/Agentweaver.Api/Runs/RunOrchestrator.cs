@@ -2,6 +2,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Runs;
@@ -22,6 +23,25 @@ public sealed class RunOrchestrator
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<RunOrchestrator> _logger;
+
+    /// <summary>
+    /// Concise "Memory Protocol" appended to every worker (and coordinator child) system prompt so
+    /// agents actually turn the memory flywheel: record reusable learnings and submit notable
+    /// decisions. Deliberately short so it stays non-spammy. Never appended to the Scribe, which has
+    /// its own post-run memory note.
+    /// </summary>
+    internal const string WorkerMemoryProtocol =
+        """
+        ## Memory Protocol
+
+        You have native memory tools. Use them for SIGNIFICANT, reusable items only (not routine steps):
+        - record_memory(type: "learning" | "pattern", importance, content, tags) for a non-obvious
+          discovery, gotcha, or reusable pattern a teammate would want to know next time.
+        - submit_decision(slug, type, title, content, rationale) for a notable design, architecture,
+          or scope choice. Use type "architectural" or "scope" for team boundaries.
+
+        Record at most a few high-value items per run. Skip trivia and step-by-step progress.
+        """;
 
     public RunOrchestrator(
         SqliteRunStore runStore,
@@ -93,7 +113,7 @@ public sealed class RunOrchestrator
         // the agent execution and the registry's Abandon path. Using CancellationToken.None as
         // the base avoids cancellation when the HTTP request ends.
         var runCts = new CancellationTokenSource();
-        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token).ConfigureAwait(false);
+        var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
     }
@@ -156,9 +176,7 @@ public sealed class RunOrchestrator
             started.StartedAt);
 
         var runCts = new CancellationTokenSource();
-        var streamingRun = await _workflowFactory
-            .StartAsync(input, run.Id.ToString(), runCts.Token, isChild: true)
-            .ConfigureAwait(false);
+        var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
     }
@@ -207,7 +225,7 @@ public sealed class RunOrchestrator
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.
         var runCts = new CancellationTokenSource();
-        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token).ConfigureAwait(false);
+        var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, entry.Generation, runCt);
     }
@@ -271,9 +289,45 @@ public sealed class RunOrchestrator
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.
         var runCts = new CancellationTokenSource();
-        var streamingRun = await _workflowFactory.StartAsync(input, run.Id.ToString(), runCts.Token, isChild).ConfigureAwait(false);
+        var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild).ConfigureAwait(false);
         var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
         _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, generation, runCt);
+    }
+
+    private async Task<Microsoft.Agents.AI.Workflows.StreamingRun> StartWorkflowOrFailAsync(
+        AgentTurnInput input,
+        RunId runId,
+        RunStreamEntry entry,
+        CancellationToken ct,
+        bool isChild = false)
+    {
+        try
+        {
+            return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild).ConfigureAwait(false);
+        }
+        catch (ReviewPolicyCompositionException ex)
+        {
+            _logger.LogError(ex, "Policy hook failed for run {RunId}; transitioning to failed", runId);
+            var result = $"policy_hook_failed: {ex.Code}: {ex.Message}";
+            try
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, result, CancellationToken.None)
+                    .ConfigureAwait(false);
+                entry.RecordNext(EventTypes.RunFailed, new
+                {
+                    reason = "policy_hook_failed",
+                    code = ex.Code,
+                    detail = ex.Message,
+                });
+            }
+            finally
+            {
+                _streamStore.Complete(runId.ToString());
+            }
+
+            throw new RunSubmissionValidationException($"Policy hook failed: {ex.Message}", ex);
+        }
     }
 
     /// <summary>
@@ -314,7 +368,7 @@ public sealed class RunOrchestrator
             var childCharter = !string.IsNullOrEmpty(run.AgentCharter)
                 ? run.AgentCharter
                 : ResolveAgentCharter(run);
-            return (run.Task, ComposeChildSystemPrompt(childCharter));
+            return (run.Task, AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter)));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)
@@ -357,8 +411,18 @@ public sealed class RunOrchestrator
             }
         }
 
-        return (run.Task, systemPromptContext);
+        return (run.Task, AppendMemoryProtocol(systemPromptContext));
     }
+
+    /// <summary>
+    /// Appends the <see cref="WorkerMemoryProtocol"/> to a worker/child system prompt so the agent is
+    /// instructed to use its memory tools. Safe when <paramref name="systemPromptContext"/> is null
+    /// (the protocol then becomes the whole prompt context).
+    /// </summary>
+    internal static string AppendMemoryProtocol(string? systemPromptContext) =>
+        string.IsNullOrEmpty(systemPromptContext)
+            ? WorkerMemoryProtocol
+            : systemPromptContext + "\n\n---\n\n" + WorkerMemoryProtocol;
 
     /// <summary>
     /// Builds the LEAN system prompt for a coordinator CHILD run: the agent <paramref name="charter"/>
@@ -379,9 +443,19 @@ public sealed class RunOrchestrator
             "sandbox, do not retry the same path: adapt and write the file within your current " +
             "working directory instead.";
 
+        const string deliverableCapture =
+            "## Deliverable files\n" +
+            "All deliverables produced by this task — documents, drafts, reports, code, " +
+            "configuration files, or any other output — MUST be written as files in your current " +
+            "working directory. Files created here are automatically staged and committed when your " +
+            "turn ends; any output left only in memory or written to a path outside this directory " +
+            "will not be captured, will not appear in the human review, and will be permanently lost. " +
+            "If a task requires you to produce a markdown document, report, or other artifact, write " +
+            "it as a named file in your working directory.";
+
         return string.IsNullOrEmpty(charter)
-            ? boundary
-            : charter + "\n\n---\n\n" + boundary;
+            ? $"{boundary}\n\n---\n\n{deliverableCapture}"
+            : $"{charter}\n\n---\n\n{boundary}\n\n---\n\n{deliverableCapture}";
     }
 
     /// <summary>

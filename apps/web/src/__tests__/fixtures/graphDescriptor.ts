@@ -76,6 +76,31 @@ export const COORDINATOR_GRAPH_DESCRIPTOR: GraphDescriptor = {
 };
 
 /**
+ * Coordinator-variant descriptor in the spec-AUTHORING (drafting) state: the coordinator node
+ * plus the planned assembly stages, but NO subtask nodes yet. Combined with no confirmed spec
+ * and an unknown orchestration phase, this drives inSpecAuthoring=true so the assembly stages
+ * are filtered out of the rendered graph.
+ */
+export const COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR: GraphDescriptor = {
+  graph_id: 'coordinator:coord-run-drafting',
+  variant: 'coordinator',
+  start_node_id: 'coordinator',
+  nodes: [
+    { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+    { id: 'planned:assembly-rai',    label: 'RAI Review',   role: 'rai',    kind: 'planned', node_type: 'gate'   },
+    { id: 'planned:assembly-review', label: 'Human Review', role: 'review', kind: 'planned', node_type: 'gate'   },
+    { id: 'planned:assembly-merge',  label: 'Merge',        role: 'merge',  kind: 'planned', node_type: 'action' },
+    { id: 'planned:assembly-scribe', label: 'Scribe',       role: 'scribe', kind: 'planned', node_type: 'action' },
+  ],
+  edges: [
+    { from: 'coordinator',             to: 'planned:assembly-rai',    cardinality: 'direct', loopback: false },
+    { from: 'planned:assembly-rai',    to: 'planned:assembly-review', cardinality: 'direct', loopback: false },
+    { from: 'planned:assembly-review', to: 'planned:assembly-merge',  cardinality: 'direct', loopback: false },
+    { from: 'planned:assembly-merge',  to: 'planned:assembly-scribe', cardinality: 'direct', loopback: false },
+  ],
+};
+
+/**
  * Coordinator-variant descriptor WITH the two coordinator-level loopback back-edges Tank adds:
  * the RAI gate and the Human Review gate can each send the collective output back to the
  * coordinator for re-dispatch. GraphEdge has no label field — the renderer derives the label

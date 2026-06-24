@@ -41,7 +41,7 @@ describe('SteerPanel — rendering', () => {
     );
     expect(screen.getByTestId('steer-panel')).toBeTruthy();
     expect(screen.getByTestId('steer-panel-instruction')).toBeTruthy();
-    expect(screen.getByTestId('steer-panel-reroute')).toBeTruthy();
+    expect(screen.getByTestId('steer-panel-redirect')).toBeTruthy();
     expect(screen.getByTestId('steer-panel-stop')).toBeTruthy();
   });
 
@@ -54,7 +54,7 @@ describe('SteerPanel — rendering', () => {
     expect(screen.getByTestId('steer-panel')).toBeTruthy();
     expect(screen.getByTestId('steer-panel-no-permission')).toBeTruthy();
     expect(screen.queryByTestId('steer-panel-instruction')).toBeNull();
-    expect(screen.queryByTestId('steer-panel-reroute')).toBeNull();
+    expect(screen.queryByTestId('steer-panel-redirect')).toBeNull();
     expect(screen.queryByTestId('steer-panel-stop')).toBeNull();
   });
 
@@ -84,7 +84,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
 
     const textarea = screen.getByTestId('steer-panel-instruction');
     fireEvent.change(textarea, { target: { value: 'Re-run subtask 3 against main' } });
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() =>
       expect(vi.mocked(apiClient.steerCoordinator)).toHaveBeenCalledWith(
@@ -103,7 +103,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
     );
 
     // Submit without typing anything
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => {
       const call = vi.mocked(apiClient.steerCoordinator).mock.calls[0];
@@ -124,7 +124,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
 
     const textarea = screen.getByTestId('steer-panel-instruction') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'Some instruction' } });
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(textarea.value).toBe(''));
   });
@@ -138,7 +138,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
     await waitFor(() => expect(onSteered).toHaveBeenCalledOnce());
   });
 
@@ -150,7 +150,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(screen.getByTestId('steer-panel-success')).toBeTruthy());
     expect(screen.getByTestId('steer-panel-success').textContent).toContain('resumed');
@@ -164,7 +164,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(screen.getByTestId('steer-panel-success')).toBeTruthy());
     expect(screen.getByTestId('steer-panel-success').textContent).toContain('queued');
@@ -210,18 +210,18 @@ describe('SteerPanel — in-flight state', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     // Both buttons should be disabled mid-flight
     await waitFor(() => {
-      expect((screen.getByTestId('steer-panel-reroute') as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByTestId('steer-panel-redirect') as HTMLButtonElement).disabled).toBe(true);
       expect((screen.getByTestId('steer-panel-stop') as HTMLButtonElement).disabled).toBe(true);
     });
 
     // Resolve and verify re-enabled
     resolveSteer({ status: 'applied' });
     await waitFor(() => {
-      expect((screen.getByTestId('steer-panel-reroute') as HTMLButtonElement).disabled).toBe(false);
+      expect((screen.getByTestId('steer-panel-redirect') as HTMLButtonElement).disabled).toBe(false);
     });
   });
 });
@@ -240,7 +240,7 @@ describe('SteerPanel — error handling', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(screen.getByTestId('steer-panel-error')).toBeTruthy());
     expect(screen.getByTestId('steer-panel-error').textContent).toContain('owner');
@@ -256,7 +256,7 @@ describe('SteerPanel — error handling', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(screen.getByTestId('steer-panel-error')).toBeTruthy());
     const text = screen.getByTestId('steer-panel-error').textContent ?? '';
@@ -275,7 +275,7 @@ describe('SteerPanel — error handling', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(screen.getByTestId('steer-panel-error')).toBeTruthy());
     expect(screen.getByTestId('steer-panel-error').textContent).toContain('maximum number of times');
@@ -291,7 +291,7 @@ describe('SteerPanel — error handling', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(screen.getByTestId('steer-panel-error')).toBeTruthy());
     expect(screen.getByTestId('steer-panel-error').textContent).toContain('500');
@@ -305,10 +305,74 @@ describe('SteerPanel — error handling', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByTestId('steer-panel-reroute'));
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
 
     await waitFor(() => expect(screen.getByTestId('steer-panel-error')).toBeTruthy());
-    expect((screen.getByTestId('steer-panel-reroute') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('steer-panel-redirect') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Verb contract — Send / Redirect (with target child) / Amend
+// ---------------------------------------------------------------------------
+describe('SteerPanel — steering verb contract', () => {
+  it('Send calls steerCoordinator with kind=send and the typed instruction', async () => {
+    vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'queued' });
+    render(
+      <Wrapper>
+        <SteerPanel runId="run-1" />
+      </Wrapper>,
+    );
+
+    fireEvent.change(screen.getByTestId('steer-panel-instruction'), { target: { value: 'Just a heads up' } });
+    fireEvent.click(screen.getByTestId('steer-panel-send'));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiClient.steerCoordinator)).toHaveBeenCalledWith(
+        'run-1',
+        { kind: 'send', instruction: 'Just a heads up' },
+      ),
+    );
+  });
+
+  it('Redirect against a target child sends kind=redirect and target_child_run_id', async () => {
+    vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
+    render(
+      <Wrapper>
+        <SteerPanel runId="coord-1" targetChildRunId="child-7" />
+      </Wrapper>,
+    );
+
+    fireEvent.change(screen.getByTestId('steer-panel-instruction'), { target: { value: 'Unblock and use v2' } });
+    fireEvent.click(screen.getByTestId('steer-panel-redirect'));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiClient.steerCoordinator)).toHaveBeenCalledWith(
+        'coord-1',
+        { kind: 'redirect', instruction: 'Unblock and use v2', target_child_run_id: 'child-7' },
+      ),
+    );
+  });
+
+  it('Amend calls steerCoordinator with kind=amend and no target child', async () => {
+    vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'queued' });
+    render(
+      <Wrapper>
+        <SteerPanel runId="run-1" targetChildRunId="child-7" />
+      </Wrapper>,
+    );
+
+    fireEvent.change(screen.getByTestId('steer-panel-instruction'), { target: { value: 'Also add tests' } });
+    fireEvent.click(screen.getByTestId('steer-panel-amend'));
+
+    await waitFor(() => {
+      const call = vi.mocked(apiClient.steerCoordinator).mock.calls[0];
+      expect(call[0]).toBe('run-1');
+      expect(call[1].kind).toBe('amend');
+      expect(call[1].instruction).toBe('Also add tests');
+      // A child target only applies to Redirect.
+      expect(call[1].target_child_run_id).toBeUndefined();
+    });
   });
 });
 

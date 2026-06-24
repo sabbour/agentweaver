@@ -116,6 +116,14 @@ public static class EventTypes
     public const string CoordinatorRecovered = "coordinator.recovered";
 
     /// <summary>
+    /// Emitted on the coordinator run stream by the proactive stuck-child sweep when an in-progress
+    /// child subtask has made no progress past the configured stall timeout. The child's stream is
+    /// force-completed with <see cref="RunCancelled"/> so the dispatch loop resolves and re-dispatches.
+    /// Payload: { childRunId, subtaskId, staleSinceUtc, stallTimeoutMinutes }
+    /// </summary>
+    public const string CoordinatorChildStallDetected = "coordinator.child_stall_detected";
+
+    /// <summary>
     /// Emitted when the coordinator presents an outcome-spec draft (or revision) for
     /// human confirmation. The run is suspended at the await-confirmation gate after this.
     /// Payload: { specId, status, desiredOutcome, scope, assumptions, clarifyingQuestions }
@@ -146,6 +154,15 @@ public static class EventTypes
     /// Payload: { runId, subtaskId?, parentRunId?, worktreeBranch, treeHash, hasChanges, stepCount, raiSafetyFlagged }
     /// </summary>
     public const string RunAssembleReady = "run.assemble_ready";
+
+    /// <summary>
+    /// Emitted on a coordinator child run when the run reaches assemble-ready with no committed
+    /// changes (HasChanges == false). Indicates the worker agent completed its turn without writing
+    /// any files to the repository worktree. The frontend surfaces this as "This subtask produced no
+    /// changes" so the reviewer is not sent to an empty diff with no explanation.
+    /// Payload: { runId, subtaskId?, parentRunId?, message }
+    /// </summary>
+    public const string RunNoChangesProduced = "run.no_changes_produced";
 
     // -----------------------------------------------------------------------
     // Coordinator dispatch + observe (Feature 008 Phase 2) — subtask lifecycle.

@@ -103,7 +103,7 @@ public static class BacklogEndpoints
 
             // Distinguish "claimed (not deletable)" from "not found in project".
             var task = await backlogStore.GetAsync(pid, tid, ct);
-            if (task is null) return Results.NotFound();
+            if (task is null || task.ArchivedAt is not null) return Results.NotFound();
             return Results.Conflict(new { error = "task_claimed" });
         });
 
@@ -234,6 +234,23 @@ public static class BacklogEndpoints
             return updated is null ? Results.NotFound() : Results.Ok(MapTask(updated));
         });
 
+        // POST /api/projects/{projectId}/backlog/tasks/{taskId}/archive — remove task card off-board.
+        app.MapPost("/api/projects/{projectId}/backlog/tasks/{taskId}/archive", async (
+            string projectId,
+            string taskId,
+            IBacklogTaskStore backlogStore,
+            CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
+                return Results.BadRequest(new { error = "Invalid id." });
+
+            var archived = await backlogStore.TryArchiveAsync(pid, tid, DateTimeOffset.UtcNow, ct);
+            if (!archived) return Results.NotFound();
+
+            var task = await backlogStore.GetAsync(pid, tid, ct);
+            return task is null ? Results.NotFound() : Results.Ok(MapTask(task));
+        });
+
         // GET /api/projects/{projectId}/board — full board (FR-013..016a/019)
         app.MapGet("/api/projects/{projectId}/board", async (
             string projectId,
@@ -252,7 +269,7 @@ public static class BacklogEndpoints
             return Results.Ok(board);
         });
 
-        // GET /api/projects/{projectId}/workflow-stages — columns-only (FR-015/019)
+        // GET /api/projects/{projectId}/workflow-stages — canonical run-buckets only
         app.MapGet("/api/projects/{projectId}/workflow-stages", async (
             string projectId,
             IProjectStore projectStore,
@@ -265,9 +282,7 @@ public static class BacklogEndpoints
             var project = await projectStore.GetAsync(pid, ct);
             if (project is null) return Results.NotFound();
 
-            IReadOnlyList<WorkflowStage> stages;
-            try { stages = projector.GetStages(); }
-            catch { stages = Array.Empty<WorkflowStage>(); }
+            var stages = projector.GetStages();
 
             return Results.Ok(new WorkflowStagesResponse
             {
@@ -359,6 +374,7 @@ public static class BacklogEndpoints
         CommittedAt = t.CommittedAt,
         ClaimedAt = t.ClaimedAt,
         RunId = t.RunId?.ToString(),
+        ArchivedAt = t.ArchivedAt,
     };
 
     private static BacklogSettingsDto MapSettings(Project p) => new()

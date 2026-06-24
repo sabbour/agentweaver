@@ -23,7 +23,7 @@ namespace Agentweaver.Tests.Coordinator;
 /// Drives a REAL temp git repository + a real integration branch built by the production
 /// <see cref="WorktreeManager"/> (the same seam as IntegrationBranchBuilderTests), against the
 /// hermetic <see cref="CoordinatorWebApplicationFactory"/> host (no mocks, Principle VII). Asserts:
-/// content for a changed path, 404 for a path outside the collective changed set (whitelist), 404
+/// content for changed and unchanged tracked paths, 404
 /// (never 409) before the integration branch exists, and owner enforcement.
 /// </summary>
 [Collection("CoordinatorOutcomeSpec")]
@@ -78,11 +78,13 @@ public sealed class CoordinatorAssemblyContentTests : IDisposable
         content.GetProperty("content").GetString().Should().Be("feature contents\n");
         content.GetProperty("is_binary").GetBoolean().Should().BeFalse();
 
-        // (2) A path NOT in the collective changed set (present in the repo, but unchanged) is 404 —
-        //     the whitelist guard prevents reading arbitrary repo files.
+        // (2) A path NOT in the collective changed set but present in the assembled branch returns
+        //     content because the Workspace Files tab displays the whole integration tree.
         var notInSet = await _owner.GetAsync($"/api/runs/{runId}/assembly/content/readme.txt");
-        notInSet.StatusCode.Should().Be(HttpStatusCode.NotFound,
-            "only files in the collective changed set may be previewed");
+        notInSet.StatusCode.Should().Be(HttpStatusCode.OK,
+            "clicking unchanged files in the full integration-branch Files tree must not 404");
+        var unchanged = await notInSet.Content.ReadFromJsonAsync<JsonElement>();
+        unchanged.GetProperty("content").GetString().Should().Be("initial content");
 
         // (3) Owner enforcement — a non-owner gets 404, mirroring the sibling assembly endpoints.
         var foreign = await _other.GetAsync($"/api/runs/{runId}/assembly/content/feature.txt");

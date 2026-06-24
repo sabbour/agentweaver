@@ -13,7 +13,6 @@ import {
   TableHeaderCell,
   TableRow,
   Text,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -22,28 +21,19 @@ import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { OverviewDto } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Overview ("Now") — the global, cross-project live view at /overview (also the
 // landing page at '/'). Consumes GET /api/overview (real data only; no cost).
 
-const REFRESH_MS = 30000;
+const REFRESH_MS = 10000;
 
 const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalL,
-  },
-  headerActions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
   },
   cards: {
     display: 'grid',
@@ -109,7 +99,8 @@ const useStyles = makeStyles({
     listStyle: 'none',
   },
   activityRow: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: '112px 1fr auto',
     alignItems: 'center',
     gap: tokens.spacingHorizontalM,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
@@ -117,12 +108,22 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
-  activityLabel: { flex: 1, minWidth: 0 },
-  muted: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  activityKind: {
+    justifySelf: 'start',
+  },
+  activityLabel: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  muted: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
   projectLink: { color: tokens.colorBrandForeground1, textDecoration: 'none' },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
 });
 
+// Relative "time ago" for data timestamps (last activity, activity rows). This is
+// for displayed DATA, distinct from the header's refresh countdown.
 function timeAgo(iso: string): string {
   const then = new Date(iso).getTime();
   const diff = Date.now() - then;
@@ -136,10 +137,28 @@ function timeAgo(iso: string): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
+// Humanize a raw status/kind ("in_progress" -> "In progress", "awaiting_review" ->
+// "Awaiting review") for the recent-activity status chip.
+function humanizeKind(kind: string): string {
+  if (!kind) return '';
+  const spaced = kind.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+// Color the status chip mirroring RunRow in ProjectPage.tsx.
+function kindColor(kind: string): 'success' | 'danger' | 'informative' | 'subtle' {
+  if (kind === 'completed' || kind === 'merged') return 'success';
+  if (kind === 'failed' || kind === 'merge_failed' || kind === 'declined') return 'danger';
+  if (kind === 'in_progress' || kind === 'awaiting_review' || kind === 'merging') return 'informative';
+  return 'subtle';
+}
+
 export function OverviewPage() {
   const styles = useStyles();
   const [data, setData] = useState<OverviewDto | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const formatError = (err: unknown): string =>
@@ -150,16 +169,21 @@ export function OverviewPage() {
         : String(err);
 
   const load = useCallback(async (signal: { cancelled: boolean }) => {
+    if (!signal.cancelled) setRefreshing(true);
     try {
       const dto = await apiClient.getOverview();
       if (!signal.cancelled) {
         setData(dto);
+        setLastUpdated(new Date().toISOString());
         setError(null);
       }
     } catch (err) {
       if (!signal.cancelled) setError(formatError(err));
     } finally {
-      if (!signal.cancelled) setLoading(false);
+      if (!signal.cancelled) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -187,24 +211,31 @@ export function OverviewPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.pageHeader}>
-        <Title2>Overview</Title2>
-        <div className={styles.headerActions}>
-          {data && (
-            <Text className={styles.generated}>
-              Updated {new Date(data.generated_utc).toLocaleTimeString()}
-            </Text>
-          )}
-          <Button
-            appearance="secondary"
-            icon={<ArrowSyncRegular />}
-            disabled={loading}
-            onClick={() => { setLoading(true); void load({ cancelled: false }); }}
-          >
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Overview"
+        subtitle="Fleet activity at a glance."
+        actions={
+          <>
+            {lastUpdated && (
+              <RefreshCountdown
+                className={styles.generated}
+                intervalMs={REFRESH_MS}
+                lastRefreshedAt={lastUpdated ? new Date(lastUpdated) : null}
+                refreshing={refreshing}
+              />
+            )}
+            {refreshing && data && <Spinner size="extra-tiny" aria-label="Refreshing" />}
+            <Button
+              appearance="secondary"
+              icon={<ArrowSyncRegular />}
+              disabled={loading}
+              onClick={() => { setLoading(true); void load({ cancelled: false }); }}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {error && (
         <MessageBar intent="error">
@@ -326,7 +357,7 @@ export function OverviewPage() {
               <ul className={styles.activityList}>
                 {data.recent_activity.map((a, i) => (
                   <li key={`${a.project_id}-${i}`} className={styles.activityRow}>
-                    <Badge appearance="outline" color="subtle">{a.kind}</Badge>
+                    <Badge className={styles.activityKind} appearance="tint" color={kindColor(a.kind)}>{humanizeKind(a.kind)}</Badge>
                     <span className={styles.activityLabel}>
                       <Link to={`/projects/${a.project_id}`} className={styles.projectLink}>{a.project_name}</Link>
                       {' — '}{a.label}

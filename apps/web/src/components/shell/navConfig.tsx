@@ -6,6 +6,7 @@ import {
   Board24Regular,
   People24Regular,
   Flow24Regular,
+  Code24Regular,
   Bot24Regular,
   Brain24Regular,
   Flowchart24Regular,
@@ -68,6 +69,8 @@ export const NAV_SECTIONS: NavSectionDef[] = [
       // Orchestrations — list of coordinator orchestration runs; the detail route
       // (/orchestrations/:runId) keeps this item active.
       { key: 'orchestrations', label: 'Orchestrations', icon: <Flow24Regular />, segment: 'orchestrations' },
+      // Workspace — read-only file browser for the project repo + run worktrees.
+      { key: 'workspace', label: 'Workspace', icon: <Code24Regular />, segment: 'workspace' },
     ],
   },
   {

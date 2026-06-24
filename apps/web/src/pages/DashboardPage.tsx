@@ -9,19 +9,22 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableCellLayout,
   TableHeader,
   TableHeaderCell,
   TableRow,
   Text,
-  Title2,
   Title3,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { ProjectDashboardDto, ThroughputPointDto } from '../api/types';
+import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ThroughputPointDto } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Dashboard — the project HOME (/projects/:projectId). Consumes the live
 // GET /api/projects/{id}/dashboard endpoint (real data only; no cost). Renders
@@ -47,17 +50,6 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalL,
-  },
-  headerActions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
   },
   cards: {
     display: 'grid',
@@ -118,6 +110,45 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
+  leaderboardPanel: {
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    overflowX: 'auto',
+  },
+  leaderboardTable: {
+    minWidth: '760px',
+  },
+  headerCell: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
+  agentCell: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  roleCell: {
+    color: tokens.colorNeutralForeground2,
+  },
+  numericCell: {
+    textAlign: 'right',
+  },
+  successCell: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  successBasis: {
+    minWidth: '34px',
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    textAlign: 'right',
+  },
+  metricNote: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+  },
 });
 
 function formatDuration(ms: number | null): string {
@@ -128,6 +159,17 @@ function formatDuration(ms: number | null): string {
   if (minutes < 60) return `${minutes.toFixed(1)}m`;
   const hours = minutes / 60;
   return `${hours.toFixed(1)}h`;
+}
+
+function successBadgeColor(rate: number): 'success' | 'warning' | 'danger' {
+  if (rate >= 0.8) return 'success';
+  if (rate >= 0.5) return 'warning';
+  return 'danger';
+}
+
+function formatSuccessRate(row: AgentLeaderboardEntryDto): string {
+  if (row.terminal_runs === 0) return '—';
+  return `${Math.round(row.success_rate * 100)}%`;
 }
 
 // Lightweight dependency-free SVG line chart for the throughput series.
@@ -227,30 +269,41 @@ export function DashboardPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <span>{data?.project_name ?? projectId}</span>
-      </div>
-
-      <div className={styles.pageHeader}>
-        <Title2>Dashboard</Title2>
-        <div className={styles.headerActions}>
-          {data && (
-            <Text className={styles.generated}>
-              Updated {new Date(data.generated_utc).toLocaleTimeString()}
-            </Text>
-          )}
-          <Button
-            appearance="secondary"
-            icon={<ArrowSyncRegular />}
-            disabled={loading}
-            onClick={() => { setLoading(true); void load({ cancelled: false }); }}
-          >
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        subtitle="Delivery metrics and the agent leaderboard."
+        breadcrumb={
+          <div className={styles.breadcrumb}>
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <span>{data?.project_name ?? projectId}</span>
+          </div>
+        }
+        actions={
+          <>
+            {data && (
+              <Text className={styles.generated}>
+                Updated {new Date(data.generated_utc).toLocaleTimeString()}
+              </Text>
+            )}
+            {data && (
+              <RefreshCountdown
+                className={styles.generated}
+                intervalMs={REFRESH_MS}
+                lastRefreshedAt={new Date(data.generated_utc)}
+              />
+            )}
+            <Button
+              appearance="secondary"
+              icon={<ArrowSyncRegular />}
+              disabled={loading}
+              onClick={() => { setLoading(true); void load({ cancelled: false }); }}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {error && (
         <MessageBar intent="error">
@@ -294,38 +347,59 @@ export function DashboardPage() {
 
           <div className={styles.section}>
             <Title3>Agent leaderboard</Title3>
+            <Text className={styles.metricNote}>
+              Success rate = successful terminal runs / terminal runs (queued, waiting-review, and in-progress excluded).
+            </Text>
             {data.agent_leaderboard.length === 0 ? (
               <Text>No agent activity yet.</Text>
             ) : (
-              <Table aria-label="Agent leaderboard" size="small">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Agent</TableHeaderCell>
-                    <TableHeaderCell>Runs this week</TableHeaderCell>
-                    <TableHeaderCell>Runs total</TableHeaderCell>
-                    <TableHeaderCell>Success rate</TableHeaderCell>
-                    <TableHeaderCell>Avg duration</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.agent_leaderboard.map((row) => (
-                    <TableRow key={row.agent}>
-                      <TableCell>{row.agent}</TableCell>
-                      <TableCell>{row.runs_this_week}</TableCell>
-                      <TableCell>{row.runs_total}</TableCell>
-                      <TableCell>
-                        <Badge
-                          appearance="tint"
-                          color={row.success_rate >= 0.8 ? 'success' : row.success_rate >= 0.5 ? 'warning' : 'danger'}
-                        >
-                          {Math.round(row.success_rate * 100)}%
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{formatDuration(row.avg_duration_ms)}</TableCell>
+              <div className={styles.leaderboardPanel}>
+                <Table aria-label="Agent leaderboard" size="small" className={styles.leaderboardTable}>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell className={styles.headerCell}>Agent</TableHeaderCell>
+                      <TableHeaderCell className={styles.headerCell}>Role</TableHeaderCell>
+                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Runs this week</TableHeaderCell>
+                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Runs total</TableHeaderCell>
+                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Success rate</TableHeaderCell>
+                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Avg duration</TableHeaderCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {data.agent_leaderboard.map((row) => (
+                      <TableRow key={row.agent}>
+                        <TableCell>
+                          <TableCellLayout className={styles.agentCell}>
+                            <Link
+                              to={`/projects/${projectId}/flow?agent=${encodeURIComponent(row.agent)}`}
+                              className={styles.breadcrumbLink}
+                            >
+                              {row.agent}
+                            </Link>
+                          </TableCellLayout>
+                        </TableCell>
+                        <TableCell>
+                          <TableCellLayout className={styles.roleCell}>{row.role_title ?? '—'}</TableCellLayout>
+                        </TableCell>
+                        <TableCell className={styles.numericCell}>{row.runs_this_week}</TableCell>
+                        <TableCell className={styles.numericCell}>{row.runs_total}</TableCell>
+                        <TableCell>
+                          <div className={styles.successCell}>
+                            <Badge
+                              appearance="tint"
+                              color={row.terminal_runs === 0 ? 'subtle' : successBadgeColor(row.success_rate)}
+                            >
+                              {formatSuccessRate(row)}
+                            </Badge>
+                            <Text className={styles.successBasis}>{row.successful_runs}/{row.terminal_runs}</Text>
+                          </div>
+                        </TableCell>
+                        <TableCell className={styles.numericCell}>{formatDuration(row.avg_duration_ms)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </div>
         </>

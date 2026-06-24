@@ -6,7 +6,7 @@ namespace Agentweaver.Api.ReviewPolicies;
 /// <summary>
 /// Project-scoped review-policy endpoints (Feature 010, FR-025/027/033). Lists the project's discovered
 /// policies with their validation status, returns a single policy by name, sets the project's active
-/// policy by name, and re-reads <c>.scaffolders/review-policies/</c> on an explicit Sync. All discovery,
+/// policy by name, and re-reads <c>.agentweaver/review-policies/</c> on an explicit Sync. All discovery,
 /// validation, and resolution is server-side (Principles III, IV); clients only render the results.
 /// Owner-scoped like the other project endpoints: 404 when the project is missing, 403 when the caller
 /// is not the project owner.

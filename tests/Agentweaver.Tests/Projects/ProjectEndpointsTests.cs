@@ -243,6 +243,73 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
              .Should().BeTrue();
     }
 
+    [Fact]
+    public async Task GetProjectRuns_CanFilterTerminalAgentHistoryIncludingChildren()
+    {
+        var id       = await CreateBlankProjectAsync();
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var projectId = ProjectId.Parse(id);
+        var now = DateTimeOffset.UtcNow;
+        var parentId = RunId.New();
+
+        await runStore.InsertAsync(new Run
+        {
+            Id                = parentId,
+            RepositoryPath    = NewWorkingDir(),
+            OriginatingBranch = "main",
+            ModelSource       = ModelSource.GitHubCopilot,
+            Task              = "Coordinator",
+            SubmittingUser    = ProjectsWebApplicationFactory.TestUser,
+            Status            = RunStatus.InProgress,
+            StartedAt         = now.AddMinutes(-20),
+            ProjectId         = projectId,
+            AgentName         = "Coordinator",
+        });
+
+        var adaChild = new Run
+        {
+            Id                = RunId.New(),
+            RepositoryPath    = NewWorkingDir(),
+            OriginatingBranch = "main",
+            ModelSource       = ModelSource.GitHubCopilot,
+            Task              = "Ada terminal work",
+            SubmittingUser    = ProjectsWebApplicationFactory.TestUser,
+            Status            = RunStatus.Completed,
+            StartedAt         = now.AddMinutes(-10),
+            EndedAt           = now.AddMinutes(-5),
+            ProjectId         = projectId,
+            AgentName         = "Ada",
+            ParentRunId       = parentId.ToString(),
+            SubtaskId         = "1",
+        };
+        await runStore.InsertAsync(adaChild);
+
+        await runStore.InsertAsync(new Run
+        {
+            Id                = RunId.New(),
+            RepositoryPath    = NewWorkingDir(),
+            OriginatingBranch = "main",
+            ModelSource       = ModelSource.GitHubCopilot,
+            Task              = "Ada active work",
+            SubmittingUser    = ProjectsWebApplicationFactory.TestUser,
+            Status            = RunStatus.InProgress,
+            StartedAt         = now.AddMinutes(-1),
+            ProjectId         = projectId,
+            AgentName         = "Ada",
+            ParentRunId       = parentId.ToString(),
+            SubtaskId         = "2",
+        });
+
+        var response = await _client.GetAsync($"/api/projects/{id}/runs?agent=Ada&terminal_only=true&include_children=true");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var runs = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        runs.Should().ContainSingle();
+        runs![0].GetProperty("execution_id").GetString().Should().Be(adaChild.Id.ToString());
+        runs[0].GetProperty("status").GetString().Should().Be("completed");
+        runs[0].GetProperty("agent_name").GetString().Should().Be("Ada");
+    }
+
     // =========================================================================
     // PE-11: POST /api/projects/{id}/runs on a deleting project returns 409
     // =========================================================================

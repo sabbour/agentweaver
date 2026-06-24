@@ -2,6 +2,7 @@ using System.Globalization;
 using Agentweaver.Api.Diagnostics;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Agentweaver.Squad.Squad;
 using Microsoft.Data.Sqlite;
 
 namespace Agentweaver.Api.Metrics;
@@ -21,11 +22,20 @@ public sealed class MetricsService
     // Non-terminal run states that represent live, in-flight orchestration work.
     private const string ActiveStatuses = "'pending','in_progress','awaiting_review','committing','merging'";
 
-    // Terminal SUCCESS states. 'completed' is the legacy success terminal; 'merged' is the current one.
-    private const string SuccessStatuses = "'merged','completed'";
+    // Terminal SUCCESS states. 'completed' is the legacy success terminal; 'merged' is the
+    // full pipeline success terminal; 'assemble_ready' is the coordinator child success terminal.
+    private const string SuccessStatuses = "'merged','completed','assemble_ready'";
 
     // Any terminal (finished) state, used for the throughput "done" series.
-    private const string FinishedStatuses = "'merged','completed','declined','failed','merge_failed'";
+    private const string FinishedStatuses = "'merged','completed','assemble_ready','declined','failed','merge_failed'";
+
+    // Active (working) duration of a FINISHED run in ms, EXCLUDING the cumulative time the run spent
+    // parked in the awaiting_review human-review gate (runs.review_wait_ms, accrued on every exit from
+    // awaiting_review). Single source of truth so every duration aggregate excludes review dwell
+    // identically; clamped at 0 so review-heavy rows never report negative. See
+    // <see cref="ActiveDurationMsExcludingReview"/> for the equivalent C# computation.
+    private const string ActiveDurationMsSql =
+        "MAX(0, ((julianday(ended_at) - julianday(started_at)) * 86400000.0) - COALESCE(review_wait_ms, 0))";
 
     private readonly SqliteDb _db;
     private readonly IProjectStore _projectStore;
@@ -54,7 +64,8 @@ public sealed class MetricsService
 
         var summary = await ReadSummaryAsync(conn, pid, weekAgo, ct).ConfigureAwait(false);
         var throughput = await ReadThroughputAsync(conn, pid, windowStart, ct).ConfigureAwait(false);
-        var leaderboard = await ReadLeaderboardAsync(conn, pid, weekAgo, ct).ConfigureAwait(false);
+        var agentRoles = ReadAgentRoles(project);
+        var leaderboard = await ReadLeaderboardAsync(conn, pid, weekAgo, agentRoles, ct).ConfigureAwait(false);
 
         return new ProjectDashboardDto
         {
@@ -154,7 +165,11 @@ public sealed class MetricsService
     }
 
     private static async Task<IReadOnlyList<AgentLeaderboardEntryDto>> ReadLeaderboardAsync(
-        SqliteConnection conn, string pid, DateTimeOffset weekAgo, CancellationToken ct)
+        SqliteConnection conn,
+        string pid,
+        DateTimeOffset weekAgo,
+        IReadOnlyDictionary<string, string> agentRoles,
+        CancellationToken ct)
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
@@ -163,9 +178,9 @@ public sealed class MetricsService
                 agent_name,
                 COALESCE(SUM(CASE WHEN julianday(started_at) >= julianday($weekAgo) THEN 1 ELSE 0 END), 0),
                 COUNT(*),
-                CAST(SUM(CASE WHEN status IN ({SuccessStatuses}) THEN 1 ELSE 0 END) AS REAL) / COUNT(*),
-                AVG(CASE WHEN ended_at IS NOT NULL
-                         THEN (julianday(ended_at) - julianday(started_at)) * 86400000.0 END)
+                COALESCE(SUM(CASE WHEN status IN ({SuccessStatuses}) THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status IN ({FinishedStatuses}) THEN 1 ELSE 0 END), 0),
+                AVG(CASE WHEN ended_at IS NOT NULL THEN {ActiveDurationMsSql} END)
             FROM runs
             WHERE project_id = $pid AND agent_name IS NOT NULL
             GROUP BY agent_name
@@ -178,16 +193,104 @@ public sealed class MetricsService
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
+            var agent = r.GetString(0);
+            var successfulRuns = r.GetInt32(3);
+            var terminalRuns = r.GetInt32(4);
             result.Add(new AgentLeaderboardEntryDto
             {
-                Agent         = r.GetString(0),
+                Agent         = agent,
+                RoleTitle     = ResolveAgentRole(agentRoles, agent),
                 RunsThisWeek  = r.GetInt32(1),
                 RunsTotal     = r.GetInt32(2),
-                SuccessRate   = r.IsDBNull(3) ? 0d : r.GetDouble(3),
-                AvgDurationMs = r.IsDBNull(4) ? null : r.GetDouble(4),
+                SuccessfulRuns = successfulRuns,
+                TerminalRuns  = terminalRuns,
+                SuccessRate   = terminalRuns == 0 ? 0d : (double)successfulRuns / terminalRuns,
+                AvgDurationMs = r.IsDBNull(5) ? null : r.GetDouble(5),
             });
         }
         return result;
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadAgentRoles(Project project)
+    {
+        try
+        {
+            var reader = new SquadReader(project.WorkingDirectory);
+            var roles = NewRoleDictionary();
+            AddRoleAliases(roles, "Coordinator", "Coordinator");
+            AddRoleAliases(roles, "Squad", "Coordinator");
+
+            var team = reader.ReadTeam();
+            if (team is null) return roles;
+
+            var memberRoles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in team.Members.Where(m => !string.IsNullOrWhiteSpace(m.Role.Title)))
+            {
+                AddRoleAliases(memberRoles, member.Name, member.Role.Title);
+                AddRoleAliases(roles, member.Name, member.Role.Title);
+            }
+
+            var registry = reader.ReadRegistry();
+            foreach (var (registryName, member) in registry.Agents)
+            {
+                var roleTitle = ResolveAgentRole(memberRoles, member.PersistentName)
+                    ?? (!string.IsNullOrWhiteSpace(member.PreviousName) ? ResolveAgentRole(memberRoles, member.PreviousName) : null);
+                if (string.IsNullOrWhiteSpace(roleTitle)) continue;
+
+                AddRoleAliases(roles, registryName, roleTitle);
+                AddRoleAliases(roles, member.Name, roleTitle);
+                AddRoleAliases(roles, member.PersistentName, roleTitle);
+                if (!string.IsNullOrWhiteSpace(member.PreviousName))
+                    AddRoleAliases(roles, member.PreviousName, roleTitle);
+            }
+
+            return roles;
+        }
+        catch (Exception)
+        {
+            var roles = NewRoleDictionary();
+            AddRoleAliases(roles, "Coordinator", "Coordinator");
+            AddRoleAliases(roles, "Squad", "Coordinator");
+            return roles;
+        }
+    }
+
+    private static Dictionary<string, string> NewRoleDictionary() =>
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static void AddRoleAliases(IDictionary<string, string> roles, string? agentName, string roleTitle)
+    {
+        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(roleTitle)) return;
+
+        var trimmed = agentName.Trim();
+        roles.TryAdd(trimmed, roleTitle);
+
+        var normalized = NormalizeAgentName(trimmed);
+        if (normalized.Length > 0)
+            roles.TryAdd(normalized, roleTitle);
+    }
+
+    private static string? ResolveAgentRole(IReadOnlyDictionary<string, string> roles, string? agentName)
+    {
+        if (string.IsNullOrWhiteSpace(agentName)) return null;
+
+        var trimmed = agentName.Trim();
+        if (roles.TryGetValue(trimmed, out var role)) return role;
+
+        var normalized = NormalizeAgentName(trimmed);
+        return normalized.Length > 0 && roles.TryGetValue(normalized, out role) ? role : null;
+    }
+
+    private static string NormalizeAgentName(string value)
+    {
+        var buffer = new char[value.Length];
+        var n = 0;
+        foreach (var c in value)
+        {
+            if (char.IsLetterOrDigit(c))
+                buffer[n++] = char.ToLowerInvariant(c);
+        }
+        return new string(buffer, 0, n);
     }
 
     // ---------------------------------------------------------------------------------
@@ -438,6 +541,36 @@ public sealed class MetricsService
     private static DateTimeOffset ParseTs(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
 
-    private static string Truncate(string value, int max) =>
-        value.Length <= max ? value : value[..max];
+    /// <summary>
+    /// Active (working) duration of a run, in milliseconds, EXCLUDING the cumulative time it spent
+    /// parked in the awaiting_review human-review gate (<paramref name="reviewWaitMs"/> = the run's
+    /// accrued <c>review_wait_ms</c>). The C# counterpart of <see cref="ActiveDurationMsSql"/>: both
+    /// compute total elapsed minus review dwell, clamped at 0. Use this for any per-run duration
+    /// computed in process so it matches the dashboard aggregates exactly.
+    /// </summary>
+    internal static double ActiveDurationMsExcludingReview(
+        DateTimeOffset startedAt, DateTimeOffset endedAt, long reviewWaitMs) =>
+        Math.Max(0d, (endedAt - startedAt).TotalMilliseconds - reviewWaitMs);
+
+    // Truncates an activity label to at most <paramref name="max"/> chars. When the value is longer it
+    // cuts at a word boundary (no mid-word cut) at or under max-1 chars and appends a single-char
+    // ellipsis, so the total length stays <= max. Falls back to a hard cut + ellipsis only when there
+    // is no usable space (e.g. one unbroken token longer than max).
+    private const char Ellipsis = '\u2026';
+
+    internal static string Truncate(string value, int max)
+    {
+        value = value.TrimEnd();
+        if (value.Length <= max) return value;
+
+        var head = value[..(max - 1)];
+        var lastSpace = head.LastIndexOf(' ');
+
+        // Only honor the word boundary when it leaves a reasonable amount of text (>= half of max),
+        // otherwise a long leading token would shrink the label too far.
+        if (lastSpace >= max / 2)
+            head = head[..lastSpace];
+
+        return head.TrimEnd() + Ellipsis;
+    }
 }

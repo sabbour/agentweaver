@@ -7,7 +7,6 @@ import {
   MessageBarBody,
   Spinner,
   Text,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -17,6 +16,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { isCoordinatorRun } from '../utils/runKind';
 import type { Project, WorkflowRunDto } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
 
 // Orchestrations — a project-level list of coordinator orchestration runs. Each
 // row opens the existing coordinator topology view. Data comes from the project's
@@ -59,17 +59,6 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalL,
-  },
-  actions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
   },
   list: {
     display: 'flex',
@@ -159,19 +148,21 @@ export function OrchestrationsPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
-          {project?.name ?? projectId}
-        </Link>
-        <span>/</span>
-        <span>Orchestrations</span>
-      </div>
-
-      <div className={styles.pageHeader}>
-        <Title2>Orchestrations</Title2>
-        <div className={styles.actions}>
+      <PageHeader
+        title="Orchestrations"
+        subtitle="Coordinator runs across this project."
+        breadcrumb={
+          <div className={styles.breadcrumb}>
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
+              {project?.name ?? projectId}
+            </Link>
+            <span>/</span>
+            <span>Orchestrations</span>
+          </div>
+        }
+        actions={
           <Button
             appearance="secondary"
             icon={<ArrowSyncRegular />}
@@ -180,8 +171,8 @@ export function OrchestrationsPage() {
           >
             Refresh
           </Button>
-        </div>
-      </div>
+        }
+      />
 
       {error && (
         <MessageBar intent="error">

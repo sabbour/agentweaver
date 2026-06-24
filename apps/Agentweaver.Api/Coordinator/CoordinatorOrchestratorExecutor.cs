@@ -41,6 +41,16 @@ namespace Agentweaver.Api.Coordinator;
 public sealed class CoordinatorOrchestratorExecutor
 {
     private const string CoordinatorAgentName = "Coordinator";
+    private const string CoordinatorMetaToolsRuntimeNote =
+        """
+
+        ## Agentweaver project meta tools
+
+        You can use Agentweaver MCP-equivalent native tools for project meta tasks and grounding:
+        project_get, project_list_runs, backlog_get_board, backlog_capture_task, run_status,
+        run_show_artifacts, coordinator_work_plan_get, coordinator_children_get, orchestration_topology,
+        plus the memory/session/inbox tools.
+        """;
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
@@ -53,6 +63,8 @@ public sealed class CoordinatorOrchestratorExecutor
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CoordinatorOrchestratorExecutor> _logger;
     private readonly string _defaultCopilotModel;
+    private readonly string? _apiBaseUrl;
+    private readonly string? _apiKey;
     private readonly CatalogReader _catalog = new();
 
     public CoordinatorOrchestratorExecutor(
@@ -65,7 +77,9 @@ public sealed class CoordinatorOrchestratorExecutor
         RunStreamStore streamStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
-        string defaultCopilotModel)
+        string defaultCopilotModel,
+        string? apiBaseUrl,
+        string? apiKey)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -78,6 +92,8 @@ public sealed class CoordinatorOrchestratorExecutor
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorOrchestratorExecutor>();
         _defaultCopilotModel = string.IsNullOrWhiteSpace(defaultCopilotModel) ? "gpt-4o" : defaultCopilotModel;
+        _apiBaseUrl = apiBaseUrl;
+        _apiKey = apiKey;
     }
 
     /// <summary>
@@ -188,6 +204,7 @@ public sealed class CoordinatorOrchestratorExecutor
             var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "coordinator")
                 ?? "You are the Coordinator, the built-in orchestration agent. Decompose a confirmed "
                    + "outcome spec into the minimum set of independently dispatchable subtasks.";
+            charter += CoordinatorMetaToolsRuntimeNote;
 
             var rosterHint = BuildRosterHint(ResolveRoster(input.RepositoryPath));
 
@@ -252,8 +269,8 @@ public sealed class CoordinatorOrchestratorExecutor
                 streamWriter: streamWriter,
                 projectId: input.ProjectId,
                 agentName: CoordinatorAgentName,
-                apiBaseUrl: null,
-                apiKey: null,
+                apiBaseUrl: _apiBaseUrl,
+                apiKey: _apiKey,
                 ct).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);

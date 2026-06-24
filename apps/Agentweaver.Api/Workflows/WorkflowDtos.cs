@@ -52,6 +52,7 @@ public sealed record WorkflowNodeDto
     [JsonPropertyName("label")] public required string Label { get; init; }
     [JsonPropertyName("role")] public string? Role { get; init; }
     [JsonPropertyName("kind")] public string? Kind { get; init; }
+    [JsonPropertyName("gate_kind")] public string? GateKind { get; init; }
     [JsonPropertyName("agent")] public string? Agent { get; init; }
     [JsonPropertyName("prompt")] public string? Prompt { get; init; }
     [JsonPropertyName("target")] public string? Target { get; init; }
@@ -157,6 +158,7 @@ public static class WorkflowDtoMapper
                 Label = n.Label,
                 Role = n.Role,
                 Kind = n.Kind,
+                GateKind = n.GateKind,
                 Agent = n.Agent,
                 Prompt = n.Prompt,
                 Target = n.Target,

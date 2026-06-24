@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
@@ -18,6 +19,22 @@ namespace Agentweaver.Api.Coordinator;
 public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 {
     private const string CoordinatorAgentName = "Coordinator";
+    private const string CoordinatorMetaToolsRuntimeNote =
+        """
+
+        ## Agentweaver project meta tools
+
+        You can use Agentweaver MCP-equivalent native tools for project meta tasks and grounding:
+        - project_get(project_id), project_list_runs(project_id)
+        - backlog_get_board(project_id, include_terminal_history?), backlog_capture_task(project_id, title, description?)
+        - run_status(run_id), run_show_artifacts(run_id)
+        - coordinator_work_plan_get(run_id), coordinator_children_get(run_id), orchestration_topology(run_id)
+        - memory/session/inbox tools: list_inbox, submit_inbox_entry, submit_decision, record_memory, update_session, export_memory
+
+        These tools are scoped to this Agentweaver project and authenticate through the API; use them
+        for project metadata, backlog follow-ups, and run/orchestration status, not for arbitrary file
+        or shell access.
+        """;
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
@@ -27,6 +44,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly RunStreamStore _streamStore;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly string? _apiBaseUrl;
+    private readonly string? _apiKey;
 
     public CopilotCoordinatorSpecDrafter(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -36,7 +55,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
         RunStreamStore streamStore,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IConfiguration configuration)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -46,6 +66,9 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         _toolApprovalGate = toolApprovalGate;
         _streamStore = streamStore;
         _loggerFactory = loggerFactory;
+        _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
+        _apiKey = configuration["Auth:ApiKey"]
+            ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
     }
 
     public async Task<OutcomeSpecDraft> DraftAsync(
@@ -57,6 +80,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
             var systemPrompt = string.IsNullOrEmpty(memoryContext)
                 ? charter
                 : charter + "\n\n---\n\n## Team context (memories and decisions)\n\n" + memoryContext;
+            systemPrompt += CoordinatorMetaToolsRuntimeNote;
 
             // SECURITY: input.Goal and input.ReviseFeedback are human-supplied UNTRUSTED data.
             // Fence them in clearly labeled delimiters and instruct the agent to treat the fenced
@@ -121,8 +145,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 streamWriter: streamWriter,
                 projectId: input.ProjectId,
                 agentName: CoordinatorAgentName,
-                apiBaseUrl: null,
-                apiKey: null,
+                apiBaseUrl: _apiBaseUrl,
+                apiKey: _apiKey,
                 ct).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);

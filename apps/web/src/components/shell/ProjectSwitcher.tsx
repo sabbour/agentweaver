@@ -49,7 +49,9 @@ const useStyles = makeStyles({
 
 // The project-scoped category to preserve when switching projects (e.g. stay on
 // Settings). Sub-resource ids are intentionally dropped — switching lands on the
-// category root of the target project.
+// category root of the target project. Deep run/execution routes (e.g.
+// /runs/:runId/workflow) are mapped to their owning nav category via the nav
+// item's matchSegments, so they preserve Board instead of falling to the root.
 function currentCategorySegment(pathname: string, projectId: string | undefined): NavItemDef | null {
   if (!projectId) return null;
   const prefix = `/projects/${projectId}`;
@@ -57,7 +59,29 @@ function currentCategorySegment(pathname: string, projectId: string | undefined)
   const rest = pathname.slice(prefix.length).replace(/^\//, '');
   const firstSeg = rest.split('/')[0] ?? '';
   if (!firstSeg) return null;
-  return NAV_ITEMS.find((i) => i.segment && i.segment === firstSeg) ?? null;
+  // Prefer an exact segment match (e.g. 'team/cast' resolves to Agents at /team).
+  const direct = NAV_ITEMS.find((i) => i.segment && i.segment === firstSeg);
+  if (direct) return direct;
+  // Otherwise honor matchSegments so deep routes keep their category (e.g.
+  // 'runs/:runId/workflow' maps to Board).
+  const viaMatch = NAV_ITEMS.find((i) => i.matchSegments?.includes(firstSeg));
+  if (viaMatch) return viaMatch;
+  return null;
+}
+
+// Compute the path to navigate to when switching from the current page to a
+// target project. Preserves the page category where possible (mapping deep
+// sub-resource routes to their category root); otherwise lands on the target
+// project home.
+export function projectSwitchTarget(
+  pathname: string,
+  currentProjectId: string | undefined,
+  targetId: string,
+): string {
+  const category = currentCategorySegment(pathname, currentProjectId);
+  return category && category.segment
+    ? `/projects/${targetId}/${category.segment}`
+    : `/projects/${targetId}`;
 }
 
 export interface ProjectSwitcherProps {
@@ -157,9 +181,9 @@ export function ProjectSwitcher({
     if (!target) return;
     setComboValue(target.name);
     setRecentIds(pushRecentId(targetId));
-    // Preserve the current category where possible; otherwise land on the board.
-    const category = currentCategorySegment(pathname, projectId);
-    navigate(category ? `/projects/${targetId}/${category.segment}` : `/projects/${targetId}`);
+    // Preserve the current page category under the target project where possible;
+    // otherwise land on its home.
+    navigate(projectSwitchTarget(pathname, projectId, targetId));
   }
 
   const placeholder = loadError

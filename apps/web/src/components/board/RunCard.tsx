@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Badge, Button, Caption1, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { ArchiveRegular } from '@fluentui/react-icons';
 import type { RunCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
+import { ApiError } from '../../api/client';
 import { AgentAvatar } from '../AgentAvatar';
 
 const useStyles = makeStyles({
@@ -16,6 +18,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     textDecoration: 'none',
     color: tokens.colorNeutralForeground1,
+    cursor: 'pointer',
   },
   header: {
     display: 'flex',
@@ -36,6 +39,16 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
   },
+  headerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    flexShrink: 0,
+  },
+  error: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+  },
 });
 
 function badgeColor(status: string): 'success' | 'danger' | 'warning' | 'informative' | 'subtle' {
@@ -50,14 +63,17 @@ function badgeColor(status: string): 'success' | 'danger' | 'warning' | 'informa
 export interface RunCardProps {
   card: RunCardDto;
   projectId: string;
+  onMutated?: () => void | Promise<void>;
 }
 
 // Read-only coordinator-run card. Not draggable — the coordinator owns workflow movement.
 // Links to the coordinator topology/graph page (FR-016).
-export function RunCard({ card, projectId }: RunCardProps) {
+export function RunCard({ card, projectId, onMutated }: RunCardProps) {
   const styles = useStyles();
   const navigate = useNavigate();
   const [retrying, setRetrying] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Coordinator-run detail pages (CoordinatorRunPage -> /api/runs/{id}/...) are run_id-keyed for
   // EVERY coordinator run, so navigate by the canonical run_id. (workflow_run_id is null for both
@@ -81,11 +97,54 @@ export function RunCard({ card, projectId }: RunCardProps) {
     }
   };
 
+  const handleArchive = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (archiving) return;
+    setArchiving(true);
+    setError(null);
+    try {
+      await apiClient.deleteRun(card.run_id);
+      await onMutated?.();
+    } catch (err) {
+      setError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setArchiving(false);
+    }
+  };
+
+  const handleCardClick = () => {
+    navigate(`/projects/${projectId}/orchestrations/${target}`);
+  };
+
+  const handleCardKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      navigate(`/projects/${projectId}/orchestrations/${target}`);
+    }
+  };
+
   return (
-    <Link to={`/projects/${projectId}/orchestrations/${target}`} className={styles.card} data-testid={`run-card-${card.run_id}`}>
+    <div
+      className={styles.card}
+      data-testid={`run-card-${card.run_id}`}
+      role="link"
+      tabIndex={0}
+      onClick={handleCardClick}
+      onKeyDown={handleCardKeyDown}
+    >
       <div className={styles.header}>
         <Text className={styles.task}>{card.task || '(coordinator run)'}</Text>
-        <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
+        <div className={styles.headerActions}>
+          <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<ArchiveRegular />}
+            aria-label="Archive run"
+            disabled={archiving}
+            onClick={handleArchive}
+          />
+        </div>
       </div>
       {stage && <Caption1 className={styles.meta}>{stage}</Caption1>}
       {card.agent_name ? (
@@ -118,6 +177,7 @@ export function RunCard({ card, projectId }: RunCardProps) {
           Retry
         </Button>
       )}
-    </Link>
+      {error && <Text className={styles.error}>{error}</Text>}
+    </div>
   );
 }

@@ -137,5 +137,22 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
 
         sw.Stop();
         _statusStore.RecordTickOutcome(tickStart, actedCount, errorCount, sw.Elapsed.TotalMilliseconds, lastError);
+
+        // Watchdog: recover any orphaned coordinator dispatch (a work plan still dispatching whose
+        // in-memory loop died / never re-armed after a restart). Isolated so a sweep failure never
+        // affects the pickup tick outcome above.
+        try
+        {
+            var reconciler = sp.GetRequiredService<CoordinatorReconciler>();
+            await reconciler.SweepAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;   // shutdown — stop the service cleanly
+        }
+        catch (Exception exSweep)
+        {
+            _logger.LogError(exSweep, "Heartbeat: coordinator reconciler sweep failed");
+        }
     }
 }

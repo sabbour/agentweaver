@@ -27,6 +27,10 @@ internal sealed record RunWorkflowBindings(
     ExecutorBinding ScribeOutputNoChanges,
     ExecutorBinding ReviewAdapter,
     ExecutorBinding ReviewBinding,
+    ExecutorBinding PolicyAgentTurnStorer,
+    ExecutorBinding PolicyAgentOutputAdapter,
+    ExecutorBinding PolicyDirectMergeAdapter,
+    IReadOnlyDictionary<string, ExecutorBinding> PolicyGateBindings,
     ExecutorBinding MergeAdapter,
     ExecutorBinding MergeBinding,
     ExecutorBinding TerminalMerge,
@@ -70,7 +74,7 @@ internal static class RunWorkflowGraphBinder
 
         // Each logical edge expands to its raw executor wiring + predicate.
         foreach (var edge in definition.Edges)
-            WireEdge(builder, edge, bindings);
+            WireEdge(builder, definition, edge, bindings);
 
         // Terminal nodes declare which executors are graph outputs (WithOutputFrom).
         foreach (var node in definition.Nodes)
@@ -93,7 +97,7 @@ internal static class RunWorkflowGraphBinder
     /// Resolves a single logical edge <c>(from, to, when)</c> to its raw executor wiring. The predicates
     /// are the exact lambdas previously inline in <c>BuildWorkflow</c>; do not alter them (parity).
     /// </summary>
-    private static void WireEdge(GraphDescriptorBuilder g, WorkflowEdge edge, RunWorkflowBindings b)
+    private static void WireEdge(GraphDescriptorBuilder g, WorkflowDefinition definition, WorkflowEdge edge, RunWorkflowBindings b)
     {
         var key = $"{edge.From}->{edge.To}:{edge.When}";
         switch (key)
@@ -175,6 +179,9 @@ internal static class RunWorkflowGraphBinder
                 break;
 
             default:
+                if (TryWirePolicyEdge(g, definition, edge, b))
+                    break;
+
                 throw new InvalidOperationException(
                     $"RunWorkflowGraphBinder: no MAF binding for workflow edge '{key}'. " +
                     "The default WorkflowDefinition drifted from the executor wiring.");
@@ -195,10 +202,198 @@ internal static class RunWorkflowGraphBinder
             case "terminal-declined":
                 g.WithOutputFrom(b.TerminalDeclined);
                 break;
+            case var id when id.StartsWith("policy-terminal-safety-failed", StringComparison.Ordinal):
+                g.WithOutputFrom(b.TerminalSafetyFailed);
+                break;
+            case var id when id.StartsWith("policy-terminal-declined", StringComparison.Ordinal):
+                g.WithOutputFrom(b.TerminalDeclined);
+                break;
             default:
                 throw new InvalidOperationException(
                     $"RunWorkflowGraphBinder: no output binding for terminal node '{terminalNodeId}'. " +
                     "The default WorkflowDefinition drifted from the executor wiring.");
         }
+    }
+
+    private static bool TryWirePolicyEdge(
+        GraphDescriptorBuilder g,
+        WorkflowDefinition definition,
+        WorkflowEdge edge,
+        RunWorkflowBindings b)
+    {
+        var fromKind = GateKindOf(definition, edge.From);
+        var toKind = GateKindOf(definition, edge.To);
+
+        if (toKind is not null && b.PolicyGateBindings.ContainsKey(edge.To))
+        {
+            WireIntoPolicyGate(g, definition, edge, b, toKind);
+            return true;
+        }
+
+        if (fromKind is not null && b.PolicyGateBindings.ContainsKey(edge.From))
+        {
+            WireFromPolicyGate(g, edge, b, fromKind);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void WireIntoPolicyGate(
+        GraphDescriptorBuilder g,
+        WorkflowDefinition definition,
+        WorkflowEdge edge,
+        RunWorkflowBindings b,
+        string targetKind)
+    {
+        var source = ResolveSourceBinding(edge.From, b);
+        var sourceKind = GateKindOf(definition, edge.From);
+
+        if (SourceOutputsAgentTurn(edge.From, sourceKind))
+        {
+            if (targetKind == "human-review")
+            {
+                g.AddEdge<AgentTurnOutput>(source, b.ReviewAdapter, output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations))
+                 .AddEdge(b.ReviewAdapter, b.PolicyGateBindings[edge.To]);
+            }
+            else
+            {
+                g.AddEdge<AgentTurnOutput>(source, b.PolicyAgentTurnStorer,
+                        output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations))
+                 .AddEdge(b.PolicyAgentTurnStorer, b.PolicyGateBindings[edge.To]);
+            }
+            return;
+        }
+
+        if (SourceOutputsReviewDecision(edge.From, sourceKind))
+        {
+            if (targetKind == "human-review")
+            {
+                g.AddEdge<WorkflowReviewDecision>(source, b.PolicyAgentOutputAdapter,
+                        decision => ReviewDecisionPredicate(decision, edge.When))
+                 .AddEdge(b.PolicyAgentOutputAdapter, b.ReviewAdapter)
+                 .AddEdge(b.ReviewAdapter, b.PolicyGateBindings[edge.To]);
+            }
+            else
+            {
+                g.AddEdge<WorkflowReviewDecision>(source, b.PolicyAgentOutputAdapter,
+                        decision => ReviewDecisionPredicate(decision, edge.When))
+                 .AddEdge(b.PolicyAgentOutputAdapter, b.PolicyGateBindings[edge.To]);
+            }
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"RunWorkflowGraphBinder: policy gate '{edge.To}' cannot consume edge from '{edge.From}'.");
+    }
+
+    private static void WireFromPolicyGate(GraphDescriptorBuilder g, WorkflowEdge edge, RunWorkflowBindings b, string sourceKind)
+    {
+        var source = b.PolicyGateBindings[edge.From];
+
+        if (sourceKind == "rai")
+        {
+            switch (edge.To)
+            {
+                case "agent":
+                    g.AddEdge<AgentTurnOutput>(source, b.RaiRevisionAdapter,
+                            output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations))
+                     .AddEdge(b.RaiRevisionAdapter, b.AgentBinding, idempotent: true);
+                    return;
+                case "merge":
+                    g.AddEdge<AgentTurnOutput>(source, b.PolicyDirectMergeAdapter,
+                            output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations))
+                     .AddEdge(b.PolicyDirectMergeAdapter, b.MergeBinding);
+                    return;
+                case var id when id.StartsWith("policy-terminal-safety-failed", StringComparison.Ordinal):
+                    g.AddEdge<AgentTurnOutput>(source, b.TerminalSafetyFailed,
+                        output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations));
+                    return;
+            }
+        }
+
+        if (sourceKind is "rubberduck" or "human-review")
+        {
+            switch (edge.To)
+            {
+                case "agent":
+                    g.AddEdge<WorkflowReviewDecision>(source, b.ReviewChangesAdapter,
+                            decision => ReviewDecisionPredicate(decision, edge.When))
+                     .AddEdge(b.ReviewChangesAdapter, b.AgentBinding, idempotent: true);
+                    return;
+                case "merge":
+                    g.AddEdge<WorkflowReviewDecision>(source, b.MergeAdapter,
+                            decision => ReviewDecisionPredicate(decision, edge.When))
+                     .AddEdge(b.MergeAdapter, b.MergeBinding);
+                    return;
+                case var id when id.StartsWith("policy-terminal-declined", StringComparison.Ordinal):
+                    g.AddEdge<WorkflowReviewDecision>(source, b.TerminalDeclined,
+                        decision => ReviewDecisionPredicate(decision, edge.When));
+                    return;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"RunWorkflowGraphBinder: no MAF binding for policy edge '{edge.From}->{edge.To}:{edge.When}'.");
+    }
+
+    private static ExecutorBinding ResolveSourceBinding(string nodeId, RunWorkflowBindings b)
+    {
+        if (b.PolicyGateBindings.TryGetValue(nodeId, out var policy))
+            return policy;
+
+        return nodeId switch
+        {
+            "agent" => b.AgentBinding,
+            "rai" => b.RaiBinding,
+            "review" => b.ReviewBinding,
+            _ => throw new InvalidOperationException(
+                $"RunWorkflowGraphBinder: no source binding for workflow node '{nodeId}'."),
+        };
+    }
+
+    private static bool SourceOutputsAgentTurn(string nodeId, string? gateKind) =>
+        nodeId == "agent" || gateKind == "rai";
+
+    private static bool SourceOutputsReviewDecision(string nodeId, string? gateKind) =>
+        nodeId == "review" || gateKind is "rubberduck" or "human-review";
+
+    private static bool AgentTurnPredicate(AgentTurnOutput? output, string? when, string? sourceKind, int maxIterations)
+    {
+        if (output is null) return false;
+        return when switch
+        {
+            null or "" => true,
+            "pass" => !output.RaiRevisionRequired && !output.ContentSafetyFlagged,
+            "review" => !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff),
+            "revise" => output.RaiRevisionRequired && output.Iteration < maxIterations,
+            "safety-failed" => output.ContentSafetyFlagged,
+            "no-changes" => !output.RaiRevisionRequired && string.IsNullOrEmpty(output.Diff) && !output.ContentSafetyFlagged,
+            _ => false,
+        };
+    }
+
+    private static bool ReviewDecisionPredicate(WorkflowReviewDecision? decision, string? when) =>
+        when switch
+        {
+            null or "" => true,
+            "approved" or "pass" => decision is not null && decision.Approved,
+            "request-changes" or "revise" => decision is not null && !decision.Approved && decision.RequestChanges,
+            "declined" => decision is null || (!decision.Approved && !decision.RequestChanges),
+            _ => false,
+        };
+
+    private static string? GateKindOf(WorkflowDefinition definition, string nodeId)
+    {
+        var node = definition.Nodes.FirstOrDefault(n => string.Equals(n.Id, nodeId, StringComparison.Ordinal));
+        if (node is null) return null;
+        var raw = !string.IsNullOrWhiteSpace(node.GateKind) ? node.GateKind! : node.Id;
+        return raw.Trim().Replace('_', '-').Replace(' ', '-').ToLowerInvariant() switch
+        {
+            "rai" => "rai",
+            "review" or "human-review" => "human-review",
+            "rubberduck" or "rubber-duck" => "rubberduck",
+            _ => null,
+        };
     }
 }

@@ -112,6 +112,15 @@ public sealed class GraphDescriptorBuilder
         if (string.Equals(b.Id, ReviewGatePortId, StringComparison.Ordinal))
             return new RawMeta("review", "Human Review", "review", "gate", "live", Hidden: false);
 
+        if (b.Id.EndsWith("-human-review-gate", StringComparison.Ordinal) ||
+            b.Id.EndsWith("-review-gate", StringComparison.Ordinal))
+        {
+            var logicalId = b.Id.EndsWith("-gate", StringComparison.Ordinal)
+                ? b.Id[..^"-gate".Length]
+                : b.Id;
+            return new RawMeta(logicalId, "Human review", "review", "gate", "live", Hidden: false);
+        }
+
         throw new InvalidOperationException(
             $"Executor '{b.Id}' does not implement IWorkflowNodeMeta and is not the known " +
             $"'{ReviewGatePortId}' port. Wrap it in VisualFunctionExecutor (or implement the " +

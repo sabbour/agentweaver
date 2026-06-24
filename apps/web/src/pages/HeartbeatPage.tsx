@@ -13,7 +13,6 @@ import {
   TableHeaderCell,
   TableRow,
   Text,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -22,6 +21,8 @@ import { ArrowClockwiseRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { HeartbeatAutomationDto, HeartbeatStatusDto } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Heartbeat (Spec 011, FR-017) — service status, last error, the real automations
 // catalog (exactly two: Coordinator Heartbeat + Checkpoint GC), and the recent
@@ -34,18 +35,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-  },
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalL,
-    flexWrap: 'wrap',
-  },
-  headerActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
   },
   statusRow: {
     display: 'flex',
@@ -139,6 +128,7 @@ export function HeartbeatPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -150,7 +140,7 @@ export function HeartbeatPage() {
   const load = useCallback(async (signal: { cancelled: boolean }) => {
     try {
       const dto = await apiClient.getHeartbeatStatus();
-      if (!signal.cancelled) { setData(dto); setError(null); }
+      if (!signal.cancelled) { setData(dto); setError(null); setLastRefreshedAt(Date.now()); }
     } catch (err) {
       if (!signal.cancelled) setError(formatError(err));
     } finally {
@@ -171,24 +161,30 @@ export function HeartbeatPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.pageHeader}>
-        <Title2>Heartbeat</Title2>
-        <div className={styles.headerActions}>
-          <Switch
-            label="Auto-refresh"
-            checked={autoRefresh}
-            onChange={(_, d) => setAutoRefresh(d.checked)}
-          />
-          <Button
-            appearance="secondary"
-            icon={<ArrowClockwiseRegular />}
-            onClick={() => { setLoading(true); void load({ cancelled: false }); }}
-            disabled={loading}
-          >
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Heartbeat"
+        subtitle="Background automation status and recent ticks."
+        actions={
+          <>
+            {autoRefresh && lastRefreshedAt != null && (
+              <RefreshCountdown intervalMs={REFRESH_MS} lastRefreshedAt={lastRefreshedAt} refreshing={loading} />
+            )}
+            <Switch
+              label="Auto-refresh"
+              checked={autoRefresh}
+              onChange={(_, d) => setAutoRefresh(d.checked)}
+            />
+            <Button
+              appearance="secondary"
+              icon={<ArrowClockwiseRegular />}
+              onClick={() => { setLoading(true); void load({ cancelled: false }); }}
+              disabled={loading}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {error && (
         <MessageBar intent="error">

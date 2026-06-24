@@ -32,9 +32,16 @@ public sealed record Project
 
     /// <summary>
     /// The project's active review policy, referenced BY NAME (Feature 010, FR-027/033). Selects which
-    /// available review policy (from <c>.scaffolders/review-policies/</c> or the built-in default)
-    /// injects its review steps into the project's runs. Null means "use the built-in default policy"
-    /// (Rubber-duck + RAI, FR-032).
+    /// available review policy (from <c>.agentweaver/review-policies/</c> or the built-in default)
+    /// overlays its review steps onto the project's runs. Null means "use the built-in default policy"
+    /// (RAI + human-review, absorbed by the built-in workflow for identity/parity).
     /// </summary>
     public string? ActiveReviewPolicyName { get; init; }
+
+    /// <summary>
+    /// The project's sandbox profile, set when a blueprint is applied at creation (Feature 012). A
+    /// named preset (e.g. <c>default</c> or <c>restricted</c>) selecting the shell/network/destructive
+    /// gating posture for the project's runs. Null means "use the built-in default sandbox posture".
+    /// </summary>
+    public string? SandboxProfile { get; init; }
 }

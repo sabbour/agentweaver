@@ -13,17 +13,24 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
+  BracesRegular,
   CheckmarkRegular,
   ChevronDownRegular,
   ChevronRightRegular,
+  CodeRegular,
+  ColorRegular,
   CommentRegular,
   DismissRegular,
   DocumentAddRegular,
   DocumentDismissRegular,
   DocumentEditRegular,
+  DocumentPdfRegular,
   DocumentRegular,
+  DocumentTextRegular,
   FolderOpenRegular,
   FolderRegular,
+  ImageRegular,
+  LockClosedRegular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 import {
@@ -111,6 +118,46 @@ function getFileStatusIcon(status?: string): FluentIcon {
   if (status === 'modified') return DocumentEditRegular;
   if (status === 'deleted') return DocumentDismissRegular;
   return DocumentRegular;
+}
+
+// Maps a filename to an extension-specific icon for the file tree. The returned `kind`
+// is surfaced as data-file-icon for styling/testing. In the review/diff tree the change
+// status COLOR is layered on top via the status icon class — this only picks the glyph.
+function fileIconForName(name: string): { Icon: FluentIcon; kind: string } {
+  const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : '';
+  switch (ext) {
+    case 'md':
+    case 'markdown':
+      return { Icon: DocumentTextRegular, kind: 'markdown' };
+    case 'ts':
+    case 'tsx':
+    case 'js':
+    case 'jsx':
+    case 'cs':
+    case 'py':
+    case 'sh':
+    case 'ps1':
+      return { Icon: CodeRegular, kind: 'code' };
+    case 'json':
+      return { Icon: BracesRegular, kind: 'json' };
+    case 'css':
+    case 'scss':
+      return { Icon: ColorRegular, kind: 'style' };
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'svg':
+    case 'webp':
+      return { Icon: ImageRegular, kind: 'image' };
+    case 'pdf':
+      return { Icon: DocumentPdfRegular, kind: 'pdf' };
+    case 'lock':
+      return { Icon: LockClosedRegular, kind: 'lock' };
+    default:
+      // html, yml, yaml, and any unknown extension fall back to the neutral document icon.
+      return { Icon: DocumentRegular, kind: 'document' };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +577,9 @@ function renderTreeNodes({
     }
 
     const isChanged = node.status !== undefined || defaultChangedFlag;
-    const FileStatusIcon = getFileStatusIcon(node.status);
+    // Base glyph comes from the file extension; the status color class below is layered on
+    // top for changed files so the review/diff tree keeps its added/modified/deleted coloring.
+    const { Icon: FileExtIcon, kind: fileIconKind } = fileIconForName(node.name);
     const statusIconClass =
       node.status === 'added'
         ? styles.statusIconAdded
@@ -554,8 +603,8 @@ function renderTreeNodes({
           if (e.key === 'Enter' || e.key === ' ') onFileClick(node.fullPath, isChanged);
         }}
       >
-        <span className={statusIconClass} aria-label={node.status ?? undefined}>
-          <FileStatusIcon />
+        <span className={statusIconClass} aria-label={node.status ?? undefined} data-file-icon={fileIconKind}>
+          <FileExtIcon />
         </span>
         <Text
           className={mergeClasses(
@@ -711,9 +760,13 @@ export function FilesTabPanel({
 interface FileTreePanelProps {
   state: ArtifactBrowserState;
   onFileClick?: (path: string, isChanged?: boolean) => void;
+  /** True when the run emitted run.no_changes_produced (zero committed changes at review/assembly). */
+  noChangesProduced?: boolean;
+  /** Optional ids/titles of subtasks that produced nothing, surfaced in the explanation. */
+  noChangeSubtaskIds?: string[];
 }
 
-export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
+export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeSubtaskIds }: FileTreePanelProps) {
   const styles = useFileTreeStyles();
   const {
     runStatus,
@@ -754,6 +807,11 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
   const [requestChangesComment, setRequestChangesComment] = useState('');
 
   const showReviewBar = runStatus === 'awaiting_review' && reviewResult === null && commitResult === null;
+  // At a review/assembly gate an empty file list means the run reached review with zero committed
+  // changes — surface a clear explanation rather than a bare "No changes" label. The explicit
+  // run.no_changes_produced signal (when threaded in) forces the explanation regardless of status.
+  const atReviewGate = runStatus === 'awaiting_review';
+  const showNoChangesExplanation = files.length === 0 && (noChangesProduced === true || atReviewGate);
   const totalAdded = files.reduce((acc, f) => acc + (f.added_lines ?? 0), 0);
   const totalRemoved = files.reduce((acc, f) => acc + (f.removed_lines ?? 0), 0);
 
@@ -898,8 +956,20 @@ export function FileTreePanel({ state, onFileClick }: FileTreePanelProps) {
               <Text>{filesError}</Text>
             </div>
           ) : files.length === 0 ? (
-            <div className={styles.emptyState}>
-              <Text>No changes</Text>
+            <div className={styles.emptyState} data-testid="changes-empty-state">
+              {showNoChangesExplanation ? (
+                <>
+                  <Text block weight="semibold">This run produced no changes to review.</Text>
+                  <Text block>
+                    The agents may have written output outside the repository, or there was nothing to change.
+                  </Text>
+                  {noChangeSubtaskIds && noChangeSubtaskIds.length > 0 && (
+                    <Text block>Subtasks with no changes: {noChangeSubtaskIds.join(', ')}.</Text>
+                  )}
+                </>
+              ) : (
+                <Text>No changes</Text>
+              )}
             </div>
           ) : (
             <>
@@ -982,9 +1052,13 @@ interface ArtifactBrowserProps {
   runId: string;
   runStatus: string;
   onCommitSuccess?: () => void;
+  /** True when the run emitted run.no_changes_produced (zero committed changes at review/assembly). */
+  noChangesProduced?: boolean;
+  /** Optional ids/titles of subtasks that produced nothing, surfaced in the explanation. */
+  noChangeSubtaskIds?: string[];
 }
 
-export function ArtifactBrowser({ runId, runStatus, onCommitSuccess }: ArtifactBrowserProps) {
+export function ArtifactBrowser({ runId, runStatus, onCommitSuccess, noChangesProduced, noChangeSubtaskIds }: ArtifactBrowserProps) {
   const styles = useStyles();
   const state = useArtifactBrowser(runId, runStatus, undefined, onCommitSuccess);
 
@@ -997,7 +1071,7 @@ export function ArtifactBrowser({ runId, runStatus, onCommitSuccess }: ArtifactB
       )}
       <div className={styles.panels}>
         <div className={styles.leftPanel}>
-          <FileTreePanel state={state} />
+          <FileTreePanel state={state} noChangesProduced={noChangesProduced} noChangeSubtaskIds={noChangeSubtaskIds} />
         </div>
         <div className={styles.rightPanel}>
           <DiffPanel state={state} />

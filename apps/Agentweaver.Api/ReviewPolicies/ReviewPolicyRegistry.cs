@@ -5,7 +5,7 @@ namespace Agentweaver.Api.ReviewPolicies;
 
 /// <summary>
 /// The discovered + validated review policies for a single project: the built-in default plus every
-/// <c>.scaffolders/review-policies/</c> file, each with its validation status (Feature 010). Immutable:
+/// <c>.agentweaver/review-policies/</c> file, each with its validation status (Feature 010). Immutable:
 /// a Sync produces a fresh set so a run that resolved the previous set is unaffected.
 /// </summary>
 public sealed record ProjectReviewPolicySet
@@ -26,19 +26,19 @@ public sealed record ProjectReviewPolicySet
 /// FR-025/026/033). Policies are loaded once per project on first access and cached; <see cref="Sync"/>
 /// is the ONLY refresh path (no file-watch, no per-heartbeat reload). All discovery, validation, and
 /// resolution is server-side (Principles III, IV). Reads only from the project's own
-/// <c>.scaffolders/review-policies/</c> directory and never follows references that escape the project
+/// <c>.agentweaver/review-policies/</c> directory and never follows references that escape the project
 /// sandbox (FR-034, Principle X).
 ///
 /// Name-resolution precedence (FR-033): a project binds to its policy BY NAME via
 /// <see cref="Project.ActiveReviewPolicyName"/> (the API-stored setting). The NAME is resolved to a
-/// definition from the project's <c>.scaffolders/review-policies/</c> files first; a project file named
+/// definition from the project's <c>.agentweaver/review-policies/</c> files first; a project file named
 /// the same as the built-in default REPLACES the built-in (project customization). When nothing on disk
-/// matches, the built-in default (Rubber-duck + RAI, FR-032) is used so every project always has a
+/// matches, the built-in default (RAI + human-review, absorbed by the built-in workflow) is used so every project always has a
 /// usable, safe policy even with nothing materialized.
 /// </summary>
 public sealed class ReviewPolicyRegistry
 {
-    public const string ReviewPoliciesRelativePath = ".scaffolders/review-policies";
+    public const string ReviewPoliciesRelativePath = ".agentweaver/review-policies";
 
     private readonly ConcurrentDictionary<ProjectId, ProjectReviewPolicySet> _cache = new();
 
@@ -46,7 +46,7 @@ public sealed class ReviewPolicyRegistry
     public ProjectReviewPolicySet GetOrLoad(Project project) =>
         _cache.GetOrAdd(project.Id, _ => Build(project));
 
-    /// <summary>Re-reads <c>.scaffolders/review-policies/</c> from disk and replaces the cached set
+    /// <summary>Re-reads <c>.agentweaver/review-policies/</c> from disk and replaces the cached set
     /// (explicit Sync). Returns the refreshed set.</summary>
     public ProjectReviewPolicySet Sync(Project project)
     {
@@ -89,7 +89,7 @@ public sealed class ReviewPolicyRegistry
         results.Add(BuiltInReviewPolicies.Default);
         nameToIndex[BuiltInReviewPolicies.Default.Policy!.Name] = 0;
 
-        var dir = Path.Combine(project.WorkingDirectory, ".scaffolders", "review-policies");
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "review-policies");
         foreach (var file in EnumeratePolicyFiles(dir))
         {
             var source = Path.GetFileName(file);
@@ -97,6 +97,9 @@ public sealed class ReviewPolicyRegistry
             try
             {
                 var yaml = File.ReadAllText(file);
+                if (DefaultReviewPolicyTemplate.TryNormalizeLegacyMaterializedDefault(
+                        file, yaml, out var normalizedYaml, out _))
+                    yaml = normalizedYaml;
                 result = ReviewPolicyLoader.Load(yaml, source);
             }
             catch (IOException ex)

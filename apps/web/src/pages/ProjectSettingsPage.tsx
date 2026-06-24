@@ -11,7 +11,6 @@ import {
   Spinner,
   Switch,
   Text,
-  Title2,
   Title3,
   mergeClasses,
   makeStyles,
@@ -27,6 +26,7 @@ import {
 import type { ReactElement } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { PageHeader } from '../components/PageHeader';
 import type {
   Project,
   SandboxPolicy,
@@ -405,11 +405,11 @@ export function ProjectSettingsPage() {
     setReviewError(null);
     setReviewMessage(null);
     try {
-      // POST sync re-reads .scaffolders/review-policies from disk and returns the
+      // POST sync re-reads .agentweaver/review-policies from disk and returns the
       // refreshed list; then reload list + step details against that set.
       const refreshed = await apiClient.syncReviewPolicies(projectId);
       await loadReviewPolicies();
-      setReviewMessage(`Synced ${refreshed.policies.length} review polic${refreshed.policies.length === 1 ? 'y' : 'ies'} from .scaffolders/review-policies/.`);
+      setReviewMessage(`Synced ${refreshed.policies.length} review polic${refreshed.policies.length === 1 ? 'y' : 'ies'} from .agentweaver/review-policies/.`);
     } catch (err) {
       setReviewError(formatError(err));
     } finally {
@@ -524,15 +524,19 @@ export function ProjectSettingsPage() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>{project?.name ?? projectId}</Link>
-        <span>/</span>
-        <span>Settings</span>
-      </div>
-
-      <Title2>Project settings</Title2>
+      <PageHeader
+        title="Project settings"
+        subtitle="Project configuration and pickup behavior."
+        breadcrumb={
+          <div className={styles.breadcrumb}>
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>{project?.name ?? projectId}</Link>
+            <span>/</span>
+            <span>Settings</span>
+          </div>
+        }
+      />
 
       {loading && <Spinner label="Loading project" />}
 
@@ -753,7 +757,7 @@ export function ProjectSettingsPage() {
 
                 {!reviewLoading && reviewList && reviewList.policies.length === 0 && (
                   <Text className={styles.emptyNote}>
-                    No review policies found. Sync to load from .scaffolders/review-policies/.
+                    No review policies found. Sync to load from .agentweaver/review-policies/.
                   </Text>
                 )}
 

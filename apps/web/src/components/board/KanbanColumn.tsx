@@ -1,8 +1,9 @@
-import { Badge, Button, Caption1, Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { Badge, Button, Caption1, Input, Popover, PopoverSurface, PopoverTrigger, Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { AddRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
 import type { BoardColumnDto, RunCardDto, TaskCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
+import { ApiError } from '../../api/client';
 import { STAGE_DESCRIPTIONS } from './columnMeta';
 import { TaskCard } from './TaskCard';
 import { RunCard } from './RunCard';
@@ -83,6 +84,23 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1Selected,
     color: tokens.colorNeutralForeground2,
   },
+  addSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    minWidth: '260px',
+  },
+  addRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+  },
+  addInput: {
+    flex: 1,
+  },
+  addError: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+  },
 });
 
 export interface KanbanColumnProps {
@@ -123,6 +141,10 @@ export function KanbanColumn(props: KanbanColumnProps) {
 
   const [sendingAll, setSendingAll] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addTitle, setAddTitle] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const isIntake = column.kind === 'intake';
   const isTerminal = column.kind === 'workflow' && (column.id === 'terminal' || column.collapsed_count != null);
@@ -135,6 +157,32 @@ export function KanbanColumn(props: KanbanColumnProps) {
       await onMutated();
     } finally {
       setSendingAll(false);
+    }
+  };
+
+  // Per-column quick capture (FR-001/002). Backlog captures directly; Ready captures
+  // into Backlog then promotes the new task so it lands in Ready. Empty/whitespace
+  // titles are blocked client-side; the server is the backstop.
+  const submitAdd = async () => {
+    const trimmed = addTitle.trim();
+    if (!trimmed) {
+      setAddError('Title is required.');
+      return;
+    }
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      const captured = await apiClient.captureBacklogTask(projectId, { title: trimmed });
+      if (column.id === 'ready') {
+        await apiClient.moveTaskToReady(projectId, captured.task_id);
+      }
+      setAddTitle('');
+      setAddOpen(false);
+      await onMutated();
+    } catch (e) {
+      setAddError(e instanceof ApiError ? `API error ${e.status}: ${e.body}` : e instanceof Error ? e.message : String(e));
+    } finally {
+      setAddBusy(false);
     }
   };
 
@@ -208,13 +256,49 @@ export function KanbanColumn(props: KanbanColumnProps) {
             </Button>
           )}
           {isIntake && (
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<AddRegular />}
-              aria-label={`Add to ${column.label}`}
-              title={`Add to ${column.label}`}
-            />
+            <Popover
+              open={addOpen}
+              trapFocus
+              onOpenChange={(_, d) => {
+                setAddOpen(d.open);
+                if (!d.open) { setAddTitle(''); setAddError(null); }
+              }}
+            >
+              <PopoverTrigger disableButtonEnhancement>
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  icon={<AddRegular />}
+                  aria-label={`Add to ${column.label}`}
+                  title={`Add to ${column.label}`}
+                />
+              </PopoverTrigger>
+              <PopoverSurface aria-label={`Add task to ${column.label}`}>
+                <div className={styles.addSurface}>
+                  <div className={styles.addRow}>
+                    <Input
+                      className={styles.addInput}
+                      value={addTitle}
+                      placeholder={`Add a task to ${column.label}`}
+                      aria-label={`New task title for ${column.label}`}
+                      disabled={addBusy}
+                      autoFocus
+                      onChange={(_, v) => { setAddTitle(v.value); if (addError) setAddError(null); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void submitAdd(); }}
+                    />
+                    <Button
+                      appearance="primary"
+                      icon={<AddRegular />}
+                      disabled={addBusy || !addTitle.trim()}
+                      onClick={() => void submitAdd()}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                  {addError && <Text className={styles.addError}>{addError}</Text>}
+                </div>
+              </PopoverSurface>
+            </Popover>
           )}
         </div>
       </div>
@@ -246,7 +330,7 @@ export function KanbanColumn(props: KanbanColumnProps) {
                 />
               </div>
             ) : (
-              <RunCard key={(card as RunCardDto).run_id} card={card as RunCardDto} projectId={projectId} />
+              <RunCard key={(card as RunCardDto).run_id} card={card as RunCardDto} projectId={projectId} onMutated={onMutated} />
             ),
           )}
         </div>

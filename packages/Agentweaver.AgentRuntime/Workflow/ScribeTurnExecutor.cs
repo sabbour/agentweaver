@@ -51,7 +51,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         - export_memory() — write the updated state to .squad/ and .agentweaver/context/
 
         Only merge entries of type: learning, pattern, update.
-        Leave architectural and scope entries for coordinator review.
+        Architectural and scope entries are promoted by the Coordinator during finalization,
+        not by a per-run Scribe pass.
         """;
 
 
@@ -142,6 +143,17 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         IWorkflowTurnAgent? agent = null;
         try
         {
+            var isCoordinator = string.Equals(input.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase);
+
+            // The Coordinator owns architectural/scope promotion: as part of finalization it reviews
+            // those pending entries and merges the ones it endorses. A per-run worker Scribe leaves
+            // them untouched. A deterministic backstop promotes any the model misses.
+            var reviewStep = isCoordinator
+                ? "2. Review every entry. For type learning, pattern, or update: call merge_inbox_entry(entryId).\n"
+                  + "                   For type architectural or scope: call merge_inbox_entry(entryId) for the ones you endorse as a team boundary."
+                : "2. For each entry of type learning, pattern, or update: call merge_inbox_entry(entryId).\n"
+                  + "                   Leave architectural and scope entries for the Coordinator to promote.";
+
             var task = $$"""
                 You are Scribe. A project run has just completed.
 
@@ -153,8 +165,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 Complete these post-run steps using the native memory tools available to you:
 
                 1. Call list_inbox(forAgent: "{{input.AgentName}}") to see pending entries.
-                2. For each entry of type learning, pattern, or update: call merge_inbox_entry(entryId).
-                   Skip entries of type architectural or scope — leave them for coordinator review.
+                {{reviewStep}}
                 3. Call update_session(summary: one sentence describing what {{input.AgentName}} accomplished).
                 4. Call export_memory() to write the updated memory state to .squad/.
 

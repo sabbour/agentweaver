@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  Badge,
   Button,
   Dialog,
   DialogActions,
@@ -9,16 +10,15 @@ import {
   DialogSurface,
   DialogTitle,
   Field,
+  InfoLabel,
   Input,
   MessageBar,
   MessageBarBody,
   Spinner,
-  Switch,
   Text,
   Textarea,
   Title2,
   Title3,
-  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -55,6 +55,10 @@ import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentRail } from '../components/AgentRail';
 import { SteerPanel } from '../components/SteerPanel';
+import { AutomationToggle } from '../components/AutomationToggle';
+import { AUTOMATION_HELP } from '../components/automationHelp';
+import { SteeringLegend } from '../components/SteeringLegend';
+import { STEERING_HELP } from '../components/steeringHelp';
 import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
@@ -91,6 +95,7 @@ import {
   type CoordinatorTopologyState,
   type TopologyNodeState,
 } from '../state/topologyReducer';
+import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
 
 // ---------------------------------------------------------------------------
 // Steering context — page-level; lets the steer bar trigger the dialog
@@ -180,7 +185,13 @@ interface OrchState {
 // assembly_declined, …) to a human-readable explanation for the blocked/failed card. Falls back to
 // the raw reason when unknown so nothing is hidden.
 function friendlyAssemblyReason(reason: string | undefined): string {
-  switch (reason) {
+  // The reason can arrive as the bare event code ("ineligible_subtasks") or as the
+  // run-result string ("assembly_blocked: ineligible_subtasks"). Normalize the
+  // prefix so both map to the same case.
+  const normalized = reason?.replace(/^assembly_blocked:\s*/i, '');
+  switch (normalized) {
+    case 'ineligible_subtasks':
+      return "Assembly can't start because one or more subtasks didn't finish successfully. Every subtask must reach a ready state before the coordinator can assemble the combined result — there is no partial assembly. The blocking subtasks are listed below; reroute to the coordinator to re-run them, or stop the run.";
     case 'integration_conflict':
       return 'Two subtasks changed the same lines, so their branches could not be combined automatically. Resolve by steering the coordinator to re-run the affected subtask(s) against the latest changes, or stop and merge manually.';
     case 'integration_build_error':
@@ -189,6 +200,95 @@ function friendlyAssemblyReason(reason: string | undefined): string {
       return 'Merging the assembled output into your branch failed (a conflict appeared at final merge time).';
     default:
       return reason ? `The collective assembly stopped: ${reason}.` : 'The collective assembly could not complete.';
+  }
+}
+
+// A subtask that blocked the all-or-nothing assembly gate, surfaced by the
+// coordinator.assembly_blocked event payload (LOCKED CONTRACT).
+interface IneligibleSubtask {
+  id: number;
+  title: string;
+  status: string;
+  agent: string;
+}
+
+// Find the latest coordinator.assembly_blocked event and read its
+// ineligibleSubtasks list. Returns undefined for older runs that omit it so the
+// blocked panel can fall back to the single-message form.
+function readIneligibleSubtasks(events: RunStreamEvent[]): IneligibleSubtask[] | undefined {
+  let raw: unknown;
+  for (const evt of events) {
+    if (evt.type === 'coordinator.assembly_blocked') {
+      const v = evt.payload['ineligibleSubtasks'] ?? evt.payload['ineligible_subtasks'];
+      if (Array.isArray(v)) raw = v;
+    }
+  }
+  if (!Array.isArray(raw)) return undefined;
+  return raw.map((item) => {
+    const o = (item ?? {}) as Record<string, unknown>;
+    return {
+      id: typeof o.id === 'number' ? o.id : Number(o.id) || 0,
+      title: o.title != null ? String(o.title) : '',
+      status: o.status != null ? String(o.status) : '',
+      agent: o.agent != null ? String(o.agent) : '',
+    };
+  });
+}
+
+// Bare ineligible subtask ids (older runs may carry only ids, no detail rows).
+function readIneligibleSubtaskIds(events: RunStreamEvent[]): number[] | undefined {
+  let raw: unknown;
+  for (const evt of events) {
+    if (evt.type === 'coordinator.assembly_blocked') {
+      const v = evt.payload['ineligibleSubtaskIds'] ?? evt.payload['ineligible_subtask_ids'];
+      if (Array.isArray(v)) raw = v;
+    }
+  }
+  if (!Array.isArray(raw)) return undefined;
+  const ids = raw.map((x) => (typeof x === 'number' ? x : Number(x))).filter((n) => !Number.isNaN(n));
+  return ids.length > 0 ? ids : undefined;
+}
+
+function humanizeSubtaskStatus(status: string): string {
+  if (!status) return '';
+  const spaced = status.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+// Status → badge intent + label for a blocking subtask.
+function subtaskStatusBadge(status: string): {
+  intent: 'warning' | 'danger' | 'informative' | 'subtle';
+  label: string;
+} {
+  switch (status) {
+    case 'rai_flagged':
+      return { intent: 'warning', label: 'RAI-flagged' };
+    case 'failed':
+      return { intent: 'danger', label: 'Failed' };
+    case 'running':
+      return { intent: 'informative', label: 'Still running' };
+    case 'dispatched':
+      return { intent: 'informative', label: 'Dispatched' };
+    case 'pending':
+      return { intent: 'informative', label: 'Pending' };
+    default:
+      return { intent: 'subtle', label: humanizeSubtaskStatus(status) || status };
+  }
+}
+
+// One-line per-status hint shown under each blocking subtask row.
+function subtaskStatusHint(status: string): string {
+  switch (status) {
+    case 'rai_flagged':
+      return "RAI flagged this subtask's output. Reroute to the coordinator to re-run it against the feedback, or stop.";
+    case 'failed':
+      return 'This subtask failed. Reroute to the coordinator to retry it, or stop.';
+    case 'running':
+    case 'dispatched':
+    case 'pending':
+      return "This subtask hasn't finished yet.";
+    default:
+      return '';
   }
 }
 
@@ -752,6 +852,32 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
   },
+  blockedSubtasks: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  blockedSubtaskRow: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  blockedSubtaskHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  blockedSubtaskTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  blockedSubtaskAgent: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
   dagContainer: {
     minHeight: '200px',
     width: '100%',
@@ -789,6 +915,13 @@ const useStyles = makeStyles({
   steerLabel: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
+  },
+  steerScopeNote: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  steerNote: {
+    marginTop: tokens.spacingVerticalXS,
   },
   panel: {
     display: 'flex',
@@ -851,9 +984,22 @@ const useStyles = makeStyles({
 
 function steerKindLabel(kind: SteerKind): string {
   if (kind === 'stop') return 'Stop';
+  if (kind === 'send') return 'Send';
   if (kind === 'redirect') return 'Redirect';
-  return 'Amend';
+  if (kind === 'amend') return 'Amend';
+  return 'Steer';
 }
+
+// Maps a successful inline steer response status to a compact confirmation line.
+function steerStatusMessage(status: string): string {
+  if (status === 'applied') return 'Applied — re-running the affected work with your guidance.';
+  if (status === 'queued') return 'Queued — applies at the next step.';
+  return 'Steering message sent.';
+}
+
+// Verbatim explanation for the steer info affordance (visible InfoLabel, not hover-only).
+const STEER_INFO =
+  `Sends a course-correction to the coordinator. It applies at the next step of the affected subtasks, or resumes the run if it's parked (blocked or failed). Targets all active subtasks. Send: ${STEERING_HELP.send} Redirect: ${STEERING_HELP.redirect} Amend: ${STEERING_HELP.amend}`;
 
 // ---------------------------------------------------------------------------
 // Page
@@ -865,6 +1011,9 @@ export function CoordinatorRunPage() {
   const navigate = useNavigate();
 
   const { events, status: streamStatus } = useRunStream(runId ?? '', API_KEY, API_URL);
+
+  // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
+  const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
 
   // REST seed: coordinator GraphDescriptor (GET /api/runs/{id}/graph, coordinator variant).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
@@ -938,6 +1087,10 @@ export function CoordinatorRunPage() {
   // Per-run work-plan + children snapshot — used to drive the AgentRail.
   const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
   const [childrenData, setChildrenData] = useState<CoordinatorChildResponse[]>([]);
+  // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
+  // Used to render a graceful empty state and to back off the lifecycle poll so the page
+  // doesn't hammer the 404 endpoint on a tight loop.
+  const [noWorkPlan, setNoWorkPlan] = useState(false);
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -956,11 +1109,20 @@ export function CoordinatorRunPage() {
     const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
 
     const tick = async () => {
-      const [detail, wp] = await Promise.all([
-        apiClient.getRun(runId).catch(() => null),
-        apiClient.getWorkPlan(runId).catch(() => null),
-      ]);
+      const detail = await apiClient.getRun(runId).catch(() => null);
+      // Fetch the work-plan separately so we can distinguish "no plan yet" (404) from a
+      // transient failure. A 404 must NOT be retried on the tight 4s cadence — that spams
+      // the endpoint for early/stuck runs that have no plan. We flag it and back off.
+      let wp: WorkPlanResponse | null = null;
+      let wpMissing = false;
+      try {
+        wp = await apiClient.getWorkPlan(runId);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) wpMissing = true;
+        wp = null;
+      }
       if (cancelled) return;
+      setNoWorkPlan(wpMissing);
       const statusField = detail?.coordinator_status ?? undefined;
       const reasonField = detail?.coordinator_status_reason ?? undefined;
       const wpStatus = wp?.status ?? undefined;
@@ -979,7 +1141,10 @@ export function CoordinatorRunPage() {
         ? normalizePhase(statusField)
         : normalizePhase(wpStatus);
       if (!TERMINAL.has(phase)) {
-        timer = setTimeout(() => { void tick(); }, 4000);
+        // Back off substantially while the work plan is absent (404) so we stop hammering
+        // the endpoint on a tight loop; resume the normal cadence once a plan exists.
+        const delay = wpMissing ? 30000 : 4000;
+        timer = setTimeout(() => { void tick(); }, delay);
       }
     };
 
@@ -1021,6 +1186,10 @@ export function CoordinatorRunPage() {
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase);
+
+  // Blocking subtasks behind an all-or-nothing assembly gate (ineligible_subtasks).
+  const ineligibleSubtasks = useMemo(() => readIneligibleSubtasks(events), [events]);
+  const ineligibleSubtaskIds = useMemo(() => readIneligibleSubtaskIds(events), [events]);
 
   // Session run — reuse the standard rich run Timeline over the coordinator's OWN event stream,
   // so the coordinator session reads like every other agent's "view run" (turn groups, tool cards,
@@ -1402,6 +1571,32 @@ export function CoordinatorRunPage() {
     };
   }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
 
+  // While the Coordinator is still drafting the outcome spec (inSpecAuthoring), the assembly
+  // stages (RAI / Human Review / Merge / Scribe) are not yet committed work — no spec confirmed,
+  // no subtasks, no orchestration phase. Presenting them as planned pipeline nodes implies a
+  // downstream plan that does not exist. Filter them (and edges referencing them) out of the
+  // rendered graph until drafting ends, leaving only the live Coordinator node. The descriptor
+  // itself is left untouched; this is purely a display-time projection.
+  const assemblyNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const n of effectiveDescriptor?.nodes ?? []) {
+      const role = (n.role ?? '').toLowerCase();
+      if (role === 'rai' || role === 'review' || role === 'merge' || role === 'scribe') ids.add(n.id);
+    }
+    return ids;
+  }, [effectiveDescriptor]);
+
+  const { displayNodes, displayEdges2 } = useMemo<{ displayNodes: Node[]; displayEdges2: Edge[] }>(() => {
+    if (!inSpecAuthoring) return { displayNodes: rfNodes, displayEdges2: displayEdges };
+    const filteredNodes = rfNodes.filter((n) => !assemblyNodeIds.has(n.id));
+    // Defensive fallback: never render an empty graph box. If filtering would drop every node
+    // (e.g. a descriptor with assembly stages but no coordinator node), keep the full graph.
+    if (filteredNodes.length === 0) return { displayNodes: rfNodes, displayEdges2: displayEdges };
+    const keptIds = new Set(filteredNodes.map((n) => n.id));
+    const filteredEdges = displayEdges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target));
+    return { displayNodes: filteredNodes, displayEdges2: filteredEdges };
+  }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
+
   // ---------------------------------------------------------------------------
   // Steering dialog
   // ---------------------------------------------------------------------------
@@ -1457,14 +1652,17 @@ export function CoordinatorRunPage() {
     reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
-  // Merge "Browse files": surface the assembled filesystem (git tree of the integration branch) by
-  // scrolling to the review rail AND switching it to the Files tab. The monotonic signal is read by
-  // RunLayout, which flips the artifact browser to Files on each increment.
-  const [filesFocusSignal, setFilesFocusSignal] = useState(0);
+  // Merge "Browse files": route to the project Workspace with the coordinator integration branch
+  // selected, so refresh/back preserve the browsed ref and the user lands in the WORK section.
+  const [filesFocusSignal] = useState(0);
   const browseAssemblyFiles = useCallback(() => {
-    setFilesFocusSignal((n) => n + 1);
-    scrollToReview();
-  }, [scrollToReview]);
+    if (!projectId || !runId) return;
+    const query = new URLSearchParams({
+      run: runId,
+      ref: `agentweaver/integration/${runId}`,
+    });
+    navigate(`/projects/${projectId}/workspace?${query.toString()}`);
+  }, [navigate, projectId, runId]);
 
   // "View run" modal — renders the selected child run (or a collective-assembly sub-run stream
   // such as `${runId}-rai` / `${runId}-scribe`) via the standard RunWatcher in a dialog.
@@ -1485,27 +1683,47 @@ export function CoordinatorRunPage() {
   // directly (falling back to the confirmation dialog when no text is provided).
   const [steerText, setSteerText] = useState('');
   const [steerBusy, setSteerBusy] = useState(false);
+  // Transient inline confirmation/error after an inline send (the bar otherwise "feels pending").
+  const [steerNote, setSteerNote] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const quickSteer = useCallback(async (kind: SteerKind) => {
     if (!runId) return;
     const text = steerText.trim();
-    if ((kind === 'redirect' || kind === 'amend') && !text) {
+    if ((kind === 'send' || kind === 'redirect' || kind === 'amend') && !text) {
       openSteer({ kind });
       return;
     }
     setSteerBusy(true);
+    setSteerNote(null);
     try {
-      await apiClient.steerCoordinator(runId, {
+      const res = await apiClient.steerCoordinator(runId, {
         kind,
         instruction: kind === 'stop' ? undefined : text || undefined,
       });
-      if (kind !== 'stop') setSteerText('');
-    } catch {
-      // Surface failures through the dialog path so the user can retry with full context.
+      if (kind !== 'stop') {
+        setSteerText('');
+        setSteerNote({ intent: 'success', text: steerStatusMessage(res.status) });
+      }
+    } catch (err) {
+      // Surface failures inline AND via the dialog path so the user can retry with full context.
+      setSteerNote({
+        intent: 'error',
+        text:
+          err instanceof ApiError
+            ? `Steer failed (${err.status}): ${err.body}`
+            : err instanceof Error ? err.message : String(err),
+      });
       openSteer({ kind });
     } finally {
       setSteerBusy(false);
     }
   }, [runId, steerText, openSteer]);
+
+  // Auto-clear the inline steer confirmation after a few seconds so it stays non-blocking.
+  useEffect(() => {
+    if (!steerNote) return;
+    const t = setTimeout(() => setSteerNote(null), 6000);
+    return () => clearTimeout(t);
+  }, [steerNote]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -1679,27 +1897,33 @@ export function CoordinatorRunPage() {
         </div>
         <Text className={styles.hint}>
           Live view of the coordinator and its subtasks. Expand a subtask to see its pipeline, or use
-          the steering controls to stop, redirect, or amend the orchestration.
+          the steering controls to send a course-correction to the coordinator or stop the orchestration.
         </Text>
 
         <CoordSteerContext.Provider value={openSteer}>
           {coordActive && (
           <div className={styles.steerBar}>
-            <span className={styles.steerLabel}>Steer coordinator:</span>
+            <InfoLabel
+              className={styles.steerLabel}
+              info={STEER_INFO}
+              infoButton={{ 'aria-label': 'About steering the coordinator' }}
+            >
+              Steer coordinator:
+            </InfoLabel>
             <Input
               size="small"
               className={styles.steerInput}
               value={steerText}
               onChange={(_, v) => setSteerText(v.value)}
-              placeholder="Message the coordinator to redirect or amend…"
+              placeholder="Message the coordinator with a course-correction…"
               disabled={steerBusy || !coordActive}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && steerText.trim()) { e.preventDefault(); void quickSteer('amend'); }
+                if (e.key === 'Enter' && steerText.trim()) { e.preventDefault(); void quickSteer('send'); }
               }}
             />
             <Button appearance="primary" size="small" icon={<SendRegular />}
               disabled={steerBusy || !coordActive || !steerText.trim()}
-              onClick={() => void quickSteer('amend')}>
+              onClick={() => void quickSteer('send')}>
               Send
             </Button>
             <Button appearance="subtle" size="small" icon={<ArrowRoutingRegular />}
@@ -1718,7 +1942,14 @@ export function CoordinatorRunPage() {
               Stop
             </Button>
             {steerBusy && <Spinner size="extra-tiny" aria-label="Steering" />}
+            <span className={styles.steerScopeNote}>Applies to all active subtasks.</span>
           </div>
+          )}
+          {coordActive && <SteeringLegend />}
+          {steerNote && (
+            <MessageBar intent={steerNote.intent} className={styles.steerNote}>
+              <MessageBarBody>{steerNote.text}</MessageBarBody>
+            </MessageBar>
           )}
 
           {hasGraph ? (
@@ -1728,11 +1959,13 @@ export function CoordinatorRunPage() {
             <CoordinatorSessionContext.Provider value={scrollToSession}>
             <CoordExpandContext.Provider value={expandValue}>
             <CoordViewRunContext.Provider value={openChildRun}>
-              <div className={styles.dagContainer} style={{ height: graphHeight }}>
+              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+              <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
+                <div style={{ zoom, width: '100%', height: '100%' }}>
                 <ReactFlow
-                  key={`${rfNodes.length}:${displayEdges.length}`}
-                  nodes={rfNodes}
-                  edges={displayEdges}
+                  key={`${displayNodes.length}:${displayEdges2.length}`}
+                  nodes={displayNodes}
+                  edges={displayEdges2}
                   nodeTypes={coordinatorNodeTypes}
                   edgeTypes={workflowEdgeTypes}
                   fitView
@@ -1750,10 +1983,16 @@ export function CoordinatorRunPage() {
                   proOptions={{ hideAttribution: true }}
                 >
                   <GraphAutoFit
-                    token={`${rfNodes.length}:${displayEdges.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
+                    token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
                   />
                 </ReactFlow>
+                </div>
               </div>
+              {inSpecAuthoring && (
+                <Text className={styles.hint}>
+                  The execution pipeline appears once you confirm the outcome spec.
+                </Text>
+              )}
             </CoordViewRunContext.Provider>
             </CoordExpandContext.Provider>
             </CoordinatorSessionContext.Provider>
@@ -1762,7 +2001,11 @@ export function CoordinatorRunPage() {
             </ExecutionModalContext.Provider>
           ) : (
             <Text className={styles.hint}>
-              {isConnecting ? 'Connecting to coordinator stream...' : 'Waiting for coordinator graph...'}
+              {isConnecting
+                ? 'Connecting to coordinator stream...'
+                : noWorkPlan
+                  ? 'No work plan available yet.'
+                  : 'Waiting for coordinator graph...'}
             </Text>
           )}
         </CoordSteerContext.Provider>
@@ -1876,6 +2119,36 @@ export function CoordinatorRunPage() {
                   </ul>
                 </div>
               )}
+              {ineligibleSubtasks && ineligibleSubtasks.length > 0 ? (
+                <div className={styles.blockedSubtasks}>
+                  <Text className={styles.hint}>Blocking subtask{ineligibleSubtasks.length > 1 ? 's' : ''}:</Text>
+                  {ineligibleSubtasks.map((st) => {
+                    const badge = subtaskStatusBadge(st.status);
+                    const hint = subtaskStatusHint(st.status);
+                    return (
+                      <div key={st.id} className={styles.blockedSubtaskRow}>
+                        <div className={styles.blockedSubtaskHead}>
+                          <Text className={styles.blockedSubtaskTitle}>{st.title || `#${st.id}`}</Text>
+                          <Badge appearance="tint" color={badge.intent} size="small">{badge.label}</Badge>
+                          {st.agent && <Text className={styles.blockedSubtaskAgent}>{st.agent}</Text>}
+                        </div>
+                        {hint && <Text className={styles.hint}>{hint}</Text>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                ineligibleSubtaskIds && ineligibleSubtaskIds.length > 0 && (
+                  <div className={styles.conflictFiles}>
+                    <Text className={styles.hint}>Blocking subtask{ineligibleSubtaskIds.length > 1 ? 's' : ''}:</Text>
+                    <ul className={styles.conflictList}>
+                      {ineligibleSubtaskIds.map((id) => (
+                        <li key={id}>#{id}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              )}
               <Text className={styles.hint}>
                 Use the controls below to redirect the coordinator with an instruction, or stop the run.
               </Text>
@@ -1892,32 +2165,23 @@ export function CoordinatorRunPage() {
           {/* Session controls — compact automation toolbar + bubbled child actions. */}
           <div className={styles.sessionToolbar}>
             {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
-            {/* Automation toggles — autopilot + auto-approve-tools. Both cascade to children. */}
+            {/* Automation toggles — autopilot + auto-approve-tools. Both cascade to children.
+                Each carries a visible InfoLabel (i) explaining what it does. */}
             <div className={styles.toggleGroup}>
-              <Tooltip
-                content="Auto-answer clarifying questions using the coordinator model. Permission requests still require your approval. Cascades to children; every auto-answer is logged."
-                relationship="description"
-              >
-                <Switch
-                  checked={autopilot}
-                  disabled={autopilotBusy || !coordActive}
-                  onChange={(_, d) => toggleAutopilot(d.checked)}
-                  label="Autopilot"
-                  labelPosition="after"
-                />
-              </Tooltip>
-              <Tooltip
-                content="Auto-approve tool permission requests. Dangerous tools remain blocked by policy. Cascades to children."
-                relationship="description"
-              >
-                <Switch
-                  checked={autoApprove}
-                  disabled={autoApproveBusy || !coordActive}
-                  onChange={(_, d) => toggleAutoApprove(d.checked)}
-                  label="Auto-approve tools"
-                  labelPosition="after"
-                />
-              </Tooltip>
+              <AutomationToggle
+                label="Autopilot"
+                info={AUTOMATION_HELP.autopilotOrchestration}
+                checked={autopilot}
+                disabled={autopilotBusy || !coordActive}
+                onChange={(checked) => toggleAutopilot(checked)}
+              />
+              <AutomationToggle
+                label="Auto-approve tools"
+                info={AUTOMATION_HELP.autoApproveOrchestration}
+                checked={autoApprove}
+                disabled={autoApproveBusy || !coordActive}
+                onChange={(checked) => toggleAutoApprove(checked)}
+              />
             </div>
           </div>
 
@@ -2030,18 +2294,12 @@ export function CoordinatorRunPage() {
                   <Text>Stop this orchestration? No further work will be dispatched.</Text>
                 ) : (
                   <>
-                    <Text>
-                      {steerReq?.kind === 'redirect'
-                        ? 'Describe the new direction for the orchestration.'
-                        : 'Describe the amendment to apply to the orchestration.'}
-                    </Text>
+                    <Text>Describe the course-correction to send to the coordinator.</Text>
                     <Field label="Instruction" required>
                       <Textarea
                         value={instruction}
                         onChange={(_, v) => setInstruction(v.value)}
-                        placeholder={steerReq?.kind === 'redirect'
-                          ? 'e.g. Target the v2 API instead.'
-                          : 'e.g. Also add integration tests.'}
+                        placeholder="e.g. Target the v2 API instead, and add integration tests."
                         rows={4}
                       />
                     </Field>
@@ -2071,4 +2329,3 @@ export function CoordinatorRunPage() {
     </div>
   );
 }
-

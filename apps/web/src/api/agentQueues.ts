@@ -1,5 +1,16 @@
 import type { AgentQueueDto, CoordinatorChildResponse, WorkPlanResponse } from './types';
 
+// Per-orchestration breakdown of one agent's work (camelCase mirror of AgentOrchestrationQueueDto).
+export type AgentOrchestrationQueue = {
+  runId: string;
+  title: string | null;
+  active: number;
+  queued: number;
+  blocked: number;
+  done: number;
+  sampleTitles: string[];
+};
+
 // Locked component contract — Phase 2 will feed the same shape from a backend DTO.
 export type AgentQueueItem = {
   agentName: string;
@@ -9,6 +20,7 @@ export type AgentQueueItem = {
   done: number;
   runIds?: string[];
   sampleTitles?: string[];
+  orchestrations: AgentOrchestrationQueue[];
 };
 
 /**
@@ -52,6 +64,15 @@ export function fromDto(dto: AgentQueueDto): AgentQueueItem {
     done:         dto.done,
     runIds:       dto.run_ids,
     sampleTitles: dto.sample_titles,
+    orchestrations: (dto.orchestrations ?? []).map((o) => ({
+      runId:        o.run_id,
+      title:        o.title,
+      active:       o.active,
+      queued:       o.queued,
+      blocked:      o.blocked,
+      done:         o.done,
+      sampleTitles: o.sample_titles,
+    })),
   };
 }
 
@@ -102,6 +123,17 @@ export function deriveAgentQueues(
       done:    counts.done,
       runIds:      [runId],
       sampleTitles: counts.titles,
+      // Per-run derivation yields a single orchestration group (the run it derives from),
+      // so the per-orchestration card layout stays satisfied and AgentRail keeps working.
+      orchestrations: [{
+        runId,
+        title:        null,
+        active:       counts.active,
+        queued:       counts.queued,
+        blocked:      counts.blocked,
+        done:         counts.done,
+        sampleTitles: counts.titles,
+      }],
     });
   }
 

@@ -3,8 +3,8 @@ import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
-import { ArtifactBrowser } from '../components/ArtifactBrowser';
-import type { WorkspaceFileEntry, WorkspaceFileDiff } from '../api/types';
+import { ArtifactBrowser, FilesTabPanel } from '../components/ArtifactBrowser';
+import type { WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode } from '../api/types';
 
 // Mock apiClient so no real HTTP calls are made.
 // getRunFiles and getRunFileDiff correspond to the methods Tank added to
@@ -87,6 +87,47 @@ describe('ArtifactBrowser', () => {
     await waitFor(() => {
       expect(screen.getByText('No changes')).toBeDefined();
     });
+  });
+
+  // AB-01b: at a review gate, an empty file list means the run reached review with zero
+  // committed changes — surface a clear explanation, not a bare "No changes" label.
+  it('explains "no changes produced" when the file list is empty at a review gate', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="run-001b" runStatus="awaiting_review" />
+      </Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('This run produced no changes to review.')).toBeDefined();
+    });
+    expect(
+      screen.getByText(/written output outside the repository, or there was nothing to change/),
+    ).toBeDefined();
+  });
+
+  // AB-01c: the explicit run.no_changes_produced signal forces the explanation and lists the
+  // subtasks that produced nothing, regardless of run status.
+  it('renders the no-changes explanation and subtasks when noChangesProduced is set', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser
+          runId="run-001c"
+          runStatus="in_progress"
+          noChangesProduced
+          noChangeSubtaskIds={['Audit repo', 'Apply fixes']}
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('This run produced no changes to review.')).toBeDefined();
+    });
+    expect(screen.getByText(/Subtasks with no changes: Audit repo, Apply fixes\./)).toBeDefined();
   });
 
   // AB-02: file list with one added file renders the file name and an "added" status icon
@@ -400,5 +441,64 @@ describe('ArtifactBrowser', () => {
 
     // The status icon must carry aria-label="modified".
     expect(screen.getAllByLabelText('modified').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FilesTabPanel — extension-specific file icons (ws-file-icons)
+// ---------------------------------------------------------------------------
+
+describe('FilesTabPanel file icons', () => {
+  function makeNode(overrides: Partial<WorkspaceNode> = {}): WorkspaceNode {
+    return {
+      path: 'README.md',
+      is_folder: false,
+      status: null,
+      ...overrides,
+    };
+  }
+
+  function renderPanel(files: WorkspaceNode[]) {
+    return render(
+      <Wrapper>
+        <FilesTabPanel
+          workspaceFiles={files}
+          workspaceLoading={false}
+          workspaceError={null}
+          selectedPath={null}
+          onFileClick={() => {}}
+        />
+      </Wrapper>,
+    );
+  }
+
+  // FI-01: a markdown file gets the markdown/text icon.
+  it('renders the markdown icon for a .md file', () => {
+    const { container } = renderPanel([makeNode({ path: 'docs/guide.md' })]);
+    expect(container.querySelector('[data-file-icon="markdown"]')).not.toBeNull();
+  });
+
+  // FI-02: a TypeScript file gets the code icon.
+  it('renders the code icon for a .ts file', () => {
+    const { container } = renderPanel([makeNode({ path: 'src/app.ts' })]);
+    expect(container.querySelector('[data-file-icon="code"]')).not.toBeNull();
+  });
+
+  // FI-03: an unknown extension falls back to the neutral document icon.
+  it('falls back to the document icon for an unknown extension', () => {
+    const { container } = renderPanel([makeNode({ path: 'data/archive.xyz' })]);
+    expect(container.querySelector('[data-file-icon="document"]')).not.toBeNull();
+  });
+
+  // FI-04: a changed file in the review/diff tree keeps its status coloring while still
+  // using the extension icon glyph.
+  it('preserves the status indication for a changed file and still uses the extension icon', () => {
+    const { container } = renderPanel([
+      makeNode({ path: 'src/changed.ts', status: 'modified' }),
+    ]);
+    const icon = container.querySelector('[data-file-icon="code"]');
+    expect(icon).not.toBeNull();
+    // The status icon span reflects the change status via its aria-label.
+    expect(icon?.getAttribute('aria-label')).toBe('modified');
   });
 });

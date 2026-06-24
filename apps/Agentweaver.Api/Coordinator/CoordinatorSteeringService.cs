@@ -12,19 +12,41 @@ namespace Agentweaver.Api.Coordinator;
 /// <summary>
 /// Canonical <see cref="SteeringDirective.Kind"/> values for Feature 008 Phase 2. Per the steering
 /// spike (<c>specs/008-coordinator-agent/steering-spike.md</c>) only <see cref="Stop"/>,
-/// <see cref="Redirect"/>, and <see cref="Amend"/> are buildable with honest semantics; <see cref="Pause"/>
-/// has no runtime primitive and is DESCOPED — it is rejected with a validation error, never executed.
+/// <see cref="Send"/>, <see cref="Redirect"/>, and <see cref="Amend"/> are buildable with honest
+/// semantics; <see cref="Pause"/> has no runtime primitive and is DESCOPED — it is rejected with a
+/// validation error, never executed.
 /// </summary>
 public static class SteeringKind
 {
     public const string Stop = "stop";
+
+    /// <summary>
+    /// Informational nudge delivered to the coordinator. Does not alter the work plan, interrupt
+    /// in-flight dispatch, or reset any subtask — the message is persisted and applied immediately as
+    /// a <c>coordinator.steering</c> event so the operator can observe it in the run timeline.
+    /// </summary>
+    public const string Send = "send";
+
+    /// <summary>
+    /// Interrupt/override the coordinator's current plan toward a new instruction. For a live
+    /// coordinator, the directive is queued and applied at the target child's next turn boundary;
+    /// for a parked coordinator, it resets failed/rai_flagged subtasks and re-arms dispatch.
+    /// When targeting a specific in-progress child, the child is force-completed so the queued
+    /// directive is applied without waiting for a natural boundary.
+    /// </summary>
     public const string Redirect = "redirect";
+
+    /// <summary>
+    /// Additive change to the coordinator's work context without discarding in-flight work. For a
+    /// live coordinator, queued for the target child's next boundary. For a parked coordinator,
+    /// only unblocks RAI-flagged gates (does not reset failed subtasks — preserving completed work).
+    /// </summary>
     public const string Amend = "amend";
 
     /// <summary>Descoped in Phase 2 — accepted only to produce an explicit rejection.</summary>
     public const string Pause = "pause";
 
-    public static bool IsSupported(string kind) => kind is Stop or Redirect or Amend;
+    public static bool IsSupported(string kind) => kind is Stop or Send or Redirect or Amend;
 
     /// <summary>True for the verbs that queue and apply at the child's next turn boundary.</summary>
     public static bool IsNextBoundary(string kind) => kind is Redirect or Amend;
@@ -135,6 +157,31 @@ public sealed class CoordinatorSteeringQueue
             return directive;
         }
     }
+
+    /// <summary>
+    /// Like <see cref="TryTakeForChild"/> but only dequeues a <see cref="SteeringKind.Redirect"/>
+    /// directive. Used by the dispatch loop when a child has failed (rather than completed normally)
+    /// and the caller needs to apply only a redirect — not an amend — as a re-dispatch override.
+    /// </summary>
+    public QueuedSteering? TryTakeRedirectForChild(string coordinatorRunId, string childRunId)
+    {
+        lock (_gate)
+        {
+            if (!_pending.TryGetValue(coordinatorRunId, out var list) || list.Count == 0)
+                return null;
+
+            var idx = list.FindIndex(d =>
+                d.Kind == SteeringKind.Redirect &&
+                (d.TargetChildRunId is null ||
+                    string.Equals(d.TargetChildRunId, childRunId, StringComparison.Ordinal)));
+            if (idx < 0)
+                return null;
+
+            var directive = list[idx];
+            list.RemoveAt(idx);
+            return directive;
+        }
+    }
 }
 
 /// <summary>
@@ -171,6 +218,7 @@ public sealed class CoordinatorSteeringService
     private readonly RunWorkflowRegistry _registry;
     private readonly CoordinatorSteeringQueue _queue;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly RunWorkflowFactory? _runWorkflowFactory;
     private readonly ILogger<CoordinatorSteeringService> _logger;
 
     public CoordinatorSteeringService(
@@ -178,13 +226,15 @@ public sealed class CoordinatorSteeringService
         RunWorkflowRegistry registry,
         CoordinatorSteeringQueue queue,
         IServiceScopeFactory scopeFactory,
-        ILogger<CoordinatorSteeringService> logger)
+        ILogger<CoordinatorSteeringService> logger,
+        RunWorkflowFactory? runWorkflowFactory = null)
     {
         _streamStore = streamStore;
         _registry = registry;
         _queue = queue;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _runWorkflowFactory = runWorkflowFactory;
     }
 
     /// <summary>
@@ -213,7 +263,7 @@ public sealed class CoordinatorSteeringService
                 "Steering verb 'pause' is descoped in Phase 2. Use 'stop' for an immediate halt, or 'redirect'/'amend' to change direction at the next turn boundary.");
         if (!SteeringKind.IsSupported(normalized))
             throw new SteeringValidationException(
-                $"Unknown steering verb '{kind}'. Supported verbs: stop, redirect, amend.");
+                $"Unknown steering verb '{kind}'. Supported verbs: stop, send, redirect, amend.");
         if (SteeringKind.IsNextBoundary(normalized) && string.IsNullOrWhiteSpace(instruction))
             throw new SteeringValidationException(
                 $"A '{normalized}' directive requires a non-empty instruction.");
@@ -247,6 +297,11 @@ public sealed class CoordinatorSteeringService
                 coordinatorRunId, directiveId, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
                 .ConfigureAwait(false);
 
+        if (normalized == SteeringKind.Send)
+            return await ApplySendAsync(
+                coordinatorRunId, directiveId, resolvedInstruction, createdBy, createdAt, ct)
+                .ConfigureAwait(false);
+
         // redirect / amend. On a LIVE loop these queue and drain at the target child's next turn
         // boundary. But when the orchestration has dead-ended (rai_flagged subtask or assembly
         // conflict), the one-shot dispatch loop has already exited, so a queued directive would never
@@ -260,6 +315,33 @@ public sealed class CoordinatorSteeringService
         return await QueueNextBoundaryAsync(
             coordinatorRunId, directiveId, normalized, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
             .ConfigureAwait(false);
+    }
+
+    // -----------------------------------------------------------------------
+    // send — informational nudge, applied immediately, no plan/dispatch change.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Delivers an informational directive to the coordinator run timeline without altering the work
+    /// plan or interrupting dispatch. The directive transitions pending → applied in a single step;
+    /// no queue, no re-arm, no subtask reset. Useful for operator notes, mid-run context updates, or
+    /// audit entries that do not require the coordinator to change direction.
+    /// </summary>
+    private async Task<SteeringDirectiveView> ApplySendAsync(
+        string coordinatorRunId, int directiveId, string instruction,
+        string createdBy, DateTimeOffset createdAt, CancellationToken ct)
+    {
+        var relayedAt = DateTimeOffset.UtcNow;
+        await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
+        EmitSteering(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId: null, SteeringStatus.Applied, instruction);
+
+        _logger.LogInformation(
+            "Steering send applied for coordinator {RunId} (directive {DirectiveId}); informational nudge delivered",
+            coordinatorRunId, directiveId);
+
+        return new SteeringDirectiveView(
+            directiveId, coordinatorRunId, TargetChildRunId: null, SteeringKind.Send, instruction,
+            SteeringStatus.Applied, createdBy, createdAt, relayedAt);
     }
 
     // -----------------------------------------------------------------------
@@ -293,6 +375,10 @@ public sealed class CoordinatorSteeringService
             {
                 childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop" });
                 _streamStore.Complete(childRunId);
+                // Persist the child run's accumulated events so the timeline survives stream eviction.
+                // The watch loop's abandon path emits nothing; this is the only persist for stopped children.
+                if (_runWorkflowFactory is not null)
+                    _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
             }
         }
 
@@ -321,6 +407,12 @@ public sealed class CoordinatorSteeringService
         _queue.Enqueue(coordinatorRunId, new QueuedSteering(directiveId, kind, targetChildRunId, instruction));
         EmitSteering(coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Queued, instruction);
 
+        // For redirect targeting a specific in-progress child: force-complete that child's stream so
+        // the active dispatch loop immediately processes a failure and applies this queued directive
+        // without waiting for a natural turn boundary (which may never arrive for a stuck child).
+        if (kind == SteeringKind.Redirect && targetChildRunId is not null)
+            TryForceCompleteChildForRedirect(coordinatorRunId, targetChildRunId, directiveId);
+
         _logger.LogInformation(
             "Steering {Kind} queued for coordinator {RunId} (directive {DirectiveId}); applies at the target child's next turn boundary",
             kind, coordinatorRunId, directiveId);
@@ -330,12 +422,38 @@ public sealed class CoordinatorSteeringService
             SteeringStatus.Queued, createdBy, createdAt, RelayedAt: null);
     }
 
+    /// <summary>
+    /// For a redirect directive targeting a specific in-progress child, force-completes the child's
+    /// stream with <c>run.cancelled</c> so the dispatch loop's observer resolves the child as failed
+    /// and immediately picks up the queued redirect directive (via <see cref="CoordinatorSteeringQueue.TryTakeRedirectForChild"/>).
+    /// Only acts when the child stream entry exists and is not already completed. Does not cancel the
+    /// workflow token (that is <see cref="ApplyStopAsync"/>'s job) — this is a stream-level signal.
+    /// </summary>
+    private void TryForceCompleteChildForRedirect(string coordinatorRunId, string childRunId, int directiveId)
+    {
+        var childEntry = _streamStore.Get(childRunId);
+        if (childEntry is null || childEntry.IsCompleted)
+            return;
+
+        childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_redirect", directiveId });
+        _streamStore.Complete(childRunId);
+        if (_runWorkflowFactory is not null)
+            _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
+
+        // Also abandon the workflow token so the watch loop exits cleanly.
+        _registry.Abandon(childRunId);
+
+        _logger.LogInformation(
+            "Steering redirect (directive {DirectiveId}): force-completed stuck child {ChildRunId} for coordinator {CoordRunId}",
+            directiveId, childRunId, coordinatorRunId);
+    }
+
     // -----------------------------------------------------------------------
     // redirect / amend on a PARKED/FAILED coordinator — auto-resume recovery.
     // -----------------------------------------------------------------------
 
     /// <summary>Per-subtask recovery attempt cap — a flagged/failed subtask cannot auto-resume forever.</summary>
-    private const int MaxRecoveryAttempts = 3;
+    internal const int MaxRecoveryAttempts = 3;
 
     /// <summary>
     /// When a coordinator has dead-ended — a <c>rai_flagged</c> subtask blocked assembly, or a
@@ -385,7 +503,32 @@ public sealed class CoordinatorSteeringService
         var runIsTerminalRecoverable = run.Status is RunStatus.Failed or RunStatus.MergeFailed;
         var planIsParked = plan.Status is WorkPlanStatus.AssemblyBlocked or WorkPlanStatus.AssemblyFailed;
         if (!runIsTerminalRecoverable && !planIsParked)
-            return null;
+        {
+            // ORPHANED DISPATCH. The work plan is still dispatching (or the run is in_progress) but no
+            // loop is running for it (IsDispatchActive is false) — the in-memory dispatch loop died
+            // without a restart, or a restart never re-armed it. A queued redirect/amend would drain
+            // into the void. Re-arm dispatch so the recovery-aware loop reconciles the in-flight
+            // subtasks and advances the frontier, then fall through to QueueNextBoundaryAsync so the
+            // directive drains at the next boundary. Subtasks are NOT reset here: the re-armed loop
+            // re-observes them, preserving any terminal child result the orphan already produced.
+            var planDispatching = plan.Status is WorkPlanStatus.Dispatching;
+            var runInProgress = run.Status is RunStatus.InProgress;
+            if ((planDispatching || runInProgress) && !dispatch.IsDispatchActive(coordinatorRunId))
+            {
+                var orphanContext = new CoordinatorDispatchContext(
+                    CoordinatorRunId: coordinatorRunId,
+                    RepositoryPath: run.RepositoryPath,
+                    OriginatingBranch: run.OriginatingBranch,
+                    SubmittingUser: run.SubmittingUser,
+                    ProjectId: run.ProjectId);
+                dispatch.StartDispatch(orphanContext);
+                _logger.LogInformation(
+                    "Steering {Kind} on orphaned coordinator {RunId} (directive {DirectiveId}); re-armed dispatch and queued the directive to drain at the next boundary",
+                    kind, coordinatorRunId, directiveId);
+            }
+
+            return null; // fall back to queueing; the live (or re-armed) loop drains the directive
+        }
 
         // Single-writer guard: the dispatch loop must be confirmed NOT running before we mutate
         // subtask rows (it is the sole writer while alive).
@@ -396,17 +539,30 @@ public sealed class CoordinatorSteeringService
             .Where(s => s.WorkPlanId == plan.Id)
             .ToListAsync(ct).ConfigureAwait(false);
 
-        // "Coordinator figures it out": reset the non-satisfying terminal subtasks (rai_flagged /
-        // failed). If there are none, this is a pure assembly conflict — redo the change-producing
-        // (assemble_ready) subtasks; if none of those either, fall back to all subtasks. Completed
-        // (no-change) subtasks are left intact.
-        var affected = subtasks
-            .Where(s => s.Status is SubtaskStatus.RaiFlagged or SubtaskStatus.Failed)
-            .ToList();
-        if (affected.Count == 0)
-            affected = subtasks.Where(s => s.Status == SubtaskStatus.AssembleReady).ToList();
-        if (affected.Count == 0)
-            affected = subtasks;
+        // Distinct behavior per verb:
+        //   redirect: override — resets rai_flagged + failed subtasks so the coordinator re-dispatches
+        //     with the new instruction. Falls back to assembly-ready and then all subtasks for pure
+        //     assembly-conflict recovery.
+        //   amend: additive — only unblocks hard RAI gates (rai_flagged) without discarding failed
+        //     work. If there are no RAI-blocked subtasks to unblock, falls through to queue so the
+        //     instruction is applied at the next natural boundary (no completed work is discarded).
+        List<Subtask> affected;
+        if (kind == SteeringKind.Amend)
+        {
+            affected = subtasks.Where(s => s.Status == SubtaskStatus.RaiFlagged).ToList();
+            if (affected.Count == 0)
+                return null; // amend never discards completed/failed work; fall through to queue
+        }
+        else // redirect (and any future override verbs)
+        {
+            affected = subtasks
+                .Where(s => s.Status is SubtaskStatus.RaiFlagged or SubtaskStatus.Failed)
+                .ToList();
+            if (affected.Count == 0)
+                affected = subtasks.Where(s => s.Status == SubtaskStatus.AssembleReady).ToList();
+            if (affected.Count == 0)
+                affected = subtasks;
+        }
 
         var eligible = affected.Where(s => s.RecoveryAttempts < MaxRecoveryAttempts).ToList();
         if (eligible.Count == 0)

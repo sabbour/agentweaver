@@ -104,9 +104,8 @@ export const ActiveEdgeContext = createContext<string | undefined>(undefined);
 export const CoordinatorSessionContext = createContext<(() => void) | undefined>(undefined);
 
 /**
- * CoordinatorRunPage: the Merge stage's "Browse files" wants the assembled filesystem (the Files
- * tab of the review rail), not the per-run execution modal. When provided, the Merge button calls
- * this instead of {@link ExecutionModalContext}; the per-run page leaves it unset and keeps the modal.
+ * CoordinatorRunPage: the Merge stage's "Browse files" opens the assembled filesystem in the
+ * project Workspace instead of the per-run execution modal.
  */
 export const BrowseFilesContext = createContext<((executionId: string) => void) | undefined>(undefined);
 

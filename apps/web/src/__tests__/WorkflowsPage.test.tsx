@@ -52,7 +52,7 @@ const sampleList: WorkflowListResponse = {
       name: 'Nightly Sweep',
       description: null,
       trigger: { type: 'event', event: 'task-added-to-ready' },
-      source: '.scaffolders/workflows/nightly.yaml',
+      source: '.agentweaver/workflows/nightly.yaml',
       valid: false,
       error: 'Unknown node type: foo',
       is_built_in: false,
@@ -91,7 +91,7 @@ describe('WorkflowsPage', () => {
     renderPage('proj-1');
 
     await waitFor(() => expect(screen.getByText('No workflows found')).toBeDefined());
-    expect(screen.getByText('Sync to load from .scaffolders/workflows/.')).toBeDefined();
+    expect(screen.getByText('Sync to load from .agentweaver/workflows/.')).toBeDefined();
   });
 
   it('calls the sync endpoint and refreshes the list', async () => {

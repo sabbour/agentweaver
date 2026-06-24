@@ -57,6 +57,7 @@ import type { SteerKind, TopologyEdge } from '../api/types';
 import type { TopologyNodeState } from '../state/topologyReducer';
 import { layoutDag, NODE_W } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
+import { STEERING_HELP } from './steeringHelp';
 
 // ---------------------------------------------------------------------------
 // Steering context — lets a custom node trigger a steering action without
@@ -333,6 +334,7 @@ const nodeTypes = { topology: TopologyNodeCard };
 
 function steerKindLabel(kind: SteerKind): string {
   if (kind === 'stop') return 'Stop';
+  if (kind === 'send') return 'Send';
   if (kind === 'redirect') return 'Redirect';
   return 'Amend';
 }
@@ -457,7 +459,7 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
       const targetChildRunId = steerReq.node.kind === 'subtask' ? steerReq.node.childRunId : undefined;
       await apiClient.steerCoordinator(coordinatorRunId, {
         kind: steerReq.kind,
-        targetChildRunId,
+        target_child_run_id: targetChildRunId,
         instruction: steerReq.kind === 'stop' ? undefined : instruction.trim() || undefined,
       });
       closeSteer();
@@ -545,8 +547,8 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
                   <>
                     <Text>
                       {steerReq?.kind === 'redirect'
-                        ? 'Describe the new direction for this work.'
-                        : 'Describe the amendment to apply to this work.'}
+                        ? STEERING_HELP.redirect
+                        : STEERING_HELP.amend}
                     </Text>
                     <Field label="Instruction" required>
                       <Textarea

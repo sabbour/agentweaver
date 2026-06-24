@@ -118,7 +118,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "backlog_get_board"), Description("Get the full Kanban board for a project: Backlog, Ready, and coordinator workflow columns with all cards.")]
+    [McpServerTool(Name = "backlog_get_board"), Description("Get the full Kanban board for a project: Backlog, Ready, Problems, Human Review, Active, and Done.")]
     public async Task<string> BacklogGetBoardAsync(
         [Description("Project ID")] string project_id,
         [Description("Include terminal/done history (default false)")] bool? include_terminal_history,
@@ -135,7 +135,23 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "backlog_get_workflow_stages"), Description("Get the ordered coordinator workflow-stage column definitions for a project.")]
+    [McpServerTool(Name = "backlog_archive_task"), Description("Archive a backlog task off the active board. Claimed tasks also archive their linked coordinator run card.")]
+    public async Task<string> BacklogArchiveTaskAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Task ID")] string task_id,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.PostAsync<JsonElement>(
+                $"/api/projects/{project_id}/backlog/tasks/{task_id}/archive", body: null, ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "backlog_get_workflow_stages"), Description("Get the ordered canonical run-bucket definitions for a project (Problems, Human Review, Active, Done).")]
     public async Task<string> BacklogGetWorkflowStagesAsync(
         [Description("Project ID")] string project_id,
         CancellationToken ct)

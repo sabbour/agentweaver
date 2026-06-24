@@ -16,6 +16,12 @@ public sealed record WorkflowComposition
 
     /// <summary>The id of the merge node the steps were injected before, or null when none exists.</summary>
     public string? AnchorMergeNodeId { get; init; }
+
+    /// <summary>The policy step kinds that were absorbed by existing workflow gates.</summary>
+    public IReadOnlyList<ReviewStepKind> AbsorbedStepKinds { get; init; } = [];
+
+    /// <summary>The policy step kinds that were injected as new nodes.</summary>
+    public IReadOnlyList<ReviewStepKind> InjectedStepKinds { get; init; } = [];
 }
 
 /// <summary>
@@ -60,20 +66,49 @@ public static class ReviewPolicyComposer
                 Effective = workflow,
                 InjectedNodeIds = [],
                 AnchorMergeNodeId = mergeNode?.Id,
+                AbsorbedStepKinds = [],
+                InjectedStepKinds = [],
             };
         }
 
         var existingIds = new HashSet<string>(workflow.Nodes.Select(n => n.Id), StringComparer.Ordinal);
         var producerId = workflow.Start;
+        var preMergeGateKinds = FindPreMergeGateKinds(workflow, mergeNode.Id);
+        var absorbedKinds = new List<ReviewStepKind>();
+        var stepsToInject = new List<ReviewStep>();
 
-        var injectedSteps = new List<WorkflowNode>(policy.Steps.Count);
-        var injectedStepIds = new List<string>(policy.Steps.Count);
+        foreach (var step in policy.Steps)
+        {
+            if (preMergeGateKinds.Contains(step.Kind))
+            {
+                absorbedKinds.Add(step.Kind);
+                continue;
+            }
+
+            stepsToInject.Add(step);
+            preMergeGateKinds.Add(step.Kind);
+        }
+
+        if (stepsToInject.Count == 0)
+        {
+            return new WorkflowComposition
+            {
+                Effective = workflow,
+                InjectedNodeIds = [],
+                AnchorMergeNodeId = mergeNode.Id,
+                AbsorbedStepKinds = absorbedKinds,
+                InjectedStepKinds = [],
+            };
+        }
+
+        var injectedSteps = new List<WorkflowNode>(stepsToInject.Count);
+        var injectedStepIds = new List<string>(stepsToInject.Count);
         var injectedEdges = new List<WorkflowEdge>();
         string? safetyTerminalId = null;
         string? declinedTerminalId = null;
 
         // 1) Create one gate node per policy step, preserving declared order.
-        foreach (var step in policy.Steps)
+        foreach (var step in stepsToInject)
         {
             var id = UniqueId($"policy-{KindSlug(step.Kind)}", existingIds);
             existingIds.Add(id);
@@ -85,14 +120,15 @@ public static class ReviewPolicyComposer
                 Label = step.Label ?? DefaultLabel(step.Kind),
                 Role = "review",
                 Kind = "gate",
+                GateKind = KindSlug(step.Kind),
                 Branches = BranchesFor(step.Kind),
             });
         }
 
         // 2) Wire each gate to the next gate (or the merge node for the last), plus its loop/terminal edges.
-        for (var i = 0; i < policy.Steps.Count; i++)
+        for (var i = 0; i < stepsToInject.Count; i++)
         {
-            var step = policy.Steps[i];
+            var step = stepsToInject[i];
             var nodeId = injectedStepIds[i];
             var forwardTarget = i + 1 < injectedStepIds.Count ? injectedStepIds[i + 1] : mergeNode.Id;
 
@@ -148,7 +184,31 @@ public static class ReviewPolicyComposer
             Effective = effective,
             InjectedNodeIds = injectedStepIds,
             AnchorMergeNodeId = mergeNode.Id,
+            AbsorbedStepKinds = absorbedKinds,
+            InjectedStepKinds = stepsToInject.Select(s => s.Kind).ToList(),
         };
+    }
+
+    /// <summary>
+    /// Runtime-safe composition for the current MAF binder. Every supported injected kind has a live
+    /// executor binding in Stage 2; any future/unknown kind fails here with policy context instead of
+    /// becoming an unbound workflow node.
+    /// </summary>
+    public static WorkflowComposition ComposeForRuntime(WorkflowDefinition workflow, ReviewPolicy policy)
+    {
+        var composition = Compose(workflow, policy);
+        var unsupported = composition.InjectedStepKinds
+            .Where(k => k is not ReviewStepKind.Rai and not ReviewStepKind.Rubberduck and not ReviewStepKind.HumanReview)
+            .ToList();
+        if (unsupported.Count > 0)
+        {
+            throw new ReviewPolicyCompositionException(
+                "review_policy_unsupported_gate",
+                $"Active review policy '{policy.Name}' cannot be composed into live runtime workflow '{workflow.Id}': " +
+                $"unsupported review step kind(s): {string.Join(", ", unsupported.Select(KindSlug))}.");
+        }
+
+        return composition;
     }
 
     private static IReadOnlyList<string> BranchesFor(ReviewStepKind kind) => kind switch
@@ -184,4 +244,53 @@ public static class ReviewPolicyComposer
             if (!taken.Contains(candidate)) return candidate;
         }
     }
+
+    private static HashSet<ReviewStepKind> FindPreMergeGateKinds(WorkflowDefinition workflow, string mergeNodeId)
+    {
+        var canReachMerge = NodesThatCanReach(workflow, mergeNodeId);
+        return workflow.Nodes
+            .Where(n => n.Type == WorkflowNodeType.Check && canReachMerge.Contains(n.Id))
+            .Select(TryGetGateKind)
+            .Where(k => k.HasValue)
+            .Select(k => k!.Value)
+            .ToHashSet();
+    }
+
+    private static HashSet<string> NodesThatCanReach(WorkflowDefinition workflow, string targetNodeId)
+    {
+        var reverse = workflow.Nodes.ToDictionary(n => n.Id, _ => new List<string>(), StringComparer.Ordinal);
+        foreach (var edge in workflow.Edges)
+        {
+            if (!reverse.ContainsKey(edge.To))
+                reverse[edge.To] = [];
+            reverse[edge.To].Add(edge.From);
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<string>();
+        stack.Push(targetNodeId);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (!seen.Add(node)) continue;
+            if (!reverse.TryGetValue(node, out var prev)) continue;
+            foreach (var p in prev) stack.Push(p);
+        }
+        return seen;
+    }
+
+    private static ReviewStepKind? TryGetGateKind(WorkflowNode node)
+    {
+        var raw = !string.IsNullOrWhiteSpace(node.GateKind) ? node.GateKind! : node.Id;
+        return Normalize(raw) switch
+        {
+            "rai" => ReviewStepKind.Rai,
+            "review" or "human_review" => ReviewStepKind.HumanReview,
+            "rubberduck" or "rubber_duck" => ReviewStepKind.Rubberduck,
+            _ => null,
+        };
+    }
+
+    private static string Normalize(string raw) =>
+        raw.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
 }
