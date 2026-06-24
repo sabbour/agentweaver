@@ -219,6 +219,7 @@ public sealed class CoordinatorSteeringService
     private readonly CoordinatorSteeringQueue _queue;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RunWorkflowFactory? _runWorkflowFactory;
+    private readonly SqliteRunStore? _runStore;
     private readonly ILogger<CoordinatorSteeringService> _logger;
 
     public CoordinatorSteeringService(
@@ -227,12 +228,14 @@ public sealed class CoordinatorSteeringService
         CoordinatorSteeringQueue queue,
         IServiceScopeFactory scopeFactory,
         ILogger<CoordinatorSteeringService> logger,
-        RunWorkflowFactory? runWorkflowFactory = null)
+        RunWorkflowFactory? runWorkflowFactory = null,
+        SqliteRunStore? runStore = null)
     {
         _streamStore = streamStore;
         _registry = registry;
         _queue = queue;
         _scopeFactory = scopeFactory;
+        _runStore = runStore;
         _logger = logger;
         _runWorkflowFactory = runWorkflowFactory;
     }
@@ -380,11 +383,24 @@ public sealed class CoordinatorSteeringService
                 if (_runWorkflowFactory is not null)
                     _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
             }
+
+            // Terminalize the child run row in the DB so it no longer shows InProgress forever.
+            // The stream-level run.cancelled above unblocks the dispatch loop, but the run store row
+            // is never updated without this call — leaving the child stuck InProgress in the DB.
+            if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
+                _ = _runStore.TrySetTerminalStatusAsync(childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None);
         }
 
         var relayedAt = DateTimeOffset.UtcNow;
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
         EmitSteering(coordinatorRunId, directiveId, SteeringKind.Stop, targetChildRunId, SteeringStatus.Applied, instruction);
+
+        // For a broadcast stop (no specific child target) also terminalize the coordinator run itself.
+        // Without this the coordinator's dispatch loop continues, dead-ends at assembly_blocked, and
+        // the run stays InProgress — there is no clean cancellation path. StopCoordinatorRunAsync
+        // uses the same TrySetTerminalStatusAsync CAS used by the assembly service for its terminal states.
+        if (targetChildRunId is null)
+            await StopCoordinatorRunAsync(coordinatorRunId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "Steering stop applied for coordinator {RunId}: cancelled {Count} child run(s)",
@@ -398,6 +414,22 @@ public sealed class CoordinatorSteeringService
     // -----------------------------------------------------------------------
     // redirect / amend — queue for the child's next turn boundary.
     // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Terminates the coordinator run row as Failed/stopped. Called by <see cref="ApplyStopAsync"/>
+    /// for broadcast stops so the coordinator run exits cleanly instead of continuing to the dispatch
+    /// loop and dead-ending at <c>assembly_blocked</c>. Mirrors the <c>TerminalizeCoordinatorRunAsync</c>
+    /// pattern in <see cref="CoordinatorAssemblyService"/>: uses the same CAS guard so it is a no-op
+    /// if the run row is already terminal or absent.
+    /// </summary>
+    private async Task StopCoordinatorRunAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        if (_runStore is null || !RunId.TryParse(coordinatorRunId, out var id))
+            return;
+        await _runStore.TrySetTerminalStatusAsync(id, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", ct)
+            .ConfigureAwait(false);
+        _logger.LogInformation("Steering stop: coordinator run {RunId} terminated as stopped", coordinatorRunId);
+    }
 
     private async Task<SteeringDirectiveView> QueueNextBoundaryAsync(
         string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string instruction,
@@ -439,6 +471,12 @@ public sealed class CoordinatorSteeringService
         _streamStore.Complete(childRunId);
         if (_runWorkflowFactory is not null)
             _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
+
+        // Terminalize the child run row in the DB so it no longer shows InProgress forever.
+        // Mirrors the same fix in ApplyStopAsync — the stream-level signal alone does not update
+        // the run store row.
+        if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
+            _ = _runStore.TrySetTerminalStatusAsync(childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_redirect", CancellationToken.None);
 
         // Also abandon the workflow token so the watch loop exits cleanly.
         _registry.Abandon(childRunId);

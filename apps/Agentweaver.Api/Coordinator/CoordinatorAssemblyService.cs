@@ -517,7 +517,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         // Reset the selected subtasks to pending (leave others' results intact); clear stage and move
         // the plan back to dispatching so the dispatch engine re-runs the affected frontier.
-        await ResetSubtasksToPendingAsync(rejection.SubtaskIds, ct).ConfigureAwait(false);
+        await ResetSubtasksToPendingAsync(rejection.SubtaskIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
@@ -724,9 +724,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             coordinatorRunId, workPlanId, status, subtasks, edges, 0));
     }
 
-    private async Task ResetSubtasksToPendingAsync(IReadOnlyCollection<int> subtaskIds, CancellationToken ct)
+    private async Task ResetSubtasksToPendingAsync(IReadOnlyCollection<int> subtaskIds, string feedback, CancellationToken ct)
     {
         if (subtaskIds.Count == 0) return;
+        var guidance = BuildAssemblyFeedbackGuidance(feedback);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
@@ -734,9 +735,23 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .Where(s => subtaskIds.Contains(s.Id))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(s => s.Status, SubtaskStatus.Pending)
+                .SetProperty(s => s.RecoveryGuidance, guidance)
                 .SetProperty(s => s.UpdatedAt, now), ct)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Builds the guidance text written into a re-dispatched subtask's <c>RecoveryGuidance</c> when
+    /// the collective assembly reviewer requested changes. Mirrors the pattern used by
+    /// <see cref="CoordinatorSteeringService"/> for steering-driven recovery, adapted for the
+    /// assembly feedback path. <see cref="CoordinatorDispatchService.ComposeChildTask"/> reads this
+    /// field when composing the child's re-dispatch prompt so the child receives the reviewer's
+    /// exact feedback and does not repeat the same output verbatim.
+    /// </summary>
+    private static string BuildAssemblyFeedbackGuidance(string feedback) =>
+        $"Recovery guidance from the assembly reviewer: {feedback}\n\n" +
+        "Context: The collective assembly reviewer requested changes to your output. " +
+        "Re-do this work against the latest repository state and address the feedback above.";
 
     private async Task<(int WorkPlanId, List<Subtask> Subtasks, List<(int, int)> Edges)?> LoadPlanAsync(
         string coordinatorRunId, CancellationToken ct)

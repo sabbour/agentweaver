@@ -619,6 +619,15 @@ public sealed class RunWorkflowFactory
         // The two edges are mutually exclusive and exhaustive over all RAI outputs, so a child
         // can never hang: it either loops (revision under cap) or terminalizes assemble-ready
         // (OK / RED / empty-diff no-op / revise-at-cap).
+        //
+        // INTENTIONAL DESIGN: child runs bypass the per-child human review gate.
+        // Review happens at the aggregate level in CoordinatorAssemblyService (Phase 3), where
+        // ONE human review covers the COMBINED output of ALL children. The rationale is that
+        // reviewing each child's diff in isolation would be misleading — the meaningful unit of
+        // review is the integrated whole, not individual sub-tasks. This is the "collective
+        // review" contract documented in Feature 008 Phase 3 (specs/008-coordinator-agent).
+        // AssembleReady is the child's terminal state; the coordinator's assembly wave reads
+        // Run.WorktreeBranch + Run.TreeHash as the hand-off artefact.
         if (isChild)
         {
             var childBuilder = new GraphDescriptorBuilder(agentInputStorer)

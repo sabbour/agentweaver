@@ -209,6 +209,12 @@ public sealed class CoordinatorReconciler
             _streamStore.Complete(childRunId);
             if (_runWorkflowFactory is not null)
                 _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
+
+            // Terminalize the child run row in the DB so it no longer shows InProgress forever.
+            // The stream-level signal unblocks the dispatch loop but the run store row stays
+            // InProgress without this call.
+            if (RunId.TryParse(childRunId, out var childId))
+                _ = _runStore.TrySetTerminalStatusAsync(childId, RunStatus.Failed, DateTimeOffset.UtcNow, "stall_detected", CancellationToken.None);
         }
     }
 
