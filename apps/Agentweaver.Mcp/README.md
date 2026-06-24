@@ -87,7 +87,12 @@ Reads a markdown file from the project's workspace, runs AI decomposition, and r
 
 ### Blueprints
 
-Tools for managing project blueprints (see `BlueprintTools.cs`).
+| Tool | Description |
+|------|-------------|
+| `list_blueprints` | List predefined Agentweaver blueprints. |
+| `generate_blueprint` | Generate a new blueprint from a plain-language description. |
+| `validate_blueprint` | Validate a blueprint object against the schema. |
+| `blueprint_generate` | Generate a project blueprint from a natural language description of the team and goals. The agent can inspect before creating a project. |
 
 ### Catalog
 
@@ -127,7 +132,45 @@ Team management tools.
 
 ### Workflows
 
-Workflow definition tools.
+| Tool | Description |
+|------|-------------|
+| `workflows_list` | List all discovered workflow definitions for a project. |
+| `workflow_get` | Get the full definition of a single workflow by ID. |
+| `workflows_sync` | Re-read workflow definitions from disk, refreshing the registry. |
+| `workflow_generate` | Generate a new workflow YAML draft from a natural language description. Not yet saved — use `workflow_save` to persist. |
+| `workflow_save` | Save a workflow YAML to the project workspace. Validates and dry-run binds before saving. |
+
+#### Agent Generate → Inspect → Save Loop (FR-065)
+
+An Agentweaver `CopilotAIAgent` can author and persist a new workflow in three steps:
+
+1. **`workflow_generate(project_id, description)`** — calls `POST /api/projects/{id}/workflows/generate` and returns a YAML draft plus a `workflow_id`. Nothing is written to disk yet.
+2. **Inspect** — the agent reads the YAML in its own turn, reasons over the node graph, and optionally edits the YAML text before proceeding.
+3. **`workflow_save(project_id, workflow_id, yaml)`** — calls `PUT /api/projects/{id}/workflows/{workflow_id}`, which validates, dry-run binds all nodes, writes the file, and returns the parsed `WorkflowDefinitionDto`. The workflow is now coordinator-selectable.
+
+This design lets the agent catch schema or role mismatches before committing to disk, and keeps generation and persistence as separate, observable steps.
+
+**`workflow_generate` output**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `yaml` | string | Generated YAML draft |
+| `workflow_id` | string | Suggested workflow id (matches the `id` field in the YAML) |
+| `was_corrected` | boolean | `true` if the generator applied a correction pass (FR-060) |
+
+**`workflow_save` output**
+
+Returns the full `WorkflowDefinitionDto` JSON (id, nodes, edges, trigger, validation status) on success.
+
+**Errors**
+
+| Condition | Status | Message |
+|-----------|--------|---------|
+| Project not found | 404 | `Project {id} not found` |
+| Description empty | 400 | `description is required` |
+| YAML parse error | 400 | `YAML parse error at line N: …` |
+| Node type not yet wired | 400 | Node classification error |
+| `id` in YAML ≠ route id | 400 | Mismatch error with both ids |
 
 ### Workspace
 

@@ -55,4 +55,31 @@ public sealed class BlueprintTools(AgentweaverApiClient api)
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
+
+    /// <summary>
+    /// Generate a project blueprint from a natural language description of the team and goals.
+    /// Returns the generated blueprint including roster and workflow assignments.
+    /// The agent can inspect before creating a project.
+    /// </summary>
+    [McpServerTool(Name = "blueprint_generate"), Description(
+        "Generate a project blueprint from a natural language description of the team and goals. " +
+        "Returns the generated blueprint including roster and workflow assignments. " +
+        "The agent can inspect before creating a project.")]
+    public async Task<string> BlueprintGenerateAsync(
+        [Description("Natural language description of the team and goals")] string description,
+        CancellationToken ct)
+    {
+        try
+        {
+            var body = new { description };
+            var result = await api.PostAsync<GenerateBlueprintResponse>("/api/blueprints/generate", body, ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException ex) when (ex.StatusCode == 400)
+        {
+            throw new McpApiException(400, $"Blueprint generation failed: {ex.Message}");
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
 }
