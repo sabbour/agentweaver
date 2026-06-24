@@ -101,6 +101,8 @@ builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeP
 builder.Services.AddSingleton<IGitHubAccessTokenProvider, GitHubTokenRefreshService>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
+builder.Services.AddHttpClient("github-authz")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 
 // Project infrastructure (must be before AddAgentRuntime)
@@ -140,7 +142,7 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
 // Authentication
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ApiKeyRegistry>();
-builder.Services.AddSingleton<GitHubOrgAuthorizationService>();
+builder.Services.AddSingleton<IGitHubOrgAuthorizationService, GitHubOrgAuthorizationService>();
 
 // Repository path validation (A2 security fix)
 builder.Services.AddSingleton<RepositoryRootValidator>();
