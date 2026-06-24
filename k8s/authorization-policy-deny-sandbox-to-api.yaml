@@ -1,0 +1,14 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-sandbox-to-api
+  namespace: agentweaver
+spec:
+  selector:
+    matchLabels:
+      app: agentweaver-api
+  action: DENY
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/agentweaver/sa/agentweaver-sandbox"]

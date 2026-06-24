@@ -20,6 +20,8 @@ spec:
       labels:
         app: agentweaver-api
         app.kubernetes.io/part-of: agentweaver
+        # Required by the Azure Workload Identity webhook to inject the OIDC token volume.
+        azure.workload.identity/use: "true"
     spec:
       serviceAccountName: agentweaver-api
       securityContext:
@@ -40,19 +42,24 @@ spec:
               value: Production
             - name: Database__Path
               value: /data/agentweaver.db
-            # GitHub Copilot token — Wave 2 will replace this with Key Vault CSI.
-            # Create the secret manually before deploying:
-            #   kubectl -n agentweaver create secret generic agentweaver-secrets \
-            #     --from-literal=github-copilot-token=<token>
+            - name: Workspace__Path
+              value: /workspace
+            # GitHub Copilot token — sourced from Key Vault via the CSI driver.
+            # SecretProviderClass syncs the KV secret into the agentweaver-secrets
+            # Kubernetes Secret; the CSI volume mount below triggers that sync.
             - name: Providers__GitHubCopilot__GitHubToken
               valueFrom:
                 secretKeyRef:
                   name: agentweaver-secrets
                   key: github-copilot-token
-                  optional: true
           volumeMounts:
             - name: data
               mountPath: /data
+            # CSI mount triggers the SecretProviderClass to sync the Key Vault secret
+            # into the agentweaver-secrets Kubernetes Secret used by the env var above.
+            - name: secrets-store
+              mountPath: /mnt/secrets
+              readOnly: true
           resources:
             requests:
               cpu: 500m
@@ -87,3 +94,9 @@ spec:
           # for ephemeral local testing. The manifest is correct for Wave 2.
           persistentVolumeClaim:
             claimName: agentweaver-data
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentweaver-secrets

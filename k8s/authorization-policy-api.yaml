@@ -1,0 +1,14 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-gateway-to-api
+  namespace: agentweaver
+spec:
+  selector:
+    matchLabels:
+      app: agentweaver-api
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/app-routing-system/sa/approuting-istio-gateway"]

@@ -18,6 +18,17 @@ CLUSTER_NAME="${CLUSTER_NAME:-agentweaver-aks}"
 ACR_NAME="${ACR_NAME:-agentweaverregistry}"
 LOCATION="${LOCATION:-eastus}"
 
+# -- Key Vault + workload identity parameters ---------------------------------
+# Key Vault name must be globally unique (3-24 chars, alphanumeric and hyphens).
+KEYVAULT_NAME="${KEYVAULT_NAME:-agentweaver-kv}"
+# Azure AD tenant ID — fill in or export before sourcing:
+#   export TENANT_ID=$(az account show --query tenantId -o tsv)
+TENANT_ID="${TENANT_ID:-}"
+# Derived after running 15-setup-identity.sh; can be overridden manually:
+#   export IDENTITY_CLIENT_ID=$(az identity show --name agentweaver-api-identity \
+#     --resource-group $RESOURCE_GROUP --query clientId -o tsv)
+IDENTITY_CLIENT_ID="${IDENTITY_CLIENT_ID:-}"
+
 # -- Kubernetes parameters ----------------------------------------------------
 NAMESPACE="${NAMESPACE:-agentweaver}"
 
@@ -34,6 +45,9 @@ export LOCATION
 export NAMESPACE
 export IMAGE_TAG
 export ACR_LOGIN_SERVER
+export KEYVAULT_NAME
+export TENANT_ID
+export IDENTITY_CLIENT_ID
 
 # -- Display summary ----------------------------------------------------------
 echo "=== Agentweaver AKS variables ==="

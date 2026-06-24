@@ -115,9 +115,61 @@ The `agentweaver` namespace is labeled `istio.io/dataplane-mode: ambient`. This 
 
 - **L4 mTLS** between all pods in the namespace — no sidecars required, zero pod overhead
 - **Workload identity** derived from Kubernetes ServiceAccount SPIFFE identities
-- Foundation for `AuthorizationPolicy` resources (Wave 2 / 017-US3)
+- Foundation for `AuthorizationPolicy` resources (017-US3)
 
 The Application Routing add-on uses the `approuting-istio` gateway class, which integrates natively with the ambient mesh.
+
+### Security policies (017-US3)
+
+#### PeerAuthentication — `k8s/peer-authentication.yaml`
+
+```yaml
+kind: PeerAuthentication
+spec:
+  mtls:
+    mode: STRICT
+```
+
+Instructs the `ztunnel` DaemonSet to reject any plaintext (non-mTLS) connection entering or leaving any pod in the `agentweaver` namespace. Even if a caller bypasses `NetworkPolicy`, the ztunnel node proxy will drop the packet before it reaches the workload. This is the namespace-wide mTLS enforcement layer.
+
+#### AuthorizationPolicy — allow gateway → API / frontend
+
+`k8s/authorization-policy-api.yaml` and `k8s/authorization-policy-frontend.yaml` each set `action: ALLOW` with a single `from.source.principals` rule:
+
+```
+cluster.local/ns/app-routing-system/sa/approuting-istio-gateway
+```
+
+This is the SPIFFE identity (derived from the ServiceAccount) of the AKS App Routing gateway pods. Only traffic whose mTLS client certificate carries that identity is permitted to reach `agentweaver-api` or `agentweaver-frontend`. All other callers are implicitly denied (ALLOW policies deny by default when no rule matches).
+
+> **Namespace assumption:** The App Routing add-on provisions gateway pods in the `app-routing-system` namespace with ServiceAccount `approuting-istio-gateway`. If your cluster uses a different namespace or SA name, update the `principals` field accordingly.
+
+#### AuthorizationPolicy — deny sandbox → API
+
+`k8s/authorization-policy-deny-sandbox-to-api.yaml` sets `action: DENY` for:
+
+```
+cluster.local/ns/agentweaver/sa/agentweaver-sandbox
+```
+
+Sandbox pods (Wave 2, 017-US2) run with the `agentweaver-sandbox` ServiceAccount and are explicitly prevented from calling the API even if the ambient mesh or network policy were misconfigured. DENY policies take precedence over any ALLOW policy.
+
+#### Verify mTLS is active
+
+```bash
+# Confirm all workloads in the namespace are enrolled in ambient (ztunnel-managed)
+istioctl ztunnel-config workload -n agentweaver
+
+# Expected output includes each pod with PROTOCOL=HBONE and STATUS=Healthy.
+# HBONE (HTTP-Based Overlay Network Encapsulation) indicates ztunnel is wrapping
+# all traffic in mTLS tunnels between pods.
+
+# Check that PeerAuthentication is applied
+kubectl get peerauthentication -n agentweaver
+
+# Check AuthorizationPolicies
+kubectl get authorizationpolicy -n agentweaver
+```
 
 ### NetworkPolicy
 
