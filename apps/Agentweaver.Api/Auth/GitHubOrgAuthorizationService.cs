@@ -2,7 +2,7 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Agentweaver.Api.Auth;
 
-public enum OrgAuthResult { Allowed, Denied, NotConfigured }
+public enum OrgAuthResult { Allowed, Denied, NotConfigured, OrgAccessNotGranted }
 
 public interface IGitHubOrgAuthorizationService
 {
@@ -76,13 +76,44 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
     private async Task<OrgAuthResult> ResolveMembershipAsync(string accessToken, string login, CancellationToken ct)
     {
-        // Check org membership — 204 = member, anything else = not a member.
-        var orgMember = await CheckEndpointAsync(
+        var orgResult = await CheckEndpointAsync(
             accessToken,
             $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/members/{Uri.EscapeDataString(login)}",
             ct).ConfigureAwait(false);
 
-        if (!orgMember)
+        if (orgResult == CheckResult.OrgAccessNotGranted)
+        {
+            // The OAuth app is not approved for this org (third-party app restrictions active).
+            // /user/orgs is NOT a valid fallback — restricted orgs are also filtered out there.
+            // Fall back to GET /orgs/{org}/public_members/{login}: public data, not subject to
+            // OAuth app restrictions. Returns 204 when the user has publicized their org membership.
+            // Self-service fix for the user: github.com/orgs/{org}/people → set membership to Public.
+            //
+            // NOTE: no public equivalent exists for team membership; if AllowedTeam is also set,
+            // the team check below will still 403 and must be resolved via app approval or GitHub App.
+            var publicResult = await CheckEndpointAsync(
+                accessToken,
+                $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/public_members/{Uri.EscapeDataString(login)}",
+                ct).ConfigureAwait(false);
+
+            if (publicResult != CheckResult.Member)
+            {
+                _logger.LogWarning(
+                    "GitHub login '{Login}' could not be verified as a member of org '{Org}'. " +
+                    "The OAuth app is not approved for this org and the user does not have public membership. " +
+                    "Fix: publicize your org membership at https://github.com/orgs/{Org}/people, " +
+                    "or have an org owner approve the app under Org Settings → Third-party Access.",
+                    login, _allowedOrg, _allowedOrg);
+                return OrgAuthResult.OrgAccessNotGranted;
+            }
+
+            _logger.LogInformation(
+                "GitHub login '{Login}' verified via PUBLIC membership of org '{Org}' " +
+                "(OAuth app not approved; private endpoint returned 403).",
+                login, _allowedOrg);
+            // Public membership confirmed — fall through to team check / Allowed.
+        }
+        else if (orgResult != CheckResult.Member)
         {
             _logger.LogInformation("GitHub login '{Login}' is not a member of org '{Org}'.", login, _allowedOrg);
             return OrgAuthResult.Denied;
@@ -91,12 +122,21 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         // If team restriction is configured, also verify team membership.
         if (_teamOrg is not null && _teamSlug is not null)
         {
-            var teamMember = await CheckEndpointAsync(
+            var teamResult = await CheckEndpointAsync(
                 accessToken,
                 $"https://api.github.com/orgs/{Uri.EscapeDataString(_teamOrg)}/teams/{Uri.EscapeDataString(_teamSlug)}/memberships/{Uri.EscapeDataString(login)}",
                 ct).ConfigureAwait(false);
 
-            if (!teamMember)
+            if (teamResult == CheckResult.OrgAccessNotGranted)
+            {
+                _logger.LogWarning(
+                    "GitHub team access check returned 403 for login '{Login}' on team '{Org}/{Team}'. " +
+                    "The OAuth app has not been granted access to this org.",
+                    login, _teamOrg, _teamSlug);
+                return OrgAuthResult.OrgAccessNotGranted;
+            }
+
+            if (teamResult != CheckResult.Member)
             {
                 _logger.LogInformation(
                     "GitHub login '{Login}' is not a member of team '{Org}/{Team}'.",
@@ -108,7 +148,9 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         return OrgAuthResult.Allowed;
     }
 
-    private async Task<bool> CheckEndpointAsync(string accessToken, string url, CancellationToken ct)
+    private enum CheckResult { Member, NotMember, OrgAccessNotGranted }
+
+    private async Task<CheckResult> CheckEndpointAsync(string accessToken, string url, CancellationToken ct)
     {
         // "github-authz" is registered with AllowAutoRedirect = false so a 302 (private org,
         // requester not an org member) is treated as non-membership rather than a silent 200.
@@ -121,9 +163,16 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
         using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
 
+        // 403 = OAuth app not authorized for this org (org has third-party restrictions).
+        // Distinct from 302/404 which mean the user is simply not a member.
+        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            return CheckResult.OrgAccessNotGranted;
+
         // 204 No Content = org membership confirmed.
         // 200 OK = team membership endpoint returns 200 with an active/pending state body.
         return response.StatusCode is System.Net.HttpStatusCode.NoContent
-                                   or System.Net.HttpStatusCode.OK;
+                                   or System.Net.HttpStatusCode.OK
+            ? CheckResult.Member
+            : CheckResult.NotMember;
     }
 }
