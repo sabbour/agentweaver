@@ -25,7 +25,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
     private readonly ILogger _logger;
     private readonly ContainmentBackend _backend;
 
-    public bool IsRealIsolation => _backend != ContainmentBackend.WslUnshare || true;
+    public bool IsRealIsolation => _backend != ContainmentBackend.WslUnshare;
 
     public string BackendName => _backend switch
     {

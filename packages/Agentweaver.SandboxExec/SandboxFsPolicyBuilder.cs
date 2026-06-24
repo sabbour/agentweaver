@@ -31,7 +31,7 @@ public static class SandboxFsPolicyBuilder
         foreach (var root in allowedRepositoryRoots)
         {
             var resolved = SandboxPathValidator.ValidateAbsoluteContained(
-                Path.GetFullPath(root), Path.GetFullPath(root));
+                Path.GetFullPath(root), canonicalRoot);
             if (!string.Equals(resolved, canonicalRoot, StringComparison.OrdinalIgnoreCase))
                 roPaths.Add(resolved);
         }

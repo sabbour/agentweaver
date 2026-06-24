@@ -11,10 +11,12 @@ namespace Agentweaver.SandboxFs;
 public sealed class SandboxedFileTools
 {
     private readonly string _sandboxRoot;
+    private readonly int _maxOutputBytes;
 
-    public SandboxedFileTools(string sandboxRoot)
+    public SandboxedFileTools(string sandboxRoot, int maxOutputBytes = 0)
     {
         _sandboxRoot = Path.GetFullPath(sandboxRoot);
+        _maxOutputBytes = maxOutputBytes;
 
         // Seraph A2: reject if the sandbox root itself is a reparse point
         if (Directory.Exists(_sandboxRoot))
@@ -63,6 +65,11 @@ public sealed class SandboxedFileTools
 
             using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
             var content = await reader.ReadToEndAsync(ct);
+            if (_maxOutputBytes > 0 && Encoding.UTF8.GetByteCount(content) > _maxOutputBytes)
+            {
+                // Truncate to max bytes at a UTF-16 char boundary safe for the model.
+                content = content[..GetCharLimitForBytes(content, _maxOutputBytes)] + "\n[truncated]";
+            }
             return (content, null);
         }
         catch (SandboxViolationException ex)
@@ -781,6 +788,22 @@ public sealed class SandboxedFileTools
         }
 
         return hunks;
+    }
+
+    /// Returns the maximum number of UTF-16 chars in <paramref name="s"/> such
+    /// that the UTF-8 encoding stays within <paramref name="maxBytes"/>.
+    private static int GetCharLimitForBytes(string s, int maxBytes)
+    {
+        int byteCount = 0;
+        for (int i = 0; i < s.Length; )
+        {
+            int charBytes = Encoding.UTF8.GetByteCount(s, i, 1);
+            if (byteCount + charBytes > maxBytes)
+                return i;
+            byteCount += charBytes;
+            i++;
+        }
+        return s.Length;
     }
 
     private enum PatchHunkType { AddFile, DeleteFile, UpdateFile }

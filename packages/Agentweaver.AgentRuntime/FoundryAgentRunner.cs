@@ -119,8 +119,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
         }
 
         var chatClient = _chatClient ?? _factory!.CreateChatClient(modelId);
-        var fileTools = new SandboxedFileTools(workingDirectory);
-        var searchTools = new SandboxedSearchTools(workingDirectory);
+        var fileTools = new SandboxedFileTools(workingDirectory, sandboxPolicy.MaxOutputBytes);
+        var searchTools = new SandboxedSearchTools(workingDirectory, sandboxPolicy.MaxOutputBytes);
         var redactor = SandboxOutputRedactor.Default;
         var sandboxRoot = workingDirectory;
 

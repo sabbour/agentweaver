@@ -62,6 +62,11 @@ internal sealed class RunCommandTool : ISandboxTool
                     }
                 }
 
+                var (validatorAllowed, validatorReason) = ShellCommandValidator.Validate(
+                    command, ctx.WorkingDirectory, ctx.SandboxRoot);
+                if (!validatorAllowed)
+                    return $"Command rejected by shell validator: {validatorReason}";
+
                 var fsPolicy = SandboxFsPolicyBuilder.Build(ctx.SandboxRoot, ctx.Options.AllowedRepositoryRoots);
                 var cmd = new SandboxCommand(command, ctx.WorkingDirectory, null, fsPolicy,
                     timeout_ms ?? ctx.Options.DefaultTimeoutMs,

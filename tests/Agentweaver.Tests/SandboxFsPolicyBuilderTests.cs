@@ -38,20 +38,30 @@ public sealed class SandboxFsPolicyBuilderTests : IDisposable
     [Fact]
     public void AllowedRoot_IsAddedToReadOnlyPaths()
     {
-        var allowedRoot = Path.Combine(Path.GetTempPath(), $"allowed-ro-{Guid.NewGuid():N}");
+        var allowedRoot = Path.Combine(_sandboxRoot, $"allowed-ro-{Guid.NewGuid():N}");
         Directory.CreateDirectory(allowedRoot);
+
+        var policy = SandboxFsPolicyBuilder.Build(_sandboxRoot, [allowedRoot]);
+
+        policy.ReadOnlyPaths.Should().ContainSingle(
+            "the allowed repository root must appear in read-only paths");
+        policy.ReadOnlyPaths[0].Should().BeEquivalentTo(Path.GetFullPath(allowedRoot));
+    }
+
+    [Fact]
+    public void AllowedRoot_OutsideSandboxRoot_ThrowsSandboxViolationException()
+    {
+        var outsideRoot = Path.Combine(Path.GetTempPath(), $"outside-ro-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outsideRoot);
         try
         {
-            var policy = SandboxFsPolicyBuilder.Build(_sandboxRoot, [allowedRoot]);
-
-            policy.ReadOnlyPaths.Should().ContainSingle(
-                "the allowed repository root must appear in read-only paths");
-            policy.ReadOnlyPaths[0].Should().BeEquivalentTo(Path.GetFullPath(allowedRoot));
+            var act = () => SandboxFsPolicyBuilder.Build(_sandboxRoot, [outsideRoot]);
+            act.Should().Throw<SandboxViolationException>(
+                "an allowed root outside the sandbox root must be rejected to prevent path escape");
         }
         finally
         {
-            try { Directory.Delete(allowedRoot, recursive: true); }
-            catch { /* best effort */ }
+            try { Directory.Delete(outsideRoot, recursive: true); } catch { /* best effort */ }
         }
     }
 

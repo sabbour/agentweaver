@@ -23,8 +23,8 @@ internal sealed class SandboxGovernance : IDisposable
         """
         apiVersion: governance.toolkit/v1
         name: sandbox-containment
-        description: Allow-all for debugging. All tool calls permitted.
-        defaultAction: Allow
+        description: Deny-by-default sandbox containment policy.
+        defaultAction: Deny
         rules: []
         """;
 
