@@ -156,6 +156,103 @@ Request:
 { "approved": true }
 ```
 
+---
+
+## Spec-to-Backlog (Feature 014)
+
+### GET /api/projects/{id}/workspace/files
+
+Returns the file tree of the project's workspace directory, scoped to the
+project sandbox root. Every node in the tree is within `working_directory`.
+
+Response `200` — array of `WorkspaceFileNode`:
+
+```json
+[
+  {
+    "name": "specs",
+    "relative_path": "specs",
+    "is_directory": true,
+    "children": [
+      {
+        "name": "plan.md",
+        "relative_path": "specs/plan.md",
+        "is_directory": false,
+        "children": null
+      }
+    ]
+  }
+]
+```
+
+`children` is `null` for files and a (possibly empty) array for directories.
+Returns `[]` when the workspace root does not exist or is empty.
+Returns `404` when the project is not found.
+
+### POST /api/projects/{id}/backlog/decompose
+
+Runs a `CopilotAIAgent` decomposition turn on a workspace markdown file and
+returns (or creates) proposed backlog items.
+
+Request:
+
+```json
+{
+  "file_path": "specs/plan.md",
+  "confirm": false
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `file_path` | yes | Workspace-relative path to the markdown file. Must resolve within the project workspace root. |
+| `confirm` | yes | `false` = preview only, nothing created. `true` = create Backlog tasks for non-duplicate items. |
+
+Response `200`:
+
+```json
+{
+  "proposed_items": [
+    {
+      "title": "Implement login page",
+      "description": "Add a login form with email/password fields.",
+      "already_exists": false
+    },
+    {
+      "title": "Write unit tests",
+      "description": null,
+      "already_exists": true
+    }
+  ],
+  "was_capped": false,
+  "total_found": 2
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `proposed_items` | Up to 50 proposed items. Each carries `already_exists: true` when a Backlog task with the same title already exists for this project and source file. |
+| `was_capped` | `true` when the agent extracted more than 50 items and the list was truncated to 50. |
+| `total_found` | Total items extracted before the cap was applied. |
+
+**50-item cap**: The backend enforces a hard limit. If the agent proposes more
+than 50 items, `proposed_items` contains the first 50, `was_capped` is `true`,
+and `total_found` reflects the full extracted count.
+
+**Idempotency**: On `confirm: true`, only items where `already_exists` is
+`false` are created. Existing items (matched by `(project_id, source_file_path,
+title)`) are skipped. Re-running decomposition on the same file after a
+previous confirm produces no duplicates.
+
+**Error responses**:
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `file_path` is missing, malformed, or would escape the project workspace root. |
+| `404` | Project not found, or the resolved file does not exist in the workspace. |
+| `500` | Agent decomposition failed (model unavailable or unparseable output). |
+
+
 On approval the worktree is merged into the originating branch only if its tree
 hash still matches the approved hash. On conflict, the originating branch is left
 unchanged, a `merge.failed` event is recorded, and the worktree is preserved.

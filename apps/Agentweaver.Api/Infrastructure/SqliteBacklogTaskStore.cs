@@ -28,10 +28,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
                                        captured_by, created_at, committed_at, claimed_at, run_id,
-                                       workflow_override_id, archived_at)
+                                       workflow_override_id, archived_at, source_file_path)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
                     $capturedBy, $createdAt, $committedAt, $claimedAt, $runId,
-                    $workflowOverrideId, $archivedAt);
+                    $workflowOverrideId, $archivedAt, $sourceFilePath);
             """;
         BindFullRow(command, task);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -480,6 +480,32 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         return results;
     }
 
+    /// <summary>
+    /// Returns the set of task titles that already exist for the given
+    /// <paramref name="projectId"/> and <paramref name="sourceFilePath"/>. Used by the
+    /// decompose endpoint to flag already-imported items without creating duplicates.
+    /// </summary>
+    public async Task<HashSet<string>> GetExistingTitlesFromSourceAsync(
+        ProjectId projectId, string sourceFilePath, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT title FROM backlog_tasks
+             WHERE project_id = $projectId
+               AND source_file_path = $sourceFilePath
+               AND archived_at IS NULL;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        command.Parameters.AddWithValue("$sourceFilePath", sourceFilePath);
+        var titles = new HashSet<string>(StringComparer.Ordinal);
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            titles.Add(reader.GetString(0));
+        return titles;
+    }
+
     private static void BindFullRow(SqliteCommand command, BacklogTask task)
     {
         command.Parameters.AddWithValue("$taskId", task.Id.ToString());
@@ -495,16 +521,17 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$runId", (object?)task.RunId?.ToString() ?? DBNull.Value);
         command.Parameters.AddWithValue("$workflowOverrideId", (object?)task.WorkflowOverrideId ?? DBNull.Value);
         command.Parameters.AddWithValue("$archivedAt", NullableTs(task.ArchivedAt));
+        command.Parameters.AddWithValue("$sourceFilePath", (object?)task.SourceFilePath ?? DBNull.Value);
     }
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
     //           6=captured_by 7=created_at 8=committed_at 9=claimed_at 10=run_id 11=workflow_override_id
-    //           12=archived_at
+    //           12=archived_at 13=source_file_path
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
               captured_by, created_at, committed_at, claimed_at, run_id,
-              workflow_override_id, archived_at
+              workflow_override_id, archived_at, source_file_path
           FROM backlog_tasks
         """;
 
@@ -522,7 +549,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         ClaimedAt   = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         RunId       = r.IsDBNull(10) ? null : RunId.Parse(r.GetString(10)),
         WorkflowOverrideId = r.IsDBNull(11) ? null : r.GetString(11),
-        ArchivedAt = r.IsDBNull(12) ? null : DateTimeOffset.Parse(r.GetString(12), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        ArchivedAt  = r.IsDBNull(12) ? null : DateTimeOffset.Parse(r.GetString(12), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        SourceFilePath = r.IsDBNull(13) ? null : r.GetString(13),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

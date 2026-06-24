@@ -33,4 +33,11 @@ public sealed record BacklogTask
     /// Null means "use the project default workflow".
     /// </summary>
     public string? WorkflowOverrideId { get; init; }
+
+    /// <summary>
+    /// The workspace-relative file path from which this task was decomposed (Feature 014).
+    /// Used for idempotency: (project_id, source_file_path, title) must be unique when non-null.
+    /// Null for tasks captured manually or via other methods.
+    /// </summary>
+    public string? SourceFilePath { get; init; }
 }

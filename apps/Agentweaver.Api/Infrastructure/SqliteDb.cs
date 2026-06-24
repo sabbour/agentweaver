@@ -149,6 +149,11 @@ public sealed class SqliteDb
             """, ct);
         await TryAlterAsync(connection,
             "CREATE INDEX IF NOT EXISTS idx_cast_proposals_project ON cast_proposals (project_id);", ct);
+
+        // Source file path for spec-to-backlog decomposition (Feature 014). Records the workspace-
+        // relative path from which a task was imported; used for idempotency by (project_id,
+        // source_file_path, title). NULL for tasks captured manually or through other methods.
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN source_file_path TEXT;", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)

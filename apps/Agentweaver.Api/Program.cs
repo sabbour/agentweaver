@@ -152,6 +152,9 @@ builder.Services.AddSingleton<CastingService>();
 builder.Services.AddSingleton<IBlueprintGenerator, CopilotBlueprintGenerator>();
 builder.Services.AddSingleton<BlueprintService>();
 
+// Spec-to-backlog decomposition (Feature 014)
+builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>();
+
 var app = builder.Build();
 
 await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
@@ -236,6 +239,7 @@ app.MapRunEndpoints();
 app.MapProjectEndpoints();
 app.MapProjectWorkspaceEndpoints();
 app.MapBacklogEndpoints();
+app.MapBacklogDecomposeEndpoints();
 app.MapCoordinatorEndpoints();
 app.MapCastingEndpoints();
 app.MapBlueprintEndpoints();
