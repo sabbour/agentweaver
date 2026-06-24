@@ -81,19 +81,11 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/members/{Uri.EscapeDataString(login)}",
             ct).ConfigureAwait(false);
 
-        if (orgResult == CheckResult.OrgAccessNotGranted)
+        // If primary check fails (SAML redirect → 302, or not a member → 404), fall back to
+        // the public members endpoint before denying. This handles the common case where the
+        // token is not SAML-authorized so the private endpoint returns 302 rather than 403.
+        if (orgResult != CheckResult.Member)
         {
-            // The microsoft org (and others) enforce SAML SSO. An OAuth token that has not been
-            // SAML-authorized for the org gets 403: "Resource protected by organization SAML
-            // enforcement." This is unrelated to app approval or admin consent.
-            //
-            // /user/orgs is NOT a valid fallback — SAML-restricted orgs are filtered out there too.
-            // Fall back to GET /orgs/{org}/public_members/{login}: public data, not subject to
-            // SAML SSO enforcement. Returns 204 when the user has publicized their org membership.
-            // Self-service fix: github.com/orgs/{org}/people → set membership to Public.
-            //
-            // NOTE: no public equivalent for team membership; if AllowedTeam is also set and the
-            // token isn't SAML-authorized, the team check below will also 403.
             var publicResult = await CheckEndpointAsync(
                 accessToken,
                 $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/public_members/{Uri.EscapeDataString(login)}",
@@ -103,23 +95,17 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             if (publicResult != CheckResult.Member)
             {
                 _logger.LogWarning(
-                    "GitHub login '{Login}' could not be verified as a member of org '{Org}'. " +
-                    "The private membership endpoint returned 403 (SAML SSO enforcement) and the user " +
-                    "does not have public org membership. Fix: publicize membership at https://github.com/orgs/{Org}/people.",
+                    "GitHub login '{Login}' is not a public member of org '{Org}'. " +
+                    "If you are a member, publicize your membership at https://github.com/orgs/{Org}/people.",
                     login, _allowedOrg, _allowedOrg);
-                return OrgAuthResult.OrgAccessNotGranted;
+                return OrgAuthResult.Denied;
             }
 
             _logger.LogInformation(
                 "GitHub login '{Login}' verified via PUBLIC membership of org '{Org}' " +
-                "(private endpoint returned 403 due to SAML SSO enforcement).",
+                "(private endpoint unavailable due to SAML SSO enforcement).",
                 login, _allowedOrg);
             // Public membership confirmed — fall through to team check / Allowed.
-        }
-        else if (orgResult != CheckResult.Member)
-        {
-            _logger.LogInformation("GitHub login '{Login}' is not a member of org '{Org}'.", login, _allowedOrg);
-            return OrgAuthResult.Denied;
         }
 
         // If team restriction is configured, also verify team membership.
