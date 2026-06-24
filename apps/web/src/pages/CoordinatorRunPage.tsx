@@ -2042,7 +2042,7 @@ export function CoordinatorRunPage() {
           </div>
         ) : (
           <div className={styles.leftCol}>
-            <OutcomeSpecPanel runId={runId} events={events} streamStatus={streamStatus} onCollapse={() => setOutcomeCollapsed(true)} />
+            <OutcomeSpecPanel runId={runId} projectId={projectId ?? undefined} events={events} streamStatus={streamStatus} onCollapse={() => setOutcomeCollapsed(true)} />
           </div>
         )}
 

@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse } from './types';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -588,6 +588,18 @@ export class AgentweaverApiClient {
 
   getOverview(): Promise<import('./types').OverviewDto> {
     return this.request<import('./types').OverviewDto>('GET', '/api/overview');
+  }
+
+  // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).
+  getWorkspaceFiles(projectId: string): Promise<WorkspaceFileNode[]> {
+    return this.request<WorkspaceFileNode[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace/files`);
+  }
+
+  // Decompose a spec file into proposed backlog items (Feature 014, FR-003/004).
+  // filePath=null uses the project's confirmed outcome spec stored on the server.
+  // confirm=false → dry-run preview; confirm=true → create the tasks.
+  decomposeSpec(projectId: string, filePath: string | null, confirm: boolean): Promise<DecomposeResponse> {
+    return this.request<DecomposeResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/decompose`, { file_path: filePath, confirm });
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

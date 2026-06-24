@@ -1091,3 +1091,28 @@ export interface OverviewDto {
   active_projects: ActiveProjectDto[];
   recent_activity: RecentActivityDto[];
 }
+
+// ── Feature 014 — Spec-to-Backlog decomposition ───────────────────────────────
+// GET /api/projects/{id}/workspace/files — scoped file tree for the project sandbox.
+export interface WorkspaceFileNode {
+  name: string;
+  relativePath: string;
+  isDirectory: boolean;
+  children?: WorkspaceFileNode[];
+}
+
+// A single backlog item proposed by the decomposition agent.
+export interface ProposedBacklogItem {
+  title: string;
+  description?: string;
+  alreadyExists: boolean;
+}
+
+// POST /api/projects/{id}/backlog/decompose response.
+// When confirm=false: dry-run preview (no tasks created).
+// When confirm=true:  tasks are created; proposedItems reflects what was written.
+export interface DecomposeResponse {
+  proposedItems: ProposedBacklogItem[];
+  wasCapped: boolean;
+  totalFound: number;
+}

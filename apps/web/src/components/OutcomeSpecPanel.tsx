@@ -19,6 +19,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
+  AppsListDetailRegular,
   CheckmarkCircleRegular,
   ChevronLeftRegular,
   DismissCircleRegular,
@@ -28,7 +29,8 @@ import {
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
-import type { OutcomeSpec, OutcomeSpecStatus } from '../api/types';
+import type { OutcomeSpec, OutcomeSpecStatus, ProposedBacklogItem } from '../api/types';
+import { DecomposePreviewDialog } from './DecomposePreviewDialog';
 
 const useStyles = makeStyles({
   panel: {
@@ -164,12 +166,13 @@ const STATUS_META: Record<OutcomeSpecStatus, { label: string; color: 'informativ
 
 interface OutcomeSpecPanelProps {
   runId: string;
+  projectId?: string;
   events: RunStreamEvent[];
   streamStatus: StreamStatus;
   onCollapse?: () => void;
 }
 
-export function OutcomeSpecPanel({ runId, events, streamStatus, onCollapse }: OutcomeSpecPanelProps) {
+export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCollapse }: OutcomeSpecPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -180,6 +183,15 @@ export function OutcomeSpecPanel({ runId, events, streamStatus, onCollapse }: Ou
   const [answers, setAnswers] = useState<string[]>([]);
   const [extraFeedback, setExtraFeedback] = useState('');
   const [revising, setRevising] = useState(false);
+
+  // Decompose / "Break into tasks" state
+  const [decomposePreviewOpen, setDecomposePreviewOpen] = useState(false);
+  const [decomposeItems, setDecomposeItems] = useState<ProposedBacklogItem[]>([]);
+  const [decomposeWasCapped, setDecomposeWasCapped] = useState(false);
+  const [decomposeTotal, setDecomposeTotal] = useState(0);
+  const [decomposeLoading, setDecomposeLoading] = useState(false);
+  const [decomposeError, setDecomposeError] = useState<string | null>(null);
+  const [decomposeSuccess, setDecomposeSuccess] = useState(false);
 
   const fetchSpec = useCallback(async () => {
     try {
@@ -322,6 +334,43 @@ export function OutcomeSpecPanel({ runId, events, streamStatus, onCollapse }: Ou
     setReviseOpen(true);
   };
 
+  const handleBreakIntoTasks = async () => {
+    if (!projectId) return;
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    setDecomposeItems([]);
+    setDecomposeSuccess(false);
+    setDecomposePreviewOpen(true);
+    try {
+      const result = await apiClient.decomposeSpec(projectId, null, false);
+      setDecomposeItems(result.proposedItems);
+      setDecomposeWasCapped(result.wasCapped);
+      setDecomposeTotal(result.totalFound);
+    } catch (err) {
+      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
+
+  const handleDecomposeConfirm = async () => {
+    if (!projectId) return;
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    try {
+      const result = await apiClient.decomposeSpec(projectId, null, true);
+      setDecomposeItems(result.proposedItems);
+      setDecomposeWasCapped(result.wasCapped);
+      setDecomposeTotal(result.totalFound);
+      setDecomposePreviewOpen(false);
+      setDecomposeSuccess(true);
+    } catch (err) {
+      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
+
   return (
     <div className={styles.panel}>
       <div className={styles.headerRow}>
@@ -394,6 +443,12 @@ export function OutcomeSpecPanel({ runId, events, streamStatus, onCollapse }: Ou
         </MessageBar>
       )}
 
+      {decomposeSuccess && (
+        <MessageBar intent="success">
+          <MessageBarBody>Tasks created successfully.</MessageBarBody>
+        </MessageBar>
+      )}
+
       {awaiting && (
         <div className={styles.actions}>
           <Button
@@ -413,6 +468,18 @@ export function OutcomeSpecPanel({ runId, events, streamStatus, onCollapse }: Ou
             Clarify and request changes
           </Button>
           {acting && <Spinner size="extra-tiny" aria-hidden="true" />}
+        </div>
+      )}
+
+      {status === 'confirmed' && projectId && (
+        <div className={styles.actions}>
+          <Button
+            appearance="secondary"
+            icon={<AppsListDetailRegular />}
+            onClick={() => void handleBreakIntoTasks()}
+          >
+            Break into tasks
+          </Button>
         </div>
       )}
 
@@ -479,6 +546,17 @@ export function OutcomeSpecPanel({ runId, events, streamStatus, onCollapse }: Ou
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      <DecomposePreviewDialog
+        isOpen={decomposePreviewOpen}
+        onClose={() => { setDecomposePreviewOpen(false); setDecomposeError(null); }}
+        onConfirm={handleDecomposeConfirm}
+        proposedItems={decomposeItems}
+        wasCapped={decomposeWasCapped}
+        totalFound={decomposeTotal}
+        isLoading={decomposeLoading}
+        error={decomposeError}
+      />
     </div>
   );
 }

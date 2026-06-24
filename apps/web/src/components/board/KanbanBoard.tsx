@@ -1,5 +1,12 @@
 import { useMemo, useState } from 'react';
 import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   MessageBar,
   MessageBarBody,
   Spinner,
@@ -7,6 +14,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { ArrowImportRegular } from '@fluentui/react-icons';
 import { useCtrlScrollZoom, ZoomControls } from './useCtrlScrollZoom';
 import { useBoard } from '../../api/board';
 import { apiClient } from '../../api/apiClient';
@@ -15,6 +23,9 @@ import { KanbanColumn } from './KanbanColumn';
 import { columnAccentColor, fixedBoardColumns } from './columnMeta';
 import { CaptureTaskForm } from './CaptureTaskForm';
 import { PickupSettings } from './PickupSettings';
+import { WorkspaceFilePicker } from '../WorkspaceFilePicker';
+import { DecomposePreviewDialog } from '../DecomposePreviewDialog';
+import type { ProposedBacklogItem } from '../../api/types';
 
 const useStyles = makeStyles({
   root: {
@@ -32,6 +43,12 @@ const useStyles = makeStyles({
   capture: {
     flex: 1,
     minWidth: '280px',
+  },
+  toolbarActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
   },
   columnsViewport: {
     overflowX: 'auto',
@@ -85,6 +102,17 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const [rejectMessage, setRejectMessage] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
 
+  // "Import from workspace" state
+  const [importPickerOpen, setImportPickerOpen] = useState(false);
+  const [importSelectedPath, setImportSelectedPath] = useState<string | null>(null);
+  const [decomposePreviewOpen, setDecomposePreviewOpen] = useState(false);
+  const [decomposeItems, setDecomposeItems] = useState<ProposedBacklogItem[]>([]);
+  const [decomposeWasCapped, setDecomposeWasCapped] = useState(false);
+  const [decomposeTotal, setDecomposeTotal] = useState(0);
+  const [decomposeLoading, setDecomposeLoading] = useState(false);
+  const [decomposeError, setDecomposeError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState(false);
+
   // Board zoom (board-zoom). Ctrl+Scroll over the columns adjusts the zoom so the
   // user can fit all workflow columns on screen; +/- controls do the same.
   const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
@@ -128,14 +156,69 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     setRejectMessage('Only the coordinator moves work into the workflow.');
   };
 
+  const handleImportPickerConfirm = async () => {
+    if (!importSelectedPath) return;
+    setImportPickerOpen(false);
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    setDecomposeItems([]);
+    setImportSuccess(false);
+    setDecomposePreviewOpen(true);
+    try {
+      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, false);
+      setDecomposeItems(result.proposedItems);
+      setDecomposeWasCapped(result.wasCapped);
+      setDecomposeTotal(result.totalFound);
+    } catch (err) {
+      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
+
+  const handleDecomposeConfirm = async () => {
+    if (!importSelectedPath) return;
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    try {
+      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, true);
+      setDecomposeItems(result.proposedItems);
+      setDecomposeWasCapped(result.wasCapped);
+      setDecomposeTotal(result.totalFound);
+      setDecomposePreviewOpen(false);
+      setImportSuccess(true);
+      setImportSelectedPath(null);
+      await refetch();
+    } catch (err) {
+      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
+
   return (
     <div className={styles.root}>
       <div className={styles.toolbar}>
         <div className={styles.capture}>
           <CaptureTaskForm projectId={projectId} onCaptured={refetch} />
         </div>
-        <PickupSettings projectId={projectId} />
+        <div className={styles.toolbarActions}>
+          <Button
+            appearance="secondary"
+            icon={<ArrowImportRegular />}
+            onClick={() => { setImportSelectedPath(null); setImportPickerOpen(true); setImportSuccess(false); }}
+          >
+            Import from workspace
+          </Button>
+          <PickupSettings projectId={projectId} />
+        </div>
       </div>
+
+      {importSuccess && (
+        <MessageBar intent="success">
+          <MessageBarBody>Tasks imported successfully.</MessageBarBody>
+        </MessageBar>
+      )}
 
       {status === 'loading' && !board && <Spinner label="Loading board" />}
 
@@ -193,6 +276,45 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       )}
 
       {board && columnsWithAccent.length === 0 && <Text>No columns to display.</Text>}
+
+      {/* Workspace file picker dialog */}
+      <Dialog open={importPickerOpen} onOpenChange={(_, d) => { if (!d.open) setImportPickerOpen(false); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Import from workspace</DialogTitle>
+            <DialogContent>
+              <WorkspaceFilePicker
+                projectId={projectId}
+                selectedPath={importSelectedPath}
+                onSelect={setImportSelectedPath}
+              />
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setImportPickerOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={!importSelectedPath}
+                onClick={() => void handleImportPickerConfirm()}
+              >
+                Preview tasks
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <DecomposePreviewDialog
+        isOpen={decomposePreviewOpen}
+        onClose={() => { setDecomposePreviewOpen(false); setDecomposeError(null); }}
+        onConfirm={handleDecomposeConfirm}
+        proposedItems={decomposeItems}
+        wasCapped={decomposeWasCapped}
+        totalFound={decomposeTotal}
+        isLoading={decomposeLoading}
+        error={decomposeError}
+      />
     </div>
   );
 }
