@@ -86,6 +86,12 @@ echo "  ACR resource ID: ${ACR_ID}"
 #   --network-dataplane cilium  : Cilium replaces kube-proxy + Azure NPM.
 #                                  Required for NetworkPolicy enforcement (default-deny,
 #                                  egress allow-lists, etc.)
+#   --enable-acns               : Advanced Container Networking Services. Required to
+#                                  unlock the full Cilium feature set, including
+#                                  CiliumNetworkPolicy FQDN-based egress filtering
+#                                  (toFQDNs) for sandbox egress control, and advanced
+#                                  network observability. Must be combined with
+#                                  --network-dataplane cilium.
 #   --workload-runtime KataVmIsolation : Exposes kata-vm-isolation RuntimeClass
 #   --os-sku AzureLinux         : Required for Kata VM isolation
 #   --attach-acr                : Grants AcrPull to the cluster's managed identity
@@ -100,6 +106,7 @@ az aks create \
   --network-plugin azure \
   --network-plugin-mode overlay \
   --network-dataplane cilium \
+  --enable-acns \
   --node-vm-size Standard_D4s_v5 \
   --node-count 2 \
   --attach-acr "${ACR_NAME}" \

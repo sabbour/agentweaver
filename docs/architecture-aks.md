@@ -142,7 +142,7 @@ az aks show -g "${RESOURCE_GROUP}" -n "${CLUSTER_NAME}" --query networkProfile.p
 
 #### FQDN-based egress (optional hardening)
 
-With Cilium enabled, sandbox egress can be further tightened using `CiliumNetworkPolicy` with `toFQDNs` to restrict to specific domains (e.g. `github.com`, `npmjs.org`) rather than the broad `0.0.0.0/0` allow. This is documented as an open item in `k8s/networkpolicy-sandbox.yaml`.
+With Cilium + ACNS enabled (`--network-dataplane cilium --enable-acns`), sandbox egress can be further tightened using `CiliumNetworkPolicy` with `toFQDNs` to restrict to specific domains (e.g. `github.com`, `npmjs.org`) rather than the broad `0.0.0.0/0` allow. This is documented as an open item in `k8s/networkpolicy-sandbox.yaml`.
 
 ### Non-root containers
 

@@ -60,8 +60,8 @@ spec:
     # (b) HTTPS (port 443) — GitHub, npm, apt/pip package registries.
     #     OPEN ITEM: replace 0.0.0.0/0 with a Cilium FQDN NetworkPolicy
     #     (CiliumNetworkPolicy with `toFQDNs`) for tighter per-domain egress control.
-    #     Cilium is enabled on this cluster (--network-dataplane cilium) so FQDN
-    #     policy is available without additional configuration.
+    #     The cluster is provisioned with --network-dataplane cilium --enable-acns,
+    #     so CiliumNetworkPolicy FQDN filtering is available.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

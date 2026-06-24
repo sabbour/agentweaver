@@ -53,6 +53,7 @@ This creates:
   - Application Routing add-on (Istio variant, `approuting-istio` gateway class)
   - Gateway API
   - Azure CNI Overlay networking with **Cilium dataplane** (`--network-dataplane cilium`) — required for NetworkPolicy enforcement
+  - **ACNS** (`--enable-acns`) — Advanced Container Networking Services; required for `CiliumNetworkPolicy` FQDN-based egress filtering and network observability
   - Kata VM isolation workload runtime (`kata-vm-isolation` RuntimeClass)
   - AzureLinux node OS
   - ACR attachment (no `imagePullSecret` required)
