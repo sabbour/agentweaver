@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweaver-frontend
+  namespace: agentweaver
+  labels:
+    app: agentweaver-frontend
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agentweaver-frontend
+  template:
+    metadata:
+      labels:
+        app: agentweaver-frontend
+        app.kubernetes.io/part-of: agentweaver
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: frontend
+          image: ${ACR_LOGIN_SERVER}/agentweaver-frontend:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

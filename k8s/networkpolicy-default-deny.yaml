@@ -1,0 +1,88 @@
+# NetworkPolicy — default-deny ingress + targeted allow rules for Agentweaver.
+#
+# Three policies:
+#   1. Default-deny all ingress to the agentweaver namespace.
+#   2. Allow ingress to agentweaver-api only from the Istio gateway data plane.
+#   3. Allow ingress to agentweaver-frontend only from the Istio gateway data plane.
+#
+# The approuting-istio gateway add-on provisions its data plane in THIS namespace
+# (agentweaver), labelled `istio.io/gateway-name: agentweaver-gateway`. NetworkPolicy
+# allows ingress from exactly those pods, matching the reference project pattern
+# (hosted-copilot-sandbox k8s/aks/networkpolicy.yaml policy 4).
+#
+# Enforcement: AKS with Azure CNI Overlay enforces NetworkPolicy via Azure NPM.
+---
+# 1) DEFAULT-DENY all ingress in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector: {}        # all pods in the namespace
+  policyTypes:
+    - Ingress
+  # no ingress rules => deny all ingress
+---
+# 2) ALLOW ingress to the API pod on :8080 from the gateway data plane only.
+#
+# The approuting-istio gateway pods are co-located in this namespace and carry:
+#   istio.io/gateway-name: agentweaver-gateway
+# No namespaceSelector is needed because both the policy and gateway pods are
+# in the same namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-api
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # PRIMARY: approuting-istio gateway data plane (same namespace)
+        - podSelector:
+            matchLabels:
+              istio.io/gateway-name: agentweaver-gateway
+        # FALLBACK: managed Istio ingress namespace (some cluster/add-on variants)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-ingress
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# 3) ALLOW ingress to the frontend pod on :80 from the gateway data plane only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-frontend
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # PRIMARY: approuting-istio gateway data plane (same namespace)
+        - podSelector:
+            matchLabels:
+              istio.io/gateway-name: agentweaver-gateway
+        # FALLBACK: managed Istio ingress namespace
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-ingress
+      ports:
+        - protocol: TCP
+          port: 80

@@ -1,0 +1,38 @@
+# Gateway — PUBLIC HTTPS entry point for Agentweaver on AKS.
+#
+# Uses the Application Routing add-on with Istio variant (approuting-istio
+# GatewayClass). The add-on auto-provisions a per-gateway Deployment + Service
+# named `agentweaver-gateway-approuting-istio` in the same namespace, with pods
+# labelled `istio.io/gateway-name: agentweaver-gateway`. NetworkPolicy
+# (networkpolicy-default-deny.yaml) allows ingress from exactly those pods.
+#
+# TLS: the single `https` listener terminates TLS using the managed default-domain
+# certificate. Before deploying, apply the DefaultDomainCertificate resource and
+# wait for it to become Available, then substitute ${HOST} with the managed host.
+# The deploy script (30-deploy.sh) derives HOST automatically and uses envsubst
+# to render this manifest before applying.
+#
+# allowedRoutes.from: Same restricts route attachment to this namespace only.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentweaver-gateway
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  gatewayClassName: approuting-istio
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: ${HOST}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          # Managed cert Secret produced by DefaultDomainCertificate (same namespace).
+          - kind: Secret
+            name: cert
+      allowedRoutes:
+        namespaces:
+          from: Same

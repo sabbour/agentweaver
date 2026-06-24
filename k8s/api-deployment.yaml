@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweaver-api
+  namespace: agentweaver
+  labels:
+    app: agentweaver-api
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  # Single replica: SQLite is single-writer (RWO PVC). Recreate ensures the old
+  # pod releases the disk before the new one attaches (no multi-attach).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: agentweaver-api
+  template:
+    metadata:
+      labels:
+        app: agentweaver-api
+        app.kubernetes.io/part-of: agentweaver
+    spec:
+      serviceAccountName: agentweaver-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: Database__Path
+              value: /data/agentweaver.db
+            # GitHub Copilot token — Wave 2 will replace this with Key Vault CSI.
+            # Create the secret manually before deploying:
+            #   kubectl -n agentweaver create secret generic agentweaver-secrets \
+            #     --from-literal=github-copilot-token=<token>
+            - name: Providers__GitHubCopilot__GitHubToken
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: github-copilot-token
+                  optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /api/diagnostics/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/diagnostics/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: data
+          # Wave 1: PVC is a placeholder (Wave 2 / 017-US5 creates it).
+          # Until the PVC exists, remove this volume claim and use an emptyDir
+          # for ephemeral local testing. The manifest is correct for Wave 2.
+          persistentVolumeClaim:
+            claimName: agentweaver-data

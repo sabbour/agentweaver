@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentweaver
+  labels:
+    # Enroll all pods in Istio ambient mesh (ztunnel L4 mTLS, no sidecars)
+    istio.io/dataplane-mode: ambient
+    app.kubernetes.io/part-of: agentweaver

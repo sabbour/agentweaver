@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# 30-deploy.sh -- Deploy Agentweaver to AKS.
+#
+# Applies the k8s/ manifests after substituting placeholder tokens:
+#   ${HOST}              --> <managed-domain host>  (derived from DefaultDomainCertificate)
+#   ${ACR_LOGIN_SERVER}  --> <ACR_NAME>.azurecr.io
+#   ${IMAGE_TAG}         --> image tag
+#
+# envsubst replaces ONLY those tokens; all other $ references in manifests
+# (e.g. Kubernetes env var refs) are left untouched.
+#
+# Requires: kubectl (pointed at the AKS cluster), envsubst (apt install gettext /
+#           brew install gettext), Azure CLI.
+# Run from the REPO ROOT.
+#
+# Usage:
+#   source scripts/aks/00-variables.sh
+#   bash scripts/aks/30-deploy.sh
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=00-variables.sh
+source "${SCRIPT_DIR}/00-variables.sh"
+
+# Rendered manifests land here; cleaned up on exit
+RENDERED_DIR="${SCRIPT_DIR}/.rendered"
+trap 'rm -rf "${RENDERED_DIR}"' EXIT
+
+echo ""
+echo "=== Agentweaver AKS deployment ==="
+echo "  kubectl context: $(kubectl config current-context)"
+echo "  Namespace:       ${NAMESPACE}"
+echo "  ACR:             ${ACR_LOGIN_SERVER}"
+echo "  Image tag:       ${IMAGE_TAG}"
+echo ""
+
+# -- Pre-flight ----------------------------------------------------------------
+if ! command -v envsubst &>/dev/null; then
+  echo "ERROR: envsubst not found."
+  echo "Install via: apt install gettext  or  brew install gettext"
+  exit 1
+fi
+
+# -- Step 1: Namespace + ambient mesh label -----------------------------------
+echo "Applying namespace..."
+kubectl apply -f "${REPO_ROOT}/k8s/namespace.yaml"
+
+# -- Step 2: DefaultDomainCertificate -----------------------------------------
+# Apply the DefaultDomainCertificate resource so the managed TLS cert is issued.
+# This resource is cluster-scoped and not in the k8s/ dir — it must exist for
+# the gateway to get a valid cert. Wait for it to become Available.
+echo ""
+echo "Checking DefaultDomainCertificate 'cert' in namespace '${NAMESPACE}'..."
+if kubectl get defaultdomaincertificate cert --namespace "${NAMESPACE}" &>/dev/null; then
+  echo "  [OK] DefaultDomainCertificate 'cert' already exists."
+else
+  echo "  [INFO] DefaultDomainCertificate not found. Creating..."
+  cat <<EOF | kubectl apply -f -
+apiVersion: approuting.kubernetes.azure.com/v1alpha1
+kind: DefaultDomainCertificate
+metadata:
+  name: cert
+  namespace: ${NAMESPACE}
+spec: {}
+EOF
+fi
+
+echo "Waiting for DefaultDomainCertificate 'cert' to become Available (up to 5 min)..."
+kubectl wait \
+  --for=condition=Available \
+  defaultdomaincertificate/cert \
+  --namespace "${NAMESPACE}" \
+  --timeout=300s
+
+# -- Step 3: Derive managed domain host ---------------------------------------
+DOMAIN=$(kubectl get defaultdomaincertificate cert \
+  --namespace "${NAMESPACE}" \
+  --output jsonpath='{.status.domain}')
+
+# Strip leading '*.' wildcard: *.foo.azureaksapps.io --> foo.azureaksapps.io
+# then prepend 'agentweaver.' for the per-service FQDN.
+export HOST="agentweaver.${DOMAIN#\*.}"
+
+echo "  Managed domain: ${DOMAIN}"
+echo "  Ingress host:   ${HOST}"
+
+# -- Step 4: API service account (for workload identity in Wave 2) ------------
+echo ""
+echo "Applying service account..."
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentweaver-api
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+EOF
+
+# -- Step 5: Render manifests via envsubst ------------------------------------
+rm -rf "${RENDERED_DIR}"
+mkdir -p "${RENDERED_DIR}"
+
+echo ""
+echo "Rendering manifests (substituting HOST, ACR_LOGIN_SERVER, IMAGE_TAG)..."
+
+for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
+  fname="$(basename "${yaml_file}")"
+  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG}' \
+    < "${yaml_file}" > "${RENDERED_DIR}/${fname}"
+  echo "  rendered: ${fname}"
+done
+
+# -- Step 6: Apply rendered manifests -----------------------------------------
+echo ""
+echo "Applying manifests..."
+for rendered_file in "${RENDERED_DIR}"/*.yaml; do
+  fname="$(basename "${rendered_file}")"
+  # Skip namespace (already applied with kubectl apply above)
+  [[ "${fname}" == "namespace.yaml" ]] && continue
+  kubectl apply -f "${rendered_file}"
+  echo "  [applied] ${fname}"
+done
+
+# -- Step 7: Wait for Gateway -------------------------------------------------
+echo ""
+echo "Waiting for gateway/agentweaver-gateway to become Programmed (up to 3 min)..."
+kubectl wait \
+  --for=condition=Programmed \
+  gateway/agentweaver-gateway \
+  --namespace "${NAMESPACE}" \
+  --timeout=180s
+
+GATEWAY_IP=$(kubectl get gateway agentweaver-gateway \
+  --namespace "${NAMESPACE}" \
+  --output jsonpath='{.status.addresses[0].value}')
+
+# -- Step 8: Wait for rollouts ------------------------------------------------
+echo ""
+echo "Waiting for API deployment rollout..."
+kubectl rollout status deployment/agentweaver-api \
+  --namespace "${NAMESPACE}" \
+  --timeout=120s
+
+echo "Waiting for Frontend deployment rollout..."
+kubectl rollout status deployment/agentweaver-frontend \
+  --namespace "${NAMESPACE}" \
+  --timeout=120s
+
+# -- Final output -------------------------------------------------------------
+echo ""
+echo "==================================================="
+echo " DEPLOYMENT COMPLETE"
+echo "==================================================="
+echo ""
+echo "  Frontend URL: https://${HOST}/"
+echo "  API URL:      https://${HOST}/api/"
+echo "  Gateway IP:   ${GATEWAY_IP}"
+echo ""
+echo "  Next step:"
+echo "    bash scripts/aks/40-verify.sh"
+echo ""
+echo "  To check status:"
+echo "    kubectl get gateway,httproute,pod,svc -n ${NAMESPACE}"

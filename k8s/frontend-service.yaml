@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentweaver-frontend
+  namespace: agentweaver
+  labels:
+    app: agentweaver-frontend
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  selector:
+    app: agentweaver-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+  type: ClusterIP
