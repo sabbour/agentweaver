@@ -31,7 +31,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/projects/{project_id}/workflows/{workflow_id}", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/projects/{project_id}/workflows/{Uri.EscapeDataString(workflow_id)}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

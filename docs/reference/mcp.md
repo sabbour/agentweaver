@@ -55,8 +55,10 @@ Create a new project.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | yes | Project name |
-| `repository_path` | string | yes | Absolute path to the local git repository |
-| `model_source` | string | no | Model provider (`github-copilot`) |
+| `working_directory` | string | yes | Absolute path to the local working directory |
+| `origin` | string | no | Project origin: `blank` (default) or `github` |
+| `blueprint_id` | string | no | Predefined blueprint ID to apply (exclusive with `blueprint`) |
+| `blueprint` | object | no | Inline blueprint JSON object to apply (exclusive with `blueprint_id`) |
 
 **Returns**: Created project object with assigned `id`.
 
@@ -77,12 +79,12 @@ Rename a project.
 
 ### `project_relink`
 
-Update the repository path for a project (e.g., after moving the repository on disk).
+Update the working directory for a project (e.g., after moving the repository on disk).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
-| `repository_path` | string | yes | New absolute path to the repository |
+| `working_directory` | string | yes | New absolute path to the working directory |
 
 **Returns**: Updated project object.
 
@@ -107,10 +109,11 @@ Update provider settings for a project.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
-| `model_source` | string | yes | Model provider (`github-copilot`) |
-| `model` | string | no | Specific model name |
+| `default_provider` | string | yes | Model provider (`github_copilot` or `microsoft_foundry`) |
+| `default_model_github_copilot` | string | no | Model ID for GitHub Copilot provider |
+| `default_model_microsoft_foundry` | string | no | Model ID for Microsoft Foundry provider |
 
-**Returns**: Updated project object.
+**Returns**: Confirmation message.
 
 ---
 
@@ -125,7 +128,7 @@ Submit a new agent run for a project.
 | `project_id` | string | yes | Project ID |
 | `task` | string | yes | Task description for the agent |
 | `agent_name` | string | no | Target team member name (e.g., `"ripley"`) |
-| `originating_branch` | string | no | Branch to base the run on (defaults to current) |
+| `base_branch` | string | no | Branch to base the run on (defaults to current) |
 | `model_source` | string | no | Model provider override |
 
 **Returns**: `{ run_id, status }`.
@@ -340,6 +343,8 @@ Cast a team for a project. Supports a single-call flow (create + confirm) or a t
 | `goal` | string | conditional | Goal description for the new team (required unless `confirm_proposal_id` is set) |
 | `confirm_proposal_id` | string | conditional | ID of an existing proposal to confirm (skips creation) |
 | `confirm` | boolean | no | Automatically confirm the newly created proposal (default `false`) |
+| `mode` | string | no | Casting mode: `free_text` (default), `scenario`, `analysis`, or `manual` |
+| `intent` | string | no | Confirmation intent: `new` (default, replaces team) or `merge` (adds to existing) |
 
 **Returns**: Proposal object (when `confirm=false`) or confirmed team object (when `confirm=true` or `confirm_proposal_id` is set).
 
@@ -353,8 +358,8 @@ Add a new member to a project team.
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
 | `name` | string | yes | Member name (cast name, lowercase) |
-| `role` | string | yes | Role description |
-| `model` | string | no | Preferred model for this member |
+| `role_id` | string | yes | Role ID from the catalog |
+| `model_id` | string | no | Model ID override for this member |
 
 **Returns**: Updated team member entry.
 
@@ -426,9 +431,11 @@ Sign out of GitHub.
 
 Get the sandbox policy for a repository.
 
-**Parameters**: none (policy is resolved from the project's repository)
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repository_path` | string | no | Repository path to get the policy for (resolved from project when omitted) |
 
-**Returns**: Current sandbox policy object.
+**Returns**: Current sandbox policy object with `shell_enabled`.
 
 ---
 
@@ -438,9 +445,10 @@ Update the sandbox policy.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `policy` | object | yes | Policy object to apply |
+| `repository_path` | string | yes | Repository path |
+| `shell_enabled` | boolean | yes | Whether shell access is enabled for agent runs |
 
-**Returns**: Updated sandbox policy.
+**Returns**: Confirmation message.
 
 ---
 
@@ -701,3 +709,347 @@ Import `.squad/decisions/inbox/*.md` files from disk into the project memory dat
 
 **Returns**: `"imported"`.
 
+---
+
+## Runs (continued)
+
+### `run_retry`
+
+Retry a failed run by creating a fresh run from its original inputs.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Run ID to retry |
+
+**Returns**: `"Retried run {run_id} -> new run {new_run_id}."` — confirmation with the new run ID.
+
+---
+
+### `run_archive`
+
+Archive a run off the active project board.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | string | yes | Run ID |
+
+**Returns**: Updated run object.
+
+---
+
+### `project_list_runs`
+
+List all runs for a project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: Array of run objects with `run_id`, `status`, `task`, `agent_name`, and timing fields.
+
+---
+
+## Backlog
+
+The backlog is the project's Kanban board for task management. Tasks progress through Backlog → Ready → Active, with terminal states of Done, Failed, and Archived.
+
+### `backlog_capture_task`
+
+Capture a new task into the project backlog.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `title` | string | yes | Task title |
+| `description` | string | no | Task description |
+
+**Returns**: Created task object with `id`, `title`, `description`, and `status: "backlog"`.
+
+---
+
+### `backlog_edit_task`
+
+Edit the title and/or description of a backlog task.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `task_id` | string | yes | Task ID |
+| `title` | string | yes | New title |
+| `description` | string | no | New description (omit to clear) |
+
+**Returns**: Updated task object.
+
+---
+
+### `backlog_delete_task`
+
+Delete a backlog task. Fails with `409` if the task has already been claimed.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `task_id` | string | yes | Task ID |
+
+**Returns**: `"Task deleted successfully."`.
+
+---
+
+### `backlog_move_to_ready`
+
+Move a task from Backlog to Ready, optionally at a specific position.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `task_id` | string | yes | Task ID |
+| `target_index` | integer | no | Zero-based target position in Ready column (appends to end when omitted) |
+
+**Returns**: Updated task object with `status: "ready"`.
+
+---
+
+### `backlog_move_to_backlog`
+
+Move a task from Ready back to Backlog, optionally at a specific position.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `task_id` | string | yes | Task ID |
+| `target_index` | integer | no | Zero-based target position in Backlog column (appends to end when omitted) |
+
+**Returns**: Updated task object with `status: "backlog"`.
+
+---
+
+### `backlog_reorder_task`
+
+Reorder a task within its current bucket (Backlog or Ready) to a new zero-based position.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `task_id` | string | yes | Task ID |
+| `target_index` | integer | yes | Zero-based target position within the task's current bucket |
+
+**Returns**: Updated task object.
+
+---
+
+### `backlog_get_board`
+
+Get the full Kanban board for a project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `include_terminal_history` | boolean | no | Include terminal/done history (default `false`) |
+
+**Returns**: Board object with columns: `backlog`, `ready`, `problems`, `human_review`, `active`, and `done`. Each column is an array of task cards with `id`, `title`, `description`, `status`, and linked run details.
+
+---
+
+### `backlog_archive_task`
+
+Archive a backlog task off the active board.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `task_id` | string | yes | Task ID |
+
+**Returns**: Updated task object with `status: "archived"`.
+
+---
+
+### `backlog_get_workflow_stages`
+
+Get the ordered canonical run-bucket definitions for a project (Problems, Human Review, Active, Done).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: Array of workflow stage definitions, each with `name`, `label`, and `terminal` flag.
+
+---
+
+### `backlog_get_settings`
+
+Get the per-project backlog pickup settings.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: Settings object with `max_ready_per_heartbeat`, `pickup_autopilot`, and `pickup_auto_approve_tools`.
+
+---
+
+### `backlog_set_settings`
+
+Set the per-project backlog pickup settings.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `max_ready_per_heartbeat` | integer | yes | Maximum Ready tasks claimed per heartbeat tick (1–20) |
+| `pickup_autopilot` | boolean | yes | Auto-answer clarifying questions during unattended coordinator runs |
+| `pickup_auto_approve_tools` | boolean | yes | Auto-approve allow-with-approval tools during unattended runs |
+
+**Returns**: Updated settings object.
+
+---
+
+### `send_all_backlog_to_ready`
+
+Bulk-promote all Backlog tasks to Ready in one atomic operation.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: `"Promoted N backlog task(s) to Ready."` or `"No backlog tasks to promote."`.
+
+---
+
+## Blueprints
+
+Blueprints are pre-packaged project configurations specifying a team roster, workflow, review policy, and sandbox profile.
+
+### `list_blueprints`
+
+List the predefined Agentweaver blueprints.
+
+**Parameters**: none
+
+**Returns**: Array of blueprint objects, each with `id`, `name`, `description`, `roster`, `workflow`, `review_policy`, and `sandbox_profile`.
+
+---
+
+### `generate_blueprint`
+
+Generate a new blueprint from a plain-language description using the model.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `description` | string | yes | Plain-language description of the team and workflow |
+
+**Returns**: Generated blueprint object. Returns `422` if the model output cannot be validated.
+
+---
+
+### `validate_blueprint`
+
+Validate a blueprint object against the schema and role constraints.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `blueprint` | object | yes | Blueprint JSON object with `id`, `name`, `description`, `roster`, `workflow`, `review_policy`, `sandbox_profile` |
+
+**Returns**: `{ "valid": true, "errors": [] }` on success, or `{ "valid": false, "errors": [...] }` with a list of validation errors.
+
+---
+
+## Diagnostics
+
+### `diagnostics_get`
+
+Get a real-time system diagnostics snapshot.
+
+**Parameters**: none
+
+**Returns**: Object with `api_version`, `uptime`, `project_count`, `active_run_count`, `heartbeat_state`, and `checkpoint_gc_state`.
+
+---
+
+### `heartbeat_status`
+
+Get the current coordinator heartbeat service status.
+
+**Parameters**: none
+
+**Returns**: Object with `enabled`, `interval_seconds`, `last_tick_at`, and `service_state` (`running` | `waiting_first_tick` | `disabled`).
+
+---
+
+## Workflows
+
+### `workflows_list`
+
+List all discovered workflow definitions for a project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: Array of workflow summaries with `id`, `name`, `valid`, `validation_errors`, and `is_default`.
+
+---
+
+### `workflow_get`
+
+Get the full definition of a single workflow by ID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `workflow_id` | string | yes | Workflow ID |
+
+**Returns**: Full workflow definition with `id`, `name`, `trigger`, `nodes`, and `edges`.
+
+---
+
+### `workflows_sync`
+
+Re-read the project's workflow definitions from disk, refreshing the in-memory registry.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: Updated workflow list (same shape as `workflows_list`).
+
+---
+
+## Workspace
+
+Browse the git-backed project workspace. Supports reading files at any branch or run worktree ref.
+
+### `list_project_workspace_refs`
+
+List the browsable git refs for a project workspace: the base branch and any active run worktrees.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+
+**Returns**: Object with `base_branch` (string) and `worktrees` (array of `{ branch, run_id }`).
+
+---
+
+### `list_project_workspace`
+
+List the flat file tree for a project workspace at a given ref.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `ref` | string | no | Branch name or worktree branch to browse (defaults to base branch) |
+
+**Returns**: Array of workspace node objects, each with `path`, `type` (`blob` or `tree`), and `size`.
+
+---
+
+### `get_project_workspace_file`
+
+Get the content of a file in a project workspace at a given ref.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `path` | string | yes | Relative file path within the workspace (forward slashes, e.g. `src/main.cs`) |
+| `ref` | string | no | Branch name or worktree branch (defaults to base branch) |
+
+**Returns**: Object with `path`, `content` (base64-encoded), `encoding`, and `size`.

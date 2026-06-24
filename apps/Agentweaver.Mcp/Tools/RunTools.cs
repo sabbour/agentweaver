@@ -21,13 +21,13 @@ public sealed class RunTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         [Description("Task description for the agent")] string task,
         [Description("Agent name (optional)")] string? agent_name,
-        [Description("Branch to base the run on (optional)")] string? originating_branch,
+        [Description("Branch to base the run on (optional)")] string? base_branch,
         [Description("Model source override (optional)")] string? model_source,
         CancellationToken ct)
     {
         try
         {
-            var body = new { task, agent_name, originating_branch, model_source };
+            var body = new { task, agent_name, base_branch, model_source };
             var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/runs", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
@@ -59,20 +59,22 @@ public sealed class RunTools(AgentweaverApiClient api)
         {
             await foreach (var evt in api.StreamSseAsync($"/api/runs/{run_id}/stream", ct))
             {
-                if (evt.Data == "[DONE]") break;
+                var eventType = evt.EventType;
+                if (eventType == "done") break;
                 try
                 {
                     var doc = JsonDocument.Parse(evt.Data);
-                    var type = doc.RootElement.TryGetProperty("type", out var t) ? t.GetString() : null;
                     var payload = doc.RootElement.TryGetProperty("payload", out var p) ? p : doc.RootElement;
 
-                    string? notification = type switch
+                    string? notification = eventType switch
                     {
                         "agent.message" or "agent.message.delta" =>
                             payload.TryGetProperty("content", out var c) ? c.GetString() ?? "" : evt.Data,
                         "tool.call" =>
                             payload.TryGetProperty("name", out var n) ? $"Tool call: {n.GetString()}" : "Tool call",
                         "tool.result" => "Tool result received",
+                        "run.status" =>
+                            payload.TryGetProperty("status", out var s) ? $"Run status: {s.GetString()}" : null,
                         "run.completed" => "Run completed",
                         "review.requested" => "Run awaiting review",
                         _ => null
@@ -132,7 +134,8 @@ public sealed class RunTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/files/{path.TrimStart('/')}", ct);
+            var encodedPath = string.Join("/", path.TrimStart('/').Split('/', '\\').Select(Uri.EscapeDataString));
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/files/{encodedPath}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
