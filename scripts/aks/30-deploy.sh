@@ -128,7 +128,7 @@ echo ""
 echo "Applying manifests..."
 for rendered_file in "${RENDERED_DIR}"/*.yaml; do
   fname="$(basename "${rendered_file}")"
-  # Skip namespace (already applied above), security policies (applied in Step 9),
+  # Skip namespace (already applied above), security policies (applied in Step 10),
   # and PVCs (already applied in Step 6)
   [[ "${fname}" == "namespace.yaml" ]] && continue
   [[ "${fname}" == peer-authentication.yaml ]] && continue
@@ -151,7 +151,7 @@ GATEWAY_IP=$(kubectl get gateway agentweaver-gateway \
   --namespace "${NAMESPACE}" \
   --output jsonpath='{.status.addresses[0].value}')
 
-# -- Step 8: Wait for rollouts ------------------------------------------------
+# -- Step 9: Wait for rollouts ------------------------------------------------
 echo ""
 echo "Waiting for API deployment rollout..."
 kubectl rollout status deployment/agentweaver-api \
@@ -163,7 +163,7 @@ kubectl rollout status deployment/agentweaver-frontend \
   --namespace "${NAMESPACE}" \
   --timeout=120s
 
-# -- Step 9: Istio security policies ------------------------------------------
+# -- Step 10: Istio security policies -----------------------------------------
 # Applied after workloads so AuthorizationPolicies target already-existing label
 # selectors; PeerAuthentication is namespace-scoped and order-independent.
 echo ""

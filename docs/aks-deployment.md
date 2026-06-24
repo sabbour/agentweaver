@@ -153,7 +153,59 @@ bash scripts/aks/40-verify.sh
 
 ---
 
-## Verifying the deployment
+## Persistent storage
+
+Agentweaver uses two PersistentVolumeClaims:
+
+| PVC | Storage class | Access mode | Size | Purpose |
+|-----|--------------|-------------|------|---------|
+| `agentweaver-data` | `managed-csi-premium` | ReadWriteOnce | 10 Gi | SQLite databases (`agentweaver.db`, `memory.db`) |
+| `agentweaver-workspace` | `azurefile-csi-premium` | ReadWriteMany | 50 Gi | Agent workspaces and git worktrees |
+
+### Why Azure Disk for data (`managed-csi-premium`)
+
+SQLite's WAL (write-ahead log) mode requires consistent, low-latency disk I/O and exclusive write access. Azure Disk Premium SSDs provide predictable IOPS and `ReadWriteOnce` semantics that match the single-replica deployment. A `Recreate` rollout strategy ensures the old pod fully detaches the disk before the new pod attaches it, avoiding multi-attach errors.
+
+### Why Azure Files for workspace (`azurefile-csi-premium`)
+
+Agent workspaces and git worktrees may be accessed by multiple sandbox pods simultaneously. Azure Files Premium supports `ReadWriteMany`, allowing concurrent read/write access across pods without coordination overhead. The premium tier provides the throughput needed for git operations on large repositories.
+
+### Checking PVC binding
+
+After deploying, verify both PVCs are bound before the API pod starts:
+
+```bash
+kubectl get pvc -n agentweaver
+```
+
+Expected output:
+```
+NAME                     STATUS   VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS             AGE
+agentweaver-data         Bound    ...      10Gi       RWO            managed-csi-premium      ...
+agentweaver-workspace    Bound    ...      50Gi       RWX            azurefile-csi-premium    ...
+```
+
+If a PVC stays in `Pending`, check events:
+
+```bash
+kubectl describe pvc agentweaver-data -n agentweaver
+kubectl describe pvc agentweaver-workspace -n agentweaver
+```
+
+### Expanding storage
+
+Azure Disk and Azure Files both support online volume expansion. To expand:
+
+1. Edit the PVC manifest to increase `storage`:
+   ```bash
+   kubectl edit pvc agentweaver-data -n agentweaver
+   # Change storage: 10Gi -> 20Gi
+   ```
+2. The CSI driver will resize the underlying disk automatically; no pod restart is required for Azure Files. For Azure Disk, the filesystem is expanded online on the next I/O operation.
+
+---
+
+
 
 ### Check pod status
 
@@ -234,7 +286,7 @@ kubectl logs -n agentweaver -l app=agentweaver-api --previous
 ```
 
 Common causes:
-- PVC `agentweaver-data` does not exist (Wave 2 / 017-US5 creates it) — for initial testing, edit `api-deployment.yaml` to use an `emptyDir` volume instead
+- PVC `agentweaver-data` not yet bound — run `kubectl get pvc -n agentweaver` and wait for `STATUS=Bound`
 - GitHub Copilot token not synced — confirm `15-setup-identity.sh` completed and `IDENTITY_CLIENT_ID` / `KEYVAULT_NAME` / `TENANT_ID` were set when deploying; check CSI driver pod logs: `kubectl logs -n kube-system -l app=secrets-store-csi-driver`
 
 ### NetworkPolicy blocking traffic
