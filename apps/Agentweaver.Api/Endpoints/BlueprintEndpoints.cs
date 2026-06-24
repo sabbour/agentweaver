@@ -41,6 +41,7 @@ public static class BlueprintEndpoints
             return Results.Ok(new GenerateBlueprintResponse
             {
                 Blueprint = BlueprintDto.FromModel(result.Blueprint!),
+                GeneratedWorkflowYaml = result.GeneratedWorkflowYaml,
             });
         });
 

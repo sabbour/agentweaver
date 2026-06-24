@@ -15,6 +15,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
@@ -76,9 +77,20 @@ app.MapPost("/api/projects", async (
 
     if (blueprintToApply is not null)
     {
+        // When a generated workflow YAML is included, parse it to get the id so validation can treat
+        // it as a known workflow (it hasn't been materialized to disk yet — FR-063).
+        IReadOnlySet<string>? extraKnownWorkflowIds = null;
+        if (!string.IsNullOrWhiteSpace(request.GeneratedWorkflowYaml))
+        {
+            var genWf = WorkflowDefinitionLoader.Load(request.GeneratedWorkflowYaml, "generated");
+            if (genWf.IsValid && genWf.Definition is not null)
+                extraKnownWorkflowIds = new HashSet<string>([genWf.Definition.Id], StringComparer.Ordinal);
+        }
+
         var validation = blueprintService.Validate(
             blueprintToApply,
-            BlueprintService.ValidationProject(request.WorkingDirectory));
+            BlueprintService.ValidationProject(request.WorkingDirectory),
+            extraKnownWorkflowIds);
         if (!validation.Valid)
             return Results.BadRequest(new { error = "invalid_blueprint", details = validation.Errors });
     }
@@ -119,7 +131,9 @@ app.MapPost("/api/projects", async (
         {
             try
             {
-                await blueprintService.ApplyAsync(project.Id.ToString(), blueprintToApply, ct);
+                await blueprintService.ApplyAsync(
+                    project.Id.ToString(), blueprintToApply,
+                    request.GeneratedWorkflowYaml, ct);
             }
             catch (Exception blueprintEx)
             {

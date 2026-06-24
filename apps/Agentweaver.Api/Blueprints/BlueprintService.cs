@@ -36,6 +36,7 @@ public sealed class BlueprintService
     private readonly WorkflowRegistry _workflowRegistry;
     private readonly ReviewPolicyRegistry _reviewPolicyRegistry;
     private readonly IBlueprintGenerator _generator;
+    private readonly IWorkflowGenerator _workflowGenerator;
     private readonly ILogger<BlueprintService> _logger;
 
     public BlueprintService(
@@ -46,6 +47,7 @@ public sealed class BlueprintService
         WorkflowRegistry workflowRegistry,
         ReviewPolicyRegistry reviewPolicyRegistry,
         IBlueprintGenerator generator,
+        IWorkflowGenerator workflowGenerator,
         ILogger<BlueprintService> logger)
     {
         _catalog = catalog;
@@ -55,6 +57,7 @@ public sealed class BlueprintService
         _workflowRegistry = workflowRegistry;
         _reviewPolicyRegistry = reviewPolicyRegistry;
         _generator = generator;
+        _workflowGenerator = workflowGenerator;
         _logger = logger;
     }
 
@@ -67,7 +70,15 @@ public sealed class BlueprintService
     /// resolve in the catalog. Blueprints never mint roles, so a roster role that is not in the
     /// catalog is rejected with a clear error.
     /// </summary>
-    public BlueprintValidationResult Validate(Blueprint blueprint, Project? project = null)
+    /// <param name="blueprint">The blueprint to validate.</param>
+    /// <param name="project">Optional project for workflow/review-policy registry lookups.</param>
+    /// <param name="extraKnownWorkflowIds">Additional workflow ids treated as valid (e.g. a freshly
+    /// generated workflow not yet on disk). Avoids rejecting a blueprint whose workflows array contains
+    /// an id that the registry cannot find because the file hasn't been materialized yet.</param>
+    public BlueprintValidationResult Validate(
+        Blueprint blueprint,
+        Project? project = null,
+        IReadOnlySet<string>? extraKnownWorkflowIds = null)
     {
         var errors = new List<string>();
 
@@ -91,6 +102,8 @@ public sealed class BlueprintService
                     errors.Add("workflows list contains an empty id.");
                     continue;
                 }
+                // A freshly generated workflow is valid even before it is materialized to disk.
+                if (extraKnownWorkflowIds?.Contains(wfId) == true) continue;
                 if (_workflowRegistry.Get(project, wfId) is null)
                     errors.Add($"workflow '{wfId}' is not available for this project.");
             }
@@ -131,9 +144,48 @@ public sealed class BlueprintService
     /// Applies a blueprint to a project: seeds the roster via the casting pipeline (reusing
     /// <see cref="CastingService"/>) and sets the project's default workflow, active review policy,
     /// and sandbox profile. The blueprint must already be valid (all roster roles in the catalog).
+    /// When <paramref name="generatedWorkflowYaml"/> is supplied, the YAML is parsed, written to the
+    /// project's <c>.agentweaver/workflows/</c> directory, and the registry is synced so the workflow
+    /// is immediately selectable by the coordinator (FR-063).
     /// </summary>
-    public async Task ApplyAsync(string projectId, Blueprint blueprint, CancellationToken ct)
+    public async Task ApplyAsync(
+        string projectId,
+        Blueprint blueprint,
+        string? generatedWorkflowYaml = null,
+        CancellationToken ct = default)
     {
+        // Materialize a generated (custom) workflow to the project workspace before applying so the
+        // coordinator can select it immediately (FR-063). We fetch the project early for the path.
+        if (!string.IsNullOrWhiteSpace(generatedWorkflowYaml))
+        {
+            var loadResult = WorkflowDefinitionLoader.Load(generatedWorkflowYaml, "generated");
+            if (loadResult.IsValid && loadResult.Definition is not null)
+            {
+                var pid2 = ProjectId.Parse(projectId);
+                var project2 = await _projectStore.GetAsync(pid2, ct).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException($"Project '{projectId}' was not found.");
+
+                var workflowsDir = Path.Combine(
+                    project2.WorkingDirectory,
+                    WorkflowRegistry.WorkflowsRelativePath);
+                Directory.CreateDirectory(workflowsDir);
+
+                var workflowFile = Path.Combine(workflowsDir, $"{loadResult.Definition.Id}.yaml");
+                await File.WriteAllTextAsync(workflowFile, generatedWorkflowYaml, ct).ConfigureAwait(false);
+                _workflowRegistry.Sync(project2);
+
+                _logger.LogInformation(
+                    "Materialized generated workflow '{WorkflowId}' to {WorkflowFile} for project {ProjectId}",
+                    loadResult.Definition.Id, workflowFile, projectId);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Generated workflow YAML failed to parse during ApplyAsync for project {ProjectId}: {Error}",
+                    projectId, loadResult.Error);
+            }
+        }
+
         var (proposal, _) = await _casting
             .ProposeManualCastAsync(projectId, blueprint.Roster, universeOverride: null, ct)
             .ConfigureAwait(false);
@@ -168,6 +220,9 @@ public sealed class BlueprintService
     /// Generates a blueprint from a free-text description via the model, then parses and validates it.
     /// The model must roster only catalog roles; output that references an unknown role fails
     /// validation so the endpoint answers 422 (no role is minted).
+    /// Library-first workflow matching (FR-062): the LLM selects from the library workflow catalog.
+    /// Fallback (FR-063): if the LLM returns no library match, <see cref="IWorkflowGenerator"/> is
+    /// invoked to produce a custom workflow draft included in <see cref="BlueprintGenerationResult"/>.
     /// </summary>
     public async Task<BlueprintGenerationResult> GenerateAsync(string description, CancellationToken ct)
     {
@@ -186,10 +241,75 @@ public sealed class BlueprintService
         if (!parsed.Succeeded)
             return parsed;
 
-        var validation = Validate(parsed.Blueprint!);
-        return validation.Valid
-            ? parsed
-            : new BlueprintGenerationResult(parsed.Blueprint, validation.Errors);
+        var blueprint = parsed.Blueprint!;
+
+        // FR-063: if the LLM selected no library workflow (empty array or only the sentinel "custom"),
+        // delegate to IWorkflowGenerator to produce a bespoke workflow draft.
+        WorkflowDefinition? generatedWorkflow = null;
+        string? generatedWorkflowYaml = null;
+
+        bool needsFallback = blueprint.Workflows.Count == 0 ||
+            blueprint.Workflows.All(id => string.IsNullOrWhiteSpace(id) ||
+                string.Equals(id, "custom", StringComparison.OrdinalIgnoreCase));
+
+        if (needsFallback)
+        {
+            _logger.LogInformation(
+                "Blueprint generation: no library workflow matched; invoking IWorkflowGenerator fallback");
+            try
+            {
+                var wfRequest = new WorkflowGenerationRequest(
+                    Description: description,
+                    TeamRoles: blueprint.Roster.Count > 0 ? blueprint.Roster.ToList() : null);
+                var wfResult = await _workflowGenerator.GenerateAsync(wfRequest, ct).ConfigureAwait(false);
+                generatedWorkflow = wfResult.Workflow;
+                generatedWorkflowYaml = wfResult.GeneratedYaml;
+
+                // Rebuild the blueprint with the generated workflow id so it references the right workflow.
+                blueprint = new Blueprint(
+                    blueprint.Id,
+                    blueprint.Name,
+                    blueprint.Description,
+                    blueprint.Roster,
+                    [generatedWorkflow.Id],
+                    blueprint.ReviewPolicy,
+                    blueprint.SandboxProfile);
+
+                _logger.LogInformation(
+                    "Blueprint generation fallback produced workflow '{WorkflowId}' (corrected={Corrected})",
+                    generatedWorkflow.Id, wfResult.WasCorrected);
+            }
+            catch (WorkflowGenerationException ex)
+            {
+                _logger.LogWarning(ex, "Blueprint generation: IWorkflowGenerator fallback failed");
+                // Fall back gracefully: use the built-in default workflow instead.
+                blueprint = new Blueprint(
+                    blueprint.Id,
+                    blueprint.Name,
+                    blueprint.Description,
+                    blueprint.Roster,
+                    [BuiltInWorkflows.DefaultWorkflowId],
+                    blueprint.ReviewPolicy,
+                    blueprint.SandboxProfile);
+            }
+        }
+
+        // Treat the generated workflow id (if any) as known so Validate doesn't reject it for not
+        // being on disk yet — it will be materialized at project creation time (FR-063).
+        IReadOnlySet<string>? extraKnown = generatedWorkflow is not null
+            ? new HashSet<string>([generatedWorkflow.Id], StringComparer.Ordinal)
+            : null;
+
+        var validation = Validate(blueprint, extraKnownWorkflowIds: extraKnown);
+        var result = validation.Valid
+            ? new BlueprintGenerationResult(blueprint, [])
+            : new BlueprintGenerationResult(blueprint, validation.Errors);
+
+        return result with
+        {
+            GeneratedWorkflow = generatedWorkflow,
+            GeneratedWorkflowYaml = generatedWorkflowYaml,
+        };
     }
 
     public static SandboxPolicy CreateSandboxPolicy(string sandboxProfile, string repositoryPath) =>

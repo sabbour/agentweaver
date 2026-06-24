@@ -59,6 +59,12 @@ public sealed record GenerateBlueprintRequest
 public sealed record GenerateBlueprintResponse
 {
     [JsonPropertyName("blueprint")] public required BlueprintDto Blueprint { get; init; }
+    /// <summary>
+    /// Present when the LLM found no suitable library workflow and <c>IWorkflowGenerator</c> produced
+    /// a custom workflow (FR-063). Pass this back as <c>generated_workflow_yaml</c> on project
+    /// creation so the workflow is materialized to the project workspace on apply.
+    /// </summary>
+    [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
 }
 
 public sealed record ValidateBlueprintRequest

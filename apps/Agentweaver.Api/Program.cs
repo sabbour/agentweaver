@@ -184,7 +184,7 @@ builder.Services.AddSingleton<IBlueprintGenerator, CopilotBlueprintGenerator>();
 builder.Services.AddSingleton<BlueprintService>();
 
 // Workflow generation (Feature 015 US10) — LLM → YAML draft, validated + one correction pass.
-builder.Services.AddScoped<Agentweaver.Api.Workflows.IWorkflowGenerator, Agentweaver.Api.Workflows.CopilotWorkflowGenerator>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowGenerator, Agentweaver.Api.Workflows.CopilotWorkflowGenerator>();
 
 // Spec-to-backlog decomposition (Feature 014)
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>();

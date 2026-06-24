@@ -542,6 +542,13 @@ public sealed record CreateProjectRequest
 
     /// <summary>Optional inline blueprint (file/generated, catalog roles only) to apply on creation (Feature 012).</summary>
     [JsonPropertyName("blueprint")] public Agentweaver.Api.Blueprints.BlueprintDto? Blueprint { get; init; }
+
+    /// <summary>
+    /// Optional generated workflow YAML to materialize to the project workspace when applying a
+    /// blueprint that was produced by the FR-063 fallback (no library workflow matched). Pass the
+    /// value returned in <c>generated_workflow_yaml</c> from <c>POST /api/blueprints/generate</c>.
+    /// </summary>
+    [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
 }
 
 public sealed record UpdateProjectNameRequest

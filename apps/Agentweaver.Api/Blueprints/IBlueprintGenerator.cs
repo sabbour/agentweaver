@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Squad.Model;
 
 namespace Agentweaver.Api.Blueprints;
@@ -20,6 +21,17 @@ public sealed record BlueprintGenerationResult(
     IReadOnlyList<string> Errors)
 {
     public bool Succeeded => Blueprint is not null && Errors.Count == 0;
+
+    /// <summary>
+    /// Set when the library-first workflow matching found no suitable library workflow (FR-063) and
+    /// <see cref="IWorkflowGenerator"/> produced a custom workflow definition as a fallback. When
+    /// non-null, the workflow should be materialized to the project workspace on project creation.
+    /// </summary>
+    public WorkflowDefinition? GeneratedWorkflow { get; init; }
+
+    /// <summary>The raw YAML for <see cref="GeneratedWorkflow"/>; written verbatim to the project
+    /// workspace so the runtime loader can validate and cache it.</summary>
+    public string? GeneratedWorkflowYaml { get; init; }
 }
 
 /// <summary>
