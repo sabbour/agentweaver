@@ -1,0 +1,33 @@
+# HTTPRoute — routes /mcp/* to the Agentweaver MCP service.
+#
+# All requests with path prefix /mcp are forwarded to agentweaver-mcp:8080.
+# The MCP container listens on 8080; no path rewrite is applied so the server
+# receives the full /mcp/... path.
+# Bearer token authentication is enforced inside the MCP server by
+# McpBearerTokenMiddleware before any MCP handler runs.
+#
+# Request path:
+#   Local Copilot CLI -> Gateway (agentweaver-gateway) :443, TLS terminated
+#       -> HTTPRoute (this) PathPrefix:/mcp
+#       -> agentweaver-mcp Service :8080
+#       -> MCP pod :8080
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: agentweaver-mcp-route
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  parentRefs:
+    - name: agentweaver-gateway
+  hostnames:
+    - ${HOST}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /mcp
+      backendRefs:
+        - name: agentweaver-mcp
+          port: 8080

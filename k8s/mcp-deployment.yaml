@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweaver-mcp
+  namespace: agentweaver
+  labels:
+    app: agentweaver-mcp
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentweaver-mcp
+  template:
+    metadata:
+      labels:
+        app: agentweaver-mcp
+        app.kubernetes.io/part-of: agentweaver
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: mcp
+          image: ${ACR_LOGIN_SERVER}/agentweaver-mcp:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            # URL of the in-cluster Agentweaver API.
+            - name: AGENTWEAVER_API_URL
+              value: http://agentweaver-api:8080
+            # API key used by the MCP server to authenticate with the Agentweaver API.
+            # Store in a Kubernetes Secret and reference here.
+            - name: AGENTWEAVER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-mcp-secrets
+                  key: api-key
+            # Inbound bearer auth: Agentweaver API key accepted from external callers.
+            # Must match a key registered in the Agentweaver API (same Auth:ApiKey value).
+            - name: Auth__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-mcp-secrets
+                  key: auth-api-key
+            - name: Auth__User
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-mcp-secrets
+                  key: auth-user
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /mcp
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /mcp
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

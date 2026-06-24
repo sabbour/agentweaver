@@ -131,40 +131,46 @@ builder.Services.AddSingleton<Agentweaver.Api.Metrics.MetricsService>();
 // Agent runtime
 builder.Services.AddAgentRuntime();
 
-// In-cluster: override ISandboxExecutor with KubernetesSandboxExecutor (017-US2).
-// The last AddSingleton<ISandboxExecutor> registration wins for GetRequiredService<ISandboxExecutor>.
-if (SandboxExecutorFactory.IsInCluster)
-{
-    builder.Services.AddSingleton<ISandboxExecutor>(sp =>
-    {
-        var config = KubernetesClientConfiguration.InClusterConfig();
-        var k8sClient = new Kubernetes(config);
-        var sandboxOptions = new KubernetesSandboxOptions
-        {
-            Namespace = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver",
-            TemplateRef = builder.Configuration["Sandbox:Kubernetes:TemplateRef"] ?? "agentweaver-sandbox",
-            TimeoutSeconds = int.TryParse(
-                builder.Configuration["Sandbox:Kubernetes:TimeoutSeconds"], out int t) ? t : 600,
-        };
-        var logger = sp.GetRequiredService<ILogger<KubernetesSandboxExecutor>>();
-        return new KubernetesSandboxExecutor(k8sClient, sandboxOptions, logger);
-    });
-}
+// ISandboxExecutorRouter (017-US2): explicit router replaces fragile last-registration-wins pattern.
+// Overrides the ISandboxExecutor registered by AddAgentRuntime() — last registration wins.
+builder.Services.AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>();
+builder.Services.AddSingleton<ISandboxExecutor>(sp =>
+    sp.GetRequiredService<ISandboxExecutorRouter>().Resolve());
 
 // Authentication
+builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ApiKeyRegistry>();
+builder.Services.AddSingleton<GitHubOrgAuthorizationService>();
 
 // Repository path validation (A2 security fix)
 builder.Services.AddSingleton<RepositoryRootValidator>();
 
-// Memory database (EF Core, separate file from main SQLite DB)
+// Memory database (EF Core, separate file from main SQLite DB).
+// Database:Provider controls the backend: sqlite (default), sqlserver/azuresql, postgres/postgresql.
 builder.Services.AddDbContext<MemoryDbContext>(opts =>
 {
-    var basePath = builder.Configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
-        ? Path.GetDirectoryName(Path.GetFullPath(p))!
-        : AppPaths.DataDirectory;
-    var memoryDbPath = Path.Combine(basePath, "memory.db");
-    opts.UseSqlite($"Data Source={memoryDbPath}");
+    var provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    switch (provider)
+    {
+        case "sqlserver":
+        case "azuresql":
+            opts.UseSqlServer(builder.Configuration.GetConnectionString("MemoryDb")
+                ?? builder.Configuration["Database:ConnectionString"]
+                ?? throw new InvalidOperationException("Database:ConnectionString is required for SQL Server provider."));
+            break;
+        case "postgres":
+        case "postgresql":
+            opts.UseNpgsql(builder.Configuration.GetConnectionString("MemoryDb")
+                ?? builder.Configuration["Database:ConnectionString"]
+                ?? throw new InvalidOperationException("Database:ConnectionString is required for PostgreSQL provider."));
+            break;
+        default: // sqlite
+            var basePath = builder.Configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
+                ? Path.GetDirectoryName(Path.GetFullPath(p))!
+                : AppPaths.DataDirectory;
+            opts.UseSqlite($"Data Source={Path.Combine(basePath, "memory.db")}");
+            break;
+    }
 });
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
@@ -268,6 +274,7 @@ app.UseExceptionHandler(err => err.Run(async context =>
 
 app.UseCors();
 app.UseMiddleware<ApiKeyAuthMiddleware>();
+app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
 
 app.MapRunEndpoints();
 app.MapProjectEndpoints();
