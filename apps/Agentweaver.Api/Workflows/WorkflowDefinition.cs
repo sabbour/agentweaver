@@ -115,6 +115,19 @@ public sealed record WorkflowNode
     public IReadOnlyList<string> Branches { get; init; } = [];
 }
 
+/// <summary>
+/// An explicit board column declared in a workflow definition. When a workflow declares at least one
+/// stage the Kanban board derives its columns from this list instead of the hardcoded defaults.
+/// Workflows that omit the <c>stages:</c> key fall back to the canonical four-bucket layout
+/// (Problems, Human Review, Active, Done) for full backward compatibility.
+/// </summary>
+public sealed record WorkflowStageDefinition
+{
+    public required string Id { get; init; }
+    public required string Label { get; init; }
+    public int Order { get; init; }
+}
+
 /// <summary>A directed connection between two nodes, optionally guarded by a verdict/predicate label.</summary>
 public sealed record WorkflowEdge
 {
@@ -143,4 +156,11 @@ public sealed record WorkflowDefinition
 
     public required IReadOnlyList<WorkflowNode> Nodes { get; init; }
     public required IReadOnlyList<WorkflowEdge> Edges { get; init; }
+
+    /// <summary>
+    /// Optional explicit board column definitions. When non-empty the Kanban board derives its columns
+    /// from this list; when empty (the default) the board falls back to the four hardcoded buckets
+    /// (Problems, Human Review, Active, Done) for full backward compatibility.
+    /// </summary>
+    public IReadOnlyList<WorkflowStageDefinition> Stages { get; init; } = [];
 }

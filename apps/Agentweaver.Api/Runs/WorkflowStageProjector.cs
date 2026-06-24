@@ -1,4 +1,5 @@
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Runs;
@@ -18,16 +19,30 @@ public sealed class WorkflowStageProjector : IWorkflowStageProjector
     public const string TerminalStageLabel = "Done";
 
     /// <summary>
-    /// Returns the non-intake canonical buckets. Backlog and Ready are intake columns owned by
-    /// <see cref="BacklogTaskState"/>; all run-backed work folds into these four fixed buckets.
+    /// Returns the ordered canonical run buckets exposed after Backlog and Ready.
+    /// When <paramref name="definition"/> is supplied and declares explicit <c>stages</c>, those are
+    /// used as board columns. If no stages are declared (or no definition is provided), falls back to
+    /// the four hardcoded defaults (Problems, Human Review, Active, Done) for backward compatibility.
     /// </summary>
-    public IReadOnlyList<WorkflowStage> GetStages() => new[]
+    public IReadOnlyList<WorkflowStage> GetStages(WorkflowDefinition? definition = null)
     {
-        new WorkflowStage(ProblemsStageId, "Problems", 0),
-        new WorkflowStage(HumanReviewStageId, "Human Review", 1),
-        new WorkflowStage(ActiveStageId, "Active", 2),
-        new WorkflowStage(DoneStageId, "Done", 3),
-    };
+        if (definition is not null && definition.Stages.Count > 0)
+        {
+            return definition.Stages
+                .OrderBy(s => s.Order)
+                .ThenBy(s => s.Id, StringComparer.Ordinal)
+                .Select(s => new WorkflowStage(s.Id, s.Label, s.Order))
+                .ToArray();
+        }
+
+        return new[]
+        {
+            new WorkflowStage(ProblemsStageId, "Problems", 0),
+            new WorkflowStage(HumanReviewStageId, "Human Review", 1),
+            new WorkflowStage(ActiveStageId, "Active", 2),
+            new WorkflowStage(DoneStageId, "Done", 3),
+        };
+    }
 
     /// <summary>
     /// Maps a coordinator run's authoritative persisted state to the column id it currently occupies.

@@ -183,6 +183,7 @@ using (var scope = app.Services.CreateScope())
     {
         // Pre-migration DB: seed __EFMigrationsHistory so MigrateAsync treats the
         // initial migration as already applied, then create only RunEvents (missing table).
+        // MigrateAsync is called unconditionally below to apply any later migrations.
         await memoryDb.Database.ExecuteSqlRawAsync("""
             CREATE TABLE "__EFMigrationsHistory" (
                 "MigrationId" TEXT NOT NULL CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY,
@@ -202,11 +203,11 @@ using (var scope = app.Services.CreateScope())
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEvents_RunId_Sequence" ON "RunEvents" ("RunId", "Sequence");
             """);
     }
-    else
-    {
-        // Fresh install or already-migrated DB: normal path.
-        await memoryDb.Database.MigrateAsync();
-    }
+
+    // Always run MigrateAsync: on the pre-migration branch the history entries seeded above tell
+    // EF that AddRunEvents is already applied, so only the subsequent migrations are executed.
+    // On a fresh install or an already-migrated DB this is the normal migration path.
+    await memoryDb.Database.MigrateAsync();
 }
 await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
 // Coordinator (parent) runs are recovered AFTER the generic sweep (which has already failed any

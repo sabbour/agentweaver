@@ -34,14 +34,14 @@ public static class WorkflowDefinitionLoader
         if (dto is null)
             return WorkflowLoadResult.Invalid(source, $"{source}: empty or null workflow document.");
 
-        if (!TryMapAndValidate(dto, source, out var definition, out var error))
+        if (!TryMapAndValidate(dto, source, isBuiltIn, out var definition, out var error))
             return WorkflowLoadResult.Invalid(source, error!);
 
         return WorkflowLoadResult.Valid(source, definition!, isBuiltIn);
     }
 
     private static bool TryMapAndValidate(
-        WorkflowYamlDto dto, string source, out WorkflowDefinition? definition, out string? error)
+        WorkflowYamlDto dto, string source, bool isBuiltIn, out WorkflowDefinition? definition, out string? error)
     {
         definition = null;
         error = null;
@@ -157,6 +157,37 @@ public static class WorkflowDefinitionLoader
             }
         }
 
+        // Executor-binding support check: reject at load time any node type the run binder cannot
+        // wire yet. This surfaces a clear, actionable error at load time instead of an opaque
+        // InvalidOperationException when the first run using this workflow is dispatched.
+        // Built-in workflows are exempt — they are authored to match the binder exactly.
+        if (!isBuiltIn)
+        {
+            foreach (var node in nodes)
+            {
+                if (!IsBindableNodeType(node.Type))
+                    return Fail(source,
+                        $"node '{node.Id}' uses type '{node.Type}' which is not yet supported by the run executor " +
+                        "(supported types: prompt, check, merge, scribe, terminal). " +
+                        "Remove or replace this node to use the workflow.",
+                        out error);
+            }
+        }
+
+        // Parse optional explicit board stage definitions (FR-kanban-dynamic-columns).
+        var stages = new List<WorkflowStageDefinition>();
+        if (dto.Stages is not null)
+        {
+            foreach (var s in dto.Stages)
+            {
+                if (string.IsNullOrWhiteSpace(s.Id))
+                    return Fail(source, "a stage is missing its required 'id'.", out error);
+                if (string.IsNullOrWhiteSpace(s.Label))
+                    return Fail(source, $"stage '{s.Id}' is missing its required 'label'.", out error);
+                stages.Add(new WorkflowStageDefinition { Id = s.Id, Label = s.Label, Order = s.Order });
+            }
+        }
+
         definition = new WorkflowDefinition
         {
             Id = dto.Id!,
@@ -166,6 +197,7 @@ public static class WorkflowDefinitionLoader
             Start = dto.Start!,
             Nodes = nodes,
             Edges = edges,
+            Stages = stages,
         };
         return true;
     }
@@ -175,6 +207,28 @@ public static class WorkflowDefinitionLoader
         error = $"{source}: {message}";
         return false;
     }
+
+    /// <summary>
+    /// Returns true for node types the <see cref="RunWorkflowGraphBinder"/> can currently wire.
+    /// FanOut, FanIn, PeerReview, CoordinatorComposed, and Serial are parsed and round-tripped by the
+    /// schema but not yet bound to MAF executor wiring; a workflow containing them is rejected at load
+    /// time so the error is surfaced early rather than at first-run dispatch.
+    /// </summary>
+    private static bool IsBindableNodeType(WorkflowNodeType type) => type switch
+    {
+        WorkflowNodeType.Prompt              => true,
+        WorkflowNodeType.Check               => true,
+        WorkflowNodeType.Merge               => true,
+        WorkflowNodeType.Scribe              => true,
+        WorkflowNodeType.Terminal            => true,
+        // Not yet wired in RunWorkflowGraphBinder:
+        WorkflowNodeType.FanOut              => false,
+        WorkflowNodeType.FanIn               => false,
+        WorkflowNodeType.PeerReview          => false,
+        WorkflowNodeType.CoordinatorComposed => false,
+        WorkflowNodeType.Serial              => false,
+        _                                    => false,
+    };
 
     private static string Normalize(string raw) =>
         raw.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
@@ -233,6 +287,7 @@ internal sealed class WorkflowYamlDto
     public string? Start { get; set; }
     public List<NodeYamlDto>? Nodes { get; set; }
     public List<EdgeYamlDto>? Edges { get; set; }
+    public List<StageYamlDto>? Stages { get; set; }
 }
 
 internal sealed class TriggerYamlDto
@@ -261,4 +316,11 @@ internal sealed class EdgeYamlDto
     public string? From { get; set; }
     public string? To { get; set; }
     public string? When { get; set; }
+}
+
+internal sealed class StageYamlDto
+{
+    public string? Id { get; set; }
+    public string? Label { get; set; }
+    public int Order { get; set; }
 }
