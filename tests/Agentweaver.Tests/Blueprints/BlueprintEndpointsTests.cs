@@ -88,7 +88,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         var store = _factory.Services.GetRequiredService<IProjectStore>();
         var project = await store.GetAsync(ProjectId.Parse(id));
         project.Should().NotBeNull();
-        project!.DefaultWorkflowId.Should().Be("default");
+        project!.DefaultWorkflowId.Should().Be("software-delivery");
         project.ActiveReviewPolicyName.Should().Be("default");
         project.SandboxProfile.Should().Be("default");
 

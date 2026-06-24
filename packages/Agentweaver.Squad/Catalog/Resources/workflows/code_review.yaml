@@ -1,0 +1,48 @@
+# Code Review Workflow (Feature 015 US3)
+# Standalone code review: review → feedback → scribe.
+# No merge stage — outputs review feedback only. Use when only review feedback is needed.
+
+id: code-review
+name: Code Review
+description: Standalone code review workflow that produces feedback without merging. Use when only review and feedback are needed, not deployment or merge — for example, reviewing a draft PR or evaluating a proposed approach.
+version: "1.0"
+
+trigger:
+  type: manual
+
+start: review
+
+nodes:
+  - id: review
+    type: peer_review
+    label: Review
+    role: review
+    kind: live
+
+  - id: feedback
+    type: prompt
+    label: Feedback
+    role: agent
+    kind: live
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+    role: scribe
+    kind: agent
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: review
+    to: feedback
+
+  - from: feedback
+    to: scribe
+
+  - from: scribe
+    to: done

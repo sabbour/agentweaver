@@ -1,0 +1,98 @@
+# Incident Response Workflow (Feature 015 US3)
+# SRE incident response pipeline: triage → mitigate → verify → postmortem → scribe.
+# Explicit postmortem step ensures every incident produces a recorded retrospective before the run closes.
+
+id: incident-response
+name: Incident Response
+description: SRE incident response pipeline with triage, mitigation, verification, postmortem, and final recording. Use for production incidents, outages, and reliability events. Every run ends with a postmortem before the scribe records the outcome.
+version: "1.0"
+
+trigger:
+  type: event
+  event: task-added-to-ready
+
+start: triage
+
+nodes:
+  - id: triage
+    type: prompt
+    label: Triage
+    role: agent
+    kind: live
+
+  - id: mitigate
+    type: prompt
+    label: Mitigate
+    role: agent
+    kind: live
+
+  - id: verify
+    type: peer_review
+    label: Verify
+    role: review
+    kind: live
+
+  - id: review-gate
+    type: check
+    label: Review Gate
+    role: review
+    kind: gate
+    gate_kind: human-review
+    branches:
+      - approved
+      - request-changes
+      - declined
+
+  - id: postmortem
+    type: prompt
+    label: Postmortem
+    role: agent
+    kind: live
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+    role: scribe
+    kind: agent
+
+  - id: terminal-declined
+    type: terminal
+    label: Declined
+    role: plumbing
+    kind: terminal
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: triage
+    to: mitigate
+
+  - from: mitigate
+    to: verify
+
+  # Verify flows unconditionally to human review gate.
+  - from: verify
+    to: review-gate
+
+  # Human review gate: approved proceeds to postmortem before scribe.
+  - from: review-gate
+    to: postmortem
+    when: approved
+
+  - from: review-gate
+    to: mitigate
+    when: request-changes
+
+  - from: review-gate
+    to: terminal-declined
+    when: declined
+
+  - from: postmortem
+    to: scribe
+
+  - from: scribe
+    to: done

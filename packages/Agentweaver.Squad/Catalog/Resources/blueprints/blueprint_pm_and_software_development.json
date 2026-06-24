@@ -3,7 +3,7 @@
   "name": "Product & Software Delivery",
   "description": "A combined product and engineering team that takes work from discovery through delivery. Merges the product-management and software-development rosters, deduplicated.",
   "roster": ["lead-pm", "customer-researcher", "prototype-designer", "product-marketing-manager", "ux-designer", "lead-architect", "frontend-engineer", "backend-engineer", "security-engineer", "devops-engineer", "qa-engineer", "docs-writer"],
-  "workflow": "default",
+  "workflows": ["pm-discovery", "software-delivery", "bug-fix"],
   "review_policy": "default",
   "sandbox_profile": "default"
 }

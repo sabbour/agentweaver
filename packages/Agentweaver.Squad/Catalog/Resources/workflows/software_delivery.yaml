@@ -1,0 +1,155 @@
+# Software Delivery Workflow (Feature 015 US3)
+# Full software delivery pipeline: plan → implement → qa test gate → RAI check → code review → merge → scribe.
+# The qa test gate (performed by the qa-engineer) must pass before code review and merge.
+
+id: software-delivery
+name: Software Delivery
+description: Full software delivery pipeline with QA test gate, RAI safety check, and code review before merge. Use for new features and significant changes that require a complete delivery cycle.
+version: "1.0"
+
+trigger:
+  type: event
+  event: task-added-to-ready
+
+start: plan
+
+nodes:
+  - id: plan
+    type: prompt
+    label: Plan
+    role: agent
+    kind: live
+
+  - id: implement
+    type: prompt
+    label: Implement
+    role: agent
+    kind: live
+
+  - id: test-gate
+    type: peer_review
+    label: Test Gate
+    role: review
+    kind: live
+    agent: qa-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+    branches:
+      - revise
+      - safety-failed
+      - no-changes
+      - review
+
+  - id: code-review
+    type: peer_review
+    label: Code Review
+    role: review
+    kind: live
+
+  - id: review-gate
+    type: check
+    label: Review Gate
+    role: review
+    kind: gate
+    gate_kind: human-review
+    branches:
+      - approved
+      - request-changes
+      - declined
+
+  - id: merge
+    type: merge
+    label: Merge
+    role: merge
+    kind: action
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+    role: scribe
+    kind: agent
+
+  - id: terminal-safety-failed
+    type: terminal
+    label: Safety Failed
+    role: plumbing
+    kind: terminal
+
+  - id: terminal-declined
+    type: terminal
+    label: Declined
+    role: plumbing
+    kind: terminal
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: plan
+    to: implement
+
+  - from: implement
+    to: test-gate
+
+  # QA test gate: pass advances to RAI check; fail loops back to implement.
+  - from: test-gate
+    to: rai-check
+    when: pass
+
+  - from: test-gate
+    to: implement
+    when: fail
+
+  # RAI verdict routing.
+  - from: rai-check
+    to: implement
+    when: revise
+
+  - from: rai-check
+    to: terminal-safety-failed
+    when: safety-failed
+
+  - from: rai-check
+    to: scribe
+    when: no-changes
+
+  - from: rai-check
+    to: code-review
+    when: review
+
+  # Code review flows unconditionally to human review gate.
+  - from: code-review
+    to: review-gate
+
+  # Human review gate routing.
+  - from: review-gate
+    to: merge
+    when: approved
+
+  - from: review-gate
+    to: implement
+    when: request-changes
+
+  - from: review-gate
+    to: terminal-declined
+    when: declined
+
+  # Merge outcomes.
+  - from: merge
+    to: scribe
+    when: merged
+
+  - from: merge
+    to: review-gate
+    when: blocked
+
+  - from: scribe
+    to: done

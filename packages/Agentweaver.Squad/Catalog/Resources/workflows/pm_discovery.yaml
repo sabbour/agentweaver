@@ -1,0 +1,89 @@
+# Product Management Discovery Workflow (Feature 015 US3)
+# PM discovery pipeline: research → synthesis → stakeholder review → scribe.
+# No merge stage — outputs are documents (specs, requirements, prototypes), not code.
+
+id: pm-discovery
+name: Product Management Discovery
+description: Product discovery pipeline for user research, synthesis, and stakeholder review. Use for product discovery, requirements gathering, and feature definition. Outputs are documents and specs, not deployable code.
+version: "1.0"
+
+trigger:
+  type: event
+  event: task-added-to-ready
+
+start: research
+
+nodes:
+  - id: research
+    type: prompt
+    label: Research
+    role: agent
+    kind: live
+
+  - id: synthesis
+    type: prompt
+    label: Synthesis
+    role: agent
+    kind: live
+
+  - id: review
+    type: peer_review
+    label: Stakeholder Review
+    role: review
+    kind: live
+
+  - id: review-gate
+    type: check
+    label: Review Gate
+    role: review
+    kind: gate
+    gate_kind: human-review
+    branches:
+      - approved
+      - request-changes
+      - declined
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+    role: scribe
+    kind: agent
+
+  - id: terminal-declined
+    type: terminal
+    label: Declined
+    role: plumbing
+    kind: terminal
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: research
+    to: synthesis
+
+  - from: synthesis
+    to: review
+
+  # Stakeholder review flows unconditionally to human review gate.
+  - from: review
+    to: review-gate
+
+  # Human review gate routing (no merge — approved goes directly to scribe).
+  - from: review-gate
+    to: scribe
+    when: approved
+
+  - from: review-gate
+    to: synthesis
+    when: request-changes
+
+  - from: review-gate
+    to: terminal-declined
+    when: declined
+
+  - from: scribe
+    to: done

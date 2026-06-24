@@ -298,6 +298,52 @@ subfolder there, overridable with `Worktrees:BasePath`. Neither uses the system
 temp directory. The same build runs locally and in the cloud; all locations and
 keys come from configuration.
 
+## Blueprint schema (Feature 012 / 015)
+
+A **Blueprint** is a reusable project template: a named roster of catalog roles
+plus a set of workflows, a review policy, and a sandbox profile. Starting with
+Feature 015 US3, a blueprint bundles **multiple workflow ids** (`workflows`
+array) instead of a single one.
+
+```json
+{
+  "id": "blueprint-software-development",
+  "name": "Software Development",
+  "description": "...",
+  "roster": ["lead-architect", "backend-engineer", "qa-engineer"],
+  "workflow": "software-delivery",
+  "workflows": ["software-delivery", "bug-fix", "code-review"],
+  "review_policy": "default",
+  "sandbox_profile": "default"
+}
+```
+
+Both `workflow` (legacy single id, equal to `workflows[0]`) and `workflows`
+(the full set) are present on responses for backward compatibility. Requests may
+supply either `workflow` or `workflows`; `workflows` takes precedence when both
+are present.
+
+### Workflow library
+
+The catalog ships seven reusable functional workflows. See
+[`docs/workflow-library.md`](../../docs/workflow-library.md) for the full
+description and node structure of each.
+
+| Id | Name | Purpose |
+|----|------|---------|
+| `software-delivery` | Software Delivery | New features with QA test gate + RAI + code review |
+| `bug-fix` | Bug Fix | Lightweight defect fix with QA verification |
+| `code-review` | Code Review | Standalone review, no merge |
+| `content-authoring` | Content Authoring | Research → draft → editorial review → publish |
+| `pm-discovery` | Product Management Discovery | User research → synthesis → stakeholder review |
+| `agent-evaluation` | Agent Evaluation | Parallel eval runs + safety gate |
+| `incident-response` | Incident Response | Triage → mitigate → verify → postmortem |
+
+The built-in `default` workflow (agent → rai → review → merge → scribe) remains
+as a fallback for projects that pre-date the library and for inline blueprints
+that do not reference a library id.
+
+
 ## Configuration keys
 
 | Key | Default | Purpose |

@@ -76,7 +76,7 @@ public static class BlueprintGenerationParser
                 Str("name") ?? string.Empty,
                 Str("description") ?? string.Empty,
                 StrArray("roster"),
-                Str("workflow") ?? "default",
+                StrArray("workflows") is { Count: > 0 } wfs ? wfs : [Str("workflow") ?? "default"],
                 Str("review_policy") ?? "default",
                 Str("sandbox_profile") ?? "default");
 

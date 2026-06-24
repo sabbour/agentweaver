@@ -73,13 +73,28 @@ public sealed class BlueprintService
 
         if (string.IsNullOrWhiteSpace(blueprint.Id)) errors.Add("id is required.");
         if (string.IsNullOrWhiteSpace(blueprint.Name)) errors.Add("name is required.");
-        if (string.IsNullOrWhiteSpace(blueprint.Workflow)) errors.Add("workflow is required.");
         if (string.IsNullOrWhiteSpace(blueprint.ReviewPolicy)) errors.Add("review_policy is required.");
 
         project ??= ValidationProject();
-        if (!string.IsNullOrWhiteSpace(blueprint.Workflow) &&
-            _workflowRegistry.Get(project, blueprint.Workflow) is null)
-            errors.Add($"workflow '{blueprint.Workflow}' is not available for this project.");
+
+        // Validate all workflows in the set (Feature 015 US3: blueprints bundle a set of workflows).
+        if (blueprint.Workflows.Count == 0)
+        {
+            errors.Add("workflows must contain at least one workflow id.");
+        }
+        else
+        {
+            foreach (var wfId in blueprint.Workflows)
+            {
+                if (string.IsNullOrWhiteSpace(wfId))
+                {
+                    errors.Add("workflows list contains an empty id.");
+                    continue;
+                }
+                if (_workflowRegistry.Get(project, wfId) is null)
+                    errors.Add($"workflow '{wfId}' is not available for this project.");
+            }
+        }
         if (!string.IsNullOrWhiteSpace(blueprint.ReviewPolicy) &&
             _reviewPolicyRegistry.Get(project, blueprint.ReviewPolicy) is null)
             errors.Add($"review_policy '{blueprint.ReviewPolicy}' is not available for this project.");

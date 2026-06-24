@@ -1,0 +1,81 @@
+# SandboxTemplate — session-AGNOSTIC pod blueprint for Agentweaver sandbox execution.
+#
+# Hardened for AKS using Kata Containers (runtimeClassName: kata-vm-isolation) with
+# additional defense-in-depth beyond the reference:
+#   - runAsNonRoot: true  (spec C2 requirement; differs from hosted-copilot-sandbox reference)
+#   - readOnlyRootFilesystem: true
+#   - emptyDir workspace volume (writable at /workspace)
+#
+# Consumed by the agent-sandbox extensions controller
+# (group extensions.agents.x-k8s.io/v1alpha1, release v0.4.6+).
+#
+# Applied on the AKS cluster only (requires --workload-runtime KataVmIsolation at
+# cluster creation). Run `kubectl get runtimeclass` to confirm the name before apply.
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: agentweaver-sandbox
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  # Prevent SandboxClaims from injecting per-session env vars (warm-pool compatibility).
+  envVarsInjectionPolicy: Disallowed
+
+  podTemplate:
+    metadata:
+      labels:
+        app: agentweaver-sandbox
+        app.kubernetes.io/part-of: agentweaver
+    spec:
+      # Kata VM isolation: commands run inside a microVM, not the host kernel.
+      # Verify the exact name on your cluster: kubectl get runtimeclass
+      runtimeClassName: kata-vm-isolation
+
+      # A crashed sandbox pod is a failed session, never reused.
+      restartPolicy: Never
+
+      # No Kubernetes API access needed from inside the sandbox.
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: agentweaver-sandbox
+          image: ${ACR_LOGIN_SERVER}/agentweaver-sandbox:${IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        # Writable workspace for agent work — ephemeral, scoped to the pod lifetime.
+        - name: workspace
+          emptyDir: {}
+        # /tmp required by many tools (build systems, git, etc.) when rootfs is read-only.
+        - name: tmp
+          emptyDir: {}

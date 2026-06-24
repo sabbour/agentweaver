@@ -76,4 +76,13 @@ public static class SandboxExecutorFactory
     public static ISandboxExecutor CreatePassthrough(
         string reason = "no-isolation: passthrough-deny") =>
         new PassthroughExecutor(reason);
+
+    /// <summary>
+    /// True when the process is running inside a Kubernetes cluster
+    /// (<c>KUBERNETES_SERVICE_HOST</c> environment variable is set by the kubelet).
+    /// When true, the API project overrides this factory's result with
+    /// <c>KubernetesSandboxExecutor</c> via a later DI registration.
+    /// </summary>
+    public static bool IsInCluster =>
+        Environment.GetEnvironmentVariable("KUBERNETES_SERVICE_HOST") is not null;
 }

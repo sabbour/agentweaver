@@ -1,9 +1,9 @@
 {
   "id": "blueprint-software-development",
   "name": "Software Development",
-  "description": "A complete software delivery team spanning architecture, frontend, backend, and documentation. Enriches the quick-software-development grouping.",
+  "description": "A complete software delivery team spanning architecture, frontend, backend, security, QA, DevOps, and documentation.",
   "roster": ["lead-architect", "frontend-engineer", "backend-engineer", "security-engineer", "devops-engineer", "qa-engineer", "docs-writer"],
-  "workflow": "default",
+  "workflows": ["software-delivery", "bug-fix", "code-review"],
   "review_policy": "default",
   "sandbox_profile": "default"
 }

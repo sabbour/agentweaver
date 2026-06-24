@@ -1,9 +1,9 @@
 {
   "id": "blueprint-content-authoring",
   "name": "Content Authoring",
-  "description": "A focused writing and research team for documents, articles, and long-form content. Generalizes the content-authoring-and-research grouping.",
+  "description": "A focused writing and research team for documents, articles, and long-form content.",
   "roster": ["lead-researcher", "writer", "editor"],
-  "workflow": "default",
+  "workflows": ["content-authoring"],
   "review_policy": "default",
   "sandbox_profile": "restricted"
 }

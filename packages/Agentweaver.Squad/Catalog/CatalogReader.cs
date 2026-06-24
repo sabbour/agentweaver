@@ -142,12 +142,19 @@ public sealed class CatalogReader
         var dto = JsonSerializer.Deserialize<BlueprintDto>(text, _json);
         if (dto is null || string.IsNullOrWhiteSpace(dto.Id)) return null;
 
+        // Prefer the explicit workflows array; fall back to wrapping the legacy single workflow string.
+        IReadOnlyList<string> workflows = dto.Workflows is { Count: > 0 }
+            ? dto.Workflows
+            : dto.Workflow is not null
+                ? (IReadOnlyList<string>)[dto.Workflow]
+                : (IReadOnlyList<string>)["default"];
+
         return new Blueprint(
             dto.Id!,
             dto.Name ?? dto.Id!,
             dto.Description ?? string.Empty,
             dto.Roster ?? [],
-            dto.Workflow ?? "default",
+            workflows,
             dto.ReviewPolicy ?? "default",
             dto.SandboxProfile ?? "default");
     }
@@ -169,6 +176,35 @@ public sealed class CatalogReader
         if (stream is null) return null;
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
+    }
+
+    // -----------------------------------------------------------------------
+    // Workflow library
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Loads all predefined workflow YAML documents embedded under
+    /// <c>Catalog/Resources/workflows</c>. Returns a list of (yaml, source) pairs
+    /// where <c>source</c> is the short resource file name, sorted by name for
+    /// deterministic conflict resolution in the <c>WorkflowRegistry</c>.
+    /// </summary>
+    public IReadOnlyList<(string Yaml, string Source)> LoadAllWorkflowYamls()
+    {
+        var prefix = $"{ResourcePrefix}.workflows.";
+        var names = _asm.GetManifestResourceNames()
+            .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) &&
+                        (n.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
+                         n.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(n => n, StringComparer.Ordinal);
+
+        var result = new List<(string, string)>();
+        foreach (var name in names)
+        {
+            var text = ReadResourceText(name);
+            if (text is not null)
+                result.Add((text, name[prefix.Length..]));
+        }
+        return result;
     }
 
     private sealed record CatalogManifestDto(
@@ -196,6 +232,7 @@ public sealed class CatalogReader
         [property: JsonPropertyName("description")] string? Description,
         [property: JsonPropertyName("roster")] IReadOnlyList<string>? Roster,
         [property: JsonPropertyName("workflow")] string? Workflow,
+        [property: JsonPropertyName("workflows")] IReadOnlyList<string>? Workflows,
         [property: JsonPropertyName("review_policy")] string? ReviewPolicy,
         [property: JsonPropertyName("sandbox_profile")] string? SandboxProfile);
 }

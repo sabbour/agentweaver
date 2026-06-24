@@ -1,0 +1,10 @@
+# SandboxClaim template — filled in per run by KubernetesSandboxExecutor.
+# {runId} is replaced with a 16-char hex run identifier at creation time.
+apiVersion: sandbox.agentweaver.io/v1
+kind: SandboxClaim
+metadata:
+  name: run-{runId}
+  namespace: agentweaver
+spec:
+  templateRef: agentweaver-sandbox
+  ttl: 600s

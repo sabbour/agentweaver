@@ -1,0 +1,28 @@
+# SandboxWarmPool — keeps 3 pre-warmed sandbox pods ready for instant claim.
+#
+# The pool stamps `spec.replicas` identical, session-AGNOSTIC pods from the
+# `agentweaver-sandbox` SandboxTemplate. On each agent run the API creates a
+# SandboxClaim; the controller adopts a warm pod in sub-second time (no image
+# pull on the hot path), then refills the pool behind the adoption.
+#
+# Cost dial: each warm pod holds 256Mi/250m at rest. 3 replicas absorbs a small
+# concurrent burst while the pool refills. Tune from observed claim-rate telemetry.
+#
+# Consumed by the agent-sandbox extensions controller (v0.4.6+).
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxWarmPool
+metadata:
+  name: agentweaver-sandbox
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  sandboxTemplateRef:
+    name: agentweaver-sandbox
+
+  # 3 warm pods: absorbs a small burst while the pool refills after adoption.
+  replicas: 3
+
+  # Replace stale warm pods only as they are consumed (default), avoiding
+  # unnecessary churn of healthy idle pods on template updates.
+  updateStrategy: OnReplenish

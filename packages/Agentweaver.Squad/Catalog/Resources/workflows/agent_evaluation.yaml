@@ -1,0 +1,103 @@
+# Agent Evaluation Workflow (Feature 015 US3)
+# AI agent evaluation pipeline: setup → fan_out parallel runs → fan_in collect → safety gate → report → scribe.
+# Uses fan_out/fan_in for parallel evaluation runs and a dedicated safety gate before the report.
+
+id: agent-evaluation
+name: Agent Evaluation
+description: AI agent evaluation pipeline with parallel evaluation runs, dedicated safety gate, and evaluation report. Use for evaluating AI agent capabilities, safety properties, and performance. The safety gate must pass before the evaluation report proceeds.
+version: "1.0"
+
+trigger:
+  type: event
+  event: task-added-to-ready
+
+start: eval-setup
+
+nodes:
+  - id: eval-setup
+    type: prompt
+    label: Evaluation Setup
+    role: agent
+    kind: live
+
+  - id: eval-run
+    type: fan_out
+    label: Evaluation Runs
+    role: agent
+    kind: live
+
+  - id: eval-collect
+    type: fan_in
+    label: Collect Results
+    role: agent
+    kind: live
+    target: eval-run
+
+  - id: safety-gate
+    type: check
+    label: Safety Gate
+    role: review
+    kind: gate
+    gate_kind: rai
+    branches:
+      - revise
+      - safety-failed
+      - no-changes
+      - review
+
+  - id: report
+    type: prompt
+    label: Evaluation Report
+    role: agent
+    kind: live
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+    role: scribe
+    kind: agent
+
+  - id: terminal-safety-failed
+    type: terminal
+    label: Safety Failed
+    role: plumbing
+    kind: terminal
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: eval-setup
+    to: eval-run
+
+  - from: eval-run
+    to: eval-collect
+
+  - from: eval-collect
+    to: safety-gate
+
+  # Safety gate verdict routing.
+  - from: safety-gate
+    to: eval-setup
+    when: revise
+
+  - from: safety-gate
+    to: terminal-safety-failed
+    when: safety-failed
+
+  - from: safety-gate
+    to: scribe
+    when: no-changes
+
+  - from: safety-gate
+    to: report
+    when: review
+
+  - from: report
+    to: scribe
+
+  - from: scribe
+    to: done

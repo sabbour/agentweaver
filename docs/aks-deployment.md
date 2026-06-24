@@ -255,7 +255,78 @@ curl "https://${HOST}/api/diagnostics/health"
 
 ---
 
-## Troubleshooting
+## Sandbox setup
+
+Agentweaver uses a Kubernetes-native sandbox (`KubernetesSandboxExecutor`) when deployed
+to AKS. Each agent run claims a pre-warmed pod from a `SandboxWarmPool` via a
+`SandboxClaim` CRD, executes the shell command via pod-exec, then releases the claim.
+
+### Prerequisites
+
+The `agent-sandbox` extensions controller must be installed on the cluster:
+```bash
+kubectl apply -f https://github.com/Azure/agent-sandbox/releases/latest/download/install.yaml
+```
+
+### Apply sandbox CRDs and NetworkPolicy
+
+```bash
+# Apply the sandbox template (Kata VM, non-root, read-only rootfs)
+envsubst < k8s/sandbox-template.yaml | kubectl apply -f -
+
+# Apply the warm pool (3 pre-warmed pods)
+kubectl apply -f k8s/sandbox-warmpool.yaml
+
+# Apply the NetworkPolicy (default-deny ingress + egress allow-list)
+kubectl apply -f k8s/networkpolicy-sandbox.yaml
+```
+
+> **Note**: `sandbox-template.yaml` requires `$ACR_LOGIN_SERVER` and `$IMAGE_TAG`
+> to be set before applying (the same variables used in `scripts/aks/30-deploy.sh`).
+
+### Verify warm pods are running
+
+```bash
+# List warm pods — should show 3 pods in Running state
+kubectl get pods -n agentweaver -l app=agentweaver-sandbox
+
+# Check warm pool status
+kubectl get sandboxwarmpool agentweaver-sandbox -n agentweaver -o yaml
+
+# Expected: status.readyReplicas == 3
+```
+
+### Verify sandbox executor selection
+
+When the API pod starts inside the cluster, the log should contain:
+```
+KubernetesSandboxExecutor selected (KUBERNETES_SERVICE_HOST detected)
+```
+
+Check with:
+```bash
+kubectl logs -n agentweaver -l app=agentweaver-api | grep -i sandbox
+```
+
+### Claim lifecycle
+
+1. `KubernetesSandboxExecutor` creates a `SandboxClaim` named `run-<16hex>`.
+2. The controller binds the claim to a warm pod (sub-second when pool is warm).
+3. The executor runs the command via Kubernetes pod-exec WebSocket API.
+4. On completion, the claim is deleted; the controller terminates the pod and refills
+   the pool.
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `Sandbox:Kubernetes:Namespace` | `agentweaver` | Namespace for claims and pods |
+| `Sandbox:Kubernetes:TemplateRef` | `agentweaver-sandbox` | SandboxTemplate to claim from |
+| `Sandbox:Kubernetes:TimeoutSeconds` | `600` | Per-sandbox session timeout |
+
+Override in `appsettings.json` or via environment variables (e.g.,
+`Sandbox__Kubernetes__TimeoutSeconds=300`).
+
 
 ### Gateway not Programmed
 

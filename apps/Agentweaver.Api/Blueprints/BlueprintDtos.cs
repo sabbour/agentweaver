@@ -8,6 +8,8 @@ namespace Agentweaver.Api.Blueprints;
 /// GET /api/blueprints, POST /api/blueprints/validate, POST /api/blueprints/generate, and the
 /// optional inline blueprint on project creation. Input fields are nullable so malformed payloads
 /// are reported by validation rather than failing deserialization.
+/// Both <c>workflow</c> (legacy single id) and <c>workflows</c> (new array) are accepted as input;
+/// the response always includes both for backward compatibility.
 /// </summary>
 public sealed record BlueprintDto
 {
@@ -15,7 +17,10 @@ public sealed record BlueprintDto
     [JsonPropertyName("name")] public string? Name { get; init; }
     [JsonPropertyName("description")] public string? Description { get; init; }
     [JsonPropertyName("roster")] public IReadOnlyList<string>? Roster { get; init; }
+    /// <summary>Legacy single workflow id (backward compat input and response default-workflow field).</summary>
     [JsonPropertyName("workflow")] public string? Workflow { get; init; }
+    /// <summary>The full set of workflow ids this blueprint bundles (Feature 015 US3).</summary>
+    [JsonPropertyName("workflows")] public IReadOnlyList<string>? Workflows { get; init; }
     [JsonPropertyName("review_policy")] public string? ReviewPolicy { get; init; }
     [JsonPropertyName("sandbox_profile")] public string? SandboxProfile { get; init; }
 
@@ -26,6 +31,7 @@ public sealed record BlueprintDto
         Description = b.Description,
         Roster = b.Roster,
         Workflow = b.Workflow,
+        Workflows = b.Workflows,
         ReviewPolicy = b.ReviewPolicy,
         SandboxProfile = b.SandboxProfile,
     };
@@ -35,7 +41,7 @@ public sealed record BlueprintDto
         Name ?? string.Empty,
         Description ?? string.Empty,
         Roster ?? [],
-        Workflow ?? string.Empty,
+        Workflows is { Count: > 0 } ? Workflows : (Workflow is not null ? [Workflow] : ["default"]),
         ReviewPolicy ?? string.Empty,
         SandboxProfile ?? string.Empty);
 }

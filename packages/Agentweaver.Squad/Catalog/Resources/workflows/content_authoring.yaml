@@ -1,0 +1,110 @@
+# Content Authoring Workflow (Feature 015 US3)
+# Content creation pipeline: research → draft → editorial review → RAI check → publish → scribe.
+# Includes an editorial review revise loop and a RAI safety check before publishing.
+# No code-merge semantics — publish is the terminal action for content delivery.
+
+id: content-authoring
+name: Content Authoring
+description: Content creation pipeline with research, drafting, editorial review, RAI safety check, and publishing. Use for articles, documentation, long-form content, and any work where the output is published text rather than merged code.
+version: "1.0"
+
+trigger:
+  type: event
+  event: task-added-to-ready
+
+start: research
+
+nodes:
+  - id: research
+    type: prompt
+    label: Research
+    role: agent
+    kind: live
+
+  - id: draft
+    type: prompt
+    label: Draft
+    role: agent
+    kind: live
+
+  - id: edit
+    type: peer_review
+    label: Editorial Review
+    role: review
+    kind: live
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+    branches:
+      - revise
+      - safety-failed
+      - no-changes
+      - review
+
+  - id: publish
+    type: merge
+    label: Publish
+    role: merge
+    kind: action
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+    role: scribe
+    kind: agent
+
+  - id: terminal-safety-failed
+    type: terminal
+    label: Safety Failed
+    role: plumbing
+    kind: terminal
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: research
+    to: draft
+
+  - from: draft
+    to: edit
+
+  # Editorial review flows unconditionally to RAI gate.
+  - from: edit
+    to: rai-check
+
+  # RAI verdict routing.
+  - from: rai-check
+    to: draft
+    when: revise
+
+  - from: rai-check
+    to: terminal-safety-failed
+    when: safety-failed
+
+  - from: rai-check
+    to: scribe
+    when: no-changes
+
+  - from: rai-check
+    to: publish
+    when: review
+
+  # Publish (content delivery) outcomes.
+  - from: publish
+    to: scribe
+    when: merged
+
+  - from: publish
+    to: edit
+    when: blocked
+
+  - from: scribe
+    to: done

@@ -1,0 +1,90 @@
+# Bug Fix Workflow (Feature 015 US3)
+# Lightweight bug fix pipeline: triage → fix → QA verification → merge → scribe.
+# No heavy planning or code review gate — optimized for quick turnaround on defects and patches.
+
+id: bug-fix
+name: Bug Fix
+description: Lightweight bug fix pipeline with triage, fix, and QA verification. Use for bug fixes, patches, and small targeted corrections that do not require a full delivery cycle.
+version: "1.0"
+
+trigger:
+  type: event
+  event: task-added-to-ready
+
+start: triage
+
+nodes:
+  - id: triage
+    type: prompt
+    label: Triage
+    role: agent
+    kind: live
+
+  - id: fix
+    type: prompt
+    label: Fix
+    role: agent
+    kind: live
+
+  - id: verify
+    type: peer_review
+    label: Verify
+    role: review
+    kind: live
+    agent: qa-engineer
+
+  - id: merge
+    type: merge
+    label: Merge
+    role: merge
+    kind: action
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+    role: scribe
+    kind: agent
+
+  - id: terminal-declined
+    type: terminal
+    label: Declined
+    role: plumbing
+    kind: terminal
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: triage
+    to: fix
+
+  - from: fix
+    to: verify
+
+  # QA verification verdict routing.
+  - from: verify
+    to: merge
+    when: approved
+
+  - from: verify
+    to: fix
+    when: request-changes
+
+  - from: verify
+    to: terminal-declined
+    when: declined
+
+  # Merge outcomes.
+  - from: merge
+    to: scribe
+    when: merged
+
+  - from: merge
+    to: verify
+    when: blocked
+
+  - from: scribe
+    to: done

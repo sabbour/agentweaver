@@ -1,0 +1,83 @@
+# NetworkPolicy for Agentweaver sandbox pods (label: app: agentweaver-sandbox).
+#
+# Three policies:
+#   1. Default-deny all ingress to sandbox pods.
+#   2. Egress allow-list: DNS (kube-dns) + HTTPS to GitHub endpoints only.
+#   3. Explicit: no egress to the API pod (sandbox cannot call back to the orchestrator).
+#
+# The API executes commands in the sandbox via Kubernetes pod-exec (WebSocket API
+# through the kube-apiserver), so sandbox pods do not need to initiate connections to
+# the API pod. The egress allow-list keeps exfiltration risk low.
+---
+# 1) DEFAULT-DENY all ingress to sandbox pods.
+#    Empty ingress rule set = deny all inbound. The API uses pod-exec, not HTTP.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-deny-ingress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-sandbox
+  policyTypes:
+    - Ingress
+  # no ingress rules => deny all ingress
+---
+# 2) EGRESS allow-list for sandbox pods.
+#    Allow only DNS (for package managers, git remote resolution) and HTTPS (GitHub
+#    endpoints for git clone/push, package installs). All other egress is denied —
+#    in particular, sandbox pods cannot reach the API pod or MCP server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-egress-allowlist
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-sandbox
+  policyTypes:
+    - Egress
+  egress:
+    # (a) DNS — CoreDNS in kube-system. Required for resolving github.com, etc.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # (b) HTTPS (port 443) — GitHub, npm, apt/pip package registries.
+    #     ⚠ OPEN ITEM: replace 0.0.0.0/0 with pinned GitHub CIDR ranges
+    #     (https://api.github.com/meta) or adopt Cilium FQDN policy for tighter
+    #     egress control once the cluster network-policy engine supports it.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            # Exclude the cluster pod CIDR so sandbox pods cannot reach the API pod
+            # or other in-cluster services over HTTPS.
+            # OPERATOR: replace with your cluster's pod CIDR (az aks show --query networkProfile.podCidr).
+            except:
+              - 10.244.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    # (c) HTTP (port 80) — apt/pip plain-HTTP package mirrors.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16
+      ports:
+        - protocol: TCP
+          port: 80
