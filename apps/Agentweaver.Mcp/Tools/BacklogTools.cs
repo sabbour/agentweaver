@@ -7,6 +7,18 @@ namespace Agentweaver.Mcp.Tools;
 
 internal sealed record ReadyAllResponse([property: JsonPropertyName("moved")] int Moved);
 
+/// <summary>A single proposed backlog item returned by the decompose endpoint.</summary>
+internal sealed record ProposedBacklogItem(
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("description")] string? Description,
+    [property: JsonPropertyName("already_exists")] bool AlreadyExists);
+
+/// <summary>Response from POST /api/projects/{id}/backlog/decompose.</summary>
+internal sealed record DecomposeResponse(
+    [property: JsonPropertyName("proposed_items")] List<ProposedBacklogItem> ProposedItems,
+    [property: JsonPropertyName("was_capped")] bool WasCapped,
+    [property: JsonPropertyName("total_found")] int TotalFound);
+
 [McpServerToolType]
 public sealed class BacklogTools(AgentweaverApiClient api)
 {
@@ -214,6 +226,40 @@ public sealed class BacklogTools(AgentweaverApiClient api)
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    /// <summary>
+    /// Decomposes a workspace spec file into proposed backlog tasks by calling
+    /// POST /api/projects/{project_id}/backlog/decompose.
+    /// </summary>
+    [McpServerTool(Name = "backlog_decompose_spec"), Description(
+        "Decompose a workspace spec file into proposed backlog tasks for a project. " +
+        "Reads a markdown file from the project's workspace, runs AI decomposition, " +
+        "and returns proposed items for review. Use confirm=true to create the tasks, " +
+        "confirm=false for preview only. Results are capped at 50 items.")]
+    public async Task<string> BacklogDecomposeSpecAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Relative path to markdown file within project workspace")] string file_path,
+        [Description("If true, creates the backlog tasks. If false, returns preview only.")] bool confirm = false,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var body = new { file_path, confirm };
+            var result = await api.PostAsync<DecomposeResponse>(
+                $"/api/projects/{project_id}/backlog/decompose", body, ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException ex) when (ex.StatusCode == 404)
+        {
+            throw new McpApiException(404, $"Project {project_id} not found");
+        }
+        catch (McpApiException) { throw; }
+        catch (HttpRequestException)
+        {
+            throw new McpApiException(0, "Agentweaver API unavailable");
+        }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 }
