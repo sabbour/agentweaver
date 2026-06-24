@@ -413,6 +413,28 @@ public sealed class SqliteRunStore
             cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()), ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Records the shared orchestration worktree path and branch on a coordinator run.
+    /// Called once when the shared worktree is first provisioned for the orchestration.
+    /// Idempotent: second call with same values is a no-op (WHERE guards against overwrite).
+    /// </summary>
+    public async Task UpdateWorktreeAsync(
+        RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET worktree_path = $worktreePath, worktree_branch = $worktreeBranch
+             WHERE run_id = $runId AND worktree_path IS NULL;
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$worktreePath", worktreePath);
+                cmd.Parameters.AddWithValue("$worktreeBranch", worktreeBranch);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+    }
+
     public async Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);

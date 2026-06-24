@@ -130,6 +130,11 @@ public sealed class SqliteDb
                 WHERE state IN ('backlog','ready') AND archived_at IS NULL;
             """, ct);
 
+        // Shared orchestration worktree for multi-agent coordinator runs (sandbox-cross-worktree-access).
+        // One shared worktree per orchestration: all child runs share the coordinator's worktree path
+        // as their sandbox root so Agent B can read files produced by Agent A.
+        await TryAlterAsync(connection, "ALTER TABLE workflow_runs ADD COLUMN orchestration_worktree_path TEXT;", ct);
+
         // Cast proposals persistence (proposal store backed by SQLite so proposals survive restarts).
         await TryAlterAsync(connection,
             """

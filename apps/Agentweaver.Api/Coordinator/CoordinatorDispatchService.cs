@@ -182,6 +182,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var inFlight = new Dictionary<int, Task<ChildResult>>();
 
+        // Build a per-id lookup so DoSubtasksConflict can inspect Scope without a DB round-trip.
+        var subtasksById = subtasks.ToDictionary(s => s.Id);
+
         // RECOVERY-AWARE RE-ARM. A re-armed loop (reconciler sweep, startup recovery, or a manual
         // steer-resume of an orphan) may find subtasks already dispatched/running from a PRIOR process
         // whose child runs have since reached a terminal state in the run store. Re-observe each so
@@ -210,10 +213,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         while (!ct.IsCancellationRequested)
         {
-            // Dispatch the entire current frontier (parallel for independent subtasks).
+            // Dispatch the current frontier. Subtasks with non-overlapping file scopes run in
+            // parallel; subtasks whose scopes conflict with any in-flight subtask run serially
+            // (deferred until the conflicting in-flight task completes).
             foreach (var subtaskId in SubtaskFrontier.ReadyPending(statusById, edges))
             {
                 if (inFlight.ContainsKey(subtaskId))
+                    continue;
+
+                // If any in-flight subtask conflicts with this one (overlapping or undeclared file
+                // paths), defer it: running them concurrently on the shared worktree would clobber
+                // each other's files. It will be dispatched in the next iteration after a slot frees.
+                if (inFlight.Count > 0 && ConflictsWithAnyInFlight(subtaskId, inFlight.Keys, subtasksById))
                     continue;
 
                 var dispatched = await DispatchOneAsync(
@@ -920,6 +931,32 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         return string.IsNullOrWhiteSpace(subtask.RecoveryGuidance)
             ? baseTask
             : $"{baseTask}\n\n{subtask.RecoveryGuidance}";
+    }
+
+    /// <summary>
+    /// Returns true when the candidate subtask conflicts with at least one of the currently in-flight
+    /// subtasks in the shared orchestration worktree. Delegates to
+    /// <see cref="CoordinatorAssemblyService.DoSubtasksConflict"/> for the scope/file overlap check.
+    /// When the candidate is unknown (not in <paramref name="subtasksById"/>), returns false so
+    /// dispatch can proceed rather than stalling indefinitely.
+    /// </summary>
+    private static bool ConflictsWithAnyInFlight(
+        int candidateId,
+        IEnumerable<int> inFlightIds,
+        IReadOnlyDictionary<int, Subtask> subtasksById)
+    {
+        if (!subtasksById.TryGetValue(candidateId, out var candidate))
+            return false;
+
+        foreach (var inFlightId in inFlightIds)
+        {
+            if (!subtasksById.TryGetValue(inFlightId, out var inFlight))
+                continue;
+            if (CoordinatorAssemblyService.DoSubtasksConflict(candidate, inFlight))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool ReadBool(object payload, string property)

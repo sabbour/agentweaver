@@ -25,6 +25,12 @@ public sealed class RunOrchestrator
     private readonly ILogger<RunOrchestrator> _logger;
 
     /// <summary>
+    /// Guards shared-worktree provisioning so only one concurrent first-child dispatch
+    /// creates the orchestration worktree; all subsequent children reuse the stored path.
+    /// </summary>
+    private readonly SemaphoreSlim _orchestrationWorktreeLock = new(1, 1);
+
+    /// <summary>
     /// Concise "Memory Protocol" appended to every worker (and coordinator child) system prompt so
     /// agents actually turn the memory flywheel: record reusable learnings and submit notable
     /// decisions. Deliberately short so it stays non-spammy. Never appended to the Scribe, which has
@@ -120,27 +126,30 @@ public sealed class RunOrchestrator
 
     /// <summary>
     /// Starts a coordinator CHILD run (Feature 008 Phase 2 dispatch). Identical to
-    /// <see cref="StartRunAsync"/> except the workflow is built with the TRIMMED child pipeline
-    /// (<c>isChild: true</c>): agent + RAI terminating assemble-ready, with no per-child review
-    /// gate, merge, or scribe. The supplied <paramref name="run"/> MUST carry
-    /// <see cref="Run.ParentRunId"/> (the coordinator run id) and <see cref="Run.SubtaskId"/>.
-    /// The existing <see cref="RunWatchLoopService"/> observes the child stream and persists the
-    /// assemble-ready terminal exactly as for any other child run; the coordinator's dispatch
-    /// service projects <c>subtask.*</c> / <c>coordinator.topology</c> events from that stream.
+    /// <see cref="StartRunAsync"/> except:
+    /// 1. The workflow is built with the TRIMMED child pipeline (<c>isChild: true</c>): agent + RAI
+    ///    terminating assemble-ready, with no per-child review gate, merge, or scribe.
+    /// 2. The child shares the coordinator's single provisioned worktree (sandbox-cross-worktree-access):
+    ///    instead of creating a per-child git worktree, the coordinator's worktree is reused as both the
+    ///    working directory and sandbox root, so Agent B can read files produced by Agent A.
+    /// The supplied <paramref name="run"/> MUST carry <see cref="Run.ParentRunId"/> (the coordinator
+    /// run id) and <see cref="Run.SubtaskId"/>.
     /// </summary>
     public async Task StartChildRunAsync(Run run, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
+        // Reuse the coordinator's shared worktree instead of provisioning a per-child worktree.
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+            worktreeInfo = await GetOrProvisionOrchestrationWorktreeAsync(
+                run.ParentRunId, run.RepositoryPath, run.OriginatingBranch, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to create worktree for child run {RunId}", run.Id);
+            _logger.LogError(ex, "Failed to provision orchestration worktree for child run {RunId} (coordinator {CoordinatorRunId})", run.Id, run.ParentRunId);
             throw;
         }
 
@@ -584,5 +593,77 @@ public sealed class RunOrchestrator
 
         db.RunEvents.AddRange(toInsert);
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the shared orchestration worktree for the coordinator run identified by
+    /// <paramref name="coordinatorRunId"/>. If the coordinator has no worktree yet (first child
+    /// dispatch), provisions one using the coordinator's run-id as the worktree name, persists
+    /// the path back on the coordinator row, and returns it. A <see cref="SemaphoreSlim"/> ensures
+    /// only one concurrent first-child dispatch creates the worktree; all subsequent children
+    /// simply re-read the stored path (double-checked locking pattern).
+    /// </summary>
+    private async Task<WorktreeInfo> GetOrProvisionOrchestrationWorktreeAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        string originatingBranch,
+        CancellationToken ct)
+    {
+        // Fast path: coordinator already has a worktree stored.
+        if (RunId.TryParse(coordinatorRunId, out var coordId))
+        {
+            var coordinator = await _runStore.GetAsync(coordId, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(coordinator?.WorktreePath) && !string.IsNullOrEmpty(coordinator.WorktreeBranch))
+            {
+                return new WorktreeInfo
+                {
+                    WorktreePath = coordinator.WorktreePath,
+                    BranchName = coordinator.WorktreeBranch,
+                };
+            }
+        }
+
+        // Slow path: need to provision. Acquire lock to prevent duplicate creation under parallel dispatch.
+        await _orchestrationWorktreeLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // Double-check after acquiring lock.
+            if (RunId.TryParse(coordinatorRunId, out var coordId2))
+            {
+                var coordinator = await _runStore.GetAsync(coordId2, ct).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(coordinator?.WorktreePath) && !string.IsNullOrEmpty(coordinator.WorktreeBranch))
+                {
+                    return new WorktreeInfo
+                    {
+                        WorktreePath = coordinator.WorktreePath,
+                        BranchName = coordinator.WorktreeBranch,
+                    };
+                }
+
+                // Create the shared orchestration worktree keyed to the coordinator run id.
+                _logger.LogInformation(
+                    "Provisioning shared orchestration worktree for coordinator run {CoordinatorRunId}",
+                    coordinatorRunId);
+                var worktreeInfo = _worktreeManager.AddWorktree(repositoryPath, originatingBranch, coordId2);
+
+                // Persist on the coordinator run so all subsequent children reuse the same path.
+                await _runStore.UpdateWorktreeAsync(
+                    coordId2, worktreeInfo.WorktreePath, worktreeInfo.BranchName, ct).ConfigureAwait(false);
+
+                return worktreeInfo;
+            }
+
+            // Coordinator run id is not a valid RunId — fall back to per-child worktree for safety.
+            _logger.LogWarning(
+                "Could not parse coordinator run id '{CoordinatorRunId}' as RunId; falling back to per-child worktree",
+                coordinatorRunId);
+            if (!RunId.TryParse(coordinatorRunId, out var fallbackId))
+                throw new InvalidOperationException($"Cannot parse coordinator run id '{coordinatorRunId}'.");
+            return _worktreeManager.AddWorktree(repositoryPath, originatingBranch, fallbackId);
+        }
+        finally
+        {
+            _orchestrationWorktreeLock.Release();
+        }
     }
 }

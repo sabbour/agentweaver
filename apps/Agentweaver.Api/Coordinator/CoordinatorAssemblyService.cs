@@ -90,6 +90,58 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         $"agentweaver/integration/{coordinatorRunId}";
 
     /// <summary>
+    /// Returns true when two subtasks are likely to conflict in the shared orchestration worktree
+    /// and must therefore run serially rather than in parallel.
+    ///
+    /// <para>Conflict rules (conservative-by-default):</para>
+    /// <list type="bullet">
+    /// <item>If either subtask declares no file-path tokens in its <see cref="Subtask.Scope"/>,
+    ///   the scope is undeclared and they are assumed to conflict (safe default).</item>
+    /// <item>If both declare file-path tokens, they conflict when any token from one subtask
+    ///   suffix-matches or filename-matches a token from the other (same logic as
+    ///   <see cref="AssemblyPlanning.FilesMatch"/> in D6 rejection routing).</item>
+    /// </list>
+    ///
+    /// Called by the dispatch loop to decide parallel vs serial scheduling before dispatching a
+    /// ready frontier subtask alongside one that is already in-flight.
+    /// </summary>
+    internal static bool DoSubtasksConflict(Subtask subtask1, Subtask subtask2)
+    {
+        var files1 = AssemblyPlanning.ExtractFileTokens(subtask1.Scope);
+        var files2 = AssemblyPlanning.ExtractFileTokens(subtask2.Scope);
+
+        // Either subtask has no declared paths → conservatively treat as conflicting.
+        if (files1.Count == 0 || files2.Count == 0)
+            return true;
+
+        // Check for file-path overlap using the same matching rules as D6 rejection routing.
+        foreach (var f1 in files1)
+            foreach (var f2 in files2)
+                if (FilesMatchPublic(f1, f2))
+                    return true;
+
+        return false;
+    }
+
+    // Mirrors AssemblyPlanning.FilesMatch (private static there) for use in DoSubtasksConflict.
+    private static bool FilesMatchPublic(string a, string b)
+    {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (a.EndsWith("/" + b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (b.EndsWith("/" + a, StringComparison.OrdinalIgnoreCase)) return true;
+        // Bare filename token (no separator) matches the other path's filename.
+        if (!b.Contains('/') && string.Equals(FileNameOf(a), b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!a.Contains('/') && string.Equals(FileNameOf(b), a, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private static string FileNameOf(string path)
+    {
+        var idx = path.LastIndexOf('/');
+        return idx >= 0 ? path[(idx + 1)..] : path;
+    }
+
+    /// <summary>
     /// Launches the collective-assembly pipeline for a coordinator run on a supervised background task
     /// (mirrors <see cref="CoordinatorDispatchService.StartDispatch"/>). Returns immediately. The
     /// in-memory guard short-circuits a duplicate concurrent launch; the DB CAS (D4) is the real
