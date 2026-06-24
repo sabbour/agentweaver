@@ -24,12 +24,13 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { AddRegular, ArrowSyncRegular, ChevronDownRegular, ChevronRightRegular, EditRegular, NetworkCheckRegular, SparkleRegular } from '@fluentui/react-icons';
+import { AddRegular, ArrowSyncRegular, ChevronDownRegular, ChevronRightRegular, EditRegular, FlowRegular, NetworkCheckRegular, SparkleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { WorkflowEditor, BLANK_TEMPLATE } from '../components/WorkflowEditor';
+import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
 
 // Spec 010 (FR-039/041) — project Workflows management page. Lists the workflows
@@ -133,6 +134,7 @@ export function WorkflowsPage() {
   const [editorState, setEditorState] = useState<{
     workflowId: string;
     initialYaml: string;
+    visual?: boolean;
   } | null>(null);
   const [editLoading, setEditLoading] = useState(false);
 
@@ -221,13 +223,13 @@ export function WorkflowsPage() {
     }
   }, [projectId]);
 
-  const handleEdit = useCallback(async (wf: WorkflowSummaryDto) => {
+  const handleEdit = useCallback(async (wf: WorkflowSummaryDto, visual = false) => {
     if (!wf.id || !projectId) return;
     setEditLoading(true);
     setError(null);
     try {
       const yamlContent = await apiClient.getWorkflowYaml(projectId, wf.id);
-      setEditorState({ workflowId: wf.id, initialYaml: yamlContent });
+      setEditorState({ workflowId: wf.id, initialYaml: yamlContent, visual });
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -409,13 +411,23 @@ export function WorkflowsPage() {
       {editLoading && <Spinner label="Loading workflow" />}
 
       {editorState && (
-        <WorkflowEditor
-          projectId={projectId}
-          workflowId={editorState.workflowId}
-          initialYaml={editorState.initialYaml}
-          onSave={handleEditorSave}
-          onClose={handleEditorClose}
-        />
+        editorState.visual ? (
+          <VisualWorkflowEditor
+            projectId={projectId}
+            workflowId={editorState.workflowId}
+            initialYaml={editorState.initialYaml}
+            onSave={handleEditorSave}
+            onClose={handleEditorClose}
+          />
+        ) : (
+          <WorkflowEditor
+            projectId={projectId}
+            workflowId={editorState.workflowId}
+            initialYaml={editorState.initialYaml}
+            onSave={handleEditorSave}
+            onClose={handleEditorClose}
+          />
+        )
       )}
 
       {!editorState && (
@@ -472,6 +484,17 @@ export function WorkflowsPage() {
                         onClick={() => { void handleEdit(wf); }}
                       >
                         Edit
+                      </Button>
+                    )}
+                    {wf.id && !wf.is_built_in && (
+                      <Button
+                        appearance="subtle"
+                        icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <FlowRegular />}
+                        size="small"
+                        disabled={editLoading}
+                        onClick={() => { void handleEdit(wf, true); }}
+                      >
+                        Edit visually
                       </Button>
                     )}
                   </div>
