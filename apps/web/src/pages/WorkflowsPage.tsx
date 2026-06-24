@@ -3,6 +3,13 @@ import { Link, useParams } from 'react-router-dom';
 import {
   Badge,
   Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
   Menu,
   MenuItem,
   MenuList,
@@ -12,16 +19,18 @@ import {
   MessageBarBody,
   Spinner,
   Text,
+  Textarea,
   Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { AddRegular, ArrowSyncRegular, ChevronDownRegular, EditRegular } from '@fluentui/react-icons';
+import { AddRegular, ArrowSyncRegular, ChevronDownRegular, ChevronRightRegular, EditRegular, NetworkCheckRegular, SparkleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { WorkflowEditor, BLANK_TEMPLATE } from '../components/WorkflowEditor';
+import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
 
 // Spec 010 (FR-039/041) — project Workflows management page. Lists the workflows
 // discovered from .agentweaver/workflows/ with their validation status, marks the
@@ -127,6 +136,19 @@ export function WorkflowsPage() {
   } | null>(null);
   const [editLoading, setEditLoading] = useState(false);
 
+  // Graph expansion: one graph open at a time (null = all collapsed).
+  const [expandedGraphId, setExpandedGraphId] = useState<string | null>(null);
+
+  const toggleGraph = useCallback((workflowId: string) => {
+    setExpandedGraphId((prev) => (prev === workflowId ? null : workflowId));
+  }, []);
+
+  // Generate-workflow dialog state (US10).
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generateDescription, setGenerateDescription] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+
   const formatError = (err: unknown): string =>
     err instanceof ApiError
       ? `API error ${err.status}: ${err.body}`
@@ -217,6 +239,32 @@ export function WorkflowsPage() {
     setEditorState({ workflowId: 'my-workflow', initialYaml: BLANK_TEMPLATE });
   }, []);
 
+  const handleOpenGenerate = useCallback(() => {
+    setGenerateDescription('');
+    setGenerateError(null);
+    setGenerateOpen(true);
+  }, []);
+
+  const handleGenerate = useCallback(async () => {
+    if (!projectId || !generateDescription.trim()) return;
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const result = await apiClient.generateWorkflow(projectId, generateDescription.trim());
+      setGenerateOpen(false);
+      setEditorState({ workflowId: result.workflowId, initialYaml: result.yaml });
+      setSyncMessage(
+        result.wasCorrected
+          ? 'Workflow generated (one correction pass applied). Review and save the draft.'
+          : 'Workflow generated. Review and save the draft.',
+      );
+    } catch (err) {
+      setGenerateError(formatError(err));
+    } finally {
+      setGenerating(false);
+    }
+  }, [projectId, generateDescription]);
+
   const handleEditorSave = useCallback((saved: WorkflowDetailDto) => {
     // Refresh the workflow list so the saved workflow is visible.
     if (!projectId) return;
@@ -258,6 +306,14 @@ export function WorkflowsPage() {
               disabled={editLoading}
             >
               New workflow
+            </Button>
+            <Button
+              appearance="secondary"
+              icon={<SparkleRegular />}
+              onClick={handleOpenGenerate}
+              disabled={editLoading}
+            >
+              Generate workflow
             </Button>
             <Menu>
             <MenuTrigger disableButtonEnhancement>
@@ -306,6 +362,43 @@ export function WorkflowsPage() {
           <MessageBarBody>{syncMessage}</MessageBarBody>
         </MessageBar>
       )}
+
+      <Dialog open={generateOpen} onOpenChange={(_, d) => { if (!generating) setGenerateOpen(d.open); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Generate workflow</DialogTitle>
+            <DialogContent>
+              <Field label="Describe the workflow you need" hint="A complete YAML draft will be generated for you to review and edit before saving.">
+                <Textarea
+                  value={generateDescription}
+                  onChange={(_, d) => { setGenerateDescription(d.value); setGenerateError(null); }}
+                  placeholder="e.g. A workflow that triages incoming bugs, fixes them, runs QA verification, then merges and records the outcome."
+                  rows={5}
+                  disabled={generating}
+                />
+              </Field>
+              {generateError && (
+                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
+                  <MessageBarBody>{generateError}</MessageBarBody>
+                </MessageBar>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" disabled={generating} onClick={() => setGenerateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={generating || !generateDescription.trim()}
+                icon={generating ? <Spinner size="extra-tiny" aria-hidden="true" /> : <SparkleRegular />}
+                onClick={() => { void handleGenerate(); }}
+              >
+                {generating ? 'Generating…' : 'Generate'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       {error && (
         <MessageBar intent="error">
@@ -358,6 +451,18 @@ export function WorkflowsPage() {
                         {wf.valid ? 'Valid' : 'Invalid'}
                       </Badge>
                     </div>
+                    {wf.id && wf.valid && (
+                      <Button
+                        appearance="subtle"
+                        icon={expandedGraphId === wf.id ? <ChevronDownRegular /> : <ChevronRightRegular />}
+                        iconPosition="after"
+                        size="small"
+                        onClick={() => { if (wf.id) toggleGraph(wf.id); }}
+                      >
+                        <NetworkCheckRegular aria-hidden="true" />
+                        View graph
+                      </Button>
+                    )}
                     {wf.id && !wf.is_built_in && (
                       <Button
                         appearance="subtle"
@@ -382,6 +487,13 @@ export function WorkflowsPage() {
                     <MessageBar intent="error">
                       <MessageBarBody>{wf.error}</MessageBarBody>
                     </MessageBar>
+                  )}
+
+                  {wf.id && expandedGraphId === wf.id && (
+                    <WorkflowDefinitionInlinePanel
+                      projectId={projectId}
+                      workflowId={wf.id}
+                    />
                   )}
                 </div>
               ))}

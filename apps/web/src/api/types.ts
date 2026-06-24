@@ -960,6 +960,29 @@ export interface WorkflowDetailDto {
   edges: WorkflowEdgeDto[];
 }
 
+// Workflow graph descriptor (US6). Matches GraphDescriptor shape for WorkflowGraphPanel.
+export interface WorkflowGraphNodeDto {
+  id: string;
+  label: string;
+  role: string;
+  kind: 'planned';
+  node_type?: GraphNodeType;
+}
+export interface WorkflowGraphEdgeDto {
+  from: string;
+  to: string;
+  cardinality: 'direct';
+  loopback: boolean;
+  label?: string | null;
+}
+export interface WorkflowGraphDto {
+  graph_id: string;
+  variant: string;
+  start_node_id: string;
+  nodes: WorkflowGraphNodeDto[];
+  edges: WorkflowGraphEdgeDto[];
+}
+
 // ── Review policies (Spec 010, FR-025/027/033) ───────────────────────────────
 // A single review step within a policy (snake_case over the wire).
 export interface ReviewStepDto {

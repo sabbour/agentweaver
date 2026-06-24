@@ -7,11 +7,14 @@
  *
  * Reuse rule: import from here; do NOT copy these definitions into page files.
  */
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Button,
   makeStyles,
+  MessageBar,
+  MessageBarBody,
+  Spinner,
   Text,
   tokens,
 } from '@fluentui/react-components';
@@ -34,16 +37,20 @@ import {
 import {
   Handle,
   MarkerType,
+  Panel,
   Position,
+  ReactFlow,
   useEdges,
   useNodes,
   type Edge,
   type EdgeProps,
+  type Node,
   type NodeProps,
 } from '@xyflow/react';
+import { apiClient } from '../api/apiClient';
 import { AgentAvatar } from './AgentAvatar';
-import type { GraphNodeType } from '../api/types';
-import { NODE_W, NODE_H, NODE_TYPE_W } from '../utils/dagLayout';
+import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
+import { NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H, layoutDag } from '../utils/dagLayout';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -804,4 +811,149 @@ export function coordinatorLoopbackLabel(sourceRole: string | undefined, sourceI
   if (id.includes('rai'))    return 'RAI flags';
   if (id.includes('review')) return 'Request changes';
   return 'Rework';
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowDefinitionInlinePanel — read-only static graph for WorkflowsPage
+// ---------------------------------------------------------------------------
+
+const useInlinePanelStyles = makeStyles({
+  container: {
+    height: '320px',
+    borderRadius: '8px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    '& .react-flow__renderer': { borderRadius: '8px' },
+  },
+  loadingWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '320px',
+  },
+});
+
+const FIT_VIEW_OPTS = { padding: 0.2, maxZoom: 1.1 };
+
+/**
+ * Fetches the static graph descriptor for a workflow definition and renders a
+ * read-only ReactFlow graph. Intended for inline expansion in WorkflowsPage.
+ */
+export function WorkflowDefinitionInlinePanel({
+  projectId,
+  workflowId,
+}: {
+  projectId: string;
+  workflowId: string;
+}) {
+  const s = useInlinePanelStyles();
+  const [graph, setGraph]     = useState<WorkflowGraphDto | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    apiClient.getWorkflowGraph(projectId, workflowId)
+      .then((g) => { if (!cancelled) { setGraph(g); setLoading(false); } })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [projectId, workflowId]);
+
+  const rfEdges = useMemo<Edge[]>(() => {
+    if (!graph) return [];
+    return graph.edges.map((e) =>
+      e.loopback
+        ? loopbackEdge(`${e.from}->${e.to}`, e.from, e.to, e.label ?? '')
+        : forwardEdge(`${e.from}->${e.to}`, e.from, e.to),
+    );
+  }, [graph]);
+
+  const rfNodes = useMemo<Node[]>(() => {
+    if (!graph) return [];
+    const forwardOnly = rfEdges.filter((e) => e.type !== 'loopback');
+    const hints: Record<string, { width: number; height: number }> = {};
+    const raw: Node[] = graph.nodes.map((n) => {
+      const nt = n.node_type;
+      hints[n.id] = {
+        width:  NODE_TYPE_W[nt ?? ''] ?? NODE_W,
+        height: NODE_TYPE_H[nt ?? ''] ?? NODE_H,
+      };
+      return {
+        id: n.id,
+        type: 'workflow',
+        position: { x: 0, y: 0 },
+        data: {
+          def: {
+            key:             n.role,
+            label:           n.label,
+            roleDescription: roleDescForRole(n.role),
+            Icon:            iconForRole(n.role),
+          },
+          state:     { status: 'pending' },
+          nodeType:  nt,
+          isPlanned: true,
+        } as WorkflowNodeData,
+      };
+    });
+    return layoutDag(raw, forwardOnly, { rankdir: 'LR', rankSep: 60, nodeSep: 20 }, hints);
+  }, [graph, rfEdges]);
+
+  if (loading) {
+    return (
+      <div className={s.loadingWrap}>
+        <Spinner size="small" label="Loading graph" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <MessageBar intent="error">
+        <MessageBarBody>{error}</MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  if (!graph || graph.nodes.length === 0) return null;
+
+  return (
+    <ExecutionModalContext.Provider value={undefined}>
+      <ActiveEdgeContext.Provider value={undefined}>
+        <div className={s.container}>
+          <ReactFlow
+            nodes={rfNodes}
+            edges={rfEdges}
+            nodeTypes={workflowNodeTypes}
+            edgeTypes={workflowEdgeTypes}
+            fitView
+            fitViewOptions={FIT_VIEW_OPTS}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            nodesFocusable={false}
+            edgesFocusable={false}
+            panOnScroll={false}
+            zoomOnScroll
+            zoomActivationKeyCode={['Meta', 'Control']}
+            zoomOnPinch
+            zoomOnDoubleClick={false}
+            panOnDrag
+            proOptions={{ hideAttribution: true }}
+          >
+            <Panel position="bottom-right">
+              <span style={{ fontSize: '11px', color: 'var(--colorNeutralForeground3)', padding: '2px 6px', background: 'var(--colorNeutralBackground1)', borderRadius: '4px', border: '1px solid var(--colorNeutralStroke2)' }}>
+                Read-only
+              </span>
+            </Panel>
+          </ReactFlow>
+        </div>
+      </ActiveEdgeContext.Provider>
+    </ExecutionModalContext.Provider>
+  );
 }

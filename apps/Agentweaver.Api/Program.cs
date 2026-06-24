@@ -87,6 +87,10 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringQue
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter,
     Agentweaver.Api.Coordinator.CopilotCoordinatorSpecDrafter>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelectionModel,
+    Agentweaver.Api.Coordinator.CopilotWorkflowSelectionModel>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelector,
+    Agentweaver.Api.Coordinator.WorkflowSelector>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
@@ -178,6 +182,9 @@ builder.Services.AddSingleton<CastingService>();
 // Blueprints (Feature 012)
 builder.Services.AddSingleton<IBlueprintGenerator, CopilotBlueprintGenerator>();
 builder.Services.AddSingleton<BlueprintService>();
+
+// Workflow generation (Feature 015 US10) — LLM → YAML draft, validated + one correction pass.
+builder.Services.AddScoped<Agentweaver.Api.Workflows.IWorkflowGenerator, Agentweaver.Api.Workflows.CopilotWorkflowGenerator>();
 
 // Spec-to-backlog decomposition (Feature 014)
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>();

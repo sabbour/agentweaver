@@ -580,6 +580,26 @@ export class AgentweaverApiClient {
     );
   }
 
+  // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
+  // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
+  // pass was needed. Throws ApiError 400 when generation fails after the correction pass.
+  generateWorkflow(projectId: string, description: string): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean }> {
+    return this.request<{ yaml: string; workflowId: string; wasCorrected: boolean }>(
+      'POST',
+      `/api/projects/${encodeURIComponent(projectId)}/workflows/generate`,
+      { description },
+    );
+  }
+
+  // Get the static graph descriptor for a workflow definition (US6). Returns a WorkflowGraphDto
+  // with nodes/edges ready for WorkflowDefinitionInlinePanel; 404 when the workflow is unknown.
+  getWorkflowGraph(projectId: string, workflowId: string): Promise<import('./types').WorkflowGraphDto> {
+    return this.request<import('./types').WorkflowGraphDto>(
+      'GET',
+      `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/graph`,
+    );
+  }
+
   // Review policies (Spec 010, FR-025/027/033). Project-scoped, owner-authorized.
   // List discovered policies + active selection; Get returns one policy's steps;
   // SetActive selects the active policy by name (null clears to the built-in

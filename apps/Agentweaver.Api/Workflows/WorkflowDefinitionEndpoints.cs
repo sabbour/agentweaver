@@ -1,5 +1,6 @@
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Agentweaver.Squad.Squad;
 using YamlDotNet.Core;
 
 namespace Agentweaver.Api.Workflows;
@@ -136,6 +137,25 @@ public static class WorkflowDefinitionEndpoints
             });
         });
 
+        // GET /api/projects/{projectId}/workflows/{workflowId}/graph — static graph descriptor (US6).
+        // Returns a WorkflowGraphDto that maps each node/edge to the shape consumed by WorkflowGraphPanel.
+        app.MapGet("/api/projects/{projectId}/workflows/{workflowId}/graph", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            IProjectStore projectStore,
+            WorkflowRegistry registry,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+
+            var result = registry.Get(project!, workflowId);
+            if (result?.Definition is null) return Results.NotFound();
+
+            return Results.Ok(WorkflowDtoMapper.ToGraph(result.Definition));
+        });
+
         // GET /api/projects/{projectId}/workflows/{workflowId}/yaml — raw YAML content on disk (US7).
         // Returns 404 for built-in workflows (no on-disk file) and for unknown workflow ids.
         app.MapGet("/api/projects/{projectId}/workflows/{workflowId}/yaml", async (
@@ -252,6 +272,68 @@ public static class WorkflowDefinitionEndpoints
 
             return Results.Ok(WorkflowDtoMapper.ToDetail(saved, EffectiveDefaultId(project)));
         });
+
+        // POST /api/projects/{projectId}/workflows/generate — generate a DRAFT workflow from a
+        // natural-language description (Feature 015 US10, FR-056–FR-061). Returns the generated YAML as
+        // an UNSAVED draft for the client to open in the editor; nothing is written to disk here. The
+        // generator validates the model output and performs exactly one correction pass (FR-060) before
+        // failing closed with a structured 400.
+        app.MapPost("/api/projects/{projectId}/workflows/generate", async (
+            HttpContext httpContext,
+            string projectId,
+            GenerateWorkflowRequest request,
+            IProjectStore projectStore,
+            IWorkflowGenerator generator,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+
+            if (request is null || string.IsNullOrWhiteSpace(request.Description))
+                return Results.BadRequest(new { error = "description is required." });
+
+            // FR-061: constrain generated nodes to the project's actual cast roles so the workflow is
+            // immediately runnable. Falls back to the full catalog inside the generator when none exist.
+            var teamRoles = TryReadTeamRoles(project!);
+
+            try
+            {
+                var result = await generator.GenerateAsync(
+                    new WorkflowGenerationRequest(request.Description, project!.Id.ToString(), teamRoles), ct);
+
+                return Results.Ok(new GenerateWorkflowResponse
+                {
+                    Yaml = result.GeneratedYaml,
+                    WorkflowId = result.Workflow.Id,
+                    WasCorrected = result.WasCorrected,
+                });
+            }
+            catch (WorkflowGenerationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+    }
+
+    /// <summary>Reads the project's cast role ids from its squad team, or null when none can be read.
+    /// Used to constrain generated workflow nodes to roles the project can cast (FR-061).</summary>
+    private static IReadOnlyList<string>? TryReadTeamRoles(Project project)
+    {
+        try
+        {
+            var team = new SquadReader(project.WorkingDirectory).ReadTeam();
+            if (team is null) return null;
+            var roles = team.Members
+                .Select(m => m.Role.Id)
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return roles.Count == 0 ? null : roles;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Normalizes an incoming workflow id: trims and treats empty/whitespace as null (clear).</summary>

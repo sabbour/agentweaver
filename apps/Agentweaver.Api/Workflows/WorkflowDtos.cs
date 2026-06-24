@@ -95,6 +95,55 @@ public sealed record WorkflowYamlResponse
     [JsonPropertyName("yaml")] public required string Yaml { get; init; }
 }
 
+/// <summary>A node in a workflow graph descriptor (US6). role/node_type match the GraphNode shape
+/// consumed by WorkflowGraphPanel on the frontend; kind is always "planned".</summary>
+public sealed record WorkflowGraphNodeDto
+{
+    [JsonPropertyName("id")]        public required string Id       { get; init; }
+    [JsonPropertyName("label")]     public required string Label    { get; init; }
+    [JsonPropertyName("role")]      public required string Role     { get; init; }
+    [JsonPropertyName("kind")]      public required string Kind     { get; init; }
+    [JsonPropertyName("node_type")] public string? NodeType { get; init; }
+}
+
+/// <summary>An edge in a workflow graph descriptor (US6). cardinality is always "direct";
+/// loopback is true when the edge forms a back-edge in topological order (cycle).</summary>
+public sealed record WorkflowGraphEdgeDto
+{
+    [JsonPropertyName("from")]        public required string From        { get; init; }
+    [JsonPropertyName("to")]          public required string To          { get; init; }
+    [JsonPropertyName("cardinality")] public required string Cardinality { get; init; }
+    [JsonPropertyName("loopback")]    public required bool   Loopback    { get; init; }
+    [JsonPropertyName("label")]       public string? Label { get; init; }
+}
+
+/// <summary>Response body for GET workflow graph (US6). Matches the GraphDescriptor shape
+/// consumed by the WorkflowGraphPanel renderer on the frontend.</summary>
+public sealed record WorkflowGraphDto
+{
+    [JsonPropertyName("graph_id")]      public required string GraphId     { get; init; }
+    [JsonPropertyName("variant")]       public required string Variant     { get; init; }
+    [JsonPropertyName("start_node_id")] public required string StartNodeId { get; init; }
+    [JsonPropertyName("nodes")]         public required IReadOnlyList<WorkflowGraphNodeDto> Nodes { get; init; }
+    [JsonPropertyName("edges")]         public required IReadOnlyList<WorkflowGraphEdgeDto> Edges { get; init; }
+}
+
+/// <summary>Request body to generate a workflow draft from a natural-language description (US10).</summary>
+public sealed record GenerateWorkflowRequest
+{
+    [JsonPropertyName("description")] public required string Description { get; init; }
+}
+
+/// <summary>Response body for a generated workflow draft (US10). The YAML is unsaved — the client opens
+/// it in the editor for review before any save. <c>wasCorrected</c> reports whether the single
+/// correction pass (FR-060) was needed.</summary>
+public sealed record GenerateWorkflowResponse
+{
+    [JsonPropertyName("yaml")] public required string Yaml { get; init; }
+    [JsonPropertyName("workflowId")] public required string WorkflowId { get; init; }
+    [JsonPropertyName("wasCorrected")] public required bool WasCorrected { get; init; }
+}
+
 /// <summary>Maps the workflow domain model to API DTOs (server-side only, Principles III/IV).</summary>
 public static class WorkflowDtoMapper
 {
@@ -147,6 +196,88 @@ public static class WorkflowDtoMapper
             Error = result.Error,
             IsBuiltIn = result.IsBuiltIn,
             IsDefault = def is not null && string.Equals(def.Id, effectiveDefaultId, StringComparison.Ordinal),
+        };
+    }
+
+    private static string NodeRoleForGraph(WorkflowNodeType t) => t switch
+    {
+        WorkflowNodeType.Check              => "rai",
+        WorkflowNodeType.PeerReview         => "review",
+        WorkflowNodeType.Merge              => "merge",
+        WorkflowNodeType.Scribe             => "scribe",
+        WorkflowNodeType.CoordinatorComposed => "coordinator",
+        WorkflowNodeType.Terminal           => "assembly",
+        _                                   => "agent",
+    };
+
+    private static string NodeTypeForGraph(WorkflowNodeType t) => t switch
+    {
+        WorkflowNodeType.Terminal   => "terminal",
+        WorkflowNodeType.Check      => "gate",
+        WorkflowNodeType.PeerReview => "gate",
+        WorkflowNodeType.FanOut     => "action",
+        WorkflowNodeType.FanIn      => "action",
+        WorkflowNodeType.Merge      => "action",
+        WorkflowNodeType.Scribe     => "action",
+        _                           => "agent",
+    };
+
+    /// <summary>Detects back-edges (loopbacks) via DFS so dagre layout can skip them.</summary>
+    private static HashSet<(string From, string To)> DetectLoopbacks(WorkflowDefinition def)
+    {
+        var adjacency = def.Edges
+            .GroupBy(e => e.From)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.To).ToList());
+
+        var visited  = new HashSet<string>(StringComparer.Ordinal);
+        var inStack  = new HashSet<string>(StringComparer.Ordinal);
+        var loopbacks = new HashSet<(string, string)>();
+
+        void Dfs(string node)
+        {
+            visited.Add(node);
+            inStack.Add(node);
+            foreach (var neighbor in adjacency.GetValueOrDefault(node, []))
+            {
+                if (inStack.Contains(neighbor))
+                    loopbacks.Add((node, neighbor));
+                else if (!visited.Contains(neighbor))
+                    Dfs(neighbor);
+            }
+            inStack.Remove(node);
+        }
+
+        foreach (var n in def.Nodes)
+            if (!visited.Contains(n.Id))
+                Dfs(n.Id);
+
+        return loopbacks;
+    }
+
+    public static WorkflowGraphDto ToGraph(WorkflowDefinition def)
+    {
+        var loopbacks = DetectLoopbacks(def);
+        return new WorkflowGraphDto
+        {
+            GraphId     = def.Id,
+            Variant     = "workflow",
+            StartNodeId = def.Start,
+            Nodes = def.Nodes.Select(n => new WorkflowGraphNodeDto
+            {
+                Id       = n.Id,
+                Label    = n.Label,
+                Role     = NodeRoleForGraph(n.Type),
+                Kind     = "planned",
+                NodeType = NodeTypeForGraph(n.Type),
+            }).ToList(),
+            Edges = def.Edges.Select(e => new WorkflowGraphEdgeDto
+            {
+                From        = e.From,
+                To          = e.To,
+                Cardinality = "direct",
+                Loopback    = loopbacks.Contains((e.From, e.To)),
+                Label       = e.When,
+            }).ToList(),
         };
     }
 

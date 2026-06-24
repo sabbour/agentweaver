@@ -9,6 +9,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 using Agentweaver.Squad.Catalog;
@@ -125,6 +126,11 @@ public sealed class CoordinatorOrchestratorExecutor
             return;
         }
 
+        // Feature 015 US5: pick the best-fit functional workflow for THIS task from the project's
+        // available set and surface it (with rationale + override hint). Single-workflow projects skip
+        // selection silently. Selection never blocks orchestration — it always resolves to a workflow.
+        await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
+
         var drafts = await DecomposeWithModelAsync(input, spec, ct).ConfigureAwait(false)
                      ?? DecomposeDeterministic(spec);
         if (drafts.Count == 0)
@@ -152,6 +158,93 @@ public sealed class CoordinatorOrchestratorExecutor
             .ConfigureAwait(false);
 
         EmitWorkPlanEvent(input.RunId, workPlanId, persisted);
+    }
+
+    // -----------------------------------------------------------------------
+    // Workflow selection (Feature 015 US5)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Selects the best-fit functional workflow for the task and surfaces it on the coordinator run
+    /// stream. A project carrying a single workflow skips selection silently (no event, no model
+    /// call). An explicit user override ("use {workflow-id}" carried in the human's revise feedback)
+    /// always wins over the coordinator's pick. Best-effort: any failure leaves orchestration to
+    /// proceed on the project default.
+    /// </summary>
+    private async Task SelectWorkflowAsync(
+        IServiceScope scope, CoordinatorDraftInput input, OutcomeSpec spec, CancellationToken ct)
+    {
+        try
+        {
+            var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+            var registry = scope.ServiceProvider.GetRequiredService<WorkflowRegistry>();
+            var selector = scope.ServiceProvider.GetRequiredService<IWorkflowSelector>();
+
+            if (!Guid.TryParse(input.ProjectId, out var projectGuid)) return;
+            var project = await projectStore.GetAsync(new ProjectId(projectGuid), ct).ConfigureAwait(false);
+            if (project is null) return;
+
+            // Order the default first so it is the selector's deterministic fallback.
+            var defaultDef = registry.ResolveDefault(project).Definition;
+            var available = registry.GetOrLoad(project).Available
+                .Select(r => r.Definition!)
+                .Where(d => d is not null)
+                .OrderByDescending(d => defaultDef is not null && string.Equals(d.Id, defaultDef.Id, StringComparison.Ordinal))
+                .ThenBy(d => d.Id, StringComparer.Ordinal)
+                .ToList();
+
+            // Single (or zero) workflow: skip selection silently.
+            if (available.Count <= 1) return;
+
+            var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
+            var context = new WorkflowSelectionContext(input.ProjectId, spec.Goal, roles, available);
+
+            // An explicit user override in the latest human message always wins.
+            if (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var overrideId))
+            {
+                var overridden = available.FirstOrDefault(d => string.Equals(d.Id, overrideId, StringComparison.Ordinal));
+                if (overridden is not null)
+                {
+                    EmitWorkflowSelectedEvent(input.RunId, overridden,
+                        $"Using '{overridden.Name}' as requested.", wasAutoSelected: false, available);
+                    return;
+                }
+            }
+
+            var result = await selector.SelectAsync(context, ct).ConfigureAwait(false);
+            EmitWorkflowSelectedEvent(input.RunId, result.Selected, result.Rationale, result.WasAutoSelected, available);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Coordinator workflow selection failed for run {RunId}; proceeding on the project default.",
+                input.RunId);
+        }
+    }
+
+    private void EmitWorkflowSelectedEvent(
+        string runId,
+        WorkflowDefinition selected,
+        string rationale,
+        bool wasAutoSelected,
+        IReadOnlyList<WorkflowDefinition> available)
+    {
+        var entry = _streamStore.Get(runId);
+        var overrideHint = $"Reply 'use {{other-id}}' to change (available: "
+            + string.Join(", ", available.Select(d => d.Id)) + ").";
+        entry?.RecordNext(EventTypes.CoordinatorWorkflowSelected, new
+        {
+            selectedId = selected.Id,
+            selectedName = selected.Name,
+            rationale,
+            wasAutoSelected,
+            overrideHint,
+            available = available.Select(d => new { id = d.Id, name = d.Name }).ToList(),
+        });
+
+        _logger.LogInformation(
+            "Coordinator workflow selection for run {RunId}: '{WorkflowId}' (auto={Auto}) — {Rationale}",
+            runId, selected.Id, wasAutoSelected, rationale);
     }
 
     // -----------------------------------------------------------------------
