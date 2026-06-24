@@ -257,7 +257,7 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
     private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(
         string coordinatorRunId,
-        (SubtaskStatus Status, string ChildRunId)[] subtasks)
+        (string Status, string ChildRunId)[] subtasks)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();

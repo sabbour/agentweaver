@@ -369,9 +369,9 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         result!.Status.Should().Be("merge_failed");
         result.MergeResult.Should().StartWith("conflict:");
 
-        // The worktree DIRECTORY must be removed (MergeFailed is terminal; conflict info is in the DB).
-        Directory.Exists(run.WorktreePath).Should().BeFalse(
-            "the worktree directory must be removed when the merge fails — conflict info is in merge_conflicts");
+        // The worktree DIRECTORY is preserved on conflict for manual inspection; conflict info is also in the DB.
+        Directory.Exists(run.WorktreePath).Should().BeTrue(
+            "the worktree directory must be preserved when the merge fails — conflict info is in merge_conflicts");
     }
 
     // =========================================================================

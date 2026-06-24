@@ -30,6 +30,7 @@ export interface WorkflowEditorProps {
 const BLANK_TEMPLATE = `id: my-workflow
 name: My Workflow
 description: Describe what this workflow does and when to use it.
+version: "1.0"
 
 trigger:
   type: manual

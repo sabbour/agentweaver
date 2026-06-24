@@ -179,9 +179,9 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
         repoAfter.Branches[run.OriginatingBranch]!.Tip.Sha.Should().Be(humanCommitSha,
             "the originating branch must not be modified when a merge fails (FR-016)");
 
-        // Worktree is removed on conflict — MergeFailed is cleanly terminal, conflict info is in the DB.
-        Directory.Exists(run.WorktreePath).Should().BeFalse(
-            "the worktree must be removed when the merge fails — conflict info is stored in merge_conflicts");
+        // Worktree is preserved on conflict — user can inspect the merge state manually; conflict info is also in the DB.
+        Directory.Exists(run.WorktreePath).Should().BeTrue(
+            "the worktree must be preserved when the merge fails — conflict info is stored in merge_conflicts");
     }
 
     // =========================================================================
