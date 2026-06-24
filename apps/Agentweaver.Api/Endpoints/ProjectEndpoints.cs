@@ -316,6 +316,10 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
     var run = await runStore.GetByWorkflowRunIdAsync(workflowRunId, ct);
     if (run is null) return Results.NotFound();
 
+    // Guard against cross-project data leakage: ensure the run belongs to the requested project.
+    if (run.ProjectId is null || !string.Equals(run.ProjectId.Value.ToString(), id, StringComparison.OrdinalIgnoreCase))
+        return Results.NotFound();
+
     string? coordinatorStatus = null;
     var isCoordinatorRun = run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
     if (isCoordinatorRun)

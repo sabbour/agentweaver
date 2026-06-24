@@ -684,6 +684,7 @@ app.MapPost("/api/runs/{id}/review", async (
     PendingRequestStore pendingStore,
     IWorktreeOperations worktreeOps,
     IMergeCoordinator mergeCoordinator,
+    RunWorkflowFactory workflowFactory,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -756,7 +757,7 @@ app.MapPost("/api/runs/{id}/review", async (
                 "Review decision: {Decision} (direct path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
                 request.Approved ? "approved" : "declined", id, run.SubmittingUser, caller.User);
             return await ExecuteDirectReviewAsync(
-                id, runId, run, request, runStore, streamStore, worktreeOps, mergeCoordinator, logger, ct);
+                id, runId, run, request, runStore, streamStore, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
         }
         // If the run is registered but no pending request, the request was already consumed.
         return Results.StatusCode(409);
@@ -843,7 +844,7 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Return immediately — the watch loop will handle the terminal state transition.
-    var expectedStatus = request.Approved ? "merging" : "declined";
+    var expectedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
     return Results.Json(new ReviewResponse { RunId = id, Status = expectedStatus, MergeResult = null });
 });
 
@@ -859,6 +860,8 @@ app.MapPost("/api/runs/{id}/commit", async (
     RunStreamStore streamStore,
     WorktreeManager worktreeManager,
     IMergeCoordinator mergeCoordinator,
+    RunWorkflowRegistry workflowRegistry,
+    RunWorkflowFactory workflowFactory,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -899,6 +902,9 @@ app.MapPost("/api/runs/{id}/commit", async (
 
     if (!acquiredCommitting)
         return Results.Conflict(new { error = $"Run is no longer in awaiting_review and cannot be committed." });
+
+    // Cancel any paused MAF workflow so it doesn't remain orphaned.
+    workflowRegistry.Abandon(id);
 
     // Stage and commit any remaining uncommitted changes in the worktree.
     string newTreeHash;
@@ -955,6 +961,7 @@ app.MapPost("/api/runs/{id}/commit", async (
                 entry.RecordNext(EventTypes.MergeCompleted,
                     new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha, merge_mode = mergeExecResult.MergeMode });
                 streamStore.Complete(id);
+                _ = workflowFactory.PersistRunEventsAsync(id);
             }
             logger.LogInformation("Run {RunId} committed and merged by {User}", id, caller);
             return Results.Json(new CommitResponse
@@ -973,6 +980,7 @@ app.MapPost("/api/runs/{id}/commit", async (
                 entry.RecordNext(EventTypes.MergeConflicted,
                     new { conflicting_files = conflictingFiles });
                 streamStore.Complete(id);
+                _ = workflowFactory.PersistRunEventsAsync(id);
             }
             logger.LogInformation(
                 "Run {RunId} commit succeeded but merge conflicted for {User}: {FileCount} file(s)",
@@ -2059,6 +2067,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
     RunStreamStore streamStore,
     IWorktreeOperations worktreeOps,
     IMergeCoordinator mergeCoordinator,
+    RunWorkflowFactory workflowFactory,
     ILogger<Program> logger,
     CancellationToken ct)
 {
@@ -2075,10 +2084,24 @@ static async Task<IResult> ExecuteDirectReviewAsync(
 
     if (!request.Approved)
     {
+        if (request.RequestChanges)
+        {
+            // request_changes is not supported on the direct path — there's no live workflow
+            // to resume and re-run the agent. Revert the run to AwaitingReview so the caller
+            // can re-submit with approve or decline.
+            logger.LogWarning(
+                "request_changes not supported on direct review path for run {RunId}; reverting to AwaitingReview", id);
+            await runStore.UpdateStatusAsync(runId, RunStatus.AwaitingReview, null, CancellationToken.None).ConfigureAwait(false);
+            return Results.Conflict(new
+            {
+                error = "request_changes is not supported when no live workflow is registered for this run. Please approve or decline instead."
+            });
+        }
         if (entry is not null)
         {
             entry.RecordNext(EventTypes.ReviewDeclined, new { });
             streamStore.Complete(id);
+            _ = workflowFactory.PersistRunEventsAsync(id);
         }
         return Results.Json(new ReviewResponse { RunId = id, Status = RunStatus.Declined.ToApiString(), MergeResult = null });
     }
@@ -2127,6 +2150,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
                 entry.RecordNext(EventTypes.MergeCompleted,
                     new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha, merge_mode = mergeExecResult.MergeMode });
                 streamStore.Complete(id);
+                _ = workflowFactory.PersistRunEventsAsync(id);
             }
             return Results.Json(new ReviewResponse
             {
@@ -2149,6 +2173,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
                 entry.RecordNext(EventTypes.MergeConflicted,
                     new { conflicting_files = mergeExecResult.ConflictingFiles ?? [] });
                 streamStore.Complete(id);
+                _ = workflowFactory.PersistRunEventsAsync(id);
             }
             return Results.Json(new ReviewResponse
             {
