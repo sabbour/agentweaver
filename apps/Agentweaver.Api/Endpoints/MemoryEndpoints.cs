@@ -52,8 +52,7 @@ app.MapGet("/api/projects/{id}/memory", async (
             .Select(t => t.Trim())
             .Where(t => t.Length > 0)
             .ToList();
-        foreach (var tag in requestedTags)
-            query = query.Where(m => m.Tags != null && EF.Functions.Like(m.Tags, $"%,{tag},%"));
+        query = query.Where(m => m.Tags != null && requestedTags.Any(tag => EF.Functions.Like(m.Tags, $"%,{tag},%")));
     }
 
     var memories = (await query.ToListAsync(ct))
@@ -70,6 +69,8 @@ app.MapGet("/api/projects/{id}/memory", async (
 app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
     string id,
     string name,
+    string? type,
+    string? importance,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -80,6 +81,8 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
     if (project is null) return Results.NotFound();
     var memories = (await memoryDb.AgentMemory
         .Where(m => m.ProjectId == id && m.AgentName == name)
+        .Where(m => type == null || m.Type == type)
+        .Where(m => importance == null || m.Importance == importance)
         .ToListAsync(ct))
         .OrderByDescending(m => m.CreatedAt)
         .ToList();
@@ -262,6 +265,58 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
         };
         memoryDb.SessionContexts.Add(session);
     }
+
+    if (!string.IsNullOrWhiteSpace(request.FocusArea)) session.FocusArea = request.FocusArea!;
+    if (request.ActiveIssues is not null) session.ActiveIssues = request.ActiveIssues;
+    if (request.Summary is not null) session.Summary = request.Summary;
+    if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new
+    {
+        session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        started_at = session.StartedAt, ended_at = session.EndedAt,
+    });
+});
+
+// GET /api/projects/{id}/sessions
+app.MapGet("/api/projects/{id}/sessions", async (
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var sessions = (await memoryDb.SessionContexts
+        .Where(s => s.ProjectId == id)
+        .ToListAsync(ct))
+        .OrderByDescending(s => s.StartedAt)
+        .ToList();
+    return Results.Ok(sessions.Select(s => new
+    {
+        s.Id, s.SessionId, s.FocusArea, s.ActiveIssues, s.Summary,
+        started_at = s.StartedAt, ended_at = s.EndedAt,
+    }));
+});
+
+// PATCH /api/projects/{id}/sessions/{sessionId}
+app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, async (
+    string id,
+    string sessionId,
+    UpdateSessionRequest request,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var session = await memoryDb.SessionContexts
+        .FirstOrDefaultAsync(s => s.ProjectId == id && s.SessionId == sessionId, ct);
+    if (session is null) return Results.NotFound();
 
     if (!string.IsNullOrWhiteSpace(request.FocusArea)) session.FocusArea = request.FocusArea!;
     if (request.ActiveIssues is not null) session.ActiveIssues = request.ActiveIssues;
