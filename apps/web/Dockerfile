@@ -1,40 +1,38 @@
-# Build stage
-FROM node:22-alpine AS build
+# Stage 1: Build React SPA
+# Build context must be the repo root so both apps/web/ and apps/Agentweaver.Web/ are accessible.
+FROM node:22-alpine AS web-build
 WORKDIR /app
-
-# Copy package files and install dependencies
-COPY package.json package-lock.json* ./
+COPY apps/web/package.json apps/web/package-lock.json* ./
 RUN npm ci
-
-# Copy source and build
-COPY . .
+COPY apps/web/ .
 RUN npm run build
 
-# Runtime stage — Caddy serving static assets
-FROM caddy:alpine AS runtime
+# Stage 2: Build the ASP.NET Core static file host
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS dotnet-build
+WORKDIR /src
+COPY apps/Agentweaver.Web/Agentweaver.Web.csproj apps/Agentweaver.Web/
+RUN dotnet restore apps/Agentweaver.Web/Agentweaver.Web.csproj
+COPY apps/Agentweaver.Web/ apps/Agentweaver.Web/
+RUN dotnet publish apps/Agentweaver.Web/Agentweaver.Web.csproj \
+    --configuration Release \
+    --no-restore \
+    --output /app/publish
 
-# Copy built assets
-COPY --from=build /app/dist /srv
+# Stage 3: Runtime — ASP.NET Core serving the React SPA
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+WORKDIR /app
 
-# SPA routing: all unmatched paths fall back to index.html.
-# Assets (JS/CSS/etc.) get long-lived immutable cache headers.
-RUN printf ':80 {\n\
-    root * /srv\n\
-    encode gzip br\n\
-    @assets {\n\
-        path *.js *.css *.woff *.woff2 *.ttf *.eot *.ico *.png *.jpg *.jpeg *.gif *.svg\n\
-    }\n\
-    header @assets Cache-Control "public, max-age=31536000, immutable"\n\
-    try_files {path} /index.html\n\
-    file_server\n\
-}\n' > /etc/caddy/Caddyfile
+RUN groupadd --gid 1000 appgroup \
+    && useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
 
-# Caddy needs write access to /data (OCSP/cert cache) and /config (runtime config).
-# Chown them so the process can run as non-root UID 1000.
-RUN chown -R 1000:1000 /data /config
+COPY --from=dotnet-build --chown=appuser:appgroup /app/publish .
+COPY --from=web-build --chown=appuser:appgroup /app/dist ./wwwroot
 
 USER 1000
 
-EXPOSE 80
+EXPOSE 8080
 
-CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+ENV ASPNETCORE_URLS=http://+:8080
+ENV ASPNETCORE_ENVIRONMENT=Production
+
+ENTRYPOINT ["dotnet", "Agentweaver.Web.dll"]

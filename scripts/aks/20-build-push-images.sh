@@ -2,14 +2,12 @@
 # 20-build-push-images.sh -- Build and push Agentweaver container images to ACR.
 #
 # Builds two images using 'az acr build' (no local Docker daemon required):
-#   agentweaver-api      -- .NET 10 API  (context: repo root, Dockerfile: apps/Agentweaver.Api/Dockerfile)
-#   agentweaver-frontend -- React/nginx  (context: apps/web/, Dockerfile: apps/web/Dockerfile)
+#   agentweaver-api      -- .NET 10 API         (context: repo root, Dockerfile: apps/Agentweaver.Api/Dockerfile)
+#   agentweaver-frontend -- ASP.NET Core + SPA   (context: repo root, Dockerfile: apps/web/Dockerfile)
 #
-# The build context for the API is the repo root because the Dockerfile needs
-# to COPY both apps/Agentweaver.Api/ and packages/ (multi-project solution).
-#
-# Requires: Azure CLI 2.80.0+
-# Run from the REPO ROOT.
+# Both images use the repo root as build context because both Dockerfiles reference
+# multiple subdirectories (apps/ and packages/ for the API; apps/web/ and
+# apps/Agentweaver.Web/ for the frontend).
 #
 # Usage:
 #   source scripts/aks/00-variables.sh
@@ -45,7 +43,7 @@ echo ""
 echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}"
 
 # -- Image 2: agentweaver-frontend --------------------------------------------
-# Build context: apps/web/ (self-contained, npm build runs inside)
+# Build context: repo root (Dockerfile needs both apps/web/ and apps/Agentweaver.Web/)
 # Dockerfile: apps/web/Dockerfile
 echo ""
 echo "--- Building agentweaver-frontend ---"
@@ -54,7 +52,7 @@ az acr build \
   --resource-group "${RESOURCE_GROUP}" \
   --image "agentweaver-frontend:${IMAGE_TAG}" \
   --file "apps/web/Dockerfile" \
-  apps/web/
+  .
 
 echo ""
 echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-frontend:${IMAGE_TAG}"
