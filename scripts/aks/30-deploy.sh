@@ -113,20 +113,32 @@ for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
   echo "  rendered: ${fname}"
 done
 
-# -- Step 6: Apply rendered manifests -----------------------------------------
+# -- Step 6: Apply PVCs before deployment -------------------------------------
+# PVCs must be created before pods start so volume mounts succeed on first
+# scheduling. Applied from the rendered dir so namespace substitution is done.
+echo ""
+echo "Applying PersistentVolumeClaims..."
+kubectl apply -f "${RENDERED_DIR}/pvc-data.yaml"
+echo "  [applied] pvc-data.yaml"
+kubectl apply -f "${RENDERED_DIR}/pvc-workspace.yaml"
+echo "  [applied] pvc-workspace.yaml"
+
+# -- Step 7: Apply remaining rendered manifests --------------------------------
 echo ""
 echo "Applying manifests..."
 for rendered_file in "${RENDERED_DIR}"/*.yaml; do
   fname="$(basename "${rendered_file}")"
-  # Skip namespace (already applied above) and security policies (applied in Step 9)
+  # Skip namespace (already applied above), security policies (applied in Step 9),
+  # and PVCs (already applied in Step 6)
   [[ "${fname}" == "namespace.yaml" ]] && continue
   [[ "${fname}" == peer-authentication.yaml ]] && continue
   [[ "${fname}" == authorization-policy*.yaml ]] && continue
+  [[ "${fname}" == pvc-*.yaml ]] && continue
   kubectl apply -f "${rendered_file}"
   echo "  [applied] ${fname}"
 done
 
-# -- Step 7: Wait for Gateway -------------------------------------------------
+# -- Step 8: Wait for Gateway -------------------------------------------------
 echo ""
 echo "Waiting for gateway/agentweaver-gateway to become Programmed (up to 3 min)..."
 kubectl wait \

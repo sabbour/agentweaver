@@ -55,6 +55,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: workspace
+              mountPath: /workspace
             # CSI mount triggers the SecretProviderClass to sync the Key Vault secret
             # into the agentweaver-secrets Kubernetes Secret used by the env var above.
             - name: secrets-store
@@ -89,11 +91,11 @@ spec:
                 - ALL
       volumes:
         - name: data
-          # Wave 1: PVC is a placeholder (Wave 2 / 017-US5 creates it).
-          # Until the PVC exists, remove this volume claim and use an emptyDir
-          # for ephemeral local testing. The manifest is correct for Wave 2.
           persistentVolumeClaim:
             claimName: agentweaver-data
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: agentweaver-workspace
         - name: secrets-store
           csi:
             driver: secrets-store.csi.k8s.io

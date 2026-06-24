@@ -71,13 +71,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunOptionsStore? _runOptions;
     private readonly ICoordinatorAutopilot? _autopilot;
+    private readonly IRunEventStream? _eventStream;
     private readonly ILogger<CoordinatorDispatchService> _logger;
     private readonly CancellationToken _appStopping;
 
     /// <summary>
-    /// How long an orphaned child run (terminal-less in the store, with NO live watch loop) may make
-    /// no progress before the reconciling dispatch loop stall-fails its subtask instead of polling it
-    /// forever. Configurable via <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 15 minutes).
+    /// How long a child run may emit no events before the observation loop treats it as stalled.
+    /// Configurable via <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 5 minutes).
     /// </summary>
     private readonly TimeSpan _stallTimeout;
 
@@ -94,7 +94,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         ILogger<CoordinatorDispatchService> logger,
         IRunOptionsStore? runOptions = null,
         ICoordinatorAutopilot? autopilot = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IRunEventStream? eventStream = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -104,10 +105,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _scopeFactory = scopeFactory;
         _runOptions = runOptions;
         _autopilot = autopilot;
+        _eventStream = eventStream;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
 
-        var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 15.0) ?? 15.0;
+        var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 5.0) ?? 5.0;
         _stallTimeout = TimeSpan.FromMinutes(Math.Max(0, stallMinutes));
     }
 

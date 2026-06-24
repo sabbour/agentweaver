@@ -76,16 +76,56 @@ Builds two images via `az acr build` (no local Docker daemon required):
 - `agentweaver-api:<IMAGE_TAG>` — .NET 10 API
 - `agentweaver-frontend:<IMAGE_TAG>` — React SPA served by nginx
 
-### 4. Create the GitHub Copilot token secret
-
-Before deploying, create the Kubernetes secret that holds the GitHub Copilot token:
+### 4. Set up secrets (Key Vault + workload identity)
 
 ```bash
-kubectl -n agentweaver create secret generic agentweaver-secrets \
-  --from-literal=github-copilot-token=<YOUR_GITHUB_TOKEN>
+# Set your tenant ID first
+export TENANT_ID=$(az account show --query tenantId -o tsv)
+
+# Optionally set a custom Key Vault name (must be globally unique)
+export KEYVAULT_NAME=agentweaver-kv
+
+# Set your GitHub Copilot token
+export GITHUB_COPILOT_TOKEN=ghp_...
+
+bash scripts/aks/15-setup-identity.sh
 ```
 
-> **Wave 2**: This manual secret will be replaced by Azure Key Vault + CSI driver + workload identity (017-US4).
+This script:
+1. Creates a **user-assigned managed identity** (`agentweaver-api-identity`)
+2. Creates an **Azure Key Vault** with RBAC authorization enabled
+3. Stores the GitHub Copilot token as secret `github-copilot-token` in Key Vault
+4. Grants the managed identity the `Key Vault Secrets User` role on the vault
+5. Enables **OIDC issuer** and **workload identity** on the AKS cluster
+6. Creates a **federated credential** linking the AKS service account to the managed identity
+7. Enables the **Azure Key Vault Secrets Provider** add-on (CSI driver)
+
+At completion, the script prints the `IDENTITY_CLIENT_ID` to export before deploying:
+
+```bash
+export IDENTITY_CLIENT_ID=<printed by script>
+```
+
+#### How the token flows from Key Vault to the pod
+
+```
+Key Vault secret: github-copilot-token
+        │
+        │  SecretProviderClass (k8s/secret-provider-class.yaml)
+        │  – CSI driver fetches the secret using the pod's workload identity token
+        ▼
+Kubernetes Secret: agentweaver-secrets / github-copilot-token
+        │
+        │  secretKeyRef in api-deployment.yaml
+        ▼
+Pod env var: Providers__GitHubCopilot__GitHubToken
+        │
+        │  ASP.NET Core configuration binding
+        ▼
+appsettings.json key: Providers:GitHubCopilot:GitHubToken
+```
+
+The CSI volume mount on `/mnt/secrets` is required to trigger the `SecretProviderClass` sync — without it, the Kubernetes Secret is never populated and the `secretKeyRef` will fail.
 
 ### 5. Deploy to AKS
 
@@ -195,7 +235,7 @@ kubectl logs -n agentweaver -l app=agentweaver-api --previous
 
 Common causes:
 - PVC `agentweaver-data` does not exist (Wave 2 / 017-US5 creates it) — for initial testing, edit `api-deployment.yaml` to use an `emptyDir` volume instead
-- GitHub Copilot token secret missing — create it (see Step 4)
+- GitHub Copilot token not synced — confirm `15-setup-identity.sh` completed and `IDENTITY_CLIENT_ID` / `KEYVAULT_NAME` / `TENANT_ID` were set when deploying; check CSI driver pod logs: `kubectl logs -n kube-system -l app=secrets-store-csi-driver`
 
 ### NetworkPolicy blocking traffic
 

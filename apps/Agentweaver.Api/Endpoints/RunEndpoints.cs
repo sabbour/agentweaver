@@ -316,6 +316,7 @@ app.MapGet("/api/runs/{id}/stream", async (
     string id,
     RunStreamStore streamStore,
     SqliteRunStore runStore,
+    IRunEventStream eventStream,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -403,30 +404,29 @@ app.MapGet("/api/runs/{id}/stream", async (
         }
         else
         {
-            // No live stream (e.g. after process restart). Replay from DB if available.
+            // No live stream entry (e.g. after process restart or eviction).
+            // Replay via IRunEventStream.SubscribeAsync so Last-Event-ID drives the cursor,
+            // giving gapless, duplicate-free resume without holding duplicate DB query logic.
             httpContext.Response.Headers.ContentType = "text/event-stream";
             httpContext.Response.Headers.CacheControl = "no-cache";
             httpContext.Response.Headers.Connection = "keep-alive";
 
-            using var dbScope = httpContext.RequestServices.CreateScope();
-            var db = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var persistedEvents = db.RunEvents
-                .Where(e => e.RunId == id)
-                .OrderBy(e => e.Sequence)
-                .ToList();
+            var replayLastSeenHeader = httpContext.Request.Headers["Last-Event-ID"].FirstOrDefault();
+            var replayFromSequence = int.TryParse(replayLastSeenHeader, out var rls) ? rls : 0;
 
-            if (persistedEvents.Any())
+            var replayedAny = false;
+            try
             {
-                foreach (var rec in persistedEvents)
+                await foreach (var evt in eventStream.SubscribeAsync(id, replayFromSequence, ct).ConfigureAwait(false))
                 {
-                    object payload;
-                    try { payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson); }
-                    catch { payload = new { }; }
-                    var evt = new RunEvent(rec.Sequence, rec.EventType, payload);
                     await EndpointHelpers.WriteSseEventAsync(httpContext.Response, evt, ct);
+                    replayedAny = true;
                 }
             }
-            else if (!isSubStream && run?.Result is not null)
+            catch (OperationCanceledException) { /* client disconnected */ }
+
+            // Legacy fallback: old completed runs may have no RunEvents rows but a result string.
+            if (!replayedAny && !isSubStream && run?.Result is not null)
             {
                 var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = run.Result });
                 await EndpointHelpers.WriteSseEventAsync(httpContext.Response, evt, ct);
