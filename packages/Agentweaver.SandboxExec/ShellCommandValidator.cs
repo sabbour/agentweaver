@@ -7,7 +7,7 @@ namespace Agentweaver.SandboxExec;
 /// safe to forward to the sandbox backend. This is a host-side defense-in-depth
 /// layer; mxc filesystem policy is the primary enforcement mechanism.
 /// </summary>
-internal static class ShellCommandValidator
+public static class ShellCommandValidator
 {
     private const int MaxCommandLengthBytes = 65536;
 

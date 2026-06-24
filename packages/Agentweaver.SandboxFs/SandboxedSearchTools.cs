@@ -16,6 +16,7 @@ public sealed record GrepMatch(string RelativePath, int LineNumber, string LineC
 public sealed class SandboxedSearchTools
 {
     private readonly string _sandboxRoot;
+    private readonly int _maxOutputBytes;
 
     private static readonly HashSet<string> ExcludedDirNames =
         new(StringComparer.OrdinalIgnoreCase) { ".git", "node_modules", "bin", "obj", ".vs" };
@@ -27,9 +28,10 @@ public sealed class SandboxedSearchTools
         ReturnSpecialDirectories = false,
     };
 
-    public SandboxedSearchTools(string sandboxRoot)
+    public SandboxedSearchTools(string sandboxRoot, int maxOutputBytes = 0)
     {
         _sandboxRoot = Path.GetFullPath(sandboxRoot);
+        _maxOutputBytes = maxOutputBytes;
 
         // Seraph A2: reject if the sandbox root itself is a reparse point
         if (Directory.Exists(_sandboxRoot))
@@ -105,6 +107,21 @@ public sealed class SandboxedSearchTools
             }
         }
 
+        return _maxOutputBytes > 0 ? TruncateGrepResults(results, _maxOutputBytes) : results;
+    }
+
+    private static IReadOnlyList<GrepMatch> TruncateGrepResults(List<GrepMatch> results, int maxOutputBytes)
+    {
+        int totalBytes = 0;
+        for (int i = 0; i < results.Count; i++)
+        {
+            var m = results[i];
+            int lineBytes = System.Text.Encoding.UTF8.GetByteCount(
+                $"{m.RelativePath}:{m.LineNumber}: {m.LineContent}\n");
+            if (totalBytes + lineBytes > maxOutputBytes)
+                return results.GetRange(0, i);
+            totalBytes += lineBytes;
+        }
         return results;
     }
 
@@ -212,6 +229,19 @@ public sealed class SandboxedSearchTools
             }
         }
 
+        return _maxOutputBytes > 0 ? TruncateFileResults(results, _maxOutputBytes) : results;
+    }
+
+    private static IReadOnlyList<string> TruncateFileResults(List<string> results, int maxOutputBytes)
+    {
+        int totalBytes = 0;
+        for (int i = 0; i < results.Count; i++)
+        {
+            int lineBytes = System.Text.Encoding.UTF8.GetByteCount(results[i] + "\n");
+            if (totalBytes + lineBytes > maxOutputBytes)
+                return results.GetRange(0, i);
+            totalBytes += lineBytes;
+        }
         return results;
     }
 

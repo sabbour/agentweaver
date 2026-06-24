@@ -199,8 +199,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
         _logger.LogInformation("Copilot client started");
 
-        var fileTools = new SandboxedFileTools(workingDirectory);
-        var searchTools = new SandboxedSearchTools(workingDirectory);
+        var fileTools = new SandboxedFileTools(workingDirectory, sandboxPolicy.MaxOutputBytes);
+        var searchTools = new SandboxedSearchTools(workingDirectory, sandboxPolicy.MaxOutputBytes);
         var redactor = SandboxOutputRedactor.Default;
         var agentId = $"did:mesh:agentweaver:copilot:{runId}";
 

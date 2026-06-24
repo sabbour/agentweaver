@@ -14,7 +14,7 @@ internal sealed class FileSearchTool : ISandboxTool
                 [Description("Max number of results. Default 200.")] int? max_results,
                 CancellationToken ct = default) =>
             {
-                var paths = await ctx.SearchTools.FileSearchAsync(pattern, max_results ?? 200, ct);
+                var paths = await ctx.SearchTools.FileSearchAsync(pattern, Math.Min(max_results ?? 200, 1000), ct);
                 if (paths.Count == 0) return "No files found.";
                 return string.Join("\n", paths);
             },
