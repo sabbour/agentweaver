@@ -49,9 +49,17 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
         return Results.BadRequest(new { error = "agent_name, slug, type, title, and content are required." });
 
     var exists = await memoryDb.DecisionInbox
-        .AnyAsync(e => e.ProjectId == id && e.AgentName == request.AgentName && e.Slug == request.Slug, ct);
-    if (exists)
-        return Results.Conflict(new { error = "An inbox entry with this slug already exists." });
+        .FirstOrDefaultAsync(e => e.ProjectId == id && e.AgentName == request.AgentName && e.Slug == request.Slug && e.Status == "pending", ct);
+    if (exists is not null)
+    {
+        exists.Type = request.Type!;
+        exists.Title = request.Title!;
+        exists.Content = request.Content!;
+        exists.Rationale = request.Rationale;
+        exists.UpdatedAt = DateTimeOffset.UtcNow;
+        await memoryDb.SaveChangesAsync(ct);
+        return Results.Ok(new { exists.Id, exists.Slug, exists.Status });
+    }
 
     var now = DateTimeOffset.UtcNow;
     var entry = new DecisionInboxEntry
@@ -114,6 +122,38 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     if (entry is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
+    if (entry.Type == "architectural" || entry.Type == "scope")
+        return Results.BadRequest(new { error = "Coordinator-reserved decisions must be promoted by the coordinator agent." });
+
+    var now = DateTimeOffset.UtcNow;
+    var decision = DecisionPromotion.PromoteEntry(memoryDb, entry, now);
+    await memoryDb.SaveChangesAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new { entry.Id, entry.Status, decisionId = decision.Id });
+});
+
+// POST /api/projects/{id}/decisions/inbox/{entryId}/promote (alias for /merge)
+app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
+    string id,
+    int entryId,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
+    var entry = await memoryDb.DecisionInbox
+        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
+    if (entry is null)
+        return Results.Conflict(new { error = "Entry is not pending or does not exist." });
+
+    if (entry.Type == "architectural" || entry.Type == "scope")
+        return Results.BadRequest(new { error = "Coordinator-reserved decisions must be promoted by the coordinator agent." });
+
     var now = DateTimeOffset.UtcNow;
     var decision = DecisionPromotion.PromoteEntry(memoryDb, entry, now);
     await memoryDb.SaveChangesAsync(ct);
@@ -150,6 +190,9 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
 // GET /api/projects/{id}/decisions
 app.MapGet("/api/projects/{id}/decisions", async (
     string id,
+    string? status,
+    string? type,
+    string? agent,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -160,6 +203,9 @@ app.MapGet("/api/projects/{id}/decisions", async (
     if (project is null) return Results.NotFound();
     var decisions = (await memoryDb.Decisions
         .Where(d => d.ProjectId == id)
+        .Where(d => status == null || d.Status == status)
+        .Where(d => type == null || d.Type == type)
+        .Where(d => agent == null || d.AgentName == agent)
         .ToListAsync(ct))
         .OrderByDescending(d => d.CreatedAt)
         .ToList();
@@ -168,6 +214,28 @@ app.MapGet("/api/projects/{id}/decisions", async (
         d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
         created_at = d.CreatedAt, updated_at = d.UpdatedAt,
     }));
+});
+
+// GET /api/projects/{id}/decisions/{decisionId}
+app.MapGet("/api/projects/{id}/decisions/{decisionId}", async (
+    string id,
+    int decisionId,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
+    if (decision is null || decision.ProjectId != id) return Results.NotFound();
+    return Results.Ok(new
+    {
+        decision.Id, decision.AgentName, decision.Type, decision.Status,
+        decision.Title, decision.Content, decision.Rationale, decision.Tags,
+        created_at = decision.CreatedAt, updated_at = decision.UpdatedAt,
+    });
 });
 
 // POST /api/projects/{id}/decisions
@@ -187,6 +255,10 @@ app.MapPost("/api/projects/{id}/decisions", async (
         return Results.BadRequest(new { error = "agent_name, type, title, and content are required." });
 
     var now = DateTimeOffset.UtcNow;
+    var rawTags = request.Tags;
+    var normalizedTags = !string.IsNullOrWhiteSpace(rawTags)
+        ? "," + string.Join(",", rawTags.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0)) + ","
+        : null;
     var decision = new Decision
     {
         ProjectId = id,
@@ -196,7 +268,7 @@ app.MapPost("/api/projects/{id}/decisions", async (
         Title = request.Title!,
         Content = request.Content!,
         Rationale = request.Rationale,
-        Tags = request.Tags,
+        Tags = normalizedTags,
         CreatedAt = now,
         UpdatedAt = now,
     };
