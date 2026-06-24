@@ -58,9 +58,10 @@ spec:
         - protocol: TCP
           port: 53
     # (b) HTTPS (port 443) — GitHub, npm, apt/pip package registries.
-    #     ⚠ OPEN ITEM: replace 0.0.0.0/0 with pinned GitHub CIDR ranges
-    #     (https://api.github.com/meta) or adopt Cilium FQDN policy for tighter
-    #     egress control once the cluster network-policy engine supports it.
+    #     OPEN ITEM: replace 0.0.0.0/0 with a Cilium FQDN NetworkPolicy
+    #     (CiliumNetworkPolicy with `toFQDNs`) for tighter per-domain egress control.
+    #     Cilium is enabled on this cluster (--network-dataplane cilium) so FQDN
+    #     policy is available without additional configuration.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

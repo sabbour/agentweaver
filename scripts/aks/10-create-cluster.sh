@@ -4,7 +4,7 @@
 # Creates: resource group, ACR, AKS cluster with:
 #   - App Routing add-on (Istio variant) + Gateway API
 #   - Kata VM isolation workload runtime
-#   - Azure CNI Overlay networking
+#   - Azure CNI Overlay networking with Cilium dataplane (NetworkPolicy enforcement)
 #   - AzureLinux node OS
 #   - ACR attachment (no imagePullSecret required)
 #
@@ -44,6 +44,9 @@ echo ""
 #   az feature show --namespace Microsoft.ContainerService \
 #       --name AKSAppRoutingGatewayAPI --query properties.state -o tsv
 #
+# Cilium dataplane is GA for Azure CNI Overlay since AKS 1.28; no feature
+# registration required.
+#
 echo "Installing/upgrading aks-preview extension..."
 az extension add --upgrade --name aks-preview
 
@@ -75,9 +78,14 @@ echo "  ACR resource ID: ${ACR_ID}"
 # -- Step 4: AKS cluster ------------------------------------------------------
 # Key flags:
 #   --enable-app-routing        : Enable Application Routing add-on
-#   --enable-app-routing-addon-istio : Use Istio variant (approuting-istio class)
-#   --enable-azure-cni-overlay  : Azure CNI with overlay (scales better than basic)
+#   --enable-app-routing-addon-istio : Use Istio variant (approuting-istio GatewayClass)
+#                                  Note: this enables Istio for the GATEWAY only — no
+#                                  service mesh sidecars or ambient mode on workload pods.
 #   --network-plugin azure      : Required for CNI overlay
+#   --network-plugin-mode overlay: Azure CNI with overlay networking (scales better)
+#   --network-dataplane cilium  : Cilium replaces kube-proxy + Azure NPM.
+#                                  Required for NetworkPolicy enforcement (default-deny,
+#                                  egress allow-lists, etc.)
 #   --workload-runtime KataVmIsolation : Exposes kata-vm-isolation RuntimeClass
 #   --os-sku AzureLinux         : Required for Kata VM isolation
 #   --attach-acr                : Grants AcrPull to the cluster's managed identity
@@ -89,8 +97,9 @@ az aks create \
   --location "${LOCATION}" \
   --enable-app-routing \
   --enable-app-routing-addon-istio \
-  --enable-azure-cni-overlay \
   --network-plugin azure \
+  --network-plugin-mode overlay \
+  --network-dataplane cilium \
   --node-vm-size Standard_D4s_v5 \
   --node-count 2 \
   --attach-acr "${ACR_NAME}" \

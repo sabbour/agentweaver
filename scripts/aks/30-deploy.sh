@@ -43,7 +43,7 @@ if ! command -v envsubst &>/dev/null; then
   exit 1
 fi
 
-# -- Step 1: Namespace + ambient mesh label -----------------------------------
+# -- Step 1: Namespace --------------------------------------------------------
 echo "Applying namespace..."
 kubectl apply -f "${REPO_ROOT}/k8s/namespace.yaml"
 
@@ -128,11 +128,8 @@ echo ""
 echo "Applying manifests..."
 for rendered_file in "${RENDERED_DIR}"/*.yaml; do
   fname="$(basename "${rendered_file}")"
-  # Skip namespace (already applied above), security policies (applied in Step 10),
-  # and PVCs (already applied in Step 6)
+  # Skip namespace (already applied above) and PVCs (applied in Step 6)
   [[ "${fname}" == "namespace.yaml" ]] && continue
-  [[ "${fname}" == peer-authentication.yaml ]] && continue
-  [[ "${fname}" == authorization-policy*.yaml ]] && continue
   [[ "${fname}" == pvc-*.yaml ]] && continue
   kubectl apply -f "${rendered_file}"
   echo "  [applied] ${fname}"
@@ -162,20 +159,6 @@ echo "Waiting for Frontend deployment rollout..."
 kubectl rollout status deployment/agentweaver-frontend \
   --namespace "${NAMESPACE}" \
   --timeout=120s
-
-# -- Step 10: Istio security policies -----------------------------------------
-# Applied after workloads so AuthorizationPolicies target already-existing label
-# selectors; PeerAuthentication is namespace-scoped and order-independent.
-echo ""
-echo "Applying Istio security policies..."
-kubectl apply -f "${REPO_ROOT}/k8s/peer-authentication.yaml"
-echo "  [applied] peer-authentication.yaml"
-kubectl apply -f "${REPO_ROOT}/k8s/authorization-policy-api.yaml"
-echo "  [applied] authorization-policy-api.yaml"
-kubectl apply -f "${REPO_ROOT}/k8s/authorization-policy-frontend.yaml"
-echo "  [applied] authorization-policy-frontend.yaml"
-kubectl apply -f "${REPO_ROOT}/k8s/authorization-policy-deny-sandbox-to-api.yaml"
-echo "  [applied] authorization-policy-deny-sandbox-to-api.yaml"
 
 # -- Final output -------------------------------------------------------------
 echo ""

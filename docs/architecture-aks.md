@@ -19,7 +19,7 @@ This document describes the architecture of the Agentweaver AKS deployment: its 
 │ AKS Cluster (eastus)                                                        │
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │ namespace: agentweaver   [istio.io/dataplane-mode: ambient]          │  │
+│  │ namespace: agentweaver                                               │  │
 │  │                                                                      │  │
 │  │  ┌─────────────────────────────────────────────────────────┐        │  │
 │  │  │ Gateway: agentweaver-gateway (approuting-istio)         │        │  │
@@ -109,69 +109,15 @@ Route specificity: `/api` (longer prefix) wins over `/` — no conflict.
 
 ## Security model
 
-### Istio ambient mode (meshless mTLS)
+### Network security — Cilium NetworkPolicy
 
-The `agentweaver` namespace is labeled `istio.io/dataplane-mode: ambient`. This enrolls all pods in the Istio ambient mesh via the node-level `ztunnel` DaemonSet, providing:
+The cluster is provisioned with `--network-dataplane cilium` (Azure CNI Overlay + Cilium). Cilium enforces all `NetworkPolicy` resources and also exposes `CiliumNetworkPolicy` for FQDN-based egress control when needed.
 
-- **L4 mTLS** between all pods in the namespace — no sidecars required, zero pod overhead
-- **Workload identity** derived from Kubernetes ServiceAccount SPIFFE identities
-- Foundation for `AuthorizationPolicy` resources (017-US3)
+The `approuting-istio` gateway class means the Application Routing add-on uses an Istio-based data plane for the **gateway only** — no Istio service mesh, sidecars, or ambient mode runs on workload pods.
 
-The Application Routing add-on uses the `approuting-istio` gateway class, which integrates natively with the ambient mesh.
+### Security policies
 
-### Security policies (017-US3)
-
-#### PeerAuthentication — `k8s/peer-authentication.yaml`
-
-```yaml
-kind: PeerAuthentication
-spec:
-  mtls:
-    mode: STRICT
-```
-
-Instructs the `ztunnel` DaemonSet to reject any plaintext (non-mTLS) connection entering or leaving any pod in the `agentweaver` namespace. Even if a caller bypasses `NetworkPolicy`, the ztunnel node proxy will drop the packet before it reaches the workload. This is the namespace-wide mTLS enforcement layer.
-
-#### AuthorizationPolicy — allow gateway → API / frontend
-
-`k8s/authorization-policy-api.yaml` and `k8s/authorization-policy-frontend.yaml` each set `action: ALLOW` with a single `from.source.principals` rule:
-
-```
-cluster.local/ns/app-routing-system/sa/approuting-istio-gateway
-```
-
-This is the SPIFFE identity (derived from the ServiceAccount) of the AKS App Routing gateway pods. Only traffic whose mTLS client certificate carries that identity is permitted to reach `agentweaver-api` or `agentweaver-frontend`. All other callers are implicitly denied (ALLOW policies deny by default when no rule matches).
-
-> **Namespace assumption:** The App Routing add-on provisions gateway pods in the `app-routing-system` namespace with ServiceAccount `approuting-istio-gateway`. If your cluster uses a different namespace or SA name, update the `principals` field accordingly.
-
-#### AuthorizationPolicy — deny sandbox → API
-
-`k8s/authorization-policy-deny-sandbox-to-api.yaml` sets `action: DENY` for:
-
-```
-cluster.local/ns/agentweaver/sa/agentweaver-sandbox
-```
-
-Sandbox pods (Wave 2, 017-US2) run with the `agentweaver-sandbox` ServiceAccount and are explicitly prevented from calling the API even if the ambient mesh or network policy were misconfigured. DENY policies take precedence over any ALLOW policy.
-
-#### Verify mTLS is active
-
-```bash
-# Confirm all workloads in the namespace are enrolled in ambient (ztunnel-managed)
-istioctl ztunnel-config workload -n agentweaver
-
-# Expected output includes each pod with PROTOCOL=HBONE and STATUS=Healthy.
-# HBONE (HTTP-Based Overlay Network Encapsulation) indicates ztunnel is wrapping
-# all traffic in mTLS tunnels between pods.
-
-# Check that PeerAuthentication is applied
-kubectl get peerauthentication -n agentweaver
-
-# Check AuthorizationPolicies
-kubectl get authorizationpolicy -n agentweaver
-```
-
-### NetworkPolicy
+#### NetworkPolicy
 
 Three policies are applied in `k8s/networkpolicy-default-deny.yaml`:
 
@@ -183,7 +129,20 @@ Three policies are applied in `k8s/networkpolicy-default-deny.yaml`:
 
 Gateway pods are identified by the label `istio.io/gateway-name: agentweaver-gateway` (set automatically by the approuting-istio controller on the data plane pods it provisions in the same namespace).
 
-A fallback rule allows ingress from the `aks-istio-ingress` namespace to handle cluster/add-on variants that front traffic from there instead.
+#### Sandbox isolation
+
+Sandbox pods (`k8s/networkpolicy-sandbox.yaml`) have two policies:
+- **Ingress deny-all** — the API accesses sandbox pods via `kubectl exec` through the kube-apiserver, not direct networking.
+- **Egress allow-list** — DNS (kube-dns) + HTTPS/HTTP to the internet, with the cluster pod CIDR excluded so sandboxes cannot reach the API pod.
+
+The pod CIDR exclusion (`except: 10.244.0.0/16`) is the default for Azure CNI Overlay. Verify with:
+```bash
+az aks show -g "${RESOURCE_GROUP}" -n "${CLUSTER_NAME}" --query networkProfile.podCidr -o tsv
+```
+
+#### FQDN-based egress (optional hardening)
+
+With Cilium enabled, sandbox egress can be further tightened using `CiliumNetworkPolicy` with `toFQDNs` to restrict to specific domains (e.g. `github.com`, `npmjs.org`) rather than the broad `0.0.0.0/0` allow. This is documented as an open item in `k8s/networkpolicy-sandbox.yaml`.
 
 ### Non-root containers
 

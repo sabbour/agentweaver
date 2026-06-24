@@ -2,15 +2,16 @@
 #
 # Three policies:
 #   1. Default-deny all ingress to the agentweaver namespace.
-#   2. Allow ingress to agentweaver-api only from the Istio gateway data plane.
-#   3. Allow ingress to agentweaver-frontend only from the Istio gateway data plane.
+#   2. Allow ingress to agentweaver-api only from the approuting-istio gateway data plane.
+#   3. Allow ingress to agentweaver-frontend only from the approuting-istio gateway data plane.
 #
 # The approuting-istio gateway add-on provisions its data plane in THIS namespace
 # (agentweaver), labelled `istio.io/gateway-name: agentweaver-gateway`. NetworkPolicy
 # allows ingress from exactly those pods, matching the reference project pattern
 # (hosted-copilot-sandbox k8s/aks/networkpolicy.yaml policy 4).
 #
-# Enforcement: AKS with Azure CNI Overlay enforces NetworkPolicy via Azure NPM.
+# Enforcement: AKS with Azure CNI Overlay + Cilium dataplane enforces NetworkPolicy
+# via Cilium (--network-dataplane cilium). Cilium replaces kube-proxy and Azure NPM.
 ---
 # 1) DEFAULT-DENY all ingress in the namespace.
 apiVersion: networking.k8s.io/v1

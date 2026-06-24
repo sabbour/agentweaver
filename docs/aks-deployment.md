@@ -52,7 +52,7 @@ This creates:
 - An AKS cluster with:
   - Application Routing add-on (Istio variant, `approuting-istio` gateway class)
   - Gateway API
-  - Azure CNI Overlay networking
+  - Azure CNI Overlay networking with **Cilium dataplane** (`--network-dataplane cilium`) — required for NetworkPolicy enforcement
   - Kata VM isolation workload runtime (`kata-vm-isolation` RuntimeClass)
   - AzureLinux node OS
   - ACR attachment (no `imagePullSecret` required)
@@ -134,7 +134,7 @@ bash scripts/aks/30-deploy.sh
 ```
 
 This script:
-1. Applies `k8s/namespace.yaml` (creates the `agentweaver` namespace with Istio ambient mesh label)
+1. Applies `k8s/namespace.yaml` (creates the `agentweaver` namespace)
 2. Creates the `DefaultDomainCertificate` resource and waits for it to become Available
 3. Derives the managed domain hostname from the certificate status
 4. Creates the `agentweaver-api` service account
