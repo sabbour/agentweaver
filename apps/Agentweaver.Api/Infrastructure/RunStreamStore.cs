@@ -156,19 +156,26 @@ public sealed class RunStreamEntry
     /// and <see cref="Record"/>. Use this when the caller does not already hold the
     /// lock (e.g. recovery paths that emit a single synthetic event).
     /// </summary>
-    public void RecordNext(string type, object payload)
+    /// <returns>
+    /// The monotonic sequence assigned to the recorded event, or <c>0</c> when the entry is
+    /// evicted or the per-run cap is reached and the call was a no-op. Callers that mirror events
+    /// to a durable store use the returned sequence to keep the durable log aligned with history.
+    /// </returns>
+    public int RecordNext(string type, object payload)
     {
         TaskCompletionSource? previous;
+        int seq;
         lock (_lock)
         {
-            if (_evicted) return;                   // Fix 2: no-op on evicted entries
+            if (_evicted) return 0;                  // Fix 2: no-op on evicted entries
             _lastActiveAt = DateTimeOffset.UtcNow;  // Fix 1: refresh before cap check
-            if (_history.Count >= MaxEventsPerRun) return;
-            var seq = _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
+            if (_history.Count >= MaxEventsPerRun) return 0;
+            seq = _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
             _history.Add(new RunEvent(seq, type, payload));
             previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
         previous.TrySetResult();
+        return seq;
     }
 
     /// <summary>

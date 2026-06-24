@@ -50,6 +50,10 @@ builder.Services.AddSingleton<SqliteRunRevisionStore>();
 builder.Services.AddSingleton<SqliteWorkflowRunStore>();
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
+// Durable, pub/sub run event log (016-run-event-stream). Two-layer: synchronous SQLite
+// write-through for durability + an in-process Channel<RunEvent> per run for low-latency
+// tailing. RunStreamStore is retained as the live fan-out path pending 016-us2/us3 migration.
+builder.Services.AddSingleton<IRunEventStream, SqliteRunEventStream>();
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
 
