@@ -145,9 +145,11 @@ public sealed class MergeCoordinator : IMergeCoordinator
                     _logger.LogInformation("Merge outcome: conflict. RunId={RunId} Details={Details}",
                         input.RunId, SanitizeReason(result.Reason));
 
-                    // Remove worktree best-effort — conflict info is stored in merge_conflicts DB column.
-                    try { _worktreeOps.RemoveWorktree(input.RepositoryPath, input.WorktreePath, input.WorktreeBranch); }
-                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to remove worktree for conflicted run {RunId}", input.RunId); }
+                    // Preserve the worktree on conflict so the user can inspect and manually resolve.
+                    // The worktree path is recorded in the run's worktree_path column for UI access.
+                    _logger.LogInformation(
+                        "Merge conflict for run {RunId}: preserving worktree at {WorktreePath} for manual inspection",
+                        input.RunId, input.WorktreePath);
 
                     return new MergeExecutionResult
                     {
