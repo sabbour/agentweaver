@@ -83,14 +83,17 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
         if (orgResult == CheckResult.OrgAccessNotGranted)
         {
-            // The OAuth app is not approved for this org (third-party app restrictions active).
-            // /user/orgs is NOT a valid fallback — restricted orgs are also filtered out there.
-            // Fall back to GET /orgs/{org}/public_members/{login}: public data, not subject to
-            // OAuth app restrictions. Returns 204 when the user has publicized their org membership.
-            // Self-service fix for the user: github.com/orgs/{org}/people → set membership to Public.
+            // The microsoft org (and others) enforce SAML SSO. An OAuth token that has not been
+            // SAML-authorized for the org gets 403: "Resource protected by organization SAML
+            // enforcement." This is unrelated to app approval or admin consent.
             //
-            // NOTE: no public equivalent exists for team membership; if AllowedTeam is also set,
-            // the team check below will still 403 and must be resolved via app approval or GitHub App.
+            // /user/orgs is NOT a valid fallback — SAML-restricted orgs are filtered out there too.
+            // Fall back to GET /orgs/{org}/public_members/{login}: public data, not subject to
+            // SAML SSO enforcement. Returns 204 when the user has publicized their org membership.
+            // Self-service fix: github.com/orgs/{org}/people → set membership to Public.
+            //
+            // NOTE: no public equivalent for team membership; if AllowedTeam is also set and the
+            // token isn't SAML-authorized, the team check below will also 403.
             var publicResult = await CheckEndpointAsync(
                 accessToken,
                 $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/public_members/{Uri.EscapeDataString(login)}",
@@ -100,16 +103,15 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             {
                 _logger.LogWarning(
                     "GitHub login '{Login}' could not be verified as a member of org '{Org}'. " +
-                    "The OAuth app is not approved for this org and the user does not have public membership. " +
-                    "Fix: publicize your org membership at https://github.com/orgs/{Org}/people, " +
-                    "or have an org owner approve the app under Org Settings → Third-party Access.",
+                    "The private membership endpoint returned 403 (SAML SSO enforcement) and the user " +
+                    "does not have public org membership. Fix: publicize membership at https://github.com/orgs/{Org}/people.",
                     login, _allowedOrg, _allowedOrg);
                 return OrgAuthResult.OrgAccessNotGranted;
             }
 
             _logger.LogInformation(
                 "GitHub login '{Login}' verified via PUBLIC membership of org '{Org}' " +
-                "(OAuth app not approved; private endpoint returned 403).",
+                "(private endpoint returned 403 due to SAML SSO enforcement).",
                 login, _allowedOrg);
             // Public membership confirmed — fall through to team check / Allowed.
         }
@@ -131,7 +133,7 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             {
                 _logger.LogWarning(
                     "GitHub team access check returned 403 for login '{Login}' on team '{Org}/{Team}'. " +
-                    "The OAuth app has not been granted access to this org.",
+                    "The OAuth token is not SAML-authorized for this org.",
                     login, _teamOrg, _teamSlug);
                 return OrgAuthResult.OrgAccessNotGranted;
             }
@@ -153,7 +155,8 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
     private async Task<CheckResult> CheckEndpointAsync(string accessToken, string url, CancellationToken ct)
     {
         // "github-authz" is registered with AllowAutoRedirect = false so a 302 (private org,
-        // requester not an org member) is treated as non-membership rather than a silent 200.
+        // requester not a member) is treated as non-membership rather than a silent 200.
+        // 403 means SAML SSO enforcement — the token hasn't been SAML-authorized for this org.
         using var http = _httpClientFactory.CreateClient("github-authz");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);

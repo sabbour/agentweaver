@@ -124,8 +124,8 @@ public sealed class GitHubOrgAuthorizationMiddleware
             case OrgAuthResult.OrgAccessNotGranted:
                 await WriteForbiddenAsync(context,
                     "Could not verify membership of the required GitHub organization. " +
-                    "Ensure your org membership is set to Public in GitHub org settings, " +
-                    "or have an org owner approve this app under Org Settings → Third-party Access.").ConfigureAwait(false);
+                    "Ensure your org membership is set to Public in GitHub org settings " +
+                    "(the private membership endpoint is blocked by SAML SSO enforcement).").ConfigureAwait(false);
                 return;
 
             case OrgAuthResult.NotConfigured:
