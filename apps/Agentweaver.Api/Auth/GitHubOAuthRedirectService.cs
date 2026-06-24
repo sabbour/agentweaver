@@ -15,7 +15,7 @@ namespace Agentweaver.Api.Auth;
 /// </summary>
 public sealed class GitHubOAuthRedirectService
 {
-    private const string DefaultScopes = "repo read:user";
+    private const string DefaultScopes = "repo read:user read:org";
 
     private readonly string _baseUrl;
     private readonly string? _clientId;

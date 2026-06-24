@@ -11,11 +11,11 @@ namespace Agentweaver.Api.Auth;
 /// Real GitHub device-flow OAuth service. Initiates device authorization at the configured
 /// GitHub base URL, holds the device_code server-side (never returned to clients), polls
 /// for completion, and persists the resulting token via IGitHubTokenStore.
-/// Minimal scopes: repo + read:user (section 3.8 of the plan).
+/// Minimal scopes: repo + read:user + read:org (read:org required for private org membership checks).
 /// </summary>
 public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
 {
-    private const string DefaultScopes = "repo read:user";
+    private const string DefaultScopes = "repo read:user read:org";
 
     private readonly string _baseUrl;
     private readonly string? _clientId;
