@@ -4,6 +4,7 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Runs;
@@ -22,17 +23,23 @@ public sealed class BoardProjectionService
     private readonly SqliteRunStore _runStore;
     private readonly IWorkflowStageProjector _stageProjector;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IProjectStore _projectStore;
+    private readonly WorkflowRegistry _workflowRegistry;
 
     public BoardProjectionService(
         IBacklogTaskStore backlogStore,
         SqliteRunStore runStore,
         IWorkflowStageProjector stageProjector,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        IProjectStore projectStore,
+        WorkflowRegistry workflowRegistry)
     {
         _backlogStore = backlogStore;
         _runStore = runStore;
         _stageProjector = stageProjector;
         _scopeFactory = scopeFactory;
+        _projectStore = projectStore;
+        _workflowRegistry = workflowRegistry;
     }
 
     public async Task<BoardDto> GetBoardAsync(ProjectId projectId, bool includeTerminalHistory, CancellationToken ct)
@@ -40,8 +47,15 @@ public sealed class BoardProjectionService
         var tasks = await _backlogStore.ListByProjectAsync(projectId, ct).ConfigureAwait(false);
         var runs = await _runStore.GetRunsByProjectAsync(projectId, includeChildren: false, ct).ConfigureAwait(false);
 
-        // Fixed canonical workflow buckets; no topology-derived columns are exposed on the board.
-        var stages = _stageProjector.GetStages();
+        // Resolve the effective workflow so board columns can be derived from its stage definitions.
+        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+        WorkflowDefinition? effectiveWorkflow = project is not null
+            ? _workflowRegistry.ResolveDefault(project).Definition
+            : null;
+
+        // Derive board columns from the effective workflow's declared stages; fall back to the
+        // hardcoded four-bucket layout when no explicit stages are defined (backward compatible).
+        var stages = _stageProjector.GetStages(effectiveWorkflow);
         var workflowAvailable = stages.Count > 0;
 
         var columns = new List<BoardColumnDto>

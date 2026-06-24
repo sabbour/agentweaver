@@ -216,7 +216,7 @@ public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<Projects
         var yaml = Agentweaver.Api.Workflows.DefaultWorkflowTemplate.Yaml
             .Replace("id: default", $"id: {workflowId}")
             .Replace("name: Default Run Workflow", $"name: Custom {workflowId}");
-        var dir = Path.Combine(workingDir, ".scaffolders", "workflows");
+        var dir = Path.Combine(workingDir, ".agentweaver", "workflows");
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(Path.Combine(dir, "custom.yaml"), yaml);
     }

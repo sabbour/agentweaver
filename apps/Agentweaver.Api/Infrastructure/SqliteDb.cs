@@ -132,7 +132,10 @@ public sealed class SqliteDb
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         try { await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
-        catch (SqliteException) { /* column already exists */ }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column name"))
+        {
+            // Column already exists — ignore.
+        }
     }
 
     private const string SchemaSql = """
