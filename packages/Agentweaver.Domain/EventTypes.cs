@@ -137,6 +137,15 @@ public static class EventTypes
     public const string CoordinatorOutcomeSpecConfirmed = "coordinator.outcome_spec.confirmed";
 
     /// <summary>
+    /// Emitted when the coordinator selects the workflow for a task from a project's multi-workflow
+    /// set (Feature 015 US5). Surfaces the chosen workflow and a human-readable rationale, and hints
+    /// the conversational override ("use {id}"). Skipped silently when a project carries only one
+    /// workflow. Payload: { selectedId, selectedName, rationale, wasAutoSelected, overrideHint,
+    /// available: [ { id, name } ] }
+    /// </summary>
+    public const string CoordinatorWorkflowSelected = "coordinator.workflow_selected";
+
+    /// <summary>
     /// Emitted once, at plan time, after the coordinator decomposes a confirmed outcome spec into
     /// a persisted work plan (WorkPlan + Subtask rows + SubtaskDependency edges). Carries the full
     /// plan-time snapshot so clients can render the plan without any client-side computation. The

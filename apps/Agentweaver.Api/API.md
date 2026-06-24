@@ -275,6 +275,7 @@ Events emitted by the agent runtime during a run:
 |------|----------------|
 | `agent.message.delta` | `delta`, `messageId` |
 | `agent.message` | `content`, `messageId` (restart fallback only) |
+| `coordinator.workflow_selected` | `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, `overrideHint`, `available[]` |
 | `run.completed` | (empty) |
 | `run.failed` | `message` |
 
@@ -342,6 +343,49 @@ description and node structure of each.
 The built-in `default` workflow (agent → rai → review → merge → scribe) remains
 as a fallback for projects that pre-date the library and for inline blueprints
 that do not reference a library id.
+
+### Coordinator workflow selection (Feature 015 US5)
+
+When a project carries **more than one** workflow, the coordinator picks the
+best-fit functional workflow for each task before it dispatches the run. It makes
+one LLM call grounded in the task/goal, the team roles, and each workflow's
+`id`/`name`/`description`, then surfaces the choice on the coordinator run stream
+as a `coordinator.workflow_selected` event carrying a short rationale and an
+override hint. A project carrying **exactly one** workflow skips selection
+silently (no event, no LLM call) and uses that workflow (the project default).
+
+- **Override**: a user replies `use {workflow-id}` (any available id) to switch
+  the run to that workflow — an explicit user override always wins over the
+  coordinator's pick.
+- **Fallback**: if the model is unavailable, returns malformed JSON, or names an
+  unavailable id, selection falls back to the project default workflow (the
+  failure is logged) — selection never blocks orchestration.
+
+See [`docs/workflow-selection.md`](../../docs/workflow-selection.md) for the full
+selection flow.
+
+### Generate a workflow from a description (Feature 015 US10)
+
+`POST /api/projects/{id}/workflows/generate` produces a **draft** workflow from a
+natural-language description using the GitHub Copilot model. The server builds the
+generation prompt (full YAML schema, executable node-type semantics, the project's
+cast roles or the full catalog, and library workflows as few-shot examples),
+validates the model output against the same rules as the runtime loader, and
+performs **exactly one correction pass** (FR-060) on invalid output before failing.
+The draft is **never persisted** — the client opens it in the workflow editor for
+review and an explicit save.
+
+```
+POST /api/projects/{id}/workflows/generate
+Body: { "description": "string" }
+→ 200 { "yaml": string, "workflowId": string, "wasCorrected": bool }
+→ 400 { "error": string }   // description missing, or generation failed after the correction pass
+→ 404                       // project not found
+→ 403                       // caller is not the project owner
+```
+
+See [`docs/workflow-generation.md`](../../docs/workflow-generation.md) for the
+prompt design, correction pass, and few-shot examples.
 
 
 ## Configuration keys
