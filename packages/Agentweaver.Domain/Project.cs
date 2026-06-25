@@ -57,4 +57,13 @@ public sealed record Project
     /// blueprints, null when no blueprint was applied.
     /// </summary>
     public string? SourceBlueprintType { get; init; }
+
+    /// <summary>
+    /// The set of workflow ids the project is allowed to use, declared by the applied blueprint's
+    /// <c>workflows</c> set (Feature 015 US3). When this is null or empty the project may use ALL
+    /// catalog/library workflows (backward compatible). When non-empty the workflow registry filters
+    /// available workflows to this set, always including the built-in default so a project never ends
+    /// up with zero workflows.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedWorkflowIds { get; init; }
 }

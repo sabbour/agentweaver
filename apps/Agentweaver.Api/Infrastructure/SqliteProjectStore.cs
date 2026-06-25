@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Agentweaver.Domain;
 
@@ -22,14 +23,14 @@ public sealed class SqliteProjectStore : IProjectStore
                                   state, created_at, updated_at,
                                   max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
                                   default_workflow_id, active_review_policy_name, sandbox_profile,
-                                  source_blueprint_id, source_blueprint_type)
+                                  source_blueprint_id, source_blueprint_type, allowed_workflow_ids)
             VALUES ($projectId, $name, $originKind, $sourceRepository,
                     $workingDirectory, $defaultBranch, $owner,
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
                     $state, $createdAt, $updatedAt,
                     $maxReadyPerHeartbeat, $pickupAutopilot, $pickupAutoApproveTools,
                     $defaultWorkflowId, $activeReviewPolicyName, $sandboxProfile,
-                    $sourceBlueprintId, $sourceBlueprintType);
+                    $sourceBlueprintId, $sourceBlueprintType, $allowedWorkflowIds);
             """;
         command.Parameters.AddWithValue("$projectId", project.Id.ToString());
         command.Parameters.AddWithValue("$name", project.Name);
@@ -52,6 +53,7 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$sandboxProfile", (object?)project.SandboxProfile ?? DBNull.Value);
         command.Parameters.AddWithValue("$sourceBlueprintId", (object?)project.SourceBlueprintId ?? DBNull.Value);
         command.Parameters.AddWithValue("$sourceBlueprintType", (object?)project.SourceBlueprintType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$allowedWorkflowIds", (object?)SerializeWorkflowIds(project.AllowedWorkflowIds) ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -239,12 +241,29 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task UpdateAllowedWorkflowIdsAsync(ProjectId id, IReadOnlyList<string>? allowedWorkflowIds, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET allowed_workflow_ids = $allowedWorkflowIds,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$allowedWorkflowIds", (object?)SerializeWorkflowIds(allowedWorkflowIds) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     // Ordinals: 0=project_id 1=name 2=origin_kind 3=source_repository 4=working_directory
     //           5=default_branch 6=owner 7=default_provider 8=default_model_copilot
     //           9=default_model_foundry 10=state 11=created_at 12=updated_at
     //           13=max_ready_per_heartbeat 14=pickup_autopilot 15=pickup_auto_approve_tools
     //           16=default_workflow_id 17=active_review_policy_name 18=sandbox_profile
-    //           19=source_blueprint_id 20=source_blueprint_type
+    //           19=source_blueprint_id 20=source_blueprint_type 21=allowed_workflow_ids
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
@@ -252,7 +271,7 @@ public sealed class SqliteProjectStore : IProjectStore
                default_model_foundry, state, created_at, updated_at,
                max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
                default_workflow_id, active_review_policy_name, sandbox_profile,
-               source_blueprint_id, source_blueprint_type
+               source_blueprint_id, source_blueprint_type, allowed_workflow_ids
           FROM projects
         """;
 
@@ -288,6 +307,7 @@ public sealed class SqliteProjectStore : IProjectStore
             SandboxProfile         = r.IsDBNull(18) ? null : r.GetString(18),
             SourceBlueprintId      = r.IsDBNull(19) ? null : r.GetString(19),
             SourceBlueprintType    = r.IsDBNull(20) ? null : r.GetString(20),
+            AllowedWorkflowIds     = r.IsDBNull(21) ? null : DeserializeWorkflowIds(r.GetString(21)),
         };
     }
 
@@ -306,4 +326,25 @@ public sealed class SqliteProjectStore : IProjectStore
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
+
+    /// <summary>Serializes the allowed workflow id set to a JSON array string. Null/empty -> null
+    /// (stored as SQL NULL = "all workflows allowed").</summary>
+    private static string? SerializeWorkflowIds(IReadOnlyList<string>? ids) =>
+        ids is null || ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
+
+    /// <summary>Deserializes a JSON array string of workflow ids. Returns null for blank/invalid
+    /// payloads so callers fall back to "all workflows allowed".</summary>
+    private static IReadOnlyList<string>? DeserializeWorkflowIds(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var ids = JsonSerializer.Deserialize<List<string>>(json);
+            return ids is { Count: > 0 } ? ids : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 }

@@ -627,6 +627,7 @@ static ProjectResponse MapProject(Project p, bool available) => new()
     UpdatedAt = p.UpdatedAt,
     SourceBlueprintId = p.SourceBlueprintId,
     SourceBlueprintType = p.SourceBlueprintType,
+    AllowedWorkflowIds = p.AllowedWorkflowIds,
 };
 }
 

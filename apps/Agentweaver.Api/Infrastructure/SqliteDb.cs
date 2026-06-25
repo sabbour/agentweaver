@@ -117,6 +117,12 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN source_blueprint_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN source_blueprint_type TEXT;", ct);
 
+        // Per-project allowed workflow set declared by the applied blueprint's 'workflows' set
+        // (Feature 015 US3). Stored as a JSON array of workflow ids. NULL/empty means "all catalog
+        // workflows allowed" (backward compatible); a non-empty set restricts the workflow registry to
+        // those ids (plus the built-in default).
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN allowed_workflow_ids TEXT;", ct);
+
         // Off-board archiving for runs/backlog tasks. NULL means active/non-archived, preserving all
         // existing rows. Archived Ready tasks are excluded from heartbeat pickup and board queries.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN archived_at TEXT;", ct);

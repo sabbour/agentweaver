@@ -276,5 +276,8 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
 
         public Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdateSourceBlueprintAsync(id, blueprintId, blueprintType, updatedAt, ct);
+
+        public Task UpdateAllowedWorkflowIdsAsync(ProjectId id, IReadOnlyList<string>? allowedWorkflowIds, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            _inner.UpdateAllowedWorkflowIdsAsync(id, allowedWorkflowIds, updatedAt, ct);
     }
 }

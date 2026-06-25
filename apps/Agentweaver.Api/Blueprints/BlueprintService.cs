@@ -227,12 +227,24 @@ public sealed class BlueprintService
         // below fails the roster will have been seeded but project settings may be partially updated.
         // The endpoint wraps ApplyAsync in a try/catch that rolls back the entire project on failure.
         await _projectStore.UpdateDefaultWorkflowAsync(pid, blueprint.Workflow, now, ct).ConfigureAwait(false);
+        // Persist the blueprint's allowed workflow set so the WorkflowRegistry filters the project's
+        // available workflows to exactly what the blueprint declared. An empty set leaves the project
+        // unrestricted (all catalog workflows allowed), preserving backward compatibility.
+        var allowedWorkflowIds = blueprint.Workflows.Count > 0
+            ? blueprint.Workflows.ToList()
+            : null;
+        // PARTIAL-APPLY RISK: allowed workflow set update; prior step (workflow) is not reverted on failure.
+        await _projectStore.UpdateAllowedWorkflowIdsAsync(pid, allowedWorkflowIds, now, ct).ConfigureAwait(false);
         // PARTIAL-APPLY RISK: review policy update; prior step (workflow) is not reverted on failure.
         await _projectStore.UpdateActiveReviewPolicyAsync(pid, blueprint.ReviewPolicy, now, ct).ConfigureAwait(false);
         // PARTIAL-APPLY RISK: sandbox profile update; prior steps not reverted on failure.
         await _projectStore.UpdateSandboxProfileAsync(pid, blueprint.SandboxProfile, now, ct).ConfigureAwait(false);
         var project = await _projectStore.GetAsync(pid, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Project '{projectId}' was not found.");
+        // Refresh the registry cache with the freshly-persisted project so the allowed workflow set is
+        // applied immediately to subsequent registry reads (the cached set was built before the filter
+        // was known).
+        _workflowRegistry.Sync(project);
         // PARTIAL-APPLY RISK: sandbox policy file write; prior steps not reverted on failure.
         await _sandboxPolicyStore.SetPolicyAsync(
             CreateSandboxPolicy(blueprint.SandboxProfile, project.WorkingDirectory),

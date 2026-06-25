@@ -118,7 +118,30 @@ public sealed class WorkflowRegistry
             AddResult(result, results, idToIndex);
         }
 
-        return new ProjectWorkflowSet { Results = results };
+        return new ProjectWorkflowSet { Results = FilterByAllowedSet(results, project) };
+    }
+
+    /// <summary>
+    /// Restricts the loaded results to the project's allowed workflow set (the ids declared by the
+    /// applied blueprint). When the project has no allowed set (null/empty) ALL workflows are returned
+    /// (backward compatible). When a set is present, only valid workflows whose id is in the set are
+    /// kept — PLUS the built-in default, which is always available so a project never has zero
+    /// workflows (FR-005). Invalid results are preserved so validation status remains visible.
+    /// </summary>
+    private static IReadOnlyList<WorkflowLoadResult> FilterByAllowedSet(
+        IReadOnlyList<WorkflowLoadResult> results, Project project)
+    {
+        var allowed = project.AllowedWorkflowIds;
+        if (allowed is null || allowed.Count == 0) return results;
+
+        var allowedSet = new HashSet<string>(allowed, StringComparer.Ordinal)
+        {
+            BuiltInWorkflows.DefaultWorkflowId,
+        };
+
+        return results
+            .Where(r => !r.IsValid || r.Definition is null || allowedSet.Contains(r.Definition.Id))
+            .ToList();
     }
 
     private static void AddResult(

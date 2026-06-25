@@ -586,6 +586,7 @@ public sealed record ProjectResponse
     [JsonPropertyName("updated_at")] public required DateTimeOffset UpdatedAt { get; init; }
     [JsonPropertyName("source_blueprint_id")] public string? SourceBlueprintId { get; init; }
     [JsonPropertyName("source_blueprint_type")] public string? SourceBlueprintType { get; init; }
+    [JsonPropertyName("allowed_workflow_ids")] public IReadOnlyList<string>? AllowedWorkflowIds { get; init; }
 }
 
 public sealed record CreateProjectRunRequest

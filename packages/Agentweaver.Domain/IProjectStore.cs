@@ -41,4 +41,11 @@ public interface IProjectStore
     /// Sets the blueprint provenance on a project (Feature 012).
     /// </summary>
     Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sets (or clears, when <paramref name="allowedWorkflowIds"/> is null/empty) the project's allowed
+    /// workflow set, declared by the applied blueprint's <c>workflows</c> set (Feature 015 US3). Null or
+    /// empty means "all catalog workflows allowed" (backward compatible).
+    /// </summary>
+    Task UpdateAllowedWorkflowIdsAsync(ProjectId id, IReadOnlyList<string>? allowedWorkflowIds, DateTimeOffset updatedAt, CancellationToken ct = default);
 }
