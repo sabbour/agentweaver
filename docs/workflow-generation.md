@@ -100,6 +100,34 @@ Fix the YAML and return only the corrected YAML.
   non-alphanumerics collapsed to hyphens, max 40 chars) and injects it, so the draft
   always carries a stable id.
 
+## Blueprint-driven generation: process fit, FR-063 fallback, and bespoke roles
+
+Workflow generation is also reachable **indirectly** through blueprint generation
+(`BlueprintService.GenerateAsync`, behind `POST /api/blueprints/generate`). The blueprint
+generator picks library workflows on **process fit** and falls back to generating a custom
+workflow only when nothing fits.
+
+- **Library-first, process-fit matching (FR-062).** `CopilotBlueprintGenerator` instructs the
+  model to select library workflows *only when the PROCESS they define matches what the team will
+  actually do* — never on name similarity or domain-word overlap. For operational/domain-specific
+  work that matches no library workflow's process, the model returns an **empty `workflows` array**.
+  An empty array is the **correct** answer when nothing fits — it is the sentinel for FR-063.
+- **Generate-when-none-fits (FR-063).** When the model returns no library match,
+  `BlueprintService` invokes `IWorkflowGenerator` (the same generator documented above) to produce a
+  custom workflow draft, returned in `BlueprintGenerationResult`. On `ApplyAsync`, that YAML is
+  parsed, written to the project's `.agentweaver/workflows/` directory, and the registry is synced so
+  the new workflow is **immediately coordinator-selectable**.
+- **Bespoke roles.** A generated blueprint may roster roles that have no catalog match. Each such id
+  must also appear in a `bespoke_roles` array, where every entry carries `id`, `title`, and an inline
+  `charter` (2–4 sentences). `BlueprintService.ValidateAsync` enforces that every non-catalog roster
+  id has a matching bespoke definition, that bespoke ids don't collide with catalog roles, and that
+  each bespoke role is actually rostered. On apply, bespoke roles are materialized into the casting
+  pipeline so the team is cast with the inline charters. Bespoke roles are a **last resort** — the
+  generator prefers catalog roles, which ship with pre-built charters and are immediately runnable.
+
+The matching **process-fit selection at run time** (which library workflow a coordinator picks per
+task) is documented separately in [workflow-selection.md](workflow-selection.md).
+
 ## Testing
 
 `tests/Agentweaver.Tests/Workflows/WorkflowGeneratorTests.cs` covers:

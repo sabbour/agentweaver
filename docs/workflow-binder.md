@@ -33,7 +33,8 @@ canonical `gate_kind`):
 | `merge` | — | `Merge` | `MergeBinding` |
 | `scribe` | — | `Scribe` | `ScribeBindingMerge` |
 | `terminal` | — | `Terminal` | resolved from incoming edges (see §3) |
-| `fan_out` / `fan_in` / `serial` / `peer_review` / `coordinator_composed` | — | the matching kind | **load-accepted, runtime pending** (see §5) |
+| `peer_review` | — | `PeerReview` (verdict-routed) **or** `Agent` (plain turn) | per-node peer-review executor, else `AgentBinding` — **wired** (see §2a) |
+| `fan_out` / `fan_in` / `serial` / `coordinator_composed` | — | the matching kind | **load-accepted, runtime pending** (see §5) |
 
 `NodeExecutorRegistry.ResolveExecutor(node, bindings)` returns the executor a node is *entered* at. It draws
 from the real, pre-built executors in `RunWorkflowBindings` (Principle VII: bind to real executors, never
@@ -78,6 +79,43 @@ per-node policy binding keep their existing policy plumbing (`PolicyAgentTurnSto
 `PolicyAgentOutputAdapter`, …). The canonical `rai`/`review` gates never get a policy binding, so the default
 workflow always takes the canonical path above.
 
+## 2a. Peer-review nodes and generic catalog topologies (Feature 015 US3)
+
+The §2 table is the *default* five-stage workflow. The library/catalog workflows
+(`software-delivery`, `bug-fix`, `code-review`, `content-authoring`, `pm-discovery`,
+`incident-response`) bind through an **additional** set of generic transitions wired by
+`RunWorkflowGraphBinder.TryWireCanonicalEdge`. These are **fully wired and runnable today.**
+
+**`peer_review` effective kind.** `EffectiveKind` decides how a `peer_review` node wires:
+
+- It is a real **AI review verdict gate** (`NodeKind.PeerReview`) **only** when it has at least one
+  outgoing edge whose `when` is a verdict — `approved`, `request-changes`, `declined`, `pass`, or `fail`.
+- A `peer_review` node with only **unconditional** outgoing edge(s) is a plain **producing turn** and
+  wires **identically to an `agent` node** (`NodeKind.Agent`). So `review (peer_review) → feedback`
+  with no verdict routing is just a turn.
+
+**Generic transitions** (in addition to the default five-stage table):
+
+| `(fromKind, toKind, when)` | Meaning |
+| --- | --- |
+| `(Agent, Agent, ∅)` | Sequential agent turn (output feeds the next turn) |
+| `(Agent, PeerReview, ∅)` | Producer turn → peer-review verdict gate |
+| `(Agent, Scribe, ∅)` | Direct completion (record outcome, no merge) |
+| `(Agent, HumanReview, ∅)` | Producer turn → human review gate (no RAI in between) |
+| `(Rai, Merge, review)` | RAI cleared → merge directly (publish-style, no human gate) |
+| `(Rai, Agent, review)` | RAI cleared → next agent turn |
+| `(Rai, PeerReview, review)` | RAI cleared → peer-review verdict gate |
+| `(PeerReview, Merge, approved\|pass)` | Peer-review passed → merge |
+| `(PeerReview, Rai, pass)` | Peer-review passed → RAI safety gate |
+| `(PeerReview, Agent, request-changes\|fail)` | Peer-review rejected → loop back to producer turn |
+| `(PeerReview, Terminal, declined)` | Peer-review hard-declined → terminal |
+| `(HumanReview, Agent, approved)` | Human approved → next agent turn (e.g. postmortem) |
+| `(HumanReview, Scribe, approved)` | Human approved → direct completion (no merge) |
+| `(Merge, PeerReview, blocked)` | Merge blocked → re-enter peer-review gate |
+| `(Merge, Agent, blocked)` | Merge blocked → re-enter producer turn |
+
+Any `(fromKind, toKind, when)` outside both tables fails closed with a `WorkflowBindException`.
+
 ## 3. How to author a new node type (extension point)
 
 1. Add the member to [`WorkflowNodeType`](../apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs) and its
@@ -119,13 +157,17 @@ The reflection-based **drift guard**
 ([`RunWorkflowDefinitionBindingTests`](../tests/Agentweaver.Tests/Graph/RunWorkflowDefinitionBindingTests.cs),
 `CoordinatorWorkflowGraphDriftGuardTests`) continues to assert the built MAF graph matches the descriptor.
 
-## 5. Status of `fan_out` / `fan_in` / `serial` / `peer_review`
+## 5. Status of `fan_out` / `fan_in` / `serial` / `coordinator_composed`
 
-These node types are now **accepted by the loader** (the bindable-type gate was removed) and modeled by the
-schema, but are **not yet wired to a runtime executor**. They map onto existing seams —
+`peer_review` is **fully wired** (see §2a) — both as a verdict gate and as a plain producing turn.
+
+`fan_out`, `fan_in`, `serial`, and `coordinator_composed` are **accepted by the loader** (the
+bindable-type gate was removed) and modeled by the schema, but are **not yet wired to a runtime
+executor**. They map onto existing seams —
 `fan_out` → the coordinator's [`SubtaskFrontier`](../apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs),
 `fan_in` → [`AssemblyPlanning`](../apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs), `serial` → a
-sequential chain, `peer_review` → the peer-review seam — which require dispatch infrastructure beyond the
+sequential chain — which require dispatch infrastructure beyond the
 per-run graph. Until that lands, a workflow that actually *wires* one of these nodes fails closed at **build
-time** with a clear `WorkflowBindException`, rather than being rejected at load time. This is the deliberate
+time** (`RejectUnwiredKind`) with a clear `WorkflowBindException`, rather than being rejected at load time.
+This is the deliberate
 "load-accepted, runtime-pending" boundary for US1.

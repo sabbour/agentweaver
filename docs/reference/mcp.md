@@ -18,6 +18,23 @@ AGENTWEAVER_API_URL=http://localhost:5000
 
 The `.mcp.json` at the repository root registers the server automatically for MCP hosts that support auto-discovery (Copilot CLI ≥1.0.59 and equivalents). No manual registration is required beyond setting the environment variable.
 
+## Authentication
+
+The MCP server forwards every tool call to the Agentweaver API as an authenticated HTTP request using a **bearer token** (`Authorization: Bearer <key>`).
+
+- **Shared key (default).** `AGENTWEAVER_API_KEY` is used for outbound API calls when no per-caller key is present.
+- **Per-caller key propagation.** When the MCP server itself is reached over HTTP with a bearer token (validated by `McpBearerTokenMiddleware`), that caller's key is stashed on the request (`HttpContext.Items["mcp.api_key"]`) and `AgentweaverApiClient.GetEffectiveApiKey()` uses it for the downstream API call — so each caller's identity flows through to the API rather than collapsing onto the shared key. SSE streams (`run_watch`) propagate the same effective key. When no per-caller key is present, the shared `AGENTWEAVER_API_KEY` is used.
+
+## Health probe
+
+The MCP server exposes an unauthenticated liveness probe:
+
+```
+GET /healthz → 200 { "status": "healthy" }
+```
+
+`/healthz` is explicitly bypassed by the bearer-token middleware so orchestrators (containers, Kubernetes probes) can check liveness without a key.
+
 ## Error handling
 
 All tools surface API errors as MCP tool errors with human-readable messages. HTTP 4xx errors include the API's error detail. HTTP 5xx errors are distinguished from client-side failures.
@@ -914,6 +931,20 @@ Bulk-promote all Backlog tasks to Ready in one atomic operation.
 
 ---
 
+### `backlog_decompose_spec`
+
+Read a markdown spec file from the project's workspace, run AI decomposition, and return proposed backlog items. Use `confirm=true` to create the tasks; `confirm=false` (default) previews only. Results are capped at 50 items.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `file_path` | string | yes | Relative path to a markdown file within the project workspace |
+| `confirm` | boolean | no | `true` creates the tasks; `false` (default) returns a preview only |
+
+**Returns**: `{ proposed_items: [{ title, description, already_exists }], was_capped, total_found }`. `already_exists` flags items already present in the backlog (dedup by title + source file).
+
+---
+
 ## Blueprints
 
 Blueprints are pre-packaged project configurations specifying a team roster, workflow, review policy, and sandbox profile.
@@ -1010,6 +1041,33 @@ Re-read the project's workflow definitions from disk, refreshing the in-memory r
 | `project_id` | string | yes | Project ID |
 
 **Returns**: Updated workflow list (same shape as `workflows_list`).
+
+---
+
+### `workflow_generate`
+
+Generate a new workflow YAML **draft** from a natural-language description. Nothing is written to disk — use `workflow_save` to persist (FR-065).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `description` | string | yes | Plain-language description of the pipeline |
+
+**Returns**: `{ yaml, workflow_id, was_corrected }` — the draft YAML, a suggested id (matching the `id` field), and whether a correction pass was applied.
+
+---
+
+### `workflow_save`
+
+Persist a workflow YAML to the project workspace (`.agentweaver/workflows/`). Validates and dry-run binds every node before writing; on success the workflow is immediately coordinator-selectable.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `workflow_id` | string | yes | Workflow ID (must match the `id` in the YAML) |
+| `yaml` | string | yes | Workflow YAML to save |
+
+**Returns**: The full `WorkflowDefinitionDto` (id, nodes, edges, trigger, validation status). Returns `400` on YAML parse errors, an unwired node type, or an `id`/route mismatch.
 
 ---
 

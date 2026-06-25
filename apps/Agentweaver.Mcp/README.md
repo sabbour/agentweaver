@@ -26,6 +26,21 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes
 }
 ```
 
+## Authentication & health
+
+The server authenticates every outbound API call with a **bearer token**
+(`Authorization: Bearer <key>`):
+
+- **Shared key** — `AGENTWEAVER_API_KEY` is the default token for outbound API calls.
+- **Per-caller key propagation** — when the MCP server is reached over HTTP with a bearer token
+  (validated by `McpBearerTokenMiddleware`), that caller's key is stashed on the request
+  (`HttpContext.Items["mcp.api_key"]`) and used for the downstream API call, so each caller's
+  identity flows through to the API instead of collapsing onto the shared key. SSE streams
+  (`run_watch`) propagate the same effective key.
+
+The server exposes an **unauthenticated** liveness probe at `GET /healthz` (→ `200 { "status":
+"healthy" }`), explicitly bypassed by the bearer-token middleware for container/Kubernetes probes.
+
 ## Available Tools
 
 ### Backlog
@@ -103,7 +118,10 @@ Tools for managing coordinator runs.
 
 ### Diagnostics
 
-Diagnostic and health-check tools.
+| Tool | Description |
+|------|-------------|
+| `diagnostics_get` | Real-time system diagnostics snapshot (API version, uptime, project/run counts, heartbeat & checkpoint-GC state). |
+| `heartbeat_status` | Current coordinator heartbeat service status (enabled, interval, last tick, service state). |
 
 ### GitHub Auth
 

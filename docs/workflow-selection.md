@@ -24,7 +24,8 @@ resolves to a workflow, and any failure falls back to the project default.
    workflows + the project's `.agentweaver/workflows/` files). The project
    default is ordered first so it is the deterministic fallback.
 2. **Build context.** The task/goal description, the team roles (the project's
-   active roster), and each candidate's `id`/`name`/`description`.
+   active roster), and each candidate's `id`/`name`/`description` plus a
+   `[built-in/library]` vs `[project/custom]` source tag.
 3. **LLM call.** `IWorkflowSelector.SelectAsync` issues one completion via
    `IWorkflowSelectionModel` (production: a grounded `CopilotAIAgent` turn) with
    this prompt shape:
@@ -36,12 +37,25 @@ resolves to a workflow, and any failure falls back to the project default.
    Team roles: {roles}
 
    Available workflows:
-   - {id}: {name} — {description}
+   - {id} [built-in/library | project/custom]: {name} — {description}
    ...
 
+   Selection rules:
+   - Match on PROCESS FIT: what steps the workflow runs and what outputs it produces.
+   - Do NOT select by name similarity or domain-word overlap. A closest-sounding built-in
+     is a bad choice if its process does not fit.
+   - Prefer project/custom workflows over generic built-in/library workflows when a custom
+     workflow can perform the requested process.
+   - If no workflow is a good process fit, select the first listed workflow (the project
+     default) instead of guessing.
+
    Reply with JSON: {"selected": "<workflow-id>", "rationale": "<1-2 sentences why>"}
-   Select the workflow whose description best matches the task and team.
+   Select the workflow whose process best matches the task and team.
    ```
+
+   Each candidate is tagged `[built-in/library]` or `[project/custom]` so the model can prefer a
+   project-authored workflow over a generic one. Selection is keyed on **process fit** — the steps a
+   workflow runs and the outputs it produces — never on name or domain-word similarity.
 
 4. **Parse + validate.** The first balanced JSON object is extracted; the
    `selected` id must be one of the available candidates. On a parse failure or an

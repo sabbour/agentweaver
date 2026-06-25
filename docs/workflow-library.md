@@ -13,15 +13,23 @@ built-in default and any project-authored workflows in `.agentweaver/workflows/`
 
 ## Workflow index
 
-| Id | Name | Default for Blueprint(s) | Trigger |
-|----|------|--------------------------|---------|
-| `software-delivery` | Software Delivery | Software Development, Product & Software Delivery | Event |
-| `bug-fix` | Bug Fix | — (referenced by Software Development, Product & Software Delivery) | Event |
-| `code-review` | Code Review | — (referenced by Software Development) | Manual |
-| `content-authoring` | Content Authoring | Content Authoring, Product Management | Event |
-| `pm-discovery` | Product Management Discovery | Product Management, Product & Software Delivery | Event |
-| `agent-evaluation` | Agent Evaluation | AI Agent Engineering | Event |
-| `incident-response` | Incident Response | Platform Reliability / SRE | Event |
+| Id | Name | Default for Blueprint(s) | Trigger | Binder status |
+|----|------|--------------------------|---------|---------------|
+| `software-delivery` | Software Delivery | Software Development, Product & Software Delivery | Event | ✅ Runnable |
+| `bug-fix` | Bug Fix | — (referenced by Software Development, Product & Software Delivery) | Event | ✅ Runnable |
+| `code-review` | Code Review | — (referenced by Software Development) | Manual | ✅ Runnable |
+| `content-authoring` | Content Authoring | Content Authoring, Product Management | Event | ✅ Runnable |
+| `pm-discovery` | Product Management Discovery | Product Management, Product & Software Delivery | Event | ✅ Runnable |
+| `agent-evaluation` | Agent Evaluation | AI Agent Engineering | Event | ⚠️ **Not runnable** — uses `fan_out`/`fan_in` |
+| `incident-response` | Incident Response | Platform Reliability / SRE | Event | ✅ Runnable |
+
+> **Binder status** reflects whether the workflow binds onto the live MAF run graph today (see
+> [workflow-binder.md](workflow-binder.md)). Six of the seven library workflows bind and run: their
+> `peer_review` nodes are wired (as verdict gates or plain turns) and every transition has an executor
+> mapping. **`agent-evaluation` does not yet run** — its `fan_out`/`fan_in` nodes are accepted by the
+> loader but not yet wired to a runtime executor, so building it throws a `WorkflowBindException` at
+> build time. It remains in the catalog as the reference shape for the forthcoming parallel-dispatch
+> support.
 
 ---
 
@@ -144,6 +152,11 @@ research (prompt)
 ---
 
 ## `agent-evaluation`
+
+> ⚠️ **Not runnable yet.** This workflow uses `fan_out`/`fan_in` nodes, which the loader accepts but the
+> binder does not yet wire to a runtime executor. Attempting to run it throws a `WorkflowBindException`
+> at build time. It is kept in the catalog as the canonical parallel-evaluation shape and as a few-shot
+> example for workflow generation. See [workflow-binder.md §5](workflow-binder.md).
 
 **Purpose**: AI agent evaluation with parallel evaluation runs and a mandatory safety gate.
 
