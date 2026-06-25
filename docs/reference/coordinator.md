@@ -16,7 +16,7 @@ The coordinator is orchestration-only. It MUST NOT reimplement any platform capa
 | Casting / roster / per-role model | Casting service | Selects agent + model per subtask (later phase) |
 | Human review / merge | Run graph executors | Reuses them; never runs a parallel review or merge |
 | Scribe / session logging | Scribe executor | Reuses it; never re-logs sessions itself |
-| Memory and decisions | Memory store | Reads context; persists the outcome spec (and later the work plan) |
+| Memory and decisions | Memory store | Reads context; persists the outcome spec (and later the work plan); injects active decisions into child workers |
 
 Because of this non-redundancy contract, the coordinator's charter describes only orchestration behavior — read memories and decisions for context, draft and confirm an outcome spec, and (in later phases) decompose, dispatch, observe, and hand off. It does not re-specify RAI, casting, memory governance, sandboxing, review, merge, or scribe. The provider is fixed to GitHub Copilot; only the model id varies within Copilot.
 
@@ -60,6 +60,10 @@ Confirming the outcome spec carries the coordinator run through Phase 2: **confi
 
 After confirmation, the coordinator decomposes the spec into a **work plan**: a set of subtasks plus the dependency edges between them. Each subtask carries an assigned roster agent (selected for role fit), a selected model (chosen for the subtask's complexity within the GitHub Copilot provider), a `phase`, an `isolation`, and a status. The plan is persisted to the memory store and emitted as `coordinator.work_plan`. Subagents read the confirmed spec and plan from the memory store; the coordinator does not introduce a parallel store. Read it over HTTP with `GET /api/runs/{id}/work-plan` or over MCP with `coordinator_work_plan_get`.
 
+When no catalog/roster role adequately covers a subtask's function, the decomposition MAY mint a **bespoke role**: a descriptive id plus a short **inline charter** (2–4 sentences defining the agent's persona, expertise, and approach). Bespoke roles are a last resort — the decomposition prompt prefers exact catalog/roster ids and only sets a subtask's `charter` field when the role is bespoke. A subtask's inline charter is persisted on the subtask and flows to the dispatched child run's `AgentCharter`, overriding file-based charter resolution so the coordinator can stand up a domain-specific persona without a catalog role.
+
+The `isolation` field (`worktree` | `shared`) is an **advisory hint only** with no runtime enforcement — every child run executes against a single shared worktree. Each subtask must therefore declare its output filename(s) in its scope so the assembly conflict check can serialize colliding writers.
+
 ### Child dispatch: parallel and serial
 
 The coordinator dispatches subtasks as first-class **child runs** parented by the coordinator run, reusing the existing single-agent run machinery (per-child RAI, sandboxing, and step streaming) rather than new run primitives. Dispatch is dependency-ordered:
@@ -67,6 +71,8 @@ The coordinator dispatches subtasks as first-class **child runs** parented by th
 - Subtasks with no unmet dependencies dispatch together and run **in parallel**.
 - A subtask with a dependency does not start until every prerequisite reaches `assemble_ready`/`completed`, so dependent work runs **serially** behind it.
 - A failed or RAI-flagged predecessor does not satisfy a dependency, so its dependents stay blocked.
+
+Each child worker is dispatched with its charter (catalog or bespoke inline charter) plus the project's active **architectural/scope decisions** — compiled by `MemoryContextCompiler.CompileDecisionsAsync` and injected as the `## Boundaries and Decisions` block. Children deliberately do **not** receive the full four-layer memory stack (core context, learnings, session), which duplicated the charter and carried artifact-write instructions that broke inside a child worktree; only the non-negotiable decisions reach them, ensuring scope constraints bind the agents doing the actual work. See the [Memory reference](./memory.md#coordinator-child-workers--decisions-only).
 
 A subtask's status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`, surfaced as `subtask.*` events. The dispatched child runs (paired with subtask status) are available from `GET /api/runs/{id}/children` or the `coordinator_children_get` MCP tool.
 

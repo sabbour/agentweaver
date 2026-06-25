@@ -36,6 +36,9 @@ Clients should order and deduplicate events by `sequence`.
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
+| `run.error` | When an operation fails but the run is reverted to a retryable state (e.g. back to AwaitingReview after a merge internal error); **non-terminal** — the stream stays open | `reason` |
+| `run.degraded` | When the sandbox blocks at least one tool call during a run; **non-terminal** — the run continues with a degraded outcome | `toolName`, `reason` |
+| `rai.verdict` | The RAI reviewer's verdict for a run; written to the `{runId}-rai` sub-stream | `verdict` (`green` / `yellow` / `red` / `revise`), `runId` |
 | `workflow.step` | When each workflow executor stage transitions (start/complete/fail/skip), for every node in both the full and child pipelines | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only), `message` (optional) |
 | `run.workflow_graph` | Once at run start, carrying the full workflow graph descriptor for rendering the run topology | `GraphDescriptor` (see below) |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
@@ -51,9 +54,13 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.outcome_spec` | When the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate | `specId`, `status`, `desiredOutcome`, `scope`, `assumptions`, `clarifyingQuestions` |
 | `coordinator.outcome_spec.confirmed` | When a human confirms the drafted OutcomeSpec and the coordinator run proceeds | `specId`, `confirmedBy` |
 | `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
+| `coordinator.workflow_selected` | When the coordinator selects which workflow to run from a project's multi-workflow set (skipped silently when the project carries only one workflow) | `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, `overrideHint`, `available` (`[{ id, name }]`) |
+| `coordinator.child_stall_detected` | When the proactive stuck-child sweep finds an in-progress child subtask that has made no progress past the stall timeout; the child is force-completed and re-dispatched | `childRunId`, `subtaskId`, `staleSinceUtc`, `stallTimeoutMinutes` |
 | `coordinator.topology` | When the orchestration graph is first dispatched (snapshot) and on every subsequent subtask lifecycle transition (delta) | `version`, `kind`, `seq`, `nodes` (snapshot) / `changed` (delta), `edges` (snapshot) |
 | `coordinator.graph` | When the unified coordinator graph shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot) | a shape-only `GraphDescriptor` (variant `coordinator`) |
 | `subtask.dispatched` / `subtask.running` / `subtask.assemble_ready` / `subtask.rai_flagged` / `subtask.completed` / `subtask.failed` | As a subtask's child run advances through its lifecycle | `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status` |
+| `run.assemble_ready` | On a coordinator CHILD run's own stream when the child finishes its trimmed (agent + RAI) pipeline and is ready to be collected/assembled | `runId`, `subtaskId`, `parentRunId`, `worktreeBranch`, `treeHash`, `hasChanges`, `stepCount`, `raiSafetyFlagged` |
+| `run.no_changes_produced` | On a coordinator CHILD run when it reaches assemble-ready with no committed changes (the worker wrote no files) | `runId`, `subtaskId`, `parentRunId`, `message` |
 | `coordinator.steering` | When a steering directive is created or changes state | `directiveId`, `kind`, `targetChildRunId`, `status`, `instruction` |
 | `coordinator.children_complete` | When every child subtask has reached a terminal status and the work plan moves to `awaiting_assembly` | `workPlanId` |
 | `coordinator.assembly_started` | When the collective-assembly pipeline claims the plan (`awaiting_assembly → assembling`, exactly-once) | `workPlanId`, `integrationBranch`, `subtaskCount` |

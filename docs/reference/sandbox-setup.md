@@ -8,6 +8,21 @@ This guide covers installing and configuring sandboxed execution for operators. 
 
 When the `processcontainer` backend is active on Windows, network allowlist enforcement is not available (see [Network allowlist gap](#network-allowlist-gap)).
 
+## Sandbox backends
+
+At run start, `SandboxExecutorFactory` selects one executor for the host platform and emits a `sandbox.selected` event (`backend`, `isRealIsolation`, `reason`). The selection order is:
+
+| Backend (`BackendName`) | Platform | Selected when |
+| --- | --- | --- |
+| `processcontainer` (Mxc) | Windows | mxc binaries are present (first choice on Windows). |
+| `wsl-bwrap` / `wsl-unshare` (WslMxc) | Windows | processcontainer is unavailable and WSL2 has a usable backend. `wsl-bwrap` confines the filesystem and isolates namespaces; `wsl-unshare` isolates namespaces only. |
+| `linux-bwrap` (LinuxBwrap) | Linux | bubblewrap (`bwrap`) is available — the preferred Linux backend (selective mount allowlist). |
+| `lxc-native-linux` (LinuxNativeMxc) | Linux | bubblewrap is unavailable but `lxc-exec` is present. |
+| `kubernetes-sandbox-claim` (K8s) | In-cluster | The API runs inside Kubernetes (`KUBERNETES_SERVICE_HOST` is set). See [Kubernetes (in-cluster)](#kubernetes-in-cluster). |
+| `direct` (Passthrough) | Any | No isolation backend is available. Commands run **directly on the host** with no isolation layer, relying on deployment-level isolation (e.g. a container). It is not deny-by-default — shell still executes. |
+
+`IsRealIsolation` is `true` for every real backend and `false` for `direct`. Shell execution requires either `IsRealIsolation == true` **or** the `direct` backend; any other non-isolating executor denies `run_command` at the governance gate.
+
 ## Windows ARM64
 
 ### 1. Download binaries
@@ -40,16 +55,45 @@ When Agentweaver starts, it logs the selected executor. Look for a line like:
 SandboxExecutorFactory: selected MxcSandboxExecutor (processcontainer)
 ```
 
-If you see `falling back to PassthroughExecutor`, the binary was not found or the platform probe failed. Shell will be denied.
+If you see `falling back to PassthroughExecutor`, the binary was not found or the platform probe failed. The `direct` backend then runs commands on the host with **no isolation** (it does not deny shell); rely on deployment-level isolation instead.
 
 ## Linux cloud
 
-The Linux executor probes for `lxc-exec` at two absolute paths, in order:
+On Linux the factory prefers **bubblewrap** (`linux-bwrap`): if `bwrap` is available on `PATH`, it is selected and uses a selective mount allowlist confined to the worktree. No environment variable is required.
+
+When bubblewrap is unavailable, the factory falls back to the `lxc-native-linux` backend, which probes for `lxc-exec` at two absolute paths, in order:
 
 1. `/usr/local/bin/lxc-exec`
 2. `/usr/bin/lxc-exec`
 
-Install `lxc-exec` at one of those paths before starting the server. No environment variable is required. If neither path exists at startup, Agentweaver falls back to `passthrough-deny` and shell commands are denied.
+Install `bwrap` (or `lxc-exec` at one of those paths) before starting the server. If neither a bubblewrap nor an lxc backend is found at startup, Agentweaver falls back to the `direct` (passthrough) executor, which runs commands on the host with no isolation — it does not deny shell.
+
+## Kubernetes (in-cluster)
+
+When the API runs inside a Kubernetes cluster, `SandboxExecutorFactory.IsInCluster` (detected via the `KUBERNETES_SERVICE_HOST` environment variable) is `true` and the API overrides the platform factory with the `kubernetes-sandbox-claim` backend (`KubernetesSandboxExecutor`). This backend provides real isolation (Kata VM) and NetworkPolicy egress restriction, so `HasNetworkWarning` is `false`.
+
+Each shell command runs inside a pre-warmed pod obtained through a **`SandboxClaim`** custom resource:
+
+1. The executor creates a `SandboxClaim` (`apiVersion: extensions.agents.x-k8s.io/v1alpha1`, plural `sandboxclaims`), which adopts a warm pod from the pool.
+2. It polls until the claim reaches `phase: Bound` and reports a pod name.
+3. It runs the command via pod-exec (the Kubernetes WebSocket exec API) against the `agentweaver-sandbox` container.
+4. It deletes the claim on completion; the controller GC cleans up the pod and service.
+
+Configuration is bound from the `Sandbox:Kubernetes` section:
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `Namespace` | `agentweaver` | Namespace the claims and pods live in. |
+| `TemplateRef` | `agentweaver-sandbox` | The SandboxTemplate the warm pool is built from. |
+| `TimeoutSeconds` | `600` | Per-command timeout. |
+
+### The `agentweaver-sandbox` image
+
+The warm pods run the image built from `apps/agentweaver-sandbox/Dockerfile`. It is based on `ubuntu:24.04` and ships the language runtimes agent workloads need: `git`, Python 3, Node.js/npm, and the .NET SDK 9.0. The container runs as non-root (uid/gid 1000) to match the SandboxTemplate `securityContext`. `readOnlyRootFilesystem` is enforced by the template; writable `emptyDir` mounts are provided at `/workspace` (agent work) and `/tmp` (tool scratch). The entrypoint is `sleep infinity` — the pod stays alive for pod-exec sessions and the agent drives all execution via exec rather than a long-running server process.
+
+### Port-forwarding to a sandbox pod
+
+A run's sandbox pod can be reached for preview/debugging via the run port-forward endpoints, which start a `kubectl port-forward` to the pod: `POST /api/runs/{runId}/sandbox/port-forward` (body `{ "target_port": <int> }`), `GET /api/runs/{runId}/sandbox/port-forward` to list active sessions, and `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` to stop one. See the [API reference](./api.md).
 
 ## Configuring sandbox policy
 
@@ -142,7 +186,7 @@ With `shell_enabled: false`, the `run_command` tool is removed from the model's 
 }
 ```
 
-When `true`, every `run_command` invocation pauses the run and emits a `shell.approval_required` event pending human approval, not just commands matching `destructive_command_patterns`. Note: the approval API endpoint is not yet implemented (T017-api). Setting this to `true` will pause runs indefinitely until that endpoint ships.
+When `true`, every `run_command` invocation pauses the run and emits a `shell.approval_required` event pending human approval, not just commands matching `destructive_command_patterns`. The operator approves or denies via `POST /api/runs/{id}/shell-approvals` and `POST /api/runs/{id}/shell-denials` (see the [API reference](./api.md)); the run resumes once a decision arrives.
 
 ## Network allowlist gap
 
@@ -158,6 +202,6 @@ On Windows, the `processcontainer` backend runs with unrestricted outbound netwo
 
 If network restriction is required:
 
-- Switch to the WSL2 path (ensure WSL2 is installed with a Linux distribution). The `wsl-lxc` backend supports network allowlisting.
+- Switch to the WSL2 path (ensure WSL2 is installed with a Linux distribution). The `wsl-bwrap` backend confines the filesystem to the worktree.
 - Or configure a proxy on the mxc policy (not yet exposed through the sandbox policy API — requires code changes).
 - Or run on a Linux host where the `lxc-native-linux` backend is used.

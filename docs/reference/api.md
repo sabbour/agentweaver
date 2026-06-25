@@ -3,12 +3,12 @@
 The Agentweaver backend is the single source of truth for run lifecycle, streaming, review, and merge. Every client is a thin layer over these endpoints.
 
 - Base path: `/api`
-- Authentication: bearer API key on every request
+- Authentication: bearer API key on authenticated API requests
 - Event ordering: use `sequence`, not `timestamp`
 
 ## Authentication
 
-Send the API key on every `/api` request:
+Send the API key on API requests unless the endpoint is explicitly public (`/`, `/health`, `/auth/github/*`, or `/api/server/info`):
 
 ```http
 Authorization: Bearer <api-key>
@@ -26,7 +26,7 @@ Keys map to the user accountable for the runs they submit. You can configure mul
 }
 ```
 
-A request without a recognized key returns `401 Unauthorized`. A request for a run the caller does not own returns `403 Forbidden`. When no keys are configured, every `/api` request is unauthorized.
+A request without a recognized key returns `401 Unauthorized`. A request for a run the caller does not own returns `403 Forbidden`. When no keys are configured, authenticated API requests are unauthorized.
 
 ## Endpoints
 
@@ -34,29 +34,39 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/` | Health banner (`Agentweaver API`) |
 | `POST` | `/api/runs` | Submit a task and start a run |
 | `GET` | `/api/runs/{id}` | Get current run state |
+| `POST` | `/api/runs/{id}/archive` | Archive a run |
+| `DELETE` | `/api/runs/{id}` | Delete a run record |
 | `GET` | `/api/runs/{id}/stream` | Stream ordered run events over SSE |
+| `GET` | `/api/runs/{id}/events` | Return persisted run events |
 | `POST` | `/api/runs/{id}/review` | Record an approve or decline decision |
 | `POST` | `/api/runs/{id}/shell-approvals` | Approve a pending destructive shell command |
+| `POST` | `/api/runs/{id}/shell-denials` | Deny a pending destructive shell command |
 | `GET` | `/api/runs/{id}/history` | Replay persisted session events for terminal runs |
 | `GET` | `/api/runs/{id}/graph` | Get the workflow graph descriptor for rendering the run topology |
 | `POST` | `/api/runs/{id}/commit` | Commit worktree changes and merge into originating branch |
 | `POST` | `/api/runs/{id}/request-changes` | Request a revision cycle: agent rewrites in place |
+| `POST` | `/api/runs/{id}/retry` | Retry a failed run as a new linked run |
 | `GET` | `/api/runs/{id}/workspace` | List workspace files with change status and line counts |
 | `GET` | `/api/runs/{id}/files` | List changed files (flat, with filter) |
-| `GET` | `/api/runs/{id}/files/{path}` | Get diff or content for a specific file |
+| `GET` | `/api/runs/{id}/files/{**path}` | Get diff or content for a specific file |
 | `POST` | `/api/runs/{id}/tool-approvals` | Approve a pending tool call |
 | `POST` | `/api/runs/{id}/tool-denials` | Deny a pending tool call |
 | `POST` | `/api/runs/{id}/questions/{requestId}/answer` | Answer a pending `ask_question` request |
 | `POST` | `/api/runs/{id}/auto-approve` | Toggle the per-run auto-approve-tools option |
 | `POST` | `/api/runs/{id}/autopilot` | Toggle the coordinator Autopilot option |
+| `POST` | `/api/runs/{runId}/sandbox/port-forward` | Start a sandbox pod port-forward |
+| `GET` | `/api/runs/{runId}/sandbox/port-forward` | List sandbox port-forwards for a run |
+| `DELETE` | `/api/runs/{runId}/sandbox/port-forward/{sessionId}` | Stop a sandbox port-forward |
 
 ### Projects
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/projects` | Create a project (blank or from GitHub) |
+| `GET` | `/api/server/info` | Get server metadata |
 | `GET` | `/api/projects` | List all projects |
 | `GET` | `/api/projects/{id}` | Get a project by id |
 | `PATCH` | `/api/projects/{id}` | Rename a project |
@@ -64,7 +74,9 @@ A request without a recognized key returns `401 Unauthorized`. A request for a r
 | `POST` | `/api/projects/{id}/relink` | Relink a project to a moved directory |
 | `DELETE` | `/api/projects/{id}` | Delete a project (record only; cancels active runs) |
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
+| `GET` | `/api/projects/{id}/runs/{workflowRunId}` | Get a project workflow-run summary |
 | `POST` | `/api/projects/{id}/runs` | Start a run within a project |
+| `POST` | `/api/projects/{id}/orchestrations` | Start a coordinator orchestration |
 
 Run summary objects returned by `GET /api/projects/{id}/runs` include a `result` field (`"no_changes"` or `null`). When `result` is `"no_changes"`, the agent found no file changes to commit; the review and merge gates are skipped. Each summary also includes `coordinator_status`: for a coordinator run (`agent_name: "Coordinator"`, no parent) this is the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`); it is `null` for normal runs. A companion `coordinator_status_reason` (the coordinator run's `result`, scoped to coordinator rows) carries the human-readable terminal/failure detail so the UI can render "Failed: &lt;reason&gt;". Children are excluded from this list. The UI should render `coordinator_status` (plus `coordinator_status_reason`) for coordinator rows so a long-running assembly does not show as a bare `in_progress` and a terminal failure does not show as an unexplained `failed`.
 
@@ -79,6 +91,7 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/projects/{id}/decisions/inbox` | Submit a decision or learning to the inbox |
 | `GET` | `/api/projects/{id}/decisions/inbox` | List inbox entries (`?agent=`, `?type=`, `?status=`) |
 | `POST` | `/api/projects/{id}/decisions/inbox/{entryId}/merge` | Merge a pending entry into decisions |
+| `POST` | `/api/projects/{id}/decisions/inbox/{entryId}/promote` | Alias for merge/promote |
 | `POST` | `/api/projects/{id}/decisions/inbox/{entryId}/reject` | Reject a pending entry |
 
 #### Decisions
@@ -87,6 +100,7 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | --- | --- | --- |
 | `POST` | `/api/projects/{id}/decisions` | Create a decision directly |
 | `GET` | `/api/projects/{id}/decisions` | List decisions (`?type=`, `?agent=`) |
+| `GET` | `/api/projects/{id}/decisions/{decisionId}` | Get a single decision |
 | `PUT` | `/api/projects/{id}/decisions/{decisionId}` | Update decision status/content |
 
 #### Agent Memory
@@ -105,6 +119,8 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/projects/{id}/sessions` | Start a new session (auto-ends existing) |
 | `GET` | `/api/projects/{id}/sessions/current` | Get current open session |
 | `PUT` | `/api/projects/{id}/sessions/current` | Update focus, summary, or end session |
+| `GET` | `/api/projects/{id}/sessions` | List sessions |
+| `PATCH` | `/api/projects/{id}/sessions/{sessionId}` | Update a specific session |
 
 #### Export / Import
 
@@ -117,9 +133,12 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/auth/github/authorize` | Begin the GitHub OAuth redirect flow |
+| `GET` | `/auth/github/callback` | Receive the GitHub OAuth callback |
 | `POST` | `/api/auth/github/device` | Start the GitHub device authorization flow |
 | `POST` | `/api/auth/github/poll` | Poll the device flow for completion |
 | `GET` | `/api/auth/github` | Get current GitHub authentication status |
+| `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user |
 | `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
 
 ### Team casting
@@ -127,12 +146,14 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/casting/templates` | List available scenario groupings (team templates) |
+| `GET` | `/api/projects/{id}/casting/universes` | List allowed universe names |
 | `GET` | `/api/catalog/roles` | List all available role definitions |
 | `POST` | `/api/projects/{id}/casting/proposals` | Create a casting proposal |
-| `GET` | `/api/projects/{id}/casting/proposals/{pid}` | Get a proposal |
-| `PATCH` | `/api/projects/{id}/casting/proposals/{pid}` | Amend a proposal |
-| `POST` | `/api/projects/{id}/casting/proposals/{pid}/confirm` | Confirm a proposal and create the team |
-| `DELETE` | `/api/projects/{id}/casting/proposals/{pid}` | Reject a proposal |
+| `GET` | `/api/projects/{id}/casting/proposals` | List active proposals for a project |
+| `GET` | `/api/projects/{id}/casting/proposals/{proposalId}` | Get a proposal |
+| `PATCH` | `/api/projects/{id}/casting/proposals/{proposalId}` | Amend a proposal |
+| `POST` | `/api/projects/{id}/casting/proposals/{proposalId}/confirm` | Confirm a proposal and create the team |
+| `DELETE` | `/api/projects/{id}/casting/proposals/{proposalId}` | Reject a proposal |
 | `GET` | `/api/projects/{id}/team` | Get team roster and layout metadata |
 | `GET` | `/api/projects/{id}/team/members/{name}/charter` | Get a member's charter |
 | `PUT` | `/api/projects/{id}/team/members/{name}/charter` | Replace a member's charter |
@@ -140,10 +161,69 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/projects/{id}/team/members` | Add a team member |
 | `DELETE` | `/api/projects/{id}/team/members/{name}` | Retire a team member |
 | `PATCH` | `/api/projects/{id}/team/members/{name}` | Re-role a team member |
-| `GET` | `/api/projects/{id}/team/sync` | Get pending .squad/ changes and change set hash |
-| `POST` | `/api/projects/{id}/team/sync` | Commit pending .squad/ changes |
+| `GET` | `/api/projects/{projectId}/team/sync` | Get pending .squad/ changes and change set hash |
+| `POST` | `/api/projects/{projectId}/team/sync` | Commit pending .squad/ changes |
 
 Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case-insensitive). Built-in agents cannot be removed, re-roled, or directly run. Attempting to start a run with a built-in agent name returns `400 Bad Request`.
+
+### Blueprints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/blueprints` | List predefined blueprints |
+| `POST` | `/api/blueprints/generate` | Generate a blueprint from a description |
+| `POST` | `/api/blueprints/validate` | Validate an inline blueprint |
+
+### Backlog, board, and workflow setup
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/projects/{id}/workspace/files` | List project workspace files for decomposition |
+| `POST` | `/api/projects/{id}/backlog/decompose` | Decompose workspace files into backlog tasks |
+| `POST` | `/api/projects/{projectId}/backlog/tasks` | Create a backlog task |
+| `PATCH` | `/api/projects/{projectId}/backlog/tasks/{taskId}` | Edit a backlog task title/description |
+| `DELETE` | `/api/projects/{projectId}/backlog/tasks/{taskId}` | Delete a backlog task |
+| `POST` | `/api/projects/{projectId}/backlog/tasks/{taskId}/ready` | Move a task to ready |
+| `POST` | `/api/projects/{projectId}/backlog/ready-all` | Move all eligible tasks to ready |
+| `POST` | `/api/projects/{projectId}/backlog/tasks/{taskId}/backlog` | Move a task back to backlog |
+| `POST` | `/api/projects/{projectId}/backlog/tasks/{taskId}/reorder` | Reorder a backlog task |
+| `POST` | `/api/projects/{projectId}/backlog/tasks/{taskId}/archive` | Archive a backlog task |
+| `GET` | `/api/projects/{projectId}/board` | Get the board state |
+| `GET` | `/api/projects/{projectId}/workflow-stages` | Get workflow stages |
+| `GET` | `/api/projects/{projectId}/backlog/settings` | Get backlog pickup settings |
+| `PUT` | `/api/projects/{projectId}/backlog/settings` | Update backlog pickup settings |
+| `GET` | `/api/projects/{projectId}/review-policies` | List review policies |
+| `POST` | `/api/projects/{projectId}/review-policies/sync` | Reload review policies from disk |
+| `GET` | `/api/projects/{projectId}/review-policies/{policyName}` | Get a review policy |
+| `PUT` | `/api/projects/{projectId}/review-policies/active` | Set the active review policy |
+| `GET` | `/api/projects/{projectId}/workflows` | List workflow definitions |
+| `POST` | `/api/projects/{projectId}/workflows/sync` | Reload workflow definitions from disk |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get a workflow definition |
+| `PUT` | `/api/projects/{projectId}/workflows/default` | Set the default workflow |
+| `PUT` | `/api/projects/{projectId}/backlog/tasks/{taskId}/workflow-override` | Set a task workflow override |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/graph` | Get a workflow graph |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/yaml` | Get workflow YAML |
+| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}` | Replace a workflow definition |
+| `POST` | `/api/projects/{projectId}/workflows/generate` | Generate a workflow definition |
+
+### Workspace, diagnostics, and metrics
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Public liveness probe |
+| `GET` | `/api/health` | API liveness probe |
+| `GET` | `/api/diagnostics` | Get API diagnostics |
+| `GET` | `/api/diagnostics/heartbeat` | Get diagnostics heartbeat |
+| `GET` | `/api/projects/{id}/diagnostics` | Get project diagnostics |
+| `GET` | `/api/projects/{id}/workspace/refs` | List workspace refs |
+| `GET` | `/api/projects/{id}/workspace` | List project workspace files |
+| `GET` | `/api/projects/{id}/workspace/files/{**path}` | Read a project workspace file |
+| `GET` | `/api/projects/{id}/dashboard` | Get project dashboard metrics |
+| `GET` | `/api/overview` | Get global overview metrics |
+
+### GET /
+
+Returns the plain text banner `Agentweaver API`.
 
 ### POST /api/runs
 
@@ -171,7 +251,7 @@ When `Runs:AllowedRepositoryRoots` is configured (non-empty string array), the s
 Response `202 Accepted`:
 
 ```json
-{ "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "status": "in_progress" }
+{ "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "workflow_run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "status": "in_progress" }
 ```
 
 Validation failures return `400 Bad Request`. If `repository_path` is not a valid git repository or `originating_branch` does not exist in that repository, the response is `400` with an `error` field describing the problem. Invalid repositories or branches are recorded as failed runs so they do not stay stranded.
@@ -200,6 +280,18 @@ Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, 
 For a **coordinator** run (`agent_name: "Coordinator"`, no parent), the response also carries `coordinator_status`: the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`). It is `null` for normal runs and for coordinator runs that have no work plan yet. Because a coordinator run stays `in_progress` while it dispatches children and runs collective assembly, `coordinator_status` is what the UI should render (for example "Awaiting assembly" or "Failed: <result>") instead of the bare `status`. On a terminal assembly failure the `result` — also surfaced as `coordinator_status_reason` on this response (scoped to coordinator runs) — carries the human-readable reason (for example `assembly_blocked: <reason>`, `assembly_merge_failed: <reason>`, `assembly_error: <message>`).
 
 The response also carries `auto_approve_tools` and `autopilot` (booleans) reflecting the current per-run option state (launch value plus any live toggle). Both are `false` unless explicitly enabled. The frontend uses these to render the toggle controls; see `POST /api/runs/{id}/auto-approve` and `POST /api/runs/{id}/autopilot`.
+
+### POST /api/runs/{id}/archive
+
+Archives a run for the owner. Response `200 OK`:
+
+```json
+{ "run_id": "f36800fd-...", "archived_at": "2026-06-07T21:20:00+00:00" }
+```
+
+### DELETE /api/runs/{id}
+
+Deletes a run record. Active runs are abandoned and their worktree cleanup is best effort before deletion. Response `204 No Content`.
 
 ### GET /api/runs/{id}/stream
 
@@ -297,6 +389,34 @@ After a server restart, if no workflow checkpoint is available to resume, the en
 
 See [events.md](events.md) for the event types emitted on the stream for each outcome.
 
+### POST /api/runs/{id}/shell-approvals
+
+Approves a pending shell command. Use the `commandHash` from the `shell.approval_required` event as `command_hash`.
+
+Request:
+
+```json
+{ "command_hash": "sha256:..." }
+```
+
+Response `200 OK` `{ "run_id", "command_hash", "approved": true }`.
+
+### POST /api/runs/{id}/shell-denials
+
+Denies a pending shell command.
+
+Request:
+
+```json
+{ "command_hash": "sha256:..." }
+```
+
+Response `200 OK` `{ "run_id", "command_hash", "denied": true }`.
+
+### GET /api/runs/{id}/events
+
+Returns persisted run events ordered by `sequence`. Each item has `sequence`, `type`, and `payload`.
+
 ### GET /api/runs/{id}/history
 
 Replays persisted Copilot SDK session events for a terminal run. The session is identified by `agentweaver-run-{runId}`. Returns a JSON array of run events in stream order. Only available for terminal runs. Returns `404` if the run is not terminal or the session is not found.
@@ -375,6 +495,16 @@ Request body:
 
 Response: `202 Accepted` with the updated run.
 
+### POST /api/runs/{id}/retry
+
+Retries a failed or merge-failed run as a new linked run. The source run is not mutated; child runs are retried through their coordinator parent.
+
+Response `201 Created`:
+
+```json
+{ "run_id": "new-run-id", "retried_from": "old-run-id", "status": "in_progress" }
+```
+
 ### GET /api/runs/{id}/workspace
 
 Returns a tree of all files in the run's worktree (folders + files). Files include `path`, `is_folder`, `status` (added/modified/deleted, null for unchanged), `added_lines`, `removed_lines`. Returns `404` for terminal runs whose worktrees have been removed (failed/merged/declined/merge_failed). Returns empty array for `pending`. Returns `409` while the worktree does not exist for an active run.
@@ -383,7 +513,7 @@ Returns a tree of all files in the run's worktree (folders + files). Files inclu
 
 Flat list of changed files. Query param `filter`: `all` (committed + uncommitted), `committed`, `uncommitted`, `last-commit`. Returns `409` for non-terminal runs with no worktree.
 
-### GET /api/runs/{id}/files/{path}
+### GET /api/runs/{id}/files/{**path}
 
 Returns diff and content for a specific file. Response includes `path`, `status`, `diff`, `content`, `is_binary`.
 
@@ -399,7 +529,9 @@ Request:
 
 Scope values: `once` = this call only; `run` = all calls to the same tool+url this run; `always` = all calls this server session; `tool` = all calls to this tool regardless of url.
 
-Response: `200 OK`.
+Response `200 OK` `{ "run_id", "request_id", "approved": true }`.
+
+Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending approval for this `request_id` or run is not active.
 
 ### POST /api/runs/{id}/tool-denials
 
@@ -411,7 +543,9 @@ Request:
 { "request_id": "string" }
 ```
 
-Response: `200 OK`.
+Response `200 OK` `{ "run_id", "request_id", "denied": true }`.
+
+Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending denial for this `request_id` or run is not active.
 
 ### POST /api/runs/{id}/questions/{requestId}/answer
 
@@ -454,6 +588,48 @@ Request:
 Response: `200 OK` `{ "run_id", "autopilot": true }`.
 
 Errors: `400` invalid run id; `404` run not found; `403` caller is not the run owner; `409` run is not active (`InProgress`).
+
+## Sandbox port-forward endpoints
+
+These endpoints back the Kubernetes sandbox preview feature by running `kubectl port-forward` to the sandbox pod for a run. They are owner-scoped like other run endpoints.
+
+### POST /api/runs/{runId}/sandbox/port-forward
+
+Starts a port-forward session from a random local port to the sandbox pod's target port.
+
+Request:
+
+```json
+{ "target_port": 3000 }
+```
+
+Response `200 OK`:
+
+```json
+{
+  "session_id": "pf-abc123",
+  "local_port": 54321,
+  "target_port": 3000,
+  "pod_name": "agentweaver-sandbox-...",
+  "started_at": "2026-06-07T21:00:00+00:00"
+}
+```
+
+`target_port` must be between 1 and 65535. Start failures return `409 Conflict` with an `error` message.
+
+### GET /api/runs/{runId}/sandbox/port-forward
+
+Lists active port-forward sessions for the run. Response `200 OK` is an array of `{ session_id, local_port, target_port, pod_name, started_at }`.
+
+### DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}
+
+Stops an active port-forward session. Response `200 OK`:
+
+```json
+{ "session_id": "pf-abc123", "stopped": true }
+```
+
+Returns `404 Not Found` when the run or port-forward session does not exist.
 
 ## Sandbox policy endpoints
 
@@ -517,6 +693,79 @@ Response `200 OK` returns the stored policy. Validation failures return `400 Bad
 | `require_approval_for_all_shell` | bool | `false` | When `true`, every shell command requires approval regardless of pattern matching. |
 | `redact_pii` | bool | `true` | When `true`, emails and IP addresses are removed from command output in addition to secrets. |
 | `max_output_bytes` | int | `4194304` | Output cap in bytes. Exceeded output is truncated and marked `output_truncated: true`. |
+
+## Blueprint endpoints
+
+Blueprint endpoints are global and authenticated. A blueprint response includes both the legacy `workflow` field and the full `workflows` array. Generated or inline blueprints may include `bespoke_roles`; each bespoke role id must also appear in `roster`.
+
+Blueprint shape:
+
+```json
+{
+  "id": "web-app",
+  "name": "Web App",
+  "description": "Frontend + API application",
+  "roster": ["product-manager", "bespoke-domain-expert"],
+  "workflow": "default",
+  "workflows": ["default"],
+  "review_policy": "default",
+  "sandbox_profile": "default",
+  "bespoke_roles": [
+    {
+      "id": "bespoke-domain-expert",
+      "title": "Domain Expert",
+      "charter": "Inline charter text used when no catalog role fits."
+    }
+  ]
+}
+```
+
+### GET /api/blueprints
+
+Lists predefined blueprints.
+
+Response `200 OK`:
+
+```json
+{ "blueprints": [ { "...": "BlueprintDto" } ] }
+```
+
+### POST /api/blueprints/generate
+
+Generates a single blueprint from a free-text description.
+
+Request:
+
+```json
+{ "description": "Build a travel-planning assistant" }
+```
+
+Response `200 OK`:
+
+```json
+{
+  "blueprint": { "...": "BlueprintDto" },
+  "generated_workflow_yaml": null
+}
+```
+
+`generated_workflow_yaml` is present when no suitable library workflow exists and a custom workflow was generated. Validation failures return `422 Unprocessable Entity` with `error: "blueprint_generation_failed"` and `details`.
+
+### POST /api/blueprints/validate
+
+Validates a blueprint shape, workflow/review policy references, sandbox profile, and roster roles. Roster entries must be catalog role ids or ids declared in `bespoke_roles`.
+
+Request:
+
+```json
+{ "blueprint": { "...": "BlueprintDto" } }
+```
+
+Response `200 OK`:
+
+```json
+{ "valid": true, "errors": [] }
+```
 
 ## Event types on the stream
 
@@ -652,7 +901,10 @@ Request:
   "working_directory": "C:/repos/my-project",
   "default_provider": "github-copilot",
   "default_model_github_copilot": null,
-  "default_model_microsoft_foundry": null
+  "default_model_microsoft_foundry": null,
+  "blueprint_id": null,
+  "blueprint": null,
+  "generated_workflow_yaml": null
 }
 ```
 
@@ -667,6 +919,9 @@ For a GitHub-origin project, add `"source_repository": "owner/repo"` and the ser
 | `default_provider` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the runtime default when omitted. |
 | `default_model_github_copilot` | string | No | Model name override for the GitHub Copilot provider |
 | `default_model_microsoft_foundry` | string | No | Model name override for the Microsoft Foundry provider |
+| `blueprint_id` | string | No | Predefined blueprint id from `GET /api/blueprints`. Mutually exclusive with `blueprint`. |
+| `blueprint` | object | No | Inline `BlueprintDto`, including optional `bespoke_roles`. Mutually exclusive with `blueprint_id`. |
+| `generated_workflow_yaml` | string | No | Custom workflow YAML returned by `POST /api/blueprints/generate`; materialized before applying the blueprint. |
 
 Response `201 Created` returns a project object:
 
@@ -684,6 +939,8 @@ Response `201 Created` returns a project object:
   "default_model_microsoft_foundry": null,
   "available": true,
   "state": "active",
+  "source_blueprint_id": null,
+  "source_blueprint_type": null,
   "created_at": "2026-06-07T21:00:00+00:00",
   "updated_at": "2026-06-07T21:00:00+00:00"
 }
@@ -696,6 +953,14 @@ Validation failures return `400 Bad Request`.
 ### GET /api/projects
 
 Returns all projects owned by the authenticated user. Each entry uses the same shape as the `POST /api/projects` response.
+
+### GET /api/server/info
+
+Returns public server metadata. Response `200 OK`:
+
+```json
+{ "data_directory": "C:/Users/name/AppData/Local/Agentweaver" }
+```
 
 ### GET /api/projects/{id}
 
@@ -760,17 +1025,26 @@ Lists all runs for a project. Returns a JSON array. Each entry includes `agent_n
 ```json
 [
   {
-    "run_id": "f36800fd-...",
+    "workflow_run_id": "workflow-...",
+    "execution_id": "f36800fd-...",
     "status": "merged",
-    "model_source": "github-copilot",
     "model_id": null,
     "task": "add license headers",
     "agent_name": "Aria",
+    "reviewed_by": "local-developer",
     "started_at": "2026-06-07T21:09:45+00:00",
-    "ended_at": "2026-06-07T21:10:12+00:00"
+    "ended_at": "2026-06-07T21:10:12+00:00",
+    "result": null,
+    "coordinator_status": null,
+    "coordinator_status_reason": null,
+    "archived_at": null
   }
 ]
 ```
+
+### GET /api/projects/{id}/runs/{workflowRunId}
+
+Returns one project workflow-run summary by `workflow_run_id`. The response shape matches entries from `GET /api/projects/{id}/runs`. Returns `404 Not Found` when the run does not exist or belongs to another project.
 
 ### POST /api/projects/{id}/runs
 
@@ -804,7 +1078,7 @@ Provider and model resolution order:
 Response `202 Accepted`:
 
 ```json
-{ "run_id": "f36800fd-...", "status": "in_progress" }
+{ "run_id": "f36800fd-...", "workflow_run_id": "workflow-...", "status": "pending" }
 ```
 
 `409 Conflict` with `error: "project_deleting"` when the project is being deleted.
@@ -915,7 +1189,7 @@ Response `200 OK` with the current outcome spec (same shape as `GET /api/runs/{i
 
 Confirming the outcome spec advances the coordinator run through Phase 2: **confirm -> decompose -> dispatch -> observe -> steer**. After confirmation, the coordinator decomposes the spec into a work plan (subtasks plus dependency edges), dispatches the ready subtasks as child runs (independent subtasks in parallel, dependent ones serialized behind their prerequisites), observes each child's read-only timeline, and relays any steering direction to the running subagents. The work plan, child runs, and steering directives are read and driven through the endpoints below; the live graph streams as `coordinator.work_plan`, `coordinator.topology`, `subtask.*`, and `coordinator.steering` events on the coordinator run's own `GET /api/runs/{id}/stream`.
 
-### GET /api/runs/{id}/work-plan
+### GET /api/runs/{coordinatorRunId}/work-plan
 
 Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Owner-scoped. Returns `null` (or `404`) before the coordinator has drafted a plan.
 
@@ -961,7 +1235,7 @@ Response `200 OK`:
 `403 Forbidden` when the caller does not own the run.
 `404 Not Found` when the run does not exist or has no work plan yet.
 
-### GET /api/runs/{id}/children
+### GET /api/runs/{coordinatorRunId}/children
 
 Lists the child runs dispatched by a coordinator run, one row per subtask that has a child run, each paired with its subtask status. Owner-scoped. Empty array when nothing has been dispatched.
 
@@ -999,7 +1273,7 @@ Response `200 OK`:
 `403 Forbidden` when the caller does not own the run.
 `404 Not Found` when the run does not exist.
 
-### POST /api/runs/{id}/steer
+### POST /api/runs/{coordinatorRunId}/steer
 
 Creates a steering directive that the coordinator relays to one or more running subagents. Owner-scoped.
 
@@ -1038,7 +1312,7 @@ A `stop` takes effect immediately: it cancels the targeted child run's in-flight
 `404 Not Found` when the run does not exist.
 `409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
 
-### POST /api/runs/{id}/assembly/review
+### POST /api/runs/{coordinatorRunId}/assembly/review
 
 The ONE collective human-review gate for Phase 3 collective assembly (Feature 008). After every child subtask finishes, the coordinator builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs a collective RAI pass over the aggregate diff, then suspends here for one human decision over the **combined** output of all agents. Mirrors `POST /api/runs/{id}/review` (owner-scoped, at-most-once) but `{id}` is the **coordinator** run id, and the decision is delivered to the service-driven gate the collective pipeline is awaiting. Owner-scoped.
 
@@ -1079,7 +1353,31 @@ Response `200 OK`:
 `404 Not Found` when the run does not exist.
 `409 Conflict` with `error: "no_assembly_review_pending"` when no collective review is currently awaited for the run (the pipeline has not reached the gate yet, or the decision was already consumed by a concurrent POST).
 
+### GET /api/runs/{id}/assembly/files
 
+Lists files in the coordinator assembly workspace. Owner-scoped.
+
+### GET /api/runs/{id}/assembly/files/{**path}
+
+Returns diff/content metadata for a specific file in the assembly workspace. Owner-scoped.
+
+### GET /api/runs/{id}/assembly/workspace
+
+Returns the assembly workspace tree. Owner-scoped.
+
+### GET /api/runs/{id}/assembly/content/{**path}
+
+Returns raw file content from the assembly workspace. Owner-scoped.
+
+
+
+### GET /auth/github/authorize
+
+Begins the GitHub OAuth redirect flow. This endpoint is anonymous and redirects to GitHub. If GitHub OAuth is not configured it returns `503`.
+
+### GET /auth/github/callback
+
+Receives the GitHub OAuth callback, exchanges the code for a token, and redirects to the configured frontend with `auth=success` or `auth=error`.
 
 ### POST /api/auth/github/device
 
@@ -1124,7 +1422,7 @@ Returns the current GitHub authentication state for the calling user.
 Response `200 OK`:
 
 ```json
-{ "status": "signed_in", "login": "octocat" }
+{ "status": "signed_in", "login": "octocat", "avatar_url": "https://avatars.githubusercontent.com/u/..." }
 ```
 
 | `status` value | Meaning |
@@ -1132,6 +1430,16 @@ Response `200 OK`:
 | `signed_in` | A valid token is stored; `login` contains the GitHub username |
 | `signed_out` | The user explicitly signed out |
 | `never_signed_in` | No sign-in has been completed for this user |
+
+### GET /api/github/repos
+
+Lists repositories for the signed-in GitHub user. Response `200 OK` is an array of:
+
+```json
+{ "full_name": "owner/repo", "description": "string", "private": true, "default_branch": "main" }
+```
+
+Returns `401 Unauthorized` when no valid GitHub access token is stored.
 
 ### POST /api/auth/github/sign-out
 
@@ -1165,6 +1473,16 @@ Response `200 OK`:
     ]
   }
 ]
+```
+
+### GET /api/projects/{id}/casting/universes
+
+Lists allowed universe names for a project.
+
+Response `200 OK`:
+
+```json
+{ "universes": ["star-wars", "marvel"] }
 ```
 
 ### GET /api/catalog/roles
@@ -1243,7 +1561,11 @@ Error responses:
 | `409` | `project_unavailable` | The project's working directory is not accessible |
 | `409` | `layout_conflict` | Both canonical and legacy `.squad/` layouts are present |
 
-### GET /api/projects/{id}/casting/proposals/{pid}
+### GET /api/projects/{id}/casting/proposals
+
+Lists active proposals for the project. Response `200 OK` is an array of `CastProposalDto` objects.
+
+### GET /api/projects/{id}/casting/proposals/{proposalId}
 
 Returns the current state of a proposal.
 
@@ -1251,7 +1573,7 @@ Response `200 OK` — a `CastProposalDto` (same shape as the `POST` response abo
 
 Returns `404 Not Found` when no proposal exists for the given id.
 
-### PATCH /api/projects/{id}/casting/proposals/{pid}
+### PATCH /api/projects/{id}/casting/proposals/{proposalId}
 
 Amends a proposal by replacing its member list and/or universe. Use this to add, remove, or modify proposed members before confirming.
 
@@ -1282,7 +1604,7 @@ Both `members` and `universe` are optional; omit either to leave it unchanged.
 
 Response `200 OK` returns the updated `CastProposalDto`. Returns `404 Not Found` when the proposal does not exist.
 
-### POST /api/projects/{id}/casting/proposals/{pid}/confirm
+### POST /api/projects/{id}/casting/proposals/{proposalId}/confirm
 
 Confirms a proposal and materialises the team by writing `.squad/` files. For projects with an existing team, the `intent` field controls how the proposed team relates to the existing one.
 
@@ -1330,7 +1652,7 @@ Notable error responses:
 | `409` | `layout_conflict` | Both canonical and legacy `.squad/` layouts are present; resolve manually before confirming |
 | `409` | `project_unavailable` | The project's working directory is not accessible |
 
-### DELETE /api/projects/{id}/casting/proposals/{pid}
+### DELETE /api/projects/{id}/casting/proposals/{proposalId}
 
 Rejects a proposal. No `.squad/` files are written or modified. Response `204 No Content`.
 
@@ -1396,7 +1718,7 @@ Request:
 }
 ```
 
-Response `204 No Content` on success. Returns `404 Not Found` when the member does not exist.
+Response `200 OK` returns `{ "member_name": "...", "content": "..." }`. Returns `404 Not Found` when the member does not exist.
 
 ### POST /api/projects/{id}/team/members
 
@@ -1446,7 +1768,7 @@ Request:
 
 Response `200 OK` — the updated `TeamMemberDto`. Returns `404 Not Found` when the member does not exist.
 
-### GET /api/projects/{id}/team/sync
+### GET /api/projects/{projectId}/team/sync
 
 Returns the pending uncommitted changes in the project's `.squad/` directory and a hash of the current change set.
 
@@ -1462,9 +1784,9 @@ Response `200 OK`:
 }
 ```
 
-`changes` is an empty array and `nothing_to_sync` is `true` when there is nothing to commit. `change_set_hash` must be passed to `POST /api/projects/{id}/team/sync` to prevent stale commits.
+`changes` is an empty array and `nothing_to_sync` is `true` when there is nothing to commit. `change_set_hash` must be passed to `POST /api/projects/{projectId}/team/sync` to prevent stale commits.
 
-### POST /api/projects/{id}/team/sync
+### POST /api/projects/{projectId}/team/sync
 
 Commits the pending `.squad/` changes to the project repository.
 
@@ -1479,12 +1801,12 @@ Request:
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `expected_change_set_hash` | string | Yes | Hash from `GET /api/projects/{id}/team/sync`. The server rejects the commit if the change set has shifted since you fetched it. |
+| `expected_change_set_hash` | string | Yes | Hash from `GET /api/projects/{projectId}/team/sync`. The server rejects the commit if the change set has shifted since you fetched it. |
 | `message` | string | No | Commit message. A default message is used when omitted. |
 
-Returns `409 Conflict` with `error: "sync_state_changed"` when the change set hash does not match. Fetch a fresh hash from `GET /api/projects/{id}/team/sync` and retry.
+Returns `409 Conflict` with `error: "sync_state_changed"` when the change set hash does not match. Fetch a fresh hash from `GET /api/projects/{projectId}/team/sync` and retry.
 
-Response `204 No Content` on success.
+Response `200 OK` returns `{ "commit_id": "..." }`.
 
 ## Persistence
 

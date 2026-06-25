@@ -109,3 +109,11 @@ Agent base prompt
 ```
 
 If there is no memory yet for a project, the block is omitted entirely and the agent runs with only the base prompt.
+
+---
+
+## Coordinator child workers — decisions only
+
+Coordinator child runs (a run with a `ParentRunId`) do **not** receive the full four-layer stack. The core-context, learnings, and session layers duplicated the child's charter and carried artifact-write instructions that pointed at `session-state` / `.copilot` paths absent from a child worktree, which the sandbox rejected and stalled the child.
+
+Instead, `RunOrchestrator.BuildContextAsync` injects the child's charter plus **only** the active architectural/scope **decisions** block, compiled by `MemoryContextCompiler.CompileDecisionsAsync(projectId)`. This reuses the same `## Boundaries and Decisions` rendering as Layer 1 (active `architectural`/`scope` decisions, oldest-first) but emits nothing else. Decisions are non-negotiable team boundaries — the highest-value context — and do not duplicate the charter or carry artifact-write instructions, so they are safe for child workers and ensure scope constraints reach the agents doing the actual work. When there are no active decisions, the method returns `null` and only the charter is injected. Compilation failures are swallowed (logged as a warning); the child proceeds with its charter alone.

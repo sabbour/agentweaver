@@ -1,6 +1,6 @@
 # Web UI reference
 
-The Agentweaver web UI is a React 19 and Fluent 2 client over the backend API. It submits runs, streams live events, shows run details, and records your review decision before anything merges. The browser client keeps all run logic in the API layer.
+The Agentweaver web UI is a TypeScript React 19 SPA built with Vite. It uses React Router for routing, Fluent UI React Components (Fluent 2) for styling, and React Flow for workflow diagrams. It submits runs, streams live events, shows run details, and records your review decision before anything merges. The browser client keeps all run logic in the API layer.
 
 ## Configuration
 
@@ -23,25 +23,35 @@ npm run lint
 
 `npm run build` type-checks the app and produces a production bundle. `npm run lint` runs ESLint.
 
+For production hosting, the Vite build output is served by the ASP.NET Core static web host in `apps/Agentweaver.Web` (default files, static files, and SPA fallback to `index.html`). `apps/Agentweaver.Api` maps API endpoints only; it does not serve the SPA.
+
 ## Routes
 
 | Path | Page | Purpose |
 | --- | --- | --- |
-| `/` | Project gallery | Card grid of all projects; create-blank and create-from-GitHub dialogs |
-| `/projects/:projectId` | Project | Project info, run list, and start-run dialog |
+| `/`, `/overview` | Overview | Fleet activity, active projects, and recent activity |
+| `/projects` | Project gallery | Card grid of all projects; create-blank and create-from-GitHub dialogs |
+| `/projects/:projectId` | Dashboard | Project counters, throughput chart, and agent leaderboard |
+| `/projects/:projectId/board` | Board | Project info, Kanban board, run list, and start-run dialog |
+| `/projects/:projectId/flow` | Flow | Live view of what each agent is working on |
+| `/projects/:projectId/orchestrations` | Orchestrations | Coordinator orchestration run list |
+| `/projects/:projectId/workspace` | Workspace | Project repository and run worktree browser |
 | `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, relink, delete |
 | `/projects/:projectId/team` | Team | Current team roster, member management, charter editor, and sync panel |
 | `/projects/:projectId/team/cast` | Casting wizard | Single-page casting wizard with Formulate, Template, and Analyze tabs |
+| `/projects/:projectId/memories` | Team Memory | Decisions and RAI audit trail recorded across runs |
+| `/projects/:projectId/workflows` | Workflows | Workflow definitions and editing |
+| `/projects/:projectId/diagnostics` | Diagnostics | Project diagnostics |
+| `/projects/:projectId/heartbeat` | Heartbeat | Coordinator heartbeat status |
+| `/projects/:projectId/runs/:runId/execution/:executionId` | Execution | Run execution timeline |
 | `/projects/:projectId/runs/:runId/workflow` | Workflow run | Live workflow diagram with executor stage cards, execution modal, and status |
 | `/projects/:projectId/orchestrations/:runId` | Coordinator run | Live outcome-spec review and confirm/revise gate for a coordinator run |
-| `/projects/:projectId/memories` | Team Memory | Decisions and RAI audit trail recorded across runs |
-| `/settings` | Settings | API connection settings |
 
 ## Flows
 
 ### Project gallery
 
-The home page (`/`) shows all projects as a card grid. Each card displays the project name, origin (blank or GitHub), working directory, and availability. An unavailable project — one whose working directory cannot be found on the server — renders with a warning indicator.
+The project gallery (`/projects`) shows all projects as a card grid. Each card displays the project name, origin (blank or GitHub), working directory, and availability. An unavailable project — one whose working directory cannot be found on the server — renders with a warning indicator.
 
 Two dialogs let you create a project:
 
@@ -49,11 +59,11 @@ Two dialogs let you create a project:
 
 **Create from GitHub** — collects a name, GitHub repository URL, and a local path. The server clones the repository into that path.
 
-Clicking a project card navigates to the project page.
+Clicking a project card navigates to the project dashboard.
 
-### Project page
+### Board page
 
-The project page (`/projects/:projectId`) shows project details, a list of past runs, and a start-run dialog.
+The board page (`/projects/:projectId/board`) shows project details, the Kanban board, a list of past runs, and a start-run dialog.
 
 The details section shows the project name, origin, source repository (for GitHub projects), working directory, default branch, and provider settings.
 
@@ -91,11 +101,11 @@ When signed in, it shows the GitHub username and a **Sign out** button.
 
 ### Submit a run
 
-The home page collects the repository path, originating branch, task description, and model source. Submit stays disabled until the path, branch, and task are filled in. On success the app navigates to the watch screen for the new run.
+The legacy `HomePage` submit form collects the repository path, originating branch, task description, and model source. Submit stays disabled until the path, branch, and task are filled in. On success the app navigates to the watch screen for the new run. The current routed project flow starts runs from the board page's start-run dialog.
 
 ### Start an orchestration
 
-The start-orchestration dialog (`StartOrchestrationDialog`) is opened from the **Start orchestration** button on the project page. It collects a single **Goal** field — a plain-language description of the outcome to achieve. Submit stays disabled until the goal is non-empty. Submitting calls `POST /api/projects/{id}/orchestrations`, which starts a coordinator run and returns its `runId`; the app then navigates to the coordinator run page at `/projects/:projectId/orchestrations/:runId`.
+The start-orchestration dialog (`StartOrchestrationDialog`) is opened from the **Start orchestration** button on the board page. It collects a single **Goal** field — a plain-language description of the outcome to achieve. Submit stays disabled until the goal is non-empty. Submitting calls `POST /api/projects/{id}/orchestrations`, which starts a coordinator run and returns its `runId`; the app then navigates to the coordinator run page at `/projects/:projectId/orchestrations/:runId`.
 
 ### Coordinator run and outcome-spec gate
 
@@ -495,18 +505,25 @@ src/
     reducer.ts          pure grouping reducer (turns, steps, streaming state)
     useTimelineItems.ts hook that feeds the SSE event list into the reducer
   pages/
-    ProjectGalleryPage.tsx  home: project card grid, create-blank and create-from-GitHub dialogs
-    ProjectPage.tsx         project detail, run list, start-run dialog
+    ProjectGalleryPage.tsx  project gallery: card grid, create-blank and create-from-GitHub dialogs
+    ProjectPage.tsx         board: project detail, Kanban board, run list, start-run dialog
     ProjectSettingsPage.tsx provider defaults, rename, relink, delete
     TeamPage.tsx            team roster, member management, charter dialogs, sync panel
     CastingWizardPage.tsx   Single-page casting wizard (Formulate / Template / Analyze tabs)
+    DashboardPage.tsx       project dashboard counters, throughput, and leaderboard
+    OverviewPage.tsx        global fleet activity overview
+    FlowPage.tsx            live view of what each agent is working on
+    OrchestrationsPage.tsx  coordinator orchestration run list
+    WorkspacePage.tsx       project repository and run worktree browser
+    WorkflowsPage.tsx       workflow definitions and editing
+    DiagnosticsPage.tsx     project diagnostics
+    HeartbeatPage.tsx       coordinator heartbeat status
     WatchPage.tsx
     WorkflowRunPage.tsx     live workflow graph (descriptor-driven or fallback hardcoded)
     CoordinatorRunPage.tsx  coordinator run page: outcome-spec gate + unified graph + steering
-    SettingsPage.tsx        API connection settings
-    HomePage.tsx            legacy submit form (not the default route)
+    SettingsPage.tsx        legacy sandbox-policy settings component (not currently routed)
+    HomePage.tsx            legacy submit form (not currently routed)
   App.tsx               Fluent provider and routing
   main.tsx              entry point
   config.ts             reads VITE_API_URL and VITE_API_KEY
 ```
-
