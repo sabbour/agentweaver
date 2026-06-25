@@ -52,6 +52,40 @@ public sealed class ComposeChildSystemPromptTests
             "the prompt must explain that files are committed when the turn ends");
     }
 
+    [Fact]
+    public void WithDecisions_IncludesDecisionsAfterCharter_BeforeBoundary()
+    {
+        const string decisions =
+            "## Boundaries and Decisions\n### Use Postgres\n**Type:** architectural | **Decided by:** Architect\nAll persistence uses Postgres.";
+
+        var prompt = RunOrchestrator.ComposeChildSystemPrompt(Charter, decisions);
+
+        prompt.Should().NotBeNull();
+        CountOccurrences(prompt, Charter).Should().Be(1, "the child charter must appear exactly once");
+        prompt.Should().Contain("## Boundaries and Decisions",
+            "active decisions must be injected into the child worker prompt");
+        prompt.Should().Contain("All persistence uses Postgres.");
+
+        // Order: charter, then decisions, then the sandbox boundary.
+        prompt.IndexOf(Charter, StringComparison.Ordinal)
+            .Should().BeLessThan(prompt.IndexOf("## Boundaries and Decisions", StringComparison.Ordinal));
+        prompt.IndexOf("## Boundaries and Decisions", StringComparison.Ordinal)
+            .Should().BeLessThan(prompt.IndexOf("Working-directory sandbox boundary", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void WithoutDecisions_OmitsDecisionsBlock_StillHasBoundary(string? decisions)
+    {
+        var prompt = RunOrchestrator.ComposeChildSystemPrompt(Charter, decisions);
+
+        prompt.Should().NotBeNull();
+        prompt.Should().NotContain("## Boundaries and Decisions",
+            "no decisions block should appear when there are no active decisions");
+        prompt.Should().ContainEquivalentOf("working directory");
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         var count = 0;
