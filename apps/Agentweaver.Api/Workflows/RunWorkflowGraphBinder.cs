@@ -118,6 +118,30 @@ internal static class RunWorkflowGraphBinder
         }
     }
 
+    /// <summary>
+    /// Binder DRY-RUN (no executors required): validates that every node in <paramref name="definition"/>
+    /// maps to a node kind the binder can wire to a runtime executor, and that every edge references a
+    /// declared node. Throws <see cref="WorkflowBindException"/> for the first node/edge that would fail
+    /// closed at BUILD time (e.g. fan_out / fan_in / serial / coordinator_composed, which the loader accepts
+    /// but have no runtime executor; or a dangling edge reference). <c>peer_review</c> is ACCEPTED — it now
+    /// has a runtime executor. Lets callers (save, set-default, generator) reject loader-valid-but-bind-
+    /// invalid workflows up front without standing up the full executor graph (which needs DI bindings).
+    /// </summary>
+    public static void ValidateBindable(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        foreach (var node in definition.Nodes)
+            RejectUnwiredKind(node, NodeClassifier.Classify(node));
+
+        // Dangling edge endpoints fail closed exactly as they would during a full WireFull build.
+        foreach (var edge in definition.Edges)
+        {
+            _ = GetNode(definition, edge.From);
+            _ = GetNode(definition, edge.To);
+        }
+    }
+
     /// <summary>Resolves the executor a definition's START node is entered at.</summary>
     private static ExecutorBinding ResolveEntry(WireContext ctx, WorkflowNode startNode) =>
         EffectiveKind(ctx.Definition, startNode) switch

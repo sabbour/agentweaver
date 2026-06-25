@@ -70,15 +70,29 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
     }
 
     /// <summary>Cleans model output, ensures a valid id, and validates it. Returns the cleaned YAML, the
-    /// parsed definition (null when invalid), and a validation error (null when valid).</summary>
+    /// parsed definition (null when invalid), and a validation error (null when valid). Validation is
+    /// two-stage: the schema/structural <see cref="WorkflowDefinitionLoader"/> AND a
+    /// <see cref="RunWorkflowGraphBinder.ValidateBindable"/> dry-run, so a draft that loads but would fail
+    /// to bind at runtime (e.g. uses fan_out/fan_in/serial/coordinator_composed) is rejected here and
+    /// triggers the correction pass rather than producing an unrunnable workflow.</summary>
     private static (string Yaml, WorkflowDefinition? Definition, string? Error) ParseCandidate(
         string raw, string description)
     {
         var yaml = EnsureWorkflowId(StripFences(raw), description);
         var result = WorkflowDefinitionLoader.Load(yaml, "generated");
-        return result.IsValid && result.Definition is not null
-            ? (yaml, result.Definition, null)
-            : (yaml, null, result.Error ?? "The generated YAML did not validate.");
+        if (!result.IsValid || result.Definition is null)
+            return (yaml, null, result.Error ?? "The generated YAML did not validate.");
+
+        try
+        {
+            RunWorkflowGraphBinder.ValidateBindable(result.Definition);
+        }
+        catch (WorkflowBindException ex)
+        {
+            return (yaml, null, ex.Message);
+        }
+
+        return (yaml, result.Definition, null);
     }
 
     private string BuildPrompt(WorkflowGenerationRequest request)
@@ -112,14 +126,18 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - edges: list. Each edge: { from, to, when? }. `from`/`to` MUST reference existing node ids.
               `when` guards the edge on a verdict (e.g. approved, request-changes, declined, merged, blocked).
 
-            NODE TYPES — ONLY use the following. Other types (peer_review, serial, fan_out, fan_in,
-            coordinator_composed) are accepted by the schema loader but have NO runtime executor and
-            will cause a binding error when the workflow runs. Do not use them.
+            NODE TYPES — use the following supported types. peer_review HAS a runtime executor and is
+            fully supported. Do NOT use fan_out, fan_in, serial, or coordinator_composed: those are accepted
+            by the schema loader but have NO runtime executor and will cause a binding error when the
+            workflow runs.
 
             - prompt: an agent turn. The unit of work. Required: `role` (from the roles list below),
               `prompt` (the task instruction for the agent).
+            - peer_review: an AI peer-review turn that emits a verdict. With verdict-routed outgoing edges
+              (e.g. `when: approved` / `when: request-changes`) it acts as a review GATE; with a single
+              unconditional outgoing edge it is a plain producing review turn. Set `role` and `prompt`.
             - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on) and
-              have exactly one outgoing edge per declared branch. Optional `kind` field for specialised
+              have exactly one outgoing edge per declared branch. Optional `gate_kind` field for specialised
               gates: `human-review` (human HITL review gate), `rai` (responsible-AI safety gate).
             - merge: applies a produced change to the repository. Verdicts: merged | blocked.
             - scribe: records the run outcome. Place before terminal `done` nodes.
@@ -129,7 +147,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - id, name, trigger.type, start, and at least one node are required.
             - `start` and every edge `from`/`to` MUST reference declared node ids.
             - A `check` node MUST declare `branches:` and have a matching outgoing edge for each verdict.
-            - A `serial` node's `steps:` MUST reference declared node ids.
+            - Do NOT use fan_out, fan_in, serial, or coordinator_composed node types (no runtime executor).
 
             Available roles for the `agent`/`role` fields. PREFER these catalog ids — they have pre-built
             charters and are immediately runnable. Use a catalog id whenever one fits adequately:
@@ -170,7 +188,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         """;
 
     /// <summary>Builds the few-shot section from the library workflows. Prefers the canonical
-    /// software-delivery / bug-fix / agent-evaluation patterns (FR-057); otherwise takes the first few.</summary>
+    /// software-delivery / bug-fix / code-review patterns (FR-057); otherwise takes the first few.
+    /// agent-evaluation is deliberately excluded — it uses fan_out/fan_in, which have no runtime executor,
+    /// so it must not be shown as a model to imitate.</summary>
     private string BuildFewShotExamples()
     {
         var all = _catalog.LoadAllWorkflowYamls();
@@ -179,10 +199,18 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         bool Preferred(string src) =>
             src.Contains("software_delivery", StringComparison.OrdinalIgnoreCase) ||
             src.Contains("bug_fix", StringComparison.OrdinalIgnoreCase) ||
-            src.Contains("agent_evaluation", StringComparison.OrdinalIgnoreCase);
+            src.Contains("code_review", StringComparison.OrdinalIgnoreCase);
 
-        var selected = all.Where(w => Preferred(w.Source)).ToList();
-        if (selected.Count == 0) selected = all.Take(3).ToList();
+        // Never offer fan_out/fan_in/serial/coordinator_composed workflows (e.g. agent-evaluation) as
+        // few-shot examples — they would teach the model to emit unbindable node types.
+        bool Bindable(string src) =>
+            !src.Contains("agent_evaluation", StringComparison.OrdinalIgnoreCase);
+
+        var candidates = all.Where(w => Bindable(w.Source)).ToList();
+        if (candidates.Count == 0) candidates = all.ToList();
+
+        var selected = candidates.Where(w => Preferred(w.Source)).ToList();
+        if (selected.Count == 0) selected = candidates.Take(3).ToList();
         else if (selected.Count > 3) selected = selected.Take(3).ToList();
 
         var sb = new StringBuilder();

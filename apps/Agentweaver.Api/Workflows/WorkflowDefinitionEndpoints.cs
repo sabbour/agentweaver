@@ -80,12 +80,29 @@ public static class WorkflowDefinitionEndpoints
             if (error is not null) return error;
 
             var workflowId = Normalize(request.WorkflowId);
-            if (workflowId is not null && registry.Get(project!, workflowId)?.Definition is null)
-                return Results.BadRequest(new { error = "unknown_workflow_id" });
+            if (workflowId is not null)
+            {
+                var candidate = registry.Get(project!, workflowId)?.Definition;
+                if (candidate is null)
+                    return Results.BadRequest(new { error = "unknown_workflow_id" });
 
-            await projectStore.UpdateDefaultWorkflowAsync(project!.Id, workflowId, DateTimeOffset.UtcNow, ct);
+                // Binder dry-run: a workflow may be loader-valid yet fail at runtime (e.g.
+                // agent-evaluation's fan_out/fan_in have no executor). Reject it as a default before it is
+                // ever selected for a run, with a 422 naming the runtime problem.
+                try
+                {
+                    RunWorkflowGraphBinder.ValidateBindable(candidate);
+                }
+                catch (WorkflowBindException ex)
+                {
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = $"Workflow cannot be set as default: it will fail at runtime: {ex.Message}",
+                    });
+                }
+            }
 
-            var updated = await projectStore.GetAsync(project.Id, ct);
+            var updated = await projectStore.GetAsync(project!.Id, ct);
             if (updated is null) return Results.NotFound();
             return Results.Ok(BuildListResponse(updated, registry.GetOrLoad(updated)));
         });
@@ -229,23 +246,19 @@ public static class WorkflowDefinitionEndpoints
                     line = errorLine
                 });
 
-            // Step 4: Binder dry-run — classify every node and reject types not yet wired to a
-            // runtime executor. This fails-closed before the file is written, consistent with the
-            // binder's governance guarantee.
-            foreach (var node in definition.Nodes)
+            // Step 4: Binder dry-run — run the real RunWorkflowGraphBinder governance check, which
+            // classifies every node and fails closed for any type not yet wired to a runtime executor
+            // (fan_out / fan_in / serial / coordinator_composed) and for dangling edges. peer_review is
+            // accepted: the binder now supports it. This rejects bind-invalid workflows BEFORE the file is
+            // written, consistent with the binder's governance guarantee, with a 422 (loader-valid but
+            // runtime-unbindable).
+            try
             {
-                var kind = NodeClassifier.Classify(node);
-                if (kind is NodeKind.FanOut or NodeKind.FanIn or NodeKind.Serial
-                         or NodeKind.PeerReview or NodeKind.CoordinatorComposed)
-                {
-                    return Results.BadRequest(new
-                    {
-                        error = $"Node '{node.Id}' (type '{WorkflowDtoMapper.NodeTypeToApi(node.Type)}') is accepted " +
-                                "by the schema but is not yet wired to a runtime executor. Use " +
-                                "prompt/check/merge/scribe/terminal nodes in authored workflows.",
-                        line = errorLine
-                    });
-                }
+                RunWorkflowGraphBinder.ValidateBindable(definition);
+            }
+            catch (WorkflowBindException ex)
+            {
+                return Results.UnprocessableEntity(new { error = ex.Message, line = errorLine });
             }
 
             // Step 5: Write to the project workspace.
