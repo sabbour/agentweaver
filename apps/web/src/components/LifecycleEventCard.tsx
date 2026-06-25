@@ -43,8 +43,11 @@ const useStyles = makeStyles({
   badge: { flexShrink: 0 },
   // agent.intent renders with the SAME subtle treatment as the "Used N tools"
   // cluster header (muted foreground, compact) — no card, icon, or badge chrome.
+  // paddingLeft matches TurnGroup's `steps` container so intent lines align with
+  // the "Used N tools" rows that live inside that container.
   intentAnnotation: {
     padding: '1px 0',
+    paddingLeft: tokens.spacingHorizontalM,
     color: tokens.colorNeutralForeground3,
     wordBreak: 'break-word',
   },
