@@ -56,4 +56,11 @@ public interface IToolApprovalGate
 
     /// <summary>Clears all pending approvals for a run (called on run completion).</summary>
     void Clear(string runId);
+
+    /// <summary>
+    /// Registers a parent–child relationship so that run-scoped policies granted on a child run
+    /// are also visible to its sibling child runs (i.e. stored under the parent run ID too).
+    /// Call this once when a coordinator child run is dispatched.
+    /// </summary>
+    void RegisterParentRun(string childRunId, string parentRunId);
 }

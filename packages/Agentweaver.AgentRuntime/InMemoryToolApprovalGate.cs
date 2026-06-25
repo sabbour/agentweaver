@@ -24,6 +24,9 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     private readonly HashSet<string> _alwaysAllowedPolicies = [];
     private readonly object _alwaysLock = new();
 
+    // childRunId → parentRunId — populated by RegisterParentRun
+    private readonly ConcurrentDictionary<string, string> _parentRuns = new();
+
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
 
     /// <inheritdoc />
@@ -79,15 +82,18 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
 
                 if (scope == ApprovalScope.Run)
                 {
-                    var runAllowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
-                    lock (runAllowlist) runAllowlist.Add(policyKey);
+                    AddRunPolicy(runId, policyKey);
+                    // Propagate to parent so siblings see the policy via IsAutoApproved.
+                    if (_parentRuns.TryGetValue(runId, out var parentId))
+                        AddRunPolicy(parentId, policyKey);
                 }
                 else if (scope == ApprovalScope.Tool)
                 {
                     // Tool-scoped: approve this tool for any URL this run.
                     var toolKey = PolicyKey(ctx.ToolName, null);
-                    var runAllowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
-                    lock (runAllowlist) runAllowlist.Add(toolKey);
+                    AddRunPolicy(runId, toolKey);
+                    if (_parentRuns.TryGetValue(runId, out var parentId))
+                        AddRunPolicy(parentId, toolKey);
                 }
                 else if (scope == ApprovalScope.Always)
                 {
@@ -115,18 +121,19 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
             if (_alwaysAllowedPolicies.Contains(toolKey)) return true;
         }
 
-        // Check run-scoped allowlist.
-        if (_runScopedAllowlist.TryGetValue(runId, out var runAllowlist))
-        {
-            lock (runAllowlist)
-            {
-                if (runAllowlist.Contains(key)) return true;
-                if (runAllowlist.Contains(toolKey)) return true;
-            }
-        }
+        // Check run-scoped allowlist for this run.
+        if (IsInRunAllowlist(runId, key, toolKey)) return true;
+
+        // Check parent run's allowlist — a sibling child may have already been approved.
+        if (_parentRuns.TryGetValue(runId, out var parentId) &&
+            IsInRunAllowlist(parentId, key, toolKey)) return true;
 
         return false;
     }
+
+    /// <inheritdoc />
+    public void RegisterParentRun(string childRunId, string parentRunId) =>
+        _parentRuns[childRunId] = parentRunId;
 
     /// <inheritdoc />
     public void Clear(string runId)
@@ -139,6 +146,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
 
         _requestContext.TryRemove(runId, out _);
         _runScopedAllowlist.TryRemove(runId, out _);
+        _parentRuns.TryRemove(runId, out _);
         // Always-allowed policies are intentionally not cleared — they survive run boundaries.
     }
 
@@ -147,6 +155,18 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         if (!_pending.TryGetValue(runId, out var runPending)) return false;
         if (!runPending.TryGetValue(requestId, out var tcs)) return false;
         return tcs.TrySetResult(result);
+    }
+
+    private void AddRunPolicy(string runId, string policyKey)
+    {
+        var allowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
+        lock (allowlist) allowlist.Add(policyKey);
+    }
+
+    private bool IsInRunAllowlist(string runId, string key, string toolKey)
+    {
+        if (!_runScopedAllowlist.TryGetValue(runId, out var allowlist)) return false;
+        lock (allowlist) return allowlist.Contains(key) || allowlist.Contains(toolKey);
     }
 
     private static string PolicyKey(string toolName, string? url) =>

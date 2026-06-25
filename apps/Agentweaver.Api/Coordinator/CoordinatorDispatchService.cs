@@ -72,6 +72,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly IRunOptionsStore? _runOptions;
     private readonly ICoordinatorAutopilot? _autopilot;
     private readonly IRunEventStream? _eventStream;
+    private readonly IToolApprovalGate? _approvalGate;
     private readonly ILogger<CoordinatorDispatchService> _logger;
     private readonly CancellationToken _appStopping;
 
@@ -95,7 +96,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IRunOptionsStore? runOptions = null,
         ICoordinatorAutopilot? autopilot = null,
         IConfiguration? configuration = null,
-        IRunEventStream? eventStream = null)
+        IRunEventStream? eventStream = null,
+        IToolApprovalGate? approvalGate = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -106,6 +108,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _runOptions = runOptions;
         _autopilot = autopilot;
         _eventStream = eventStream;
+        _approvalGate = approvalGate;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
 
@@ -401,6 +404,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             ProjectId = context.ProjectId,
             ModelId = subtask.SelectedModelId,
             AgentName = subtask.AssignedAgent,
+            AgentCharter = subtask.AgentCharter,
             ParentRunId = context.CoordinatorRunId,
             SubtaskId = subtaskId.ToString(),
         };
@@ -409,6 +413,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // the child's runner honors auto-approve and the child's bubbled questions are eligible for
         // Autopilot. Seeded before the child run starts so its first tool call reads the inherited value.
         CascadeOptionsToChild(context.CoordinatorRunId, childRunId.ToString());
+
+        // Register the parent→child relationship so that tool approval policies granted on one
+        // child (scope Run/Tool) are visible to sibling children in the same coordinator run.
+        _approvalGate?.RegisterParentRun(childRunId.ToString(), context.CoordinatorRunId);
 
         try
         {
