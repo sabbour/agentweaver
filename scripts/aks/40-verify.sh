@@ -6,7 +6,7 @@
 #   2. Gateway is Programmed with a public address
 #   3. HTTPRoutes are Accepted and ResolvedRefs
 #   4. Frontend (/) returns HTTP 200
-#   5. API diagnostics endpoint returns HTTP 200
+#   5. API health endpoint returns HTTP 200
 #
 # Requires: kubectl, curl.
 # Run from the REPO ROOT.
@@ -108,15 +108,15 @@ if [[ -n "${HOST}" ]]; then
   fe_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 \
     "https://${HOST}/" 2>/dev/null || echo "000")
   api_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 \
-    "https://${HOST}/api/diagnostics/health" 2>/dev/null || echo "000")
+    "https://${HOST}/health" 2>/dev/null || echo "000")
 
   [[ "${fe_status}" == "200" ]] \
     && ok "Frontend / → HTTP ${fe_status}" \
     || fail "Frontend / → HTTP ${fe_status} (expected 200)"
 
   [[ "${api_status}" == "200" ]] \
-    && ok "API /api/diagnostics/health → HTTP ${api_status}" \
-    || fail "API /api/diagnostics/health → HTTP ${api_status} (expected 200)"
+    && ok "API /health → HTTP ${api_status}" \
+    || fail "API /health → HTTP ${api_status} (expected 200)"
 fi
 
 # -- 6: RuntimeClass ----------------------------------------------------------
