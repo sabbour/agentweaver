@@ -77,9 +77,33 @@ public sealed class WorkflowSelectorTests
         // Prompt carries the task, roles, and every candidate's id/name/description.
         model.LastPrompt.Should().Contain("Task: Fix the null check in X");
         model.LastPrompt.Should().Contain("Team roles: Implementer, Reviewer");
-        model.LastPrompt.Should().Contain("- bug-fix: Bug Fix — Fast remediation of a specific defect.");
-        model.LastPrompt.Should().Contain("- software-delivery: Software Delivery —");
+        model.LastPrompt.Should().Contain("- bug-fix [built-in/library]: Bug Fix — Fast remediation of a specific defect.");
+        model.LastPrompt.Should().Contain("- software-delivery [built-in/library]: Software Delivery —");
+        model.LastPrompt.Should().Contain("Match on PROCESS FIT");
         model.LastPrompt.Should().Contain("\"selected\"");
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_PromptMarksCustomWorkflowsAndPrefersThemWhenFit()
+    {
+        var model = new FakeModel("""{"selected": "travel-planner", "rationale": "The custom workflow matches the travel planning process."}""");
+        var def = Workflow("default", "Default", "General-purpose agent workflow.");
+        var pm = Workflow("pm-discovery", "Product Management Discovery", "Software product discovery and requirements.");
+        var travel = Workflow("travel-planner", "Travel Planner", "Research destinations, draft itineraries, review plans, and track bookings.");
+        var context = new WorkflowSelectionContext(
+            "p1",
+            "Plan a family trip to Japan",
+            ["Researcher", "Writer"],
+            [def, pm, travel],
+            new HashSet<string>(["travel-planner"], StringComparer.Ordinal));
+
+        var result = await Selector(model).SelectAsync(context);
+
+        result.Selected.Should().BeSameAs(travel);
+        model.LastPrompt.Should().Contain("- travel-planner [project/custom]: Travel Planner —");
+        model.LastPrompt.Should().Contain("Prefer project/custom workflows over generic built-in/library workflows");
+        model.LastPrompt.Should().Contain("Do NOT select by name similarity");
+        model.LastPrompt.Should().Contain("select the first listed workflow (the project default)");
     }
 
     [Fact]

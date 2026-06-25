@@ -186,18 +186,23 @@ public sealed class CoordinatorOrchestratorExecutor
 
             // Order the default first so it is the selector's deterministic fallback.
             var defaultDef = registry.ResolveDefault(project).Definition;
-            var available = registry.GetOrLoad(project).Available
-                .Select(r => r.Definition!)
-                .Where(d => d is not null)
-                .OrderByDescending(d => defaultDef is not null && string.Equals(d.Id, defaultDef.Id, StringComparison.Ordinal))
-                .ThenBy(d => d.Id, StringComparer.Ordinal)
+            var availableResults = registry.GetOrLoad(project).Available
+                .Where(r => r.Definition is not null)
+                .OrderByDescending(r => defaultDef is not null &&
+                    string.Equals(r.Definition!.Id, defaultDef.Id, StringComparison.Ordinal))
+                .ThenBy(r => r.Definition!.Id, StringComparer.Ordinal)
                 .ToList();
+            var available = availableResults.Select(r => r.Definition!).ToList();
 
             // Single (or zero) workflow: skip selection silently.
             if (available.Count <= 1) return;
 
             var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
-            var context = new WorkflowSelectionContext(input.ProjectId, spec.Goal, roles, available);
+            var customWorkflowIds = availableResults
+                .Where(r => !r.IsBuiltIn)
+                .Select(r => r.Definition!.Id)
+                .ToHashSet(StringComparer.Ordinal);
+            var context = new WorkflowSelectionContext(input.ProjectId, spec.Goal, roles, available, customWorkflowIds);
 
             // An explicit user override in the latest human message always wins.
             if (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var overrideId))

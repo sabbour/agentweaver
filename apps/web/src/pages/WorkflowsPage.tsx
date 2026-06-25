@@ -11,6 +11,9 @@ import {
   DialogTitle,
   Field,
   Menu,
+  MenuDivider,
+  MenuGroup,
+  MenuGroupHeader,
   MenuItem,
   MenuList,
   MenuPopover,
@@ -109,6 +112,25 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     textAlign: 'center',
   },
+  menuItemContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    maxWidth: '360px',
+    whiteSpace: 'normal',
+  },
+  menuItemTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  menuItemDescription: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+  },
 });
 
 function describeTrigger(workflow: WorkflowSummaryDto): string {
@@ -116,6 +138,12 @@ function describeTrigger(workflow: WorkflowSummaryDto): string {
   if (!trigger) return 'Trigger: unknown';
   if (trigger.event) return `Trigger: ${trigger.type} (${trigger.event})`;
   return `Trigger: ${trigger.type}`;
+}
+
+type SelectableWorkflow = WorkflowSummaryDto & { id: string };
+
+function isSelectableWorkflow(workflow: WorkflowSummaryDto): workflow is SelectableWorkflow {
+  return workflow.valid && Boolean(workflow.id);
 }
 
 export function WorkflowsPage() {
@@ -282,6 +310,30 @@ export function WorkflowsPage() {
   if (!projectId) return null;
 
   const workflows = data?.workflows ?? [];
+  const selectableWorkflows = workflows.filter(isSelectableWorkflow);
+  const projectWorkflows = selectableWorkflows.filter((wf) => !wf.is_built_in);
+  const builtInWorkflows = selectableWorkflows.filter((wf) => wf.is_built_in);
+
+  const renderDefaultWorkflowItem = (wf: SelectableWorkflow) => (
+    <MenuItem
+      key={wf.id}
+      disabled={wf.is_default}
+      onClick={() => { void handleSetDefault(wf.id); }}
+    >
+      <div className={styles.menuItemContent}>
+        <div className={styles.menuItemTitle}>
+          <span>{wf.name ?? wf.id}</span>
+          <Badge appearance="outline" color={wf.is_built_in ? 'informative' : 'brand'}>
+            {wf.is_built_in ? 'Built-in' : 'Project'}
+          </Badge>
+          {wf.is_default && <Badge appearance="filled" color="brand">Current</Badge>}
+        </div>
+        <span className={styles.menuItemDescription}>
+          {wf.description || `Workflow id: ${wf.id}`}
+        </span>
+      </div>
+    </MenuItem>
+  );
 
   return (
     <div className={styles.root}>
@@ -330,17 +382,20 @@ export function WorkflowsPage() {
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                {workflows
-                  .filter((wf) => wf.valid && wf.id)
-                  .map((wf) => (
-                    <MenuItem
-                      key={wf.id}
-                      disabled={wf.is_default}
-                      onClick={() => { void handleSetDefault(wf.id); }}
-                    >
-                      {wf.name ?? wf.id}{wf.is_default ? ' (current)' : ''}
-                    </MenuItem>
-                  ))}
+                {projectWorkflows.length > 0 && (
+                  <MenuGroup>
+                    <MenuGroupHeader>Project workflows</MenuGroupHeader>
+                    {projectWorkflows.map(renderDefaultWorkflowItem)}
+                  </MenuGroup>
+                )}
+                {projectWorkflows.length > 0 && builtInWorkflows.length > 0 && <MenuDivider />}
+                {builtInWorkflows.length > 0 && (
+                  <MenuGroup>
+                    <MenuGroupHeader>Built-in workflows</MenuGroupHeader>
+                    {builtInWorkflows.map(renderDefaultWorkflowItem)}
+                  </MenuGroup>
+                )}
+                <MenuDivider />
                 <MenuItem onClick={() => { void handleSetDefault(null); }}>
                   Reset to built-in default
                 </MenuItem>

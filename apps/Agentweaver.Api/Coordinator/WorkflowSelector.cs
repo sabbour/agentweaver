@@ -36,7 +36,8 @@ public sealed record WorkflowSelectionContext(
     string ProjectId,
     string TaskDescription,
     IReadOnlyList<string> TeamRoles,
-    IReadOnlyList<WorkflowDefinition> AvailableWorkflows);
+    IReadOnlyList<WorkflowDefinition> AvailableWorkflows,
+    IReadOnlySet<string>? CustomWorkflowIds = null);
 
 /// <summary>
 /// The outcome of a selection: the chosen workflow, a 1–2 sentence rationale, and whether the model
@@ -147,10 +148,9 @@ public sealed class WorkflowSelector : IWorkflowSelector
         return true;
     }
 
-    /// <summary>The deterministic default: the built-in "default" workflow if present, else the first.</summary>
+    /// <summary>The deterministic default: callers put the project default first.</summary>
     private static WorkflowDefinition ResolveDefault(IReadOnlyList<WorkflowDefinition> available) =>
-        available.FirstOrDefault(w => string.Equals(w.Id, BuiltInWorkflows.DefaultWorkflowId, StringComparison.Ordinal))
-        ?? available[0];
+        available[0];
 
     private static string BuildPrompt(WorkflowSelectionContext context)
     {
@@ -168,11 +168,21 @@ public sealed class WorkflowSelector : IWorkflowSelector
         foreach (var wf in context.AvailableWorkflows)
         {
             var description = string.IsNullOrWhiteSpace(wf.Description) ? "(no description)" : wf.Description!.Trim();
-            sb.Append("- ").Append(wf.Id).Append(": ").Append(wf.Name).Append(" — ").AppendLine(description);
+            var sourceLabel = context.CustomWorkflowIds?.Contains(wf.Id) == true
+                ? "project/custom"
+                : "built-in/library";
+            sb.Append("- ").Append(wf.Id).Append(" [").Append(sourceLabel).Append("]: ")
+                .Append(wf.Name).Append(" — ").AppendLine(description);
         }
         sb.AppendLine();
+        sb.AppendLine("Selection rules:");
+        sb.AppendLine("- Match on PROCESS FIT: what steps the workflow runs and what outputs it produces.");
+        sb.AppendLine("- Do NOT select by name similarity or domain-word overlap. A closest-sounding built-in is a bad choice if its process does not fit.");
+        sb.AppendLine("- Prefer project/custom workflows over generic built-in/library workflows when a custom workflow can perform the requested process.");
+        sb.AppendLine("- If no workflow is a good process fit, select the first listed workflow (the project default) instead of guessing.");
+        sb.AppendLine();
         sb.AppendLine("Reply with JSON: {\"selected\": \"<workflow-id>\", \"rationale\": \"<1-2 sentences why>\"}");
-        sb.Append("Select the workflow whose description best matches the task and team.");
+        sb.Append("Select the workflow whose process best matches the task and team.");
         return sb.ToString();
     }
 
