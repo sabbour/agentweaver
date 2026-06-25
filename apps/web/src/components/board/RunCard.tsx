@@ -135,6 +135,10 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
       <div className={styles.header}>
         <Text className={styles.task}>{card.task || '(coordinator run)'}</Text>
         <div className={styles.headerActions}>
+          {/* TODO(tool-approval): show a warning Badge with a shield icon here when the run
+              has a pending tool approval. The backend RunCardDto (apps/web/src/api/types.ts)
+              does not currently expose a `pending_approval_count` / `has_pending_approval`
+              field, so the board card cannot surface this signal yet. */}
           <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
           <Button
             appearance="subtle"

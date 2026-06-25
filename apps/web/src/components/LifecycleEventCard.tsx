@@ -103,10 +103,19 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorPaletteYellowForeground2}`,
-    backgroundColor: tokens.colorPaletteYellowBackground1,
+    border: `1px solid ${tokens.colorStatusDangerBorder1}`,
+    backgroundColor: tokens.colorStatusDangerBackground2,
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
+    boxShadow: tokens.shadow8,
+    // pulse the border to draw attention — only rendered while unresolved
+    animationName: {
+      '0%, 100%': { borderColor: tokens.colorStatusDangerBorder1 },
+      '50%': { borderColor: `color-mix(in srgb, ${tokens.colorStatusDangerBorder1} 40%, transparent)` },
+    },
+    animationDuration: '2s',
+    animationTimingFunction: 'ease-in-out',
+    animationIterationCount: 'infinite',
   },
   approvalHeading: {
     display: 'flex',
@@ -152,20 +161,28 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorBrandStroke2}`,
+    border: `1px solid ${tokens.colorStatusWarningBorder1}`,
     backgroundColor: tokens.colorNeutralBackground1,
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
     overflow: 'hidden',
-    boxShadow: tokens.shadow4,
+    boxShadow: tokens.shadow8,
+    // pulse the border to draw attention — only rendered while unresolved
+    animationName: {
+      '0%, 100%': { borderColor: tokens.colorStatusWarningBorder1 },
+      '50%': { borderColor: `color-mix(in srgb, ${tokens.colorStatusWarningBorder1} 40%, transparent)` },
+    },
+    animationDuration: '2s',
+    animationTimingFunction: 'ease-in-out',
+    animationIterationCount: 'infinite',
   },
   approvalHeaderRedesign: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorBrandBackground2,
-    borderBottom: `1px solid ${tokens.colorBrandStroke2}`,
+    backgroundColor: tokens.colorStatusWarningBackground2,
+    borderBottom: `1px solid ${tokens.colorStatusWarningBorder1}`,
   },
   approvalBodyRedesign: {
     display: 'flex',
@@ -639,10 +656,10 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
     <div className={styles.approvalCardRedesign} role="alert">
       <div className={styles.approvalHeaderRedesign}>
         <ShieldLockRegular
-          style={{ fontSize: '18px', color: tokens.colorBrandForeground1 }}
+          style={{ fontSize: '18px', color: tokens.colorStatusWarningForeground1 }}
           aria-hidden="true"
         />
-        <Text weight="semibold" size={300} style={{ color: tokens.colorBrandForeground1 }}>
+        <Text weight="semibold" size={300} style={{ color: tokens.colorStatusWarningForeground1 }}>
           Tool Approval Required
         </Text>
       </div>

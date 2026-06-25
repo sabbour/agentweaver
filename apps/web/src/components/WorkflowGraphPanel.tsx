@@ -32,6 +32,7 @@ import {
   PersonClockRegular,
   PersonRegular,
   ShieldRegular,
+  ShieldKeyholeRegular,
   SubtractCircleRegular,
 } from '@fluentui/react-icons';
 import {
@@ -95,6 +96,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   runDegraded?: { toolName: string; reason: string };
   /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
   dir?: 'LR' | 'TB';
+  /** When true and the node is running, an orange tool-approval badge is shown. */
+  hasPendingApproval?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +162,7 @@ export const useNodeStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     padding: '14px',
     boxSizing: 'border-box',
+    position: 'relative',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '8px',
@@ -243,6 +247,22 @@ export const useNodeStyles = makeStyles({
     display: 'flex',
     justifyContent: 'flex-end',
     alignItems: 'center',
+  },
+  // Orange tool-approval badge overlay in the top-right corner of a running node.
+  approvalBadge: {
+    position: 'absolute',
+    top: '-6px',
+    right: '-6px',
+    width: '20px',
+    height: '20px',
+    borderRadius: '999px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorStatusWarningBackground3,
+    color: tokens.colorNeutralForegroundInverted,
+    boxShadow: tokens.shadow4,
+    zIndex: 1,
   },
   statusBadge: {
     display: 'inline-flex',
@@ -483,6 +503,7 @@ export function WorkflowNode({ data }: NodeProps) {
     reviewedBy,
     runOutcome,
     runDegraded,
+    hasPendingApproval,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
@@ -539,6 +560,17 @@ export function WorkflowNode({ data }: NodeProps) {
     >
       <Handle type="target" position={targetPos} style={handleStyle} />
       <Handle type="source" position={sourcePos} style={handleStyle} />
+
+      {hasPendingApproval && status === 'started' && (
+        <div
+          className={s.approvalBadge}
+          role="img"
+          aria-label="Tool approval required"
+          title="Tool approval required"
+        >
+          <ShieldKeyholeRegular fontSize={12} aria-hidden="true" />
+        </div>
+      )}
 
       <div className={s.cardHeader}>
         <StatusBadge

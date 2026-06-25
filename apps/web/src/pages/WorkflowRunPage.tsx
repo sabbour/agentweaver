@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Button,
@@ -22,6 +22,7 @@ import {
   NotebookRegular,
   PersonRegular,
   ShieldRegular,
+  ShieldKeyholeRegular,
 } from '@fluentui/react-icons';
 import {
   ReactFlow,
@@ -112,6 +113,34 @@ const usePageStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
+  },
+  approvalBanner: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 100,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorStatusWarningBackground1,
+    borderBottom: `1px solid ${tokens.colorStatusWarningBorder1}`,
+  },
+  approvalBannerIcon: {
+    color: tokens.colorStatusWarningForeground1,
+    flexShrink: 0,
+    fontSize: '20px',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  approvalBannerText: {
+    flexGrow: 1,
+    color: tokens.colorNeutralForeground1,
+    fontSize: tokens.fontSizeBase300,
+  },
+  approvalBannerStrong: {
+    color: tokens.colorStatusWarningForeground1,
+    fontWeight: tokens.fontWeightSemibold,
   },
   dagContainer: {
     height: '520px',
@@ -205,6 +234,13 @@ export function WorkflowRunPage() {
 
   // Ctrl+Scroll zoom over the workflow diagram (workflow-zoom) — shared with the board.
   const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
+
+  // Scroll target for the "Jump to approval" banner action. Points at the workflow graph
+  // section, where the running node carries the tool-approval badge.
+  const graphSectionRef = useRef<HTMLDivElement>(null);
+  const scrollToApproval = useCallback(() => {
+    graphSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
 
   const [agentName,      setAgentName]      = useState<string | undefined>(undefined);
   const [agentRoleTitle, setAgentRoleTitle] = useState<string | undefined>(undefined);
@@ -387,6 +423,32 @@ export function WorkflowRunPage() {
       }
     }
     return undefined;
+  }, [events]);
+
+  // Pending tool-approval detection: a `tool.approval_required` whose request has not yet been
+  // resolved. Resolution is tracked the same way the timeline reducer settles approvals — a
+  // `tool.result`/`tool.error` arriving for the matching callId (callId === requestId). We also
+  // honour explicit approval grant/deny events if the backend ever emits them.
+  const hasPendingApproval = useMemo<boolean>(() => {
+    const requested = new Set<string>();
+    const resolved = new Set<string>();
+    for (const evt of events) {
+      const p = evt.payload;
+      if (evt.type === 'tool.approval_required') {
+        const requestId = String(p['request_id'] ?? p['requestId'] ?? '');
+        if (requestId) requested.add(requestId);
+      } else if (evt.type === 'tool.result' || evt.type === 'tool.error') {
+        const callId = String(p['callId'] ?? p['call_id'] ?? '');
+        if (callId) resolved.add(callId);
+      } else if (evt.type === ('tool.approval_granted' as EventType) || evt.type === ('tool.approval_denied' as EventType)) {
+        const requestId = String(p['request_id'] ?? p['requestId'] ?? '');
+        if (requestId) resolved.add(requestId);
+      }
+    }
+    for (const id of requested) {
+      if (!resolved.has(id)) return true;
+    }
+    return false;
   }, [events]);
 
   // Derive executor states from SSE workflow.step events plus semantic review/merge events.
@@ -599,6 +661,7 @@ export function WorkflowRunPage() {
             reviewedBy:     node.id === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
             runOutcome:     node.id === 'agent' ? runOutcome : undefined,
             runDegraded:    node.id === 'agent' ? runDegraded : undefined,
+            hasPendingApproval: node.id === 'agent' ? hasPendingApproval : undefined,
           } as WorkflowNodeData,
           position: { x: 0, y: 0 },
         };
@@ -637,6 +700,7 @@ export function WorkflowRunPage() {
         reviewedBy:     def.key === 'review' ? (executorStates['review']?.reviewer ?? reviewedBy) : undefined,
         runOutcome:     def.key === 'agent' ? runOutcome : undefined,
         runDegraded:    def.key === 'agent' ? runDegraded : undefined,
+        hasPendingApproval: def.key === 'agent' ? hasPendingApproval : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
@@ -644,7 +708,7 @@ export function WorkflowRunPage() {
       rfNodes:      layoutDag(raw, fallbackFwd, { rankdir: 'LR', rankSep: 60, nodeSep: 30 }),
       displayEdges: fallbackEdges,
     };
-  }, [effectiveDescriptor, isChild, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded]);
+  }, [effectiveDescriptor, isChild, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded, hasPendingApproval]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -695,6 +759,22 @@ export function WorkflowRunPage() {
         )}
       </div>
 
+      {/* Sticky tool-approval banner — appears whenever a tool approval is pending so the
+          user notices it even when scrolled away from the running node / approval card. */}
+      {hasPendingApproval && (
+        <div className={styles.approvalBanner} role="alert" aria-live="polite">
+          <span className={styles.approvalBannerIcon}>
+            <ShieldKeyholeRegular aria-hidden="true" />
+          </span>
+          <span className={styles.approvalBannerText}>
+            <span className={styles.approvalBannerStrong}>Tool approval required</span>
+            {' '}— scroll down to respond
+          </span>
+          <Button appearance="secondary" size="small" onClick={scrollToApproval}>
+            Jump to approval
+          </Button>
+        </div>
+      )}
       {/* Bubbled questions — a blocked worker awaiting an answer renders a prominent inline
           answer card; once answered (or optimistically applied) it collapses to a muted state.
           Answers POST against this run id (apiClient.answerQuestion). */}
@@ -714,6 +794,7 @@ export function WorkflowRunPage() {
       )}
 
       {/* React Flow diagram wrapped in contexts so WorkflowNode can open the modal and arc highlighting works */}
+      <div ref={graphSectionRef}>
       <ExecutionModalContext.Provider value={openExecutionModal}>
       <ActiveEdgeContext.Provider value={activeLoopbackId}>
         {/* While the run detail is still resolving we do NOT know whether this is a coordinator
@@ -754,6 +835,7 @@ export function WorkflowRunPage() {
         )}
       </ActiveEdgeContext.Provider>
       </ExecutionModalContext.Provider>
+      </div>
 
       {/* Execution detail modal */}
       <Dialog open={!!modalExecId} onOpenChange={(_, d) => { if (!d.open) setModalExecId(undefined); }}>
