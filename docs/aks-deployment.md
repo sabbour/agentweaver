@@ -73,9 +73,11 @@ This creates:
 bash scripts/aks/20-build-push-images.sh
 ```
 
-Builds two images via `az acr build` (no local Docker daemon required):
+Builds four images via `az acr build` (no local Docker daemon required):
 - `agentweaver-api:<IMAGE_TAG>` — .NET 10 API
 - `agentweaver-frontend:<IMAGE_TAG>` — React SPA served by ASP.NET Core
+- `agentweaver-mcp:<IMAGE_TAG>` — MCP server
+- `agentweaver-sandbox:<IMAGE_TAG>` — sandbox base image used by warm-pool pods
 
 ### 4. Set up secrets (Key Vault + workload identity)
 
@@ -130,19 +132,34 @@ The CSI volume mount on `/mnt/secrets` is required to trigger the `SecretProvide
 
 ### 5. Deploy to AKS
 
+The deploy script also creates the `agentweaver-mcp-secrets` Secret consumed by the
+MCP deployment, so export the MCP credentials before running it:
+
 ```bash
+export MCP_API_KEY=...        # API key the MCP server uses to call the Agentweaver API
+export MCP_AUTH_API_KEY=...   # inbound bearer key accepted from external MCP callers
+export MCP_AUTH_USER=...      # user name paired with the inbound bearer key
+
 bash scripts/aks/30-deploy.sh
 ```
+
+The script aborts up front if `IDENTITY_CLIENT_ID`, `KEYVAULT_NAME`, `TENANT_ID`,
+`MCP_API_KEY`, `MCP_AUTH_API_KEY`, or `MCP_AUTH_USER` are unset.
 
 This script:
 1. Applies `k8s/namespace.yaml` (creates the `agentweaver` namespace)
 2. Creates the `DefaultDomainCertificate` resource and waits for it to become Available
 3. Derives the managed domain hostname from the certificate status
 4. Creates the `agentweaver-api` service account
-5. Renders all `k8s/*.yaml` manifests (substitutes `${HOST}`, `${ACR_LOGIN_SERVER}`, `${IMAGE_TAG}`)
-6. Applies all rendered manifests
+5. Renders the `k8s/*.yaml` manifests, substituting `${HOST}`, `${ACR_LOGIN_SERVER}`,
+   `${IMAGE_TAG}`, `${IDENTITY_CLIENT_ID}`, `${KEYVAULT_NAME}`, and `${TENANT_ID}`.
+   The sandbox manifests (`sandbox-template.yaml`, `sandbox-warmpool.yaml`,
+   `sandbox-claim-template.yaml`) are **skipped by default** because they require the
+   sandbox CRD to be pre-installed; pass `--with-sandbox` to include them.
+6. Applies the PVCs, creates the `agentweaver-mcp-secrets` Secret, then applies the
+   remaining rendered manifests
 7. Waits for the Gateway to become Programmed
-8. Waits for all Deployment rollouts to complete
+8. Waits for the API, Frontend, and MCP deployment rollouts to complete
 
 At completion, the script prints the public URL.
 
@@ -250,9 +267,13 @@ HOST="agentweaver.${HOST}"
 # Frontend
 curl -I "https://${HOST}/"
 
-# API health
-curl "https://${HOST}/api/diagnostics/health"
+# API health (the /api/* routes require a bearer API key; a 200 confirms the API is reachable)
+curl -H "Authorization: Bearer <api-key>" "https://${HOST}/api/health"
 ```
+
+> The API exposes a lightweight reachability probe at `/health` (unauthenticated) and
+> `/api/health` (authenticated). Because the gateway routes `/api/*` to the API and `/`
+> to the frontend, only `/api/health` reaches the API from outside the cluster.
 
 ---
 
@@ -280,10 +301,16 @@ kubectl apply -f k8s/sandbox-warmpool.yaml
 
 # Apply the NetworkPolicy (default-deny ingress + egress allow-list)
 kubectl apply -f k8s/networkpolicy-sandbox.yaml
+
+# Apply the CiliumNetworkPolicy that enforces FQDN-based egress (requires --enable-acns)
+kubectl apply -f k8s/cilium-network-policy-sandbox.yaml
 ```
 
 > **Note**: `sandbox-template.yaml` requires `$ACR_LOGIN_SERVER` and `$IMAGE_TAG`
 > to be set before applying (the same variables used in `scripts/aks/30-deploy.sh`).
+> The `SandboxTemplate` and `SandboxWarmPool` resources belong to the
+> `extensions.agents.x-k8s.io/v1alpha1` API group served by the agent-sandbox
+> extensions controller installed above.
 
 ### Verify warm pods are running
 
@@ -299,9 +326,11 @@ kubectl get sandboxwarmpool agentweaver-sandbox -n agentweaver -o yaml
 
 ### Verify sandbox executor selection
 
-When the API pod starts inside the cluster, the log should contain:
+When the API pod starts inside the cluster, the `SandboxExecutorRouter` detects the
+in-cluster environment (via `KUBERNETES_SERVICE_HOST`) and selects the Kubernetes
+backend. The log should contain:
 ```
-KubernetesSandboxExecutor selected (KUBERNETES_SERVICE_HOST detected)
+SandboxExecutorRouter: selecting KubernetesSandboxExecutor (namespace=agentweaver)
 ```
 
 Check with:

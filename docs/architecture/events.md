@@ -1,40 +1,51 @@
 # Events
 
-Run events are the primary mechanism for communicating progress from the agent to clients. The API records events in memory and delivers them to SSE subscribers in real time.
+Run events are the primary mechanism for communicating progress from the agent to clients. Events are persisted durably and also delivered to SSE subscribers in real time.
 
-## In-memory event store
+## Two layers: durable write-through + live fan-out
 
-`RunStreamStore` holds a `RunStreamEntry` per run. Each entry records events into a bounded list (capped at 10,000 events per run). The server allocates `sequence` numbers at write time, giving each run a monotonic total order. Events are written by the orchestrator through a `RecordingChannelWriter` that calls `Record()` on the entry directly.
+Event delivery is split across two cooperating components:
 
-Completed entries are retained for up to 256 finished runs. In-progress entries older than two hours are evicted as likely leaked. Once an entry is evicted or the process restarts, the live event sequence for that run is lost.
+- **`SqliteRunEventStream`** (`IRunEventStream`) is the durable layer. Every event is written through to a `RunEvents` table before it is fanned out to in-process subscribers via a `Channel<RunEvent>`. The `RunEvents` table lives in the EF Core memory database (`memory.db` / `MemoryDbContext`), so the per-event log survives a process restart.
+- **`RunStreamStore`** holds a `RunStreamEntry` per run for low-latency live streaming. Each entry records events into an in-memory `_history` list, allocates a monotonic `sequence` at write time, and signals blocked SSE waiters the moment a new event arrives.
+
+The orchestrator writes events through a `RecordingChannelWriter` that records to the run's `RunStreamEntry` and persists to the durable stream.
 
 ## Live fan-out
 
-When a client connects to `GET /api/runs/{id}/stream`, the endpoint reads the entry from `RunStreamStore` and enters a poll loop:
+When a client connects to `GET /api/runs/{id}/stream`, the endpoint authorizes the caller as the run owner and reads the live `RunStreamEntry` from `RunStreamStore`. While the entry exists it enters a poll loop:
 
 1. Call `GetSnapshotSince(lastSeen)` which returns new events and the completion flag atomically under a single lock.
 2. Write each event as an SSE frame.
 3. If the run is not yet complete, call `WaitForChangeAsync` which blocks until the next event is recorded, completion is signaled, or a one-second timeout elapses.
-4. Repeat until the run completes or the client disconnects.
+4. Repeat until the run completes, reaches the review gate, or the client disconnects.
 
-Each `Record()` call wakes all blocked waiters immediately, so event delivery is prompt — not polling-interval-limited.
+Each `Record()` call wakes all blocked waiters immediately, so event delivery is prompt — not polling-interval-limited. The loop closes the stream at the review gate: when the entry reports `IsAwaitingReview` and a `review.requested` event has been seen.
+
+Completed entries are retained in memory for up to 256 finished runs (`MaxRetainedCompleted`); older completed entries are evicted as new runs finish.
 
 ## SSE resume cursor
 
-The SSE endpoint exposes each event's `sequence` as the SSE `id`. Clients can reconnect with `Last-Event-ID` set to the last sequence they received. The endpoint resumes from that point in the in-memory history.
+The SSE endpoint exposes each event's `sequence` as the SSE `id`. Clients can reconnect with `Last-Event-ID` set to the last sequence they received. While the live entry still exists the endpoint resumes from that point in the in-memory history; otherwise it replays the persisted events from the durable stream (`IRunEventStream.SubscribeAsync`) starting after the supplied cursor.
 
-Reconnection works as long as the run's entry still exists in memory. Delivery is at least once; clients should deduplicate by `sequence`.
+Delivery is at least once; clients should deduplicate by `sequence`.
 
 ## Process restart behavior
 
-The in-memory event store does not survive a process restart. On startup, the API marks any run still recorded as `in_progress` in SQLite as `failed`. If a client connects to the stream for such a run after restart, the endpoint falls back to replaying the run's persisted `result` field (the final concatenated agent output) as a single `agent.message` event, then sends a `done` frame.
+On startup, `WorkflowRestartService` reconciles runs that were interrupted by the restart:
 
-This means the granular event-by-event replay is only available while the process that ran the agent is still alive and the entry has not been evicted. Durable per-event persistence across restarts is specified (FR-022) but not yet implemented.
+- Runs still recorded as `InProgress` are marked `Failed` (coordinator parent runs are deferred rather than failed).
+- Runs in `AwaitingReview` are revalidated against their worktree/tree hash; a stale review (no checkpoint, older than 24h) is failed, otherwise a synthetic `review.requested` is re-emitted so the review gate can be resumed.
 
-## Persistence (run record)
+Because the `RunEvents` table is durable, the granular event history can be replayed after a restart through the durable stream and the `GET /api/runs/{id}/events` endpoint. As a legacy fallback, if a stream has no replayable events but the run has a persisted `result`, the `/stream` endpoint emits that result as a single `agent.message` event followed by a `done` frame.
 
-The `runs` SQLite table stores the run's metadata, status, and the final `result` text. This is the only durable artifact that survives a restart. There is no `run_events` table in the current schema — the append-only event log described in the spec is planned but not yet built.
+## Persistence
+
+Two SQLite stores back the run lifecycle:
+
+- The `runs` table (main DB, `SqliteDb`) stores run metadata, status, and the final `result` text.
+- The `RunEvents` table (memory DB, `MemoryDbContext`) stores the append-only per-event log written by `SqliteRunEventStream`. `GET /api/runs/{id}/events` returns these rows ordered by `sequence`.
 
 ## Review and merge events
 
-The event log is designed to span the full lifecycle from submission through merge or decline. Review and merge events (`review.requested`, `review.approved`, `review.declined`, `merge.completed`, `merge.failed`) will be recorded on the same per-run stream once the review workflow is implemented.
+The event log spans the full lifecycle from submission through merge or decline, and the review workflow is implemented today. The review endpoint (`POST /api/runs/{id}/review`) drives approve / request-changes / decline branching, and the watch loop and commit/merge paths emit `review.requested`, `review.approved`, `review.declined`, `merge.started`, `merge.completed`, and `merge.failed` (or `merge.conflicted`) on the same per-run stream.

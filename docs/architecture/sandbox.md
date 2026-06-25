@@ -6,11 +6,13 @@ The agent can act only inside its assigned per-run git worktree. Enforcement is 
 
 Every tool call the agent attempts is evaluated by a per-run governance kernel from the Agent Governance Toolkit (AGT) before it can execute. The kernel is constructed at run start and disposed when the run ends. It loads a deny-by-default containment policy and registers a path-containment backend. If the loaded policy's default action is not Deny, the backend refuses to start the run.
 
+This page focuses on the in-process **file** containment that applies to all runs. Sandboxed **shell** execution (the `run_command` tool) layers an additional executor gate on top of the same governance kernel — see [sandboxed-execution.md](./sandboxed-execution.md).
+
 ## Two-layer evaluation
 
 A tool call must be allowed by both layers. If either denies, the call is blocked.
 
-**Layer A — tool-name policy.** The AGT kernel evaluates the call against an embedded YAML policy. Only four tool names are permitted: `read_file`, `list_directory`, `write_file`, and `edit_file`. Shell execution, URL or network fetches, MCP tool calls, and any unrecognized tool name are denied by policy. The policy is embedded and not user-configurable.
+**Layer A — tool-name policy.** The AGT kernel evaluates the call against a deny-by-default YAML policy (`defaultAction: Deny`, no allow rules). The recognized file tools — `read_file`, `list_directory`, `write_file`, `edit_file`, `create`, `str_replace_editor`, `apply_patch`, `grep_search`, `file_search` — plus the `run_command` shell tool are allowed through the `SandboxPolicyBackend` allow-list; every other tool name (MCP tools, network/URL fetches, and any unrecognized name) is denied. The policy is embedded and not user-configurable.
 
 **Layer B — path containment.** The path-containment backend evaluates the call independently and unconditionally, even when Layer A has already allowed it. It checks that the target path resolves inside the worktree root, and it also denies any tool name it does not recognize as a file tool and any call that carries no identifiable path argument.
 
@@ -73,9 +75,9 @@ Both the Foundry runner and the Copilot runner expose `list_directory` as an ava
 
 The agent cannot:
 
-- Run shell commands or execute any program
+- Run shell commands unless sandboxed execution is enabled and a real isolation backend (or explicit `direct` mode) is available — see [sandboxed-execution.md](./sandboxed-execution.md)
 - Fetch URLs or make network requests
-- Call MCP tools or any tool outside the four permitted names
+- Call MCP tools or any tool outside the recognized file and `run_command` tools
 - Traverse out of the worktree with `..`
 - Follow a symlink or junction outside the worktree
 - Read or write files outside the assigned worktree

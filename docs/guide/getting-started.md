@@ -6,8 +6,8 @@ Use this guide to stand up the API, submit a run, watch it live, and approve the
 
 You need these tools before you start:
 
-- .NET 10 SDK (`global.json` pins `10.0.300`)
-- Node.js 18 or later
+- .NET 10 SDK (`global.json` pins `10.0.100`)
+- Node.js 20.19+ (or 22.12+) — required by Vite 8
 - An existing local Git repository that the agent can target
 - A GitHub Copilot or Microsoft Foundry model credential
 

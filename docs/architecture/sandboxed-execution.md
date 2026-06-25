@@ -8,23 +8,26 @@ Agentweaver originally permitted no shell execution. The governance policy categ
 
 This feature adds sandboxed shell execution by adopting Microsoft's `mxc` sandboxing engine. The key constraint is that `mxc` is an early preview and its own documentation says its profiles are not yet hardened security boundaries. It is therefore adopted as a **defense-in-depth layer only** — it augments the existing in-process path containment and deny-by-default governance, and never replaces them.
 
-The general principle: the system confirms real isolation is available before permitting any shell command. When confirmation fails, shell remains denied. No command runs unsandboxed by default.
+The general principle: the system confirms real isolation is available before permitting any shell command. When confirmation fails, shell remains denied — unless the operator explicitly opts into unsandboxed `direct` execution (`direct: true` in `.agentweaver/settings.yml`), which relies on deployment-level isolation instead. No command runs unsandboxed by default.
 
 ## Executor selection
 
 Executor selection happens at startup via `SandboxExecutorFactory.Create`. The factory probes the host in order and returns the first available executor:
 
-| Tier | Backend name | Platform condition |
+| Order | Backend name | Platform condition |
 | --- | --- | --- |
 | 1 | `processcontainer` | Windows + `wxc-exec.exe` found + `MxcSdk.GetPlatformSupport().IsSupported` |
-| 2 | `wsl-lxc` | Windows + `wsl.exe --status` returns a WSL2 distribution |
-| 3 | `lxc-native-linux` | Linux + `lxc-exec` found at `/usr/local/bin/lxc-exec` or `/usr/bin/lxc-exec` |
-| 4 | `passthrough-deny` | Fallback when no isolation backend is available |
+| 2 | `wsl-bwrap` / `wsl-unshare` | Windows + WSL2 available (`wsl-bwrap` when bubblewrap is present in the distro, otherwise `wsl-unshare`) |
+| 3 | `linux-bwrap` | Linux + bubblewrap (`bwrap`) available — preferred Linux backend (selective mount allowlist) |
+| 4 | `lxc-native-linux` | Linux + `lxc-exec` found at `/usr/local/bin/lxc-exec` or `/usr/bin/lxc-exec` (only when bwrap is unavailable) |
+| 5 | `direct` | Fallback when no isolation backend is available, **or** selected explicitly via `direct: true` in `.agentweaver/settings.yml` |
 
-The selected executor is injected into the per-run governance context and both agent runners. Its two key properties are:
+When the API runs **inside a Kubernetes cluster** (`KUBERNETES_SERVICE_HOST` is set), the `SandboxExecutorRouter` overrides the factory result with the `kubernetes-sandbox-claim` backend (`KubernetesSandboxExecutor`), which runs commands in a per-run Kata VM pod claimed from a warm pool. See [aks-deployment.md](../aks-deployment.md#sandbox-setup).
 
-- **`IsRealIsolation`** — `true` for tiers 1–3, `false` for the passthrough fallback. Shell execution requires this to be `true`.
-- **`HasNetworkWarning`** — `true` for the Windows `processcontainer` tier. When set, the runner emits a `sandbox.warning` event because the Windows AppContainer backend cannot enforce a network allowlist (see [Limitations](#limitations)).
+The selected executor is injected into the per-run governance context and both agent runners. Its key properties are:
+
+- **`IsRealIsolation`** — `true` for `processcontainer`, `wsl-bwrap`, `linux-bwrap`, `lxc-native-linux`, and `kubernetes-sandbox-claim`; `false` for `wsl-unshare` and the `direct` fallback. Shell execution requires this to be `true`, **except** for the `direct` backend, which is an explicit opt-out (see [Layer C](#layer-c-executor-gate)).
+- **`HasNetworkWarning`** — `true` for the Windows `processcontainer` and `wsl-unshare` tiers, whose backends cannot enforce a network allowlist. When set, the runner emits a `sandbox.warning` event (see [Limitations](#limitations)).
 
 The executor selection decision, backend name, and probe reason are emitted as a `sandbox.selected` event when a run starts.
 
@@ -103,7 +106,7 @@ Only for `run_command`, after both A and B allow. `SandboxGovernance.EvaluateToo
 1. `executor.IsRealIsolation` — must be `true`.
 2. `policy.ShellEnabled` — must be `true`.
 
-If either check fails, the call is denied before any process is spawned.
+If either check fails, the call is denied before any process is spawned. The one exception is the `direct` backend (`PassthroughExecutor`, selected by `direct: true` in `.agentweaver/settings.yml`): it bypasses both checks because the operator has explicitly opted out of in-process isolation and is relying on deployment-level isolation instead.
 
 Any exception in any layer produces a deny result (fail-closed).
 
@@ -128,11 +131,13 @@ Approvals are scoped to the run. The `IShellApprovalStore` (`InMemoryShellApprov
 
 The same `SandboxExecutorFactory` runs on all targets. Each target gets real isolation through a different tier:
 
-| Target | Executor tier | Notes |
+| Target | Executor backend | Notes |
 | --- | --- | --- |
 | Windows ARM64 (developer) | `processcontainer` | Requires `wxc-exec.exe` on PATH or `MXC_BIN_DIR` set |
-| Windows with WSL2 | `wsl-lxc` | Falls through to this when processcontainer is unavailable |
-| Linux cloud (Constitution VI) | `lxc-native-linux` | Requires `lxc-exec` at a known absolute path |
+| Windows with WSL2 | `wsl-bwrap` / `wsl-unshare` | Falls through to this when processcontainer is unavailable; `wsl-bwrap` when bubblewrap is installed in the distro |
+| Linux cloud | `linux-bwrap` | Preferred Linux backend; requires `bwrap` (bubblewrap) |
+| Linux cloud (no bwrap) | `lxc-native-linux` | Used when bwrap is unavailable; requires `lxc-exec` at a known absolute path |
+| AKS / in-cluster | `kubernetes-sandbox-claim` | Auto-selected when `KUBERNETES_SERVICE_HOST` is set; per-run Kata VM pod from a warm pool |
 
 Both clients (MCP server and Web UI) reach the same endpoints. Executor selection happens in the backend, not the client. There is no client-side isolation logic.
 
@@ -209,12 +214,14 @@ This is not required for the default `0.4.0-alpha` AppContainer path.
 
 ## Linux cloud runbook
 
-On Linux hosts, `LinuxNativeMxcSandboxExecutor` probes the following absolute paths in order:
+On Linux hosts, `SandboxExecutorFactory` prefers bubblewrap. `LinuxBwrapExecutor` is selected when `bwrap` is available (the SDK platform probe reports the Bubblewrap backend, or `bwrap` is found on PATH); it applies a selective mount allowlist scoped to the run's working directory.
+
+Only when bubblewrap is unavailable does the factory fall back to `LinuxNativeMxcSandboxExecutor`, which probes the following absolute paths in order:
 
 1. `/usr/local/bin/lxc-exec`
 2. `/usr/bin/lxc-exec`
 
-PATH is never consulted. Install `lxc-exec` at one of those locations before starting the server. If neither path exists, the factory falls through to the passthrough-deny executor and shell is denied.
+PATH is never consulted for `lxc-exec`. If neither bwrap nor an `lxc-exec` backend is available, the factory falls through to the `direct` (passthrough) executor and shell is denied unless `direct: true` is set in `.agentweaver/settings.yml`.
 
 ## Limitations
 
@@ -238,5 +245,4 @@ SDK v0.1.1 dev-artifacts builds append the executor binary path as a trailing li
 
 | ID | Description | Status |
 | --- | --- | --- |
-| T017-api | Shell approval endpoint (`POST /api/runs/{id}/shell-approve`). The `shell.approval_required` event is defined and emitted, but there is no API endpoint to accept or reject the approval yet. Runs that hit a destructive command pattern will pause indefinitely. | Open |
 | T012 | Binary bundling. The spec (FR-034) calls for bundling `wxc-exec.exe` per-arch under `bin/<arch>` for zero-configuration discovery. This is blocked pending redistribution license review for the mxc binaries. Until resolved, operators must set `MXC_BIN_DIR` manually. | Open |
