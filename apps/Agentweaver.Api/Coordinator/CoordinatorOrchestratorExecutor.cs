@@ -332,13 +332,29 @@ public sealed class CoordinatorOrchestratorExecutor
 
                 Respond with ONLY a single JSON array (no prose, no code fences). Each element:
                 - "title": string. A short imperative subtask title.
-                - "scope": string. The exact context/files the subagent should read and the change to make.
+                - "scope": string. The exact context/files the subagent should read AND the specific
+                  output file(s) it must write (e.g. "research-destination.md"). Every subtask that
+                  produces a file MUST declare a unique output filename here — two parallel subtasks
+                  MUST NOT write to the same file or they will conflict.
                 - "role": string. The suggested role (prefer a roster role id/title above).
                 - "complexity": one of "low" | "medium" | "high".
                 - "phase": one of "none" | "planning" | "execution" | "validation".
-                - "isolation": one of "worktree" | "shared".
+                - "isolation": one of "worktree" | "shared". Use "shared" ONLY for pure read/compute
+                  subtasks that write NO files. Any subtask that creates or edits a file must use
+                  "worktree".
                 - "depends_on": array of 1-based indices of other subtasks in THIS array that must
                   complete first (empty if none).
+
+                PARALLELISM RULES:
+                - Subtasks without depends_on constraints run in parallel. This is desirable for
+                  independent research/analysis tasks — lean into it.
+                - When multiple parallel subtasks each write a file, each MUST write to a distinct
+                  topic-specific filename (e.g. "research-climate.md", "research-logistics.md",
+                  "research-activities.md"). Never have two parallel subtasks target the same file.
+                - After a group of parallel research/analysis subtasks, add ONE consolidation subtask
+                  (depends_on all of them) whose job is to read each agent's output file and synthesize
+                  them into a single final document. The consolidation subtask declares ALL the input
+                  files plus its own output file in its scope.
                 """;
 
             agent = new CopilotAIAgent(
