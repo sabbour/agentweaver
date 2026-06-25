@@ -24,14 +24,16 @@ internal sealed class McpProgram
 
         var mcpConfig = new McpConfig(apiUrl, apiKey ?? string.Empty);
         builder.Services.AddSingleton(mcpConfig);
-        builder.Services.AddSingleton(_ =>
+        builder.Services.AddSingleton(sp =>
         {
             var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-            return new AgentweaverApiClient(http, mcpConfig);
+            var accessor = sp.GetService<IHttpContextAccessor>();
+            return new AgentweaverApiClient(http, mcpConfig, accessor);
         });
 
         builder.Services.AddMemoryCache();
         builder.Services.AddHttpClient();
+        builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<McpApiKeyRegistry>();
 
         var mcpBuilder = builder.Services.AddMcpServer().WithToolsFromAssembly();
@@ -44,7 +46,10 @@ internal sealed class McpProgram
         var app = builder.Build();
 
         if (!useStdio)
+        {
+            app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
             app.UseMiddleware<McpBearerTokenMiddleware>();
+        }
 
         app.MapMcp("/mcp");
 
