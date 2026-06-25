@@ -1,9 +1,12 @@
 # NetworkPolicy for Agentweaver sandbox pods (label: app: agentweaver-sandbox).
 #
-# Three policies:
+# Two policies:
 #   1. Default-deny all ingress to sandbox pods.
-#   2. Egress allow-list: DNS (kube-dns) + HTTPS to GitHub endpoints only.
-#   3. Explicit: no egress to the API pod (sandbox cannot call back to the orchestrator).
+#   2. Egress allow-list: DNS to kube-dns + pod-CIDR exclusion for internal isolation.
+#
+# External (internet) egress is controlled by the companion CiliumNetworkPolicy
+# (cilium-network-policy-sandbox.yaml) using toFQDNs rules. That policy requires
+# the cluster to be provisioned with --network-dataplane cilium --enable-acns.
 #
 # The API executes commands in the sandbox via Kubernetes pod-exec (WebSocket API
 # through the kube-apiserver), so sandbox pods do not need to initiate connections to
@@ -27,9 +30,11 @@ spec:
   # no ingress rules => deny all ingress
 ---
 # 2) EGRESS allow-list for sandbox pods.
-#    Allow only DNS (for package managers, git remote resolution) and HTTPS (GitHub
-#    endpoints for git clone/push, package installs). All other egress is denied —
-#    in particular, sandbox pods cannot reach the API pod or MCP server.
+#    Allow DNS to kube-dns (needed by Cilium DNS proxy and kube-dns itself).
+#    External HTTPS egress is delegated to cilium-network-policy-sandbox.yaml
+#    (toFQDNs rules) — that CiliumNetworkPolicy must also be applied.
+#    Pod-CIDR traffic is implicitly blocked because no ipBlock or podSelector
+#    rule here permits it; the Cilium policy also does not allow in-cluster IPs.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -44,7 +49,7 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # (a) DNS — CoreDNS in kube-system. Required for resolving github.com, etc.
+    # (a) DNS — CoreDNS in kube-system. Required for FQDN resolution by Cilium proxy.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -57,28 +62,17 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # (b) HTTPS (port 443) — GitHub, npm, apt/pip package registries.
-    #     OPEN ITEM: replace 0.0.0.0/0 with a Cilium FQDN NetworkPolicy
-    #     (CiliumNetworkPolicy with `toFQDNs`) for tighter per-domain egress control.
-    #     The cluster is provisioned with --network-dataplane cilium --enable-acns,
-    #     so CiliumNetworkPolicy FQDN filtering is available.
+    # (b) HTTPS (port 443) — restricted to non-cluster traffic.
+    #     FQDN allowlist is enforced by cilium-network-policy-sandbox.yaml.
+    #     Pod CIDR (10.244.0.0/16) is excluded so sandbox pods cannot reach
+    #     the API pod or other in-cluster services over HTTPS.
+    #     OPERATOR: replace except CIDR with your cluster's pod CIDR if different
+    #     (az aks show --query networkProfile.podCidr).
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
-            # Exclude the cluster pod CIDR so sandbox pods cannot reach the API pod
-            # or other in-cluster services over HTTPS.
-            # OPERATOR: replace with your cluster's pod CIDR (az aks show --query networkProfile.podCidr).
             except:
               - 10.244.0.0/16
       ports:
         - protocol: TCP
           port: 443
-    # (c) HTTP (port 80) — apt/pip plain-HTTP package mirrors.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 10.244.0.0/16
-      ports:
-        - protocol: TCP
-          port: 80
