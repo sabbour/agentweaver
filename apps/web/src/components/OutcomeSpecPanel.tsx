@@ -416,16 +416,19 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
         </MessageBar>
       )}
 
-      {!hasContent ? (
+      {revising && (
         <div className={styles.drafting}>
           <Spinner size="extra-tiny" aria-hidden="true" />
-          <Text>
-            {revising
-              ? 'Coordinator is incorporating your changes and re-drafting the spec...'
-              : 'Coordinator is drafting the outcome spec...'}
-          </Text>
+          <Text>Coordinator is incorporating your changes and re-drafting the spec...</Text>
         </div>
-      ) : (
+      )}
+
+      {!hasContent && !revising ? (
+        <div className={styles.drafting}>
+          <Spinner size="extra-tiny" aria-hidden="true" />
+          <Text>Coordinator is drafting the outcome spec...</Text>
+        </div>
+      ) : hasContent ? (
         <>
           <SpecSection label="Goal" value={spec?.goal} />
           <SpecSection label="Desired outcome" value={spec?.desiredOutcome} />
@@ -435,7 +438,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
             <SpecSection label="Clarifying questions" value={spec?.clarifyingQuestions} />
           )}
         </>
-      )}
+      ) : null}
 
       {actionError && (
         <MessageBar intent="error">
