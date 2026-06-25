@@ -248,11 +248,36 @@ internal static class FakeBindings
             BlockedAdapter: blockedAdapter,
             ReviewChangesAdapter: reviewChangesAdapter,
             TerminalDeclined: terminalDeclined,
-            MaxIterations: 3);
+            MaxIterations: 3,
+            Wiring: new FakeWiring(agent));
     }
 
     private static ExecutorBinding Exec(string id, string logicalId, string role, string nodeType, bool hidden) =>
         new VisualFunctionExecutor<object, object>(
             id, logicalId, logicalId, role, nodeType, hidden,
             (input, ctx, ct) => new ValueTask<object>(input));
+}
+
+/// <summary>
+/// Fake wiring support for the binder unit tests. The default / renamed-default definitions only ever
+/// take the canonical Agent path, so <see cref="ResolveAgentNode"/> returns the single fake agent binding
+/// (logical id "agent") for ANY node id — preserving the id-independent collapse to the canonical graph.
+/// The generic catalog adapters are exercised by the factory-level binding test, not here, so they throw.
+/// </summary>
+internal sealed class FakeWiring(ExecutorBinding agent) : IRunWorkflowWiringSupport
+{
+    public ExecutorBinding ResolveAgentNode(WorkflowNode node) => agent;
+    public ExecutorBinding ResolvePeerReviewNode(WorkflowNode node) => throw new NotSupportedException();
+    public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding ReviewToAgentForwardAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding ReviewToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding StoreAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding ReviewToAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding ReviewToMergeAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ScribeSubPath AgentScribePath(WorkflowEdge edge) => throw new NotSupportedException();
+    public ScribeSubPath ReviewScribePath(WorkflowEdge edge) => throw new NotSupportedException();
 }

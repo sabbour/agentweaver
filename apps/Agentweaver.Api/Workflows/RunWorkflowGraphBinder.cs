@@ -127,6 +127,15 @@ internal static class RunWorkflowGraphBinder
             _ => Factory.ResolveExecutor(startNode, ctx.B),
         };
 
+    /// <summary>
+    /// True for a Feature 010 COMPOSED review-policy gate (id prefixed <c>policy-</c>, injected by
+    /// <c>ReviewPolicyComposer</c>) — the only gates the dedicated policy plumbing understands (its
+    /// neighbour ids are the canonical agent/merge/policy-terminal ids). A catalog CHECK gate keeps a real
+    /// executor in <see cref="RunWorkflowBindings.PolicyGateBindings"/> but wires through the canonical path.
+    /// </summary>
+    private static bool IsComposedPolicyGate(RunWorkflowBindings b, string nodeId) =>
+        b.PolicyGateBindings.ContainsKey(nodeId) && nodeId.StartsWith("policy-", StringComparison.Ordinal);
+
     private static WorkflowNode GetNode(WorkflowDefinition definition, string nodeId)
     {
         var node = definition.Nodes.FirstOrDefault(n => string.Equals(n.Id, nodeId, StringComparison.Ordinal));
@@ -161,9 +170,12 @@ internal static class RunWorkflowGraphBinder
         var toKind = EffectiveKind(definition, toNode);
 
         // Extra/renamed review-policy gates keep their dedicated policy plumbing (parity with Feature 010
-        // multi-gate review policies). The canonical default gates (rai/review) never receive a policy
-        // binding, so the default workflow always takes the canonical path below.
-        if (b.PolicyGateBindings.ContainsKey(edge.From) || b.PolicyGateBindings.ContainsKey(edge.To))
+        // multi-gate review policies). Only the COMPOSED policy gates (ids prefixed "policy-", injected by
+        // ReviewPolicyComposer) take that path; a catalog CHECK gate (e.g. "rai-check" / "review-gate")
+        // still has a real RAI/human-review executor in PolicyGateBindings, but its edges use generic
+        // targets, so they wire through the canonical path below (ResolveRai/ResolveReview resolve the
+        // per-node executor).
+        if (IsComposedPolicyGate(b, edge.From) || IsComposedPolicyGate(b, edge.To))
         {
             if (TryWirePolicyEdge(ctx.G, definition, edge, b))
                 return;
@@ -483,8 +495,12 @@ internal static class RunWorkflowGraphBinder
     /// a <c>safety-failed</c> verdict -> the safety terminal, a <c>declined</c> verdict -> the declined
     /// terminal, a scribe-sourced edge -> the scribe outputs. Policy terminals keep their id-prefix routing.
     /// </summary>
-    private static void WireOutputs(GraphDescriptorBuilder g, WorkflowDefinition definition, WorkflowNode terminal, RunWorkflowBindings b)
+    private static void WireOutputs(WireContext ctx, WorkflowNode terminal)
     {
+        var g = ctx.G;
+        var b = ctx.B;
+        var definition = ctx.Definition;
+
         // Review-policy terminals keep id-prefix routing (parity with Feature 010 multi-gate policies).
         if (terminal.Id.StartsWith("policy-terminal-safety-failed", StringComparison.Ordinal))
         {
@@ -509,11 +525,17 @@ internal static class RunWorkflowGraphBinder
             g.WithOutputFrom(b.TerminalDeclined);
             return;
         }
-        // A terminal reached from a scribe stage is the run's "done" sink; both scribe-output executors
-        // (merge path + no-changes path) are the graph outputs.
+        // A terminal reached from a scribe stage is the run's "done" sink; every scribe-output executor
+        // actually wired during edge expansion (canonical merge / no-changes paths AND generic
+        // direct-completion paths) is declared a graph output.
         if (incoming.Any(e => IsScribeSource(definition, e.From)))
         {
-            g.WithOutputFrom(b.ScribeOutputMerge, b.ScribeOutputNoChanges);
+            var outputs = ctx.ScribeOutputs.Distinct().ToArray();
+            if (outputs.Length == 0)
+                throw new WorkflowBindException(
+                    $"Cannot bind outputs for terminal node '{terminal.Id}': it is reached from a scribe stage " +
+                    "but no scribe-output executor was wired.", terminal.Id);
+            g.WithOutputFrom(outputs);
             return;
         }
 

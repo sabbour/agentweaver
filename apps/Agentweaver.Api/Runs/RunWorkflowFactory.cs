@@ -685,6 +685,12 @@ public sealed class RunWorkflowFactory
         // to the previous hand-coded wiring, so the collapsed descriptor and executed graph are unchanged.
         // The child pipeline (above) is intentionally left hand-coded for this stage.
         var fullBuilder = new GraphDescriptorBuilder(agentInputStorer);
+
+        // The per-node / per-edge executor mint for generic catalog topologies (Feature 015 US3). Seeded
+        // with the canonical "agent" node so the default + review-policy-composed pipelines keep the exact
+        // same agent executor instance the policy plumbing references (golden descriptor parity).
+        var wiringSupport = new GenericWiringSupport(this, canonicalAgentNodeId: "agent", canonicalAgentBinding: agentBinding);
+
         RunWorkflowGraphBinder.WireFull(
             fullBuilder,
             fullDefinition,
@@ -713,12 +719,344 @@ public sealed class RunWorkflowFactory
                 BlockedAdapter: blockedAdapter,
                 ReviewChangesAdapter: reviewChangesAdapter,
                 TerminalDeclined: terminalDeclined,
-                MaxIterations: MaxIterations));
+                MaxIterations: MaxIterations,
+                Wiring: wiringSupport));
 
         var wf = fullBuilder.Build();
         var descriptor = fullBuilder.BuildDescriptor("agentweaver-workflow-full", "full");
 
         return (wf, descriptor, fullBuilder.BuildExecutorMetaMap());
+    }
+
+    /// <summary>
+    /// Builds a <see cref="ScribeTurnInput"/> for a generic direct-completion scribe path (Feature 015 US3:
+    /// <c>Agent → Scribe</c> / <c>Review → Scribe</c> workflows that record an outcome without a merge).
+    /// Resolves project/agent context from the persisted run, falling back to the workflow entry context
+    /// stored at <c>("agent-input","run-context")</c> — the same precedence the canonical scribe-input
+    /// adapters use.
+    /// </summary>
+    internal async ValueTask<ScribeTurnInput> BuildScribeTurnInputAsync(
+        string runId, string terminalStatus, IWorkflowContext ctx, CancellationToken ct)
+    {
+        var log = _loggerFactory.CreateLogger<RunWorkflowFactory>();
+        Agentweaver.Domain.Run? run = null;
+        if (RunId.TryParse(runId, out var rid))
+            run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
+
+        string? projectId = run?.ProjectId?.ToString();
+        string? agentName = run?.AgentName;
+        if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName))
+        {
+            var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
+                projectId = agentInput!.ProjectId;
+            if (string.IsNullOrEmpty(agentName) && !string.IsNullOrEmpty(agentInput?.AgentName))
+                agentName = agentInput!.AgentName;
+        }
+
+        return new ScribeTurnInput(
+            runId,
+            projectId ?? "",
+            agentName ?? "",
+            run?.StartedAt ?? DateTimeOffset.UtcNow,
+            run?.RepositoryPath ?? "",
+            run?.ModelSource.ToApiString() ?? "github-copilot",
+            run?.ModelId,
+            TerminalStatus: terminalStatus);
+    }
+
+    /// <summary>
+    /// The per-node / per-edge executor mint that lets <see cref="RunWorkflowGraphBinder"/> wire the generic
+    /// catalog topologies (Feature 015 US3) onto the REAL executors (Principle VII — no mocks). Per-node
+    /// agent / peer-review executors are cached by node id so chained turns each get their OWN MAF node;
+    /// per-edge adapters are minted fresh (keyed by the edge) so no hidden plumbing node receives two inputs.
+    /// </summary>
+    private sealed class GenericWiringSupport : IRunWorkflowWiringSupport
+    {
+        private readonly RunWorkflowFactory _factory;
+        private readonly Dictionary<string, ExecutorBinding> _agentNodes = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, ExecutorBinding> _peerReviewNodes = new(StringComparer.Ordinal);
+
+        public GenericWiringSupport(
+            RunWorkflowFactory factory, string canonicalAgentNodeId, ExecutorBinding canonicalAgentBinding)
+        {
+            _factory = factory;
+            // Seed the canonical agent node so the DEFAULT (and review-policy-composed) pipeline keeps the
+            // exact same agent executor instance the policy plumbing also references (b.AgentBinding) — this
+            // is what preserves golden descriptor parity and keeps loop-backs targeting one agent node.
+            _agentNodes[canonicalAgentNodeId] = canonicalAgentBinding;
+        }
+
+        public ExecutorBinding ResolveAgentNode(WorkflowNode node)
+        {
+            if (_agentNodes.TryGetValue(node.Id, out var existing))
+                return existing;
+
+            var agent = _factory._agentFactory.CreateWorkerAgent();
+            ExecutorBinding binding = new AgentTurnExecutor(
+                agent,
+                _factory._worktreeOps,
+                _factory.GetRecordingWriter,
+                _factory._loggerFactory.CreateLogger<AgentTurnExecutor>(),
+                apiBaseUrl: _factory._apiBaseUrl,
+                apiKey: _factory._apiKey,
+                agentNodeCharter: node.Charter,
+                name: $"agent-turn-{node.Id}",
+                logicalNodeId: node.Id,
+                displayLabel: node.Label);
+            _agentNodes[node.Id] = binding;
+            return binding;
+        }
+
+        public ExecutorBinding ResolvePeerReviewNode(WorkflowNode node)
+        {
+            if (_peerReviewNodes.TryGetValue(node.Id, out var existing))
+                return existing;
+
+            // A peer-review verdict gate is a REAL AI reviewer: the existing RubberduckTurnExecutor takes the
+            // produced AgentTurnOutput, runs an AI critique, and emits a WorkflowReviewDecision (PASS→approved,
+            // REVISE→request-changes) — exactly the peer_review contract.
+            ExecutorBinding binding = new RubberduckTurnExecutor(
+                _factory._copilotClientFactory,
+                _factory._scopeProvider,
+                _factory._sandboxExecutor,
+                _factory._sandboxPolicyStore,
+                _factory._approvalStore,
+                _factory._toolApprovalGate,
+                _factory._loggerFactory,
+                _factory.GetRecordingWriter,
+                name: $"peer-review-{node.Id}",
+                logicalNodeId: node.Id,
+                displayLabel: node.Label,
+                createSubStream: _factory.CreateSubStreamWriter,
+                completeSubStream: _factory.CompleteSubStream,
+                agentFactory: _factory._agentFactory);
+            _peerReviewNodes[node.Id] = binding;
+            return binding;
+        }
+
+        private static string EdgeId(string role, WorkflowEdge e) =>
+            $"{role}-{e.From}-{e.To}-{e.When ?? "x"}";
+
+        public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("seq-turn", edge);
+            return new VisualFunctionExecutor<AgentTurnOutput, AgentTurnInput>(
+                id, id, "Next turn", "plumbing", "action", true,
+                async (output, ctx, ct) =>
+                {
+                    var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    var next = ContinueTurn(prev, output, "Previous step output", isRevision: false);
+                    await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ExecutorBinding ReviewToAgentForwardAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("review-forward", edge);
+            return new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnInput>(
+                id, id, "Approved → next turn", "plumbing", "action", true,
+                async (decision, ctx, ct) =>
+                {
+                    var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
+                    var next = produced is not null
+                        ? ContinueTurn(prev, produced, "Reviewed and approved output", isRevision: false)
+                        : (prev ?? EmptyTurn(string.Empty)) with { IsRevision = false };
+                    await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ExecutorBinding ReviewToAgentReviseAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("review-revise", edge);
+            return new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnInput>(
+                id, id, "Request changes", "plumbing", "action", true,
+                async (decision, ctx, ct) =>
+                {
+                    var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    var next = ReviseTurn(prev, decision.Feedback);
+                    await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ExecutorBinding StoreAgentOutputAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("store-output", edge);
+            return new VisualFunctionExecutor<AgentTurnOutput, AgentTurnOutput>(
+                id, id, "Store output", "plumbing", "action", true,
+                async (output, ctx, ct) =>
+                {
+                    await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct).ConfigureAwait(false);
+                    return output;
+                });
+        }
+
+        public ExecutorBinding ReviewToAgentOutputAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("review-to-output", edge);
+            return new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnOutput>(
+                id, id, "Reconstruct output", "plumbing", "action", true,
+                async (decision, ctx, ct) =>
+                {
+                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
+                    return produced!;
+                });
+        }
+
+        public ExecutorBinding ReviewToMergeAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("review-to-merge", edge);
+            return new VisualFunctionExecutor<WorkflowReviewDecision, MergeInput>(
+                id, id, "Merge adapter", "plumbing", "action", true,
+                async (decision, ctx, ct) =>
+                {
+                    var ao = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
+                    return new MergeInput(
+                        ao!.RunId, ao.TreeHash, ao.WorktreePath, ao.WorktreeBranch,
+                        ao.RepositoryPath, ao.OriginatingBranch, ReviewedBy: decision.ReviewedBy);
+                });
+        }
+
+        public ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("agent-to-review", edge);
+            return new VisualFunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
+                id, id, "Review adapter", "plumbing", "action", true,
+                async (output, ctx, ct) =>
+                {
+                    await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct).ConfigureAwait(false);
+                    return new WorkflowReviewRequest(
+                        output.RunId, output.TreeHash, output.Diff, output.StepCount,
+                        RaiSafetyFlagged: output.ContentSafetyFlagged);
+                });
+        }
+
+        public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("agent-to-merge", edge);
+            return new VisualFunctionExecutor<AgentTurnOutput, MergeInput>(
+                id, id, "Direct merge", "plumbing", "action", true,
+                (output, ctx, ct) => new ValueTask<MergeInput>(new MergeInput(
+                    output.RunId, output.TreeHash, output.WorktreePath, output.WorktreeBranch,
+                    output.RepositoryPath, output.OriginatingBranch)));
+        }
+
+        public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("merge-to-output", edge);
+            return new VisualFunctionExecutor<MergeOutput, AgentTurnOutput>(
+                id, id, "Blocked → review", "plumbing", "action", true,
+                async (mo, ctx, ct) =>
+                {
+                    var ao = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
+                    return ao!;
+                });
+        }
+
+        public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("merge-to-revise", edge);
+            return new VisualFunctionExecutor<MergeOutput, AgentTurnInput>(
+                id, id, "Blocked → revise", "plumbing", "action", true,
+                async (mo, ctx, ct) =>
+                {
+                    var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    var next = ReviseTurn(prev, feedback: null);
+                    await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ScribeSubPath AgentScribePath(WorkflowEdge edge)
+        {
+            var inputId = $"scribe-input-{edge.From}-{edge.To}";
+            ExecutorBinding input = new VisualFunctionExecutor<AgentTurnOutput, ScribeTurnInput>(
+                inputId, "scribe", "Scribe", "scribe", "agent", false,
+                async (output, ctx, ct) =>
+                    await _factory.BuildScribeTurnInputAsync(output.RunId, "completed", ctx, ct).ConfigureAwait(false));
+            return BuildScribePath(edge, input);
+        }
+
+        public ScribeSubPath ReviewScribePath(WorkflowEdge edge)
+        {
+            var inputId = $"scribe-input-{edge.From}-{edge.To}";
+            ExecutorBinding input = new VisualFunctionExecutor<WorkflowReviewDecision, ScribeTurnInput>(
+                inputId, "scribe", "Scribe", "scribe", "agent", false,
+                async (decision, ctx, ct) =>
+                {
+                    var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    return await _factory.BuildScribeTurnInputAsync(prev?.RunId ?? string.Empty, "completed", ctx, ct).ConfigureAwait(false);
+                });
+            return BuildScribePath(edge, input);
+        }
+
+        private ScribeSubPath BuildScribePath(WorkflowEdge edge, ExecutorBinding input)
+        {
+            ExecutorBinding scribe = new ScribeTurnExecutor(
+                _factory._copilotClientFactory, _factory._scopeProvider, _factory._sandboxExecutor,
+                _factory._sandboxPolicyStore, _factory._approvalStore, _factory._toolApprovalGate,
+                _factory._loggerFactory, _factory.GetRecordingWriter,
+                name: $"scribe-turn-{edge.From}-{edge.To}",
+                createSubStream: _factory.CreateSubStreamWriter, completeSubStream: _factory.CompleteSubStream,
+                apiBaseUrl: _factory._apiBaseUrl, apiKey: _factory._apiKey, agentFactory: _factory._agentFactory);
+
+            var outputId = $"scribe-output-{edge.From}-{edge.To}";
+            ExecutorBinding output = new VisualFunctionExecutor<ScribeTurnInput, MergeOutput>(
+                outputId, "scribe", "Scribe", "scribe", "agent", false,
+                (sti, ctx, ct) => new ValueTask<MergeOutput>(
+                    new MergeOutput(sti.RunId, sti.TerminalStatus ?? "completed", sti.MergeResult, sti.MergeMode)));
+
+            return new ScribeSubPath(input, scribe, output);
+        }
+
+        // ── Shared AgentTurnInput continuation helpers ──────────────────────────────────────────────
+        private static AgentTurnInput EmptyTurn(string runId) => new(
+            runId, string.Empty, string.Empty, string.Empty, string.Empty,
+            string.Empty, string.Empty, null, string.Empty);
+
+        /// <summary>Forward continuation onto a DIFFERENT agent (a fresh session): carry the produced
+        /// worktree forward and append the prior output as context. Not a revision.</summary>
+        private static AgentTurnInput ContinueTurn(
+            AgentTurnInput? prev, AgentTurnOutput output, string contextLabel, bool isRevision)
+        {
+            var basis = prev ?? EmptyTurn(output.RunId);
+            var task = string.IsNullOrEmpty(output.Diff)
+                ? basis.Task
+                : $"{basis.Task}\n\n[{contextLabel}]\n{output.Diff}";
+            return basis with
+            {
+                Task = task,
+                WorktreePath = output.WorktreePath,
+                WorktreeBranch = output.WorktreeBranch,
+                RepositoryPath = output.RepositoryPath,
+                OriginatingBranch = output.OriginatingBranch,
+                Iteration = basis.Iteration + 1,
+                MaxIterationsReached = false,
+                IsRevision = isRevision,
+            };
+        }
+
+        /// <summary>Revision loop back onto the SAME producing agent (resume its session): append the
+        /// reviewer feedback and increment the iteration counter.</summary>
+        private static AgentTurnInput ReviseTurn(AgentTurnInput? prev, string? feedback)
+        {
+            var basis = prev ?? EmptyTurn(string.Empty);
+            var nextIteration = basis.Iteration + 1;
+            var task = string.IsNullOrEmpty(feedback)
+                ? basis.Task
+                : $"{basis.Task}\n\n[Review feedback — iteration {nextIteration}]: {feedback}";
+            return basis with
+            {
+                Task = task,
+                Iteration = nextIteration,
+                MaxIterationsReached = false,
+                IsRevision = true,
+            };
+        }
     }
 
     private IReadOnlyDictionary<string, ExecutorBinding> BuildPolicyGateBindings(WorkflowDefinition definition)

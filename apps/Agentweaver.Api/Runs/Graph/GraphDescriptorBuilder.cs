@@ -112,12 +112,13 @@ public sealed class GraphDescriptorBuilder
         if (string.Equals(b.Id, ReviewGatePortId, StringComparison.Ordinal))
             return new RawMeta("review", "Human Review", "review", "gate", "live", Hidden: false);
 
-        if (b.Id.EndsWith("-human-review-gate", StringComparison.Ordinal) ||
-            b.Id.EndsWith("-review-gate", StringComparison.Ordinal))
+        // Per-node human-review gate ports are minted as bare RequestPorts with id "{nodeId}-gate"
+        // (see BuildPolicyGateBindings). They carry no IWorkflowNodeMeta, so self-describe them here:
+        // the logical id is the node id (gate suffix stripped). Real executors always implement the
+        // interface above, so the only bindings reaching this fallback are these review gate ports.
+        if (b.Id.EndsWith("-gate", StringComparison.Ordinal))
         {
-            var logicalId = b.Id.EndsWith("-gate", StringComparison.Ordinal)
-                ? b.Id[..^"-gate".Length]
-                : b.Id;
+            var logicalId = b.Id[..^"-gate".Length];
             return new RawMeta(logicalId, "Human review", "review", "gate", "live", Hidden: false);
         }
 
