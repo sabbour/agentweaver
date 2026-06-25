@@ -57,6 +57,21 @@ az acr build \
 echo ""
 echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-frontend:${IMAGE_TAG}"
 
+# -- Image 3: agentweaver-mcp -------------------------------------------------
+# Build context: repo root
+# Dockerfile: apps/Agentweaver.Mcp/Dockerfile
+echo ""
+echo "--- Building agentweaver-mcp ---"
+az acr build \
+  --registry "${ACR_NAME}" \
+  --resource-group "${RESOURCE_GROUP}" \
+  --image "agentweaver-mcp:${IMAGE_TAG}" \
+  --file "apps/Agentweaver.Mcp/Dockerfile" \
+  .
+
+echo ""
+echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-mcp:${IMAGE_TAG}"
+
 # -- Summary ------------------------------------------------------------------
 echo ""
 echo "==================================================="
@@ -65,6 +80,7 @@ echo "==================================================="
 echo ""
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}"
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-frontend:${IMAGE_TAG}"
+echo "  ${ACR_LOGIN_SERVER}/agentweaver-mcp:${IMAGE_TAG}"
 echo ""
 echo "Export for deploy step:"
 echo "  export ACR_NAME=${ACR_NAME}"

@@ -5,9 +5,23 @@
 #   ${HOST}              --> <managed-domain host>  (derived from DefaultDomainCertificate)
 #   ${ACR_LOGIN_SERVER}  --> <ACR_NAME>.azurecr.io
 #   ${IMAGE_TAG}         --> image tag
+#   ${IDENTITY_CLIENT_ID} --> workload identity client ID (from 15-setup-identity.sh)
+#   ${KEYVAULT_NAME}     --> Key Vault name
+#   ${TENANT_ID}         --> Azure AD tenant ID
 #
 # envsubst replaces ONLY those tokens; all other $ references in manifests
 # (e.g. Kubernetes env var refs) are left untouched.
+#
+# Sandbox manifests (sandbox-claim-template.yaml, sandbox-template.yaml,
+# sandbox-warmpool.yaml) are skipped by default because they require the
+# sandbox CRD to be pre-installed and contain literal {runId} placeholders
+# that envsubst cannot process. Pass --with-sandbox to include them.
+#
+# MCP secrets require: MCP_API_KEY, MCP_AUTH_API_KEY, MCP_AUTH_USER
+# Export these before running:
+#   export MCP_API_KEY=...
+#   export MCP_AUTH_API_KEY=...
+#   export MCP_AUTH_USER=...
 #
 # Requires: kubectl (pointed at the AKS cluster), envsubst (apt install gettext /
 #           brew install gettext), Azure CLI.
@@ -15,9 +29,15 @@
 #
 # Usage:
 #   source scripts/aks/00-variables.sh
-#   bash scripts/aks/30-deploy.sh
+#   bash scripts/aks/30-deploy.sh [--with-sandbox]
 
 set -euo pipefail
+
+# -- Parse flags ---------------------------------------------------------------
+WITH_SANDBOX=0
+for arg in "$@"; do
+  [[ "${arg}" == "--with-sandbox" ]] && WITH_SANDBOX=1
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -40,6 +60,20 @@ echo ""
 if ! command -v envsubst &>/dev/null; then
   echo "ERROR: envsubst not found."
   echo "Install via: apt install gettext  or  brew install gettext"
+  exit 1
+fi
+
+# Validate variables required for manifest substitution and secrets
+missing=()
+[[ -z "${IDENTITY_CLIENT_ID:-}" ]] && missing+=("IDENTITY_CLIENT_ID")
+[[ -z "${KEYVAULT_NAME:-}" ]]      && missing+=("KEYVAULT_NAME")
+[[ -z "${TENANT_ID:-}" ]]          && missing+=("TENANT_ID")
+[[ -z "${MCP_API_KEY:-}" ]]        && missing+=("MCP_API_KEY")
+[[ -z "${MCP_AUTH_API_KEY:-}" ]]   && missing+=("MCP_AUTH_API_KEY")
+[[ -z "${MCP_AUTH_USER:-}" ]]      && missing+=("MCP_AUTH_USER")
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "ERROR: The following required variables are not set:"
+  for v in "${missing[@]}"; do echo "  $v"; done
   exit 1
 fi
 
@@ -104,11 +138,21 @@ rm -rf "${RENDERED_DIR}"
 mkdir -p "${RENDERED_DIR}"
 
 echo ""
-echo "Rendering manifests (substituting HOST, ACR_LOGIN_SERVER, IMAGE_TAG)..."
+echo "Rendering manifests (substituting HOST, ACR_LOGIN_SERVER, IMAGE_TAG, IDENTITY_CLIENT_ID, KEYVAULT_NAME, TENANT_ID)..."
 
 for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
   fname="$(basename "${yaml_file}")"
-  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG}' \
+  # Skip sandbox-specific files unless --with-sandbox was passed; they require
+  # the sandbox CRD to be pre-installed and contain literal {runId} placeholders
+  # that cannot be substituted by envsubst.
+  if [[ "${WITH_SANDBOX}" == "0" ]] && \
+     [[ "${fname}" == "sandbox-claim-template.yaml" || \
+        "${fname}" == "sandbox-template.yaml" || \
+        "${fname}" == "sandbox-warmpool.yaml" ]]; then
+    echo "  skipped (sandbox, needs CRD): ${fname}"
+    continue
+  fi
+  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID}' \
     < "${yaml_file}" > "${RENDERED_DIR}/${fname}"
   echo "  rendered: ${fname}"
 done
@@ -122,6 +166,19 @@ kubectl apply -f "${RENDERED_DIR}/pvc-data.yaml"
 echo "  [applied] pvc-data.yaml"
 kubectl apply -f "${RENDERED_DIR}/pvc-workspace.yaml"
 echo "  [applied] pvc-workspace.yaml"
+
+# -- Step 6b: Create MCP secrets (idempotent) ---------------------------------
+# agentweaver-mcp-secrets is required by mcp-deployment.yaml.
+# Set MCP_API_KEY, MCP_AUTH_API_KEY, MCP_AUTH_USER before running this script.
+echo ""
+echo "Applying MCP secrets..."
+kubectl create secret generic agentweaver-mcp-secrets \
+  --namespace "${NAMESPACE}" \
+  --from-literal=api-key="${MCP_API_KEY}" \
+  --from-literal=auth-api-key="${MCP_AUTH_API_KEY}" \
+  --from-literal=auth-user="${MCP_AUTH_USER}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+echo "  [applied] agentweaver-mcp-secrets"
 
 # -- Step 7: Apply remaining rendered manifests --------------------------------
 echo ""
@@ -157,6 +214,11 @@ kubectl rollout status deployment/agentweaver-api \
 
 echo "Waiting for Frontend deployment rollout..."
 kubectl rollout status deployment/agentweaver-frontend \
+  --namespace "${NAMESPACE}" \
+  --timeout=120s
+
+echo "Waiting for MCP deployment rollout..."
+kubectl rollout status deployment/agentweaver-mcp \
   --namespace "${NAMESPACE}" \
   --timeout=120s
 
