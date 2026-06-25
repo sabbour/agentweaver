@@ -151,6 +151,12 @@ internal static class RunWorkflowGraphBinder
     {
         var when = edge.When;
 
+        // A peer-review node is an agent turn (AI reviewing an AI's output): it is entered at the agent
+        // executor and emits an AgentTurnOutput, exactly like a prompt node. Wire its edges identically to
+        // an Agent node so a peer_review -> check gate (or check -> peer_review loop) resolves.
+        fromKind = NormalizeForWiring(fromKind);
+        toKind = NormalizeForWiring(toKind);
+
         switch (fromKind, toKind, when)
         {
             // agent turn -> RAI gate (unconditional).
@@ -242,15 +248,22 @@ internal static class RunWorkflowGraphBinder
             case NodeKind.FanOut:
             case NodeKind.FanIn:
             case NodeKind.Serial:
-            case NodeKind.PeerReview:
             case NodeKind.CoordinatorComposed:
                 throw new WorkflowBindException(
                     $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
                     "the loader but not yet wired to a runtime executor. fan_out/fan_in map onto the coordinator " +
-                    "SubtaskFrontier/AssemblyPlanning seams; serial/peer_review onto the sequential/peer-review " +
-                    "seams — runtime support is pending.", node.Id);
+                    "SubtaskFrontier/AssemblyPlanning seams; serial onto the sequential seam — runtime support is " +
+                    "pending.", node.Id);
         }
     }
+
+    /// <summary>
+    /// Collapses kinds that share an executor/output contract onto a single canonical kind for edge
+    /// wiring. A <see cref="NodeKind.PeerReview"/> node is an agent turn (it resolves to the agent binding
+    /// and emits an <c>AgentTurnOutput</c>), so it wires identically to a <see cref="NodeKind.Agent"/> node.
+    /// </summary>
+    private static NodeKind NormalizeForWiring(NodeKind kind) =>
+        kind == NodeKind.PeerReview ? NodeKind.Agent : kind;
 
     private static ExecutorBinding ResolveAgent(RunWorkflowBindings b) => b.AgentBinding;
 

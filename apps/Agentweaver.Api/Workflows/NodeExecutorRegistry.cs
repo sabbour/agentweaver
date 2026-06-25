@@ -37,6 +37,10 @@ internal sealed class NodeExecutorRegistry : INodeExecutorFactory
         switch (kind)
         {
             case NodeKind.Agent:
+            case NodeKind.PeerReview:
+                // A peer-review node is an AGENT turn (an AI reviewing another node's output), not a
+                // human-in-the-loop gate. It is entered at the same agent-turn executor, then routes its
+                // verdict into a downstream check gate.
                 return bindings.AgentBinding;
 
             case NodeKind.Rai:
@@ -62,15 +66,14 @@ internal sealed class NodeExecutorRegistry : INodeExecutorFactory
             case NodeKind.FanOut:
             case NodeKind.FanIn:
             case NodeKind.Serial:
-            case NodeKind.PeerReview:
             case NodeKind.CoordinatorComposed:
                 // Accepted at load time (US1) and modeled by the schema, but not yet wired to a runtime
                 // executor in this binder — fan-out/fan-in map onto the coordinator's SubtaskFrontier /
                 // AssemblyPlanning seams and require dispatch infrastructure beyond the per-run graph.
                 throw new WorkflowBindException(
                     $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
-                    "the loader but not yet wired to a runtime executor. Use prompt/check/merge/scribe/terminal " +
-                    "nodes, or wait for fan_out/fan_in/serial/peer_review runtime support.", node.Id);
+                    "the loader but not yet wired to a runtime executor. Use prompt/peer_review/check/merge/scribe/" +
+                    "terminal nodes, or wait for fan_out/fan_in/serial runtime support.", node.Id);
 
             case NodeKind.Terminal:
                 throw new WorkflowBindException(
