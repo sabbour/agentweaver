@@ -275,9 +275,13 @@ public sealed class BlueprintService
         WorkflowDefinition? generatedWorkflow = null;
         string? generatedWorkflowYaml = null;
 
+        // FR-063: the LLM signals "no library workflow fits" with an empty array. Treat an empty set,
+        // an all-blank/"custom" set, or the legacy "default" sentinel as needing the fallback generator
+        // so a stale ["default"] never suppresses CopilotWorkflowGenerator.
         bool needsFallback = blueprint.Workflows.Count == 0 ||
             blueprint.Workflows.All(id => string.IsNullOrWhiteSpace(id) ||
-                string.Equals(id, "custom", StringComparison.OrdinalIgnoreCase));
+                string.Equals(id, "custom", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(id, "default", StringComparison.OrdinalIgnoreCase));
 
         if (needsFallback)
         {

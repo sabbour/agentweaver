@@ -41,7 +41,7 @@ This document describes the architecture of the Agentweaver AKS deployment: its 
 │  │           ▼                        ▼                                 │  │
 │  │  ┌──────────────────┐   ┌──────────────────────┐                   │  │
 │  │  │ API Pod          │   │ Frontend Pods (x2)    │                   │  │
-│  │  │ .NET 10 :8080    │   │ nginx :80             │                   │  │
+│  │  │ .NET 10 :8080    │   │ ASP.NET Core :8080    │                   │  │
 │  │  │ UID 1000         │   │ UID 1000              │                   │  │
 │  │  │ replicas: 1      │   │ replicas: 2           │                   │  │
 │  │  └────────┬─────────┘   └──────────────────────┘                   │  │
@@ -78,7 +78,7 @@ Client (HTTPS :443)
               │
               └─► HTTPRoute agentweaver-frontend-route  (PathPrefix: /)
                     └─► Service agentweaver-frontend :80
-                          └─► Frontend Pod :80 (nginx)
+                          └─► Frontend Pod :8080 (ASP.NET Core)
 ```
 
 ### Gateway API resource relationships

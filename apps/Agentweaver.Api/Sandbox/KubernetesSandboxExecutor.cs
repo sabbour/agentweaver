@@ -32,8 +32,8 @@ public sealed class KubernetesSandboxOptions
 /// </summary>
 internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
 {
-    private const string ApiGroup = "sandbox.agentweaver.io";
-    private const string ApiVersion = "v1";
+    private const string ApiGroup = "extensions.agents.x-k8s.io";
+    private const string ApiVersion = "v1alpha1";
     private const string ClaimPlural = "sandboxclaims";
     private const string ContainerName = "agentweaver-sandbox";
 
@@ -208,20 +208,91 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
         using var demux = new StreamDemuxer(ws, StreamType.RemoteCommand);
         demux.Start();
 
-        using var stdoutBuf = new MemoryStream();
-        using var stderrBuf = new MemoryStream();
         using var stdoutStream = demux.GetStream(ChannelIndex.StdOut, null);
         using var stderrStream = demux.GetStream(ChannelIndex.StdErr, null);
+        // Channel 3 (Error) carries the terminal v1.Status payload with the real exit code.
+        using var statusStream = demux.GetStream(ChannelIndex.Error, null);
 
-        await Task.WhenAll(
-            stdoutStream.CopyToAsync(stdoutBuf, ct),
-            stderrStream.CopyToAsync(stderrBuf, ct));
+        var stdoutTask = ReadBoundedAsync(stdoutStream, maxOutputBytes, ct);
+        var stderrTask = ReadBoundedAsync(stderrStream, maxOutputBytes, ct);
+        var statusTask = ReadBoundedAsync(statusStream, maxOutputBytes, ct);
 
-        var stdout = Encoding.UTF8.GetString(stdoutBuf.ToArray());
-        var stderr = Encoding.UTF8.GetString(stderrBuf.ToArray());
-        bool truncated = stdoutBuf.Length >= maxOutputBytes;
+        await Task.WhenAll(stdoutTask, stderrTask, statusTask);
 
-        return new SandboxExecResult(0, stdout, stderr, false, truncated);
+        var (stdoutBytes, stdoutTruncated) = await stdoutTask;
+        var (stderrBytes, stderrTruncated) = await stderrTask;
+        var (statusBytes, _) = await statusTask;
+
+        var stdout = SandboxOutputRedactor.Default.Redact(Encoding.UTF8.GetString(stdoutBytes));
+        var stderr = SandboxOutputRedactor.Default.Redact(Encoding.UTF8.GetString(stderrBytes));
+        var exitCode = ParseExitCode(Encoding.UTF8.GetString(statusBytes));
+
+        return new SandboxExecResult(
+            exitCode, stdout, stderr, false, stdoutTruncated || stderrTruncated);
+    }
+
+    /// <summary>
+    /// Reads up to <paramref name="maxBytes"/> from a stream, stopping at the cap.
+    /// Returns the bytes collected and whether the output was truncated.
+    /// </summary>
+    private static async Task<(byte[] Bytes, bool Truncated)> ReadBoundedAsync(
+        Stream stream, int maxBytes, CancellationToken ct)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        bool truncated = false;
+        int read;
+        while ((read = await stream.ReadAsync(chunk, ct)) > 0)
+        {
+            int remaining = maxBytes - (int)buffer.Length;
+            if (remaining <= 0) { truncated = true; break; }
+            int take = Math.Min(read, remaining);
+            buffer.Write(chunk, 0, take);
+            if (take < read) { truncated = true; break; }
+        }
+        return (buffer.ToArray(), truncated);
+    }
+
+    /// <summary>
+    /// Parses the terminal v1.Status JSON emitted on channel 3.
+    /// <c>status: "Success"</c> → exit 0. <c>status: "Failure"</c> → the ExitCode
+    /// cause from <c>details.causes</c> (defaulting to 1 if not present).
+    /// </summary>
+    private static int ParseExitCode(string statusJson)
+    {
+        if (string.IsNullOrWhiteSpace(statusJson))
+            return 0;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(statusJson);
+            var root = doc.RootElement;
+
+            var status = root.TryGetProperty("status", out var s) ? s.GetString() : null;
+            if (string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase))
+                return 0;
+
+            if (root.TryGetProperty("details", out var details) &&
+                details.TryGetProperty("causes", out var causes) &&
+                causes.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var cause in causes.EnumerateArray())
+                {
+                    var reason = cause.TryGetProperty("reason", out var r) ? r.GetString() : null;
+                    if (string.Equals(reason, "ExitCode", StringComparison.OrdinalIgnoreCase) &&
+                        cause.TryGetProperty("message", out var m) &&
+                        int.TryParse(m.GetString(), out var code))
+                        return code;
+                }
+            }
+
+            // Failure status with no parseable ExitCode cause → non-zero.
+            return 1;
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
     }
 
     private static string BuildShellScript(SandboxCommand command)

@@ -9,7 +9,7 @@ public interface ISandboxExecutor
     /// <summary>True when this executor provides real process isolation.</summary>
     bool IsRealIsolation { get; }
 
-    /// <summary>Human-readable backend name (e.g. "processcontainer", "wsl-lxc", "passthrough-deny").</summary>
+    /// <summary>Human-readable backend name (e.g. "processcontainer", "wsl-lxc", "direct").</summary>
     string BackendName { get; }
 
     /// <summary>Reason string from the platform probe or selection logic.</summary>

@@ -75,7 +75,7 @@ bash scripts/aks/20-build-push-images.sh
 
 Builds two images via `az acr build` (no local Docker daemon required):
 - `agentweaver-api:<IMAGE_TAG>` — .NET 10 API
-- `agentweaver-frontend:<IMAGE_TAG>` — React SPA served by nginx
+- `agentweaver-frontend:<IMAGE_TAG>` — React SPA served by ASP.NET Core
 
 ### 4. Set up secrets (Key Vault + workload identity)
 
@@ -371,22 +371,20 @@ kubectl get pods -n agentweaver -l istio.io/gateway-name=agentweaver-gateway --s
 
 The `networkpolicy-default-deny.yaml` allows ingress from pods with `istio.io/gateway-name: agentweaver-gateway`. If the gateway pods carry a different label, update policy `allow-gateway-to-api` and `allow-gateway-to-frontend` accordingly.
 
-### Istio ambient mesh not enrolling pods
+### Istio / approuting-istio clarification
+
+The `approuting-istio` GatewayClass is used **for gateway routing only** (provisioning the public LoadBalancer and TLS termination). It does **not** enroll workload pods in an Istio service mesh. The namespace carries no `istio.io/dataplane-mode` label, and no ztunnel, sidecar injection, or Istio ambient mesh is applied to `agentweaver` workloads.
+
+Inter-pod security is enforced exclusively by **Cilium NetworkPolicy** (see `k8s/networkpolicy-default-deny.yaml` and `k8s/networkpolicy-sandbox.yaml`). If you see unexpected traffic being dropped between pods, inspect the Cilium network policies rather than Istio resources:
 
 ```bash
-kubectl get pods -n agentweaver -o jsonpath='{range .items[*]}{.metadata.name}: {.metadata.annotations.ambient\.istio\.io/redirection}{"\n"}{end}'
+kubectl get ciliumnetworkpolicies -n agentweaver
+kubectl get networkpolicies -n agentweaver
 ```
 
-If pods are not enrolled, confirm the namespace carries the label:
+To confirm the gateway pods that are allowed ingress (required by the allow-gateway NetworkPolicy):
 
 ```bash
-kubectl get namespace agentweaver --show-labels
-# Expected: istio.io/dataplane-mode=ambient
+kubectl get pods -n agentweaver -l istio.io/gateway-name=agentweaver-gateway
 ```
 
-If missing, re-apply `k8s/namespace.yaml` and restart pods:
-
-```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl rollout restart deployment -n agentweaver
-```

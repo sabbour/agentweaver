@@ -80,7 +80,7 @@ internal sealed class LinuxNativeMxcSandboxExecutor : ISandboxExecutor
         var mxcPolicy = new SandboxPolicy
         {
             Version = "0.4.0-alpha",
-            Network = new NetworkPolicy { AllowOutbound = false },
+            Network = new NetworkPolicy { AllowOutbound = command.NetworkEnabled },
             Filesystem = BuildMxcFilesystemPolicy(command.FilesystemPolicy),
         };
 

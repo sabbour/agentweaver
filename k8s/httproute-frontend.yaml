@@ -1,7 +1,7 @@
 # HTTPRoute — routes / (catch-all) to the Agentweaver Frontend service.
 #
 # All requests not matched by a more specific route (i.e., not /api/*) are
-# forwarded to agentweaver-frontend:80. The frontend nginx container serves
+# forwarded to agentweaver-frontend:80. The ASP.NET Core server serves
 # the React SPA with a fallback to index.html for client-side routing.
 #
 # This route is intentionally lower priority than httproute-api.yaml because
@@ -11,7 +11,7 @@
 #   Client -> Gateway (agentweaver-gateway) :443, TLS terminated
 #       -> HTTPRoute (this) PathPrefix:/
 #       -> agentweaver-frontend Service :80
-#       -> nginx pod :80 (serves static SPA assets)
+#       -> ASP.NET Core pod :8080 (serves static SPA assets)
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

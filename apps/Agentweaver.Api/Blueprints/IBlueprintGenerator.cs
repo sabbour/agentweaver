@@ -88,7 +88,11 @@ public static class BlueprintGenerationParser
                 Str("name") ?? string.Empty,
                 Str("description") ?? string.Empty,
                 StrArray("roster"),
-                StrArray("workflows") is { Count: > 0 } wfs ? wfs : [Str("workflow") ?? "default"],
+                // FR-063 sentinel: when the model returns "workflows": [] (or omits it) that means
+                // no library workflow fits — return an empty list so the fallback generator fires.
+                // Do NOT default to ["default"], which would mask the empty-selection signal.
+                StrArray("workflows") is { Count: > 0 } wfs ? wfs
+                    : (Str("workflow") is { Length: > 0 } legacy ? [legacy] : []),
                 Str("review_policy") ?? "default",
                 Str("sandbox_profile") ?? "default")
             {

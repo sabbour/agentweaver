@@ -23,6 +23,8 @@ public sealed record BlueprintDto
     [JsonPropertyName("workflows")] public IReadOnlyList<string>? Workflows { get; init; }
     [JsonPropertyName("review_policy")] public string? ReviewPolicy { get; init; }
     [JsonPropertyName("sandbox_profile")] public string? SandboxProfile { get; init; }
+    /// <summary>Bespoke (non-catalog) roles minted by generation; each id also appears in <see cref="Roster"/>.</summary>
+    [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
 
     public static BlueprintDto FromModel(Blueprint b) => new()
     {
@@ -34,6 +36,7 @@ public sealed record BlueprintDto
         Workflows = b.Workflows,
         ReviewPolicy = b.ReviewPolicy,
         SandboxProfile = b.SandboxProfile,
+        BespokeRoles = b.BespokeRoles.Select(BespokeRoleDto.FromModel).ToList(),
     };
 
     public Blueprint ToModel() => new(
@@ -43,7 +46,32 @@ public sealed record BlueprintDto
         Roster ?? [],
         Workflows is { Count: > 0 } ? Workflows : (Workflow is not null ? [Workflow] : ["default"]),
         ReviewPolicy ?? string.Empty,
-        SandboxProfile ?? string.Empty);
+        SandboxProfile ?? string.Empty)
+    {
+        BespokeRoles = BespokeRoles is { Count: > 0 }
+            ? BespokeRoles.Select(r => r.ToModel()).ToList()
+            : [],
+    };
+}
+
+/// <summary>Wire shape for a <see cref="BespokeRole"/> (snake_case). Mirrors its three fields.</summary>
+public sealed record BespokeRoleDto
+{
+    [JsonPropertyName("id")] public string? Id { get; init; }
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("charter")] public string? Charter { get; init; }
+
+    public static BespokeRoleDto FromModel(BespokeRole r) => new()
+    {
+        Id = r.Id,
+        Title = r.Title,
+        Charter = r.Charter,
+    };
+
+    public BespokeRole ToModel() => new(
+        Id ?? string.Empty,
+        Title ?? string.Empty,
+        Charter ?? string.Empty);
 }
 
 public sealed record ListBlueprintsResponse

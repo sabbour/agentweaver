@@ -10,7 +10,7 @@ namespace Agentweaver.SandboxExec;
 ///   2. Windows: WslMxcSandboxExecutor (WSL2 + bwrap/unshare)
 ///   3. Linux:   LinuxBwrapExecutor (selective bubblewrap mounts)
 ///   4. Linux:   LinuxNativeMxcSandboxExecutor (lxc-exec direct)
-///   5. Fallback: PassthroughExecutor (deny-by-default)
+///   5. Fallback: PassthroughExecutor (direct execution, no isolation)
 /// </summary>
 public static class SandboxExecutorFactory
 {
@@ -70,11 +70,12 @@ public static class SandboxExecutorFactory
     }
 
     /// <summary>
-    /// Creates a deny-by-default passthrough executor. Suitable for unit tests and
-    /// environments where no real isolation backend is available.
+    /// Creates a direct passthrough executor that runs commands with no isolation.
+    /// Suitable for unit tests and environments where no real isolation backend is
+    /// available; relies on deployment-level isolation instead.
     /// </summary>
     public static ISandboxExecutor CreatePassthrough(
-        string reason = "no-isolation: passthrough-deny") =>
+        string reason = "no-isolation: passthrough-direct") =>
         new PassthroughExecutor(reason);
 
     /// <summary>
