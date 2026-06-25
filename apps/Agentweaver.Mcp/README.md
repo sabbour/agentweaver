@@ -90,9 +90,8 @@ Reads a markdown file from the project's workspace, runs AI decomposition, and r
 | Tool | Description |
 |------|-------------|
 | `list_blueprints` | List predefined Agentweaver blueprints. |
-| `generate_blueprint` | Generate a new blueprint from a plain-language description. |
-| `validate_blueprint` | Validate a blueprint object against the schema. |
 | `blueprint_generate` | Generate a project blueprint from a natural language description of the team and goals. The agent can inspect before creating a project. |
+| `validate_blueprint` | Validate a blueprint object against the schema. |
 
 ### Catalog
 

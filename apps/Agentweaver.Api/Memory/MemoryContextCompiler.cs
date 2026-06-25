@@ -60,19 +60,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db)
 
         var sb = new StringBuilder();
 
-        if (decisions.Count > 0)
-        {
-            sb.AppendLine("## Boundaries and Decisions");
-            sb.AppendLine("> These are non-negotiable team boundaries. They take precedence over all other context.");
-            foreach (var d in decisions)
-            {
-                sb.AppendLine($"\n### {d.Title}");
-                sb.AppendLine($"**Type:** {d.Type} | **Decided by:** {d.AgentName}");
-                sb.AppendLine(d.Content);
-                if (!string.IsNullOrEmpty(d.Rationale))
-                    sb.AppendLine($"> **Rationale:** {d.Rationale}");
-            }
-        }
+        AppendDecisionsBlock(sb, decisions);
 
         if (coreMemories.Count > 0 || learnings.Count > 0)
         {
@@ -97,5 +85,48 @@ public sealed class MemoryContextCompiler(MemoryDbContext db)
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Compiles ONLY the active architectural + scope decisions block (the "## Boundaries and
+    /// Decisions" section) for a project. Used for coordinator CHILD worker prompts, which must
+    /// receive team-wide non-negotiable boundaries but deliberately NOT the full memory stack
+    /// (core_context/learnings/session) — that stack duplicated the charter and bloated child
+    /// prompts (Defect C). Returns null if there are no active decisions.
+    /// </summary>
+    public async Task<string?> CompileDecisionsAsync(string projectId, CancellationToken ct = default)
+    {
+        // Note: SQLite does not support DateTimeOffset in ORDER BY — sort client-side.
+        var decisions = (await db.Decisions
+            .Where(d => d.ProjectId == projectId
+                     && d.Status == "active"
+                     && (d.Type == "architectural" || d.Type == "scope"))
+            .ToListAsync(ct))
+            .OrderBy(d => d.CreatedAt)
+            .ToList();
+
+        if (decisions.Count == 0)
+            return null;
+
+        var sb = new StringBuilder();
+        AppendDecisionsBlock(sb, decisions);
+        return sb.ToString();
+    }
+
+    private static void AppendDecisionsBlock(StringBuilder sb, IReadOnlyList<Decision> decisions)
+    {
+        if (decisions.Count == 0)
+            return;
+
+        sb.AppendLine("## Boundaries and Decisions");
+        sb.AppendLine("> These are non-negotiable team boundaries. They take precedence over all other context.");
+        foreach (var d in decisions)
+        {
+            sb.AppendLine($"\n### {d.Title}");
+            sb.AppendLine($"**Type:** {d.Type} | **Decided by:** {d.AgentName}");
+            sb.AppendLine(d.Content);
+            if (!string.IsNullOrEmpty(d.Rationale))
+                sb.AppendLine($"> **Rationale:** {d.Rationale}");
+        }
     }
 }

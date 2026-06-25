@@ -73,8 +73,14 @@ public sealed class GitHubOrgAuthorizationMiddleware
             return;
         }
 
-        // Obtain a valid access token for the caller's scope.
-        var scope = _scopeProvider.Resolve(caller.User);
+        // SECURITY (multi-user / AKS): resolve the caller's OWN GitHub identity for the org check.
+        // FixedInstallationScopeProvider.Resolve() ignores the userId and always returns the single
+        // shared installation scope. Used unchanged, that lets ANY api-key holder pass the org check
+        // as soon as a single user has signed in (impersonation across callers). To prevent that we
+        // prefer the caller's own stored token scope and only fall back to the configured scope
+        // provider (installation by default) when the caller has no token of their own.
+        var scope = await ResolveCallerScopeAsync(caller.User, context.RequestAborted).ConfigureAwait(false);
+
         string? accessToken;
         try
         {
@@ -92,19 +98,24 @@ public sealed class GitHubOrgAuthorizationMiddleware
             return;
         }
 
-        // Resolve the GitHub login. CallerContext already has it if the token store had it; fall
-        // back to querying the identity store directly (rare: e.g. cache miss at startup).
-        var login = caller.GitHubLogin;
-        if (string.IsNullOrWhiteSpace(login))
+        // Resolve the GitHub login from the SAME scope the token came from, so the org check always
+        // runs against the identity that owns this token — never a caller hint that may have been
+        // computed under a different (e.g. installation) scope. Only fall back to the cached caller
+        // hint when the scope's identity is genuinely unavailable.
+        string? login;
+        try
         {
-            try
-            {
-                var identity = await _tokenStore.GetIdentityAsync(scope, context.RequestAborted)
-                    .ConfigureAwait(false);
-                login = identity?.Login;
-            }
-            catch { /* best-effort */ }
+            var identity = await _tokenStore.GetIdentityAsync(scope, context.RequestAborted)
+                .ConfigureAwait(false);
+            login = identity?.Login;
         }
+        catch
+        {
+            login = null;
+        }
+
+        if (string.IsNullOrWhiteSpace(login))
+            login = caller.GitHubLogin;
 
         if (string.IsNullOrWhiteSpace(login))
         {
@@ -141,6 +152,40 @@ public sealed class GitHubOrgAuthorizationMiddleware
                     "Access denied. Not a member of the required GitHub organization.").ConfigureAwait(false);
                 return;
         }
+    }
+
+    /// <summary>
+    /// Resolves the token scope used for THIS caller's org check. Prefers the caller's own stored
+    /// GitHub token (scope <c>user:{callerUser}</c>) so each api-key holder is verified against their
+    /// OWN GitHub identity rather than a single shared installation identity. Falls back to the
+    /// configured scope provider (installation by default) only when the caller has no token of their
+    /// own (e.g. they authenticate with an API key but never signed in to GitHub).
+    ///
+    /// NOTE (defense-in-depth limitation): the fallback path still relies on the shared installation
+    /// identity, so an api-key-only caller can pass the org check using whichever identity is signed
+    /// in at the installation scope. Eliminating that requires every caller to hold their own GitHub
+    /// token (Auth:GitHub:ScopeProvider = "caller") or a hard policy that rejects api-key-only callers.
+    /// TODO(github.com/Agentweaver/agentweaver/issues): require per-caller GitHub identity in multi-user
+    /// deployments and drop the installation fallback for org authorization.
+    /// </summary>
+    private async Task<GitHubTokenScope> ResolveCallerScopeAsync(string callerUser, CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(callerUser))
+        {
+            try
+            {
+                var userScope = GitHubTokenScope.ForUser(callerUser);
+                var ownToken = await _tokenStore.GetTokenAsync(userScope, ct).ConfigureAwait(false);
+                if (ownToken is not null)
+                    return userScope;
+            }
+            catch
+            {
+                // Fall through to the configured provider on any lookup failure.
+            }
+        }
+
+        return _scopeProvider.Resolve(callerUser);
     }
 
     private static bool IsExempt(PathString path)

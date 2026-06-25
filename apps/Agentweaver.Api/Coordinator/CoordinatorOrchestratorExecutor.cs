@@ -349,9 +349,12 @@ public sealed class CoordinatorOrchestratorExecutor
                   and how it should approach its work. Leave null when using a catalog role.
                 - "complexity": one of "low" | "medium" | "high".
                 - "phase": one of "none" | "planning" | "execution" | "validation".
-                - "isolation": one of "worktree" | "shared". Use "shared" ONLY for pure read/compute
-                  subtasks that write NO files. Any subtask that creates or edits a file must use
-                  "worktree".
+                - "isolation": one of "worktree" | "shared". This is an ADVISORY hint about whether a
+                  subtask primarily reads from shared context vs. owns its workspace — it is NOT a
+                  sandbox: all subtasks share one worktree at runtime. Use "shared" for subtasks that
+                  read/research from shared context, "worktree" for the primary file producers. EITHER
+                  way, every subtask that writes a file MUST declare a unique output filename in
+                  "scope" so collision detection can schedule overlapping writers serially.
                 - "depends_on": array of 1-based indices of other subtasks in THIS array that must
                   complete first (empty if none).
 

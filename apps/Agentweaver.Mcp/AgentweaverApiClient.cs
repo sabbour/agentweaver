@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Mcp;
 
@@ -16,6 +17,13 @@ public sealed class AgentweaverApiClient
 {
     private readonly HttpClient _http;
     private readonly McpConfig _config;
+    // Injected when registered as scoped/singleton-with-accessor.
+    // When present, the caller's own API key is forwarded to the backend so the
+    // backend sees the real caller identity instead of the shared service identity.
+    // GitHub OAuth callers have no per-user API key, so they fall back to the
+    // shared AGENTWEAVER_API_KEY (limitation: all OAuth-authenticated calls reach
+    // the backend as the service identity).
+    private readonly IHttpContextAccessor? _httpContextAccessor;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -24,19 +32,38 @@ public sealed class AgentweaverApiClient
         WriteIndented = true
     };
 
-    public AgentweaverApiClient(HttpClient http, McpConfig config)
+    public AgentweaverApiClient(HttpClient http, McpConfig config, IHttpContextAccessor? httpContextAccessor = null)
     {
         _http = http;
         _config = config;
+        _httpContextAccessor = httpContextAccessor;
         _http.BaseAddress = new Uri(config.ApiUrl.TrimEnd('/') + "/");
         _http.Timeout = Timeout.InfiniteTimeSpan;
-        _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", config.ApiKey);
     }
+
+    /// <summary>
+    /// Returns the API key to use for this request.
+    /// When the inbound caller authenticated with an Agentweaver API key
+    /// (<c>mcp.api_key</c> is present in the HTTP context), that key is
+    /// propagated so the backend receives the real caller identity.
+    /// For GitHub OAuth callers the shared service key is used.
+    /// </summary>
+    private string GetEffectiveApiKey()
+    {
+        var ctx = _httpContextAccessor?.HttpContext;
+        if (ctx?.Items.TryGetValue("mcp.api_key", out var callerKey) == true && callerKey is string key)
+            return key;
+        return _config.ApiKey;
+    }
+
+    private AuthenticationHeaderValue GetAuthHeader() =>
+        new("Bearer", GetEffectiveApiKey());
 
     public async Task<T> GetAsync<T>(string path, CancellationToken ct = default)
     {
-        using var response = await _http.GetAsync(path.TrimStart('/'), ct);
+        using var message = new HttpRequestMessage(HttpMethod.Get, path.TrimStart('/'));
+        message.Headers.Authorization = GetAuthHeader();
+        using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, ct);
     }
 
@@ -46,6 +73,7 @@ public sealed class AgentweaverApiClient
         {
             Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
         };
+        message.Headers.Authorization = GetAuthHeader();
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, ct);
     }
@@ -56,6 +84,7 @@ public sealed class AgentweaverApiClient
         {
             Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
         };
+        message.Headers.Authorization = GetAuthHeader();
         using var response = await _http.SendAsync(message, ct);
         await EnsureSuccessAsync(response, ct);
     }
@@ -66,6 +95,7 @@ public sealed class AgentweaverApiClient
         {
             Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
         };
+        message.Headers.Authorization = GetAuthHeader();
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, ct);
     }
@@ -76,6 +106,7 @@ public sealed class AgentweaverApiClient
         {
             Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
         };
+        message.Headers.Authorization = GetAuthHeader();
         using var response = await _http.SendAsync(message, ct);
         await EnsureSuccessAsync(response, ct);
     }
@@ -86,20 +117,23 @@ public sealed class AgentweaverApiClient
         {
             Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
         };
+        message.Headers.Authorization = GetAuthHeader();
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, ct);
     }
 
     public async Task DeleteAsync(string path, CancellationToken ct = default)
     {
-        using var response = await _http.DeleteAsync(path.TrimStart('/'), ct);
+        using var message = new HttpRequestMessage(HttpMethod.Delete, path.TrimStart('/'));
+        message.Headers.Authorization = GetAuthHeader();
+        using var response = await _http.SendAsync(message, ct);
         await EnsureSuccessAsync(response, ct);
     }
 
     public IAsyncEnumerable<SseEvent> StreamSseAsync(string path, CancellationToken ct = default)
     {
         var fullUrl = _config.ApiUrl.TrimEnd('/') + "/" + path.TrimStart('/');
-        var sseClient = new SseClient(_http, _config.ApiKey);
+        var sseClient = new SseClient(_http, GetEffectiveApiKey());
         return sseClient.StreamAsync(fullUrl, ct);
     }
 

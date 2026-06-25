@@ -107,12 +107,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// </summary>
     internal static bool DoSubtasksConflict(Subtask subtask1, Subtask subtask2)
     {
-        // Subtasks with "shared" isolation never touch the worktree exclusively — they read/research
-        // without writing files. Two shared-isolation subtasks can always run in parallel safely.
-        // A shared subtask also cannot conflict with a worktree subtask for the same reason.
-        if (subtask1.IsolationStrategy == "shared" || subtask2.IsolationStrategy == "shared")
-            return false;
-
+        // NOTE: IsolationStrategy ("shared" vs "worktree") has NO runtime enforcement — all child
+        // runs share a single worktree (see RunOrchestrator.StartChildRunAsync). A subtask labeled
+        // "shared" can therefore still write files and clobber a sibling. We deliberately do NOT
+        // short-circuit on isolation here; every pair flows through token-based filename matching so
+        // mislabeled writers are still scheduled serially when their declared outputs overlap.
         var files1 = AssemblyPlanning.ExtractFileTokens(subtask1.Scope);
         var files2 = AssemblyPlanning.ExtractFileTokens(subtask2.Scope);
 

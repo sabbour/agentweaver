@@ -11,6 +11,15 @@ public sealed class Subtask
     public required string AssignedAgent { get; set; }
     public required string SelectedModelId { get; set; }
     public required string Phase { get; set; }            // none | planning | execution | validation
+    /// <summary>
+    /// Advisory isolation hint: "worktree" | "shared". This has NO runtime enforcement — all child
+    /// runs execute against a single shared worktree (see
+    /// <c>Agentweaver.AgentRuntime.RunOrchestrator.StartChildRunAsync</c>). "shared" does NOT mean the
+    /// subtask is sandboxed or that it won't write files; it merely signals the subtask reads from
+    /// shared context rather than owning its workspace. Because there is no isolation in practice,
+    /// every subtask (regardless of this value) must declare its output filenames in <see cref="Scope"/>
+    /// so <c>CoordinatorAssemblyService.DoSubtasksConflict</c> can serialize colliding writers.
+    /// </summary>
     public required string IsolationStrategy { get; set; } // worktree | shared
     public required string Status { get; set; }            // pending | dispatched | running | rai_flagged | assemble_ready | completed | failed
     public string? ChildRunId { get; set; }

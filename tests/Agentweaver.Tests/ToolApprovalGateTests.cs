@@ -147,4 +147,95 @@ public sealed class ToolApprovalGateTests
         var result = await pendingTask.WaitAsync(TimeSpan.FromSeconds(5));
         result.Should().BeFalse();
     }
+
+    // ── Sibling propagation (RegisterParentRun, commit cb7fbbf) ───────────────────
+
+    [Fact]
+    public async Task ToolScope_GrantInChildA_PropagatesToSiblingChildB()
+    {
+        var gate = CreateGate();
+        const string parent = "coord-1";
+        const string childA = "child-A";
+        const string childB = "child-B";
+
+        gate.RegisterParentRun(childA, parent);
+        gate.RegisterParentRun(childB, parent);
+
+        // Grant Tool scope in child A.
+        var task = Register(gate, childA, "req-1", url: "https://example.com");
+        await gate.GrantAsync(childA, "req-1", ApprovalScope.Tool);
+        (await task).Should().BeTrue();
+
+        // Sibling child B sees the policy for the same tool (any URL).
+        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolScope_PropagatesAcrossUrls_RunScope_DoesNot()
+    {
+        var gate = CreateGate();
+        const string parent = "coord-2";
+        const string childA = "child-A2";
+        const string childB = "child-B2";
+
+        gate.RegisterParentRun(childA, parent);
+        gate.RegisterParentRun(childB, parent);
+
+        // Run scope is URL-specific: grant for example.com in child A.
+        var runTask = Register(gate, childA, "req-run", toolName: "web_fetch", url: "https://example.com");
+        await gate.GrantAsync(childA, "req-run", ApprovalScope.Run);
+        (await runTask).Should().BeTrue();
+
+        // Run-scoped grant does NOT propagate to a sibling for a DIFFERENT URL.
+        gate.IsAutoApproved(childB, "web_fetch", "https://other.com").Should().BeFalse();
+        // It does cover the sibling for the SAME URL (stored under the parent).
+        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();
+
+        // Tool scope is URL-agnostic: grant for a different tool in child A.
+        var toolTask = Register(gate, childA, "req-tool", toolName: "shell", url: "https://anything.com");
+        await gate.GrantAsync(childA, "req-tool", ApprovalScope.Tool);
+        (await toolTask).Should().BeTrue();
+
+        // Tool-scoped grant propagates to the sibling for ANY URL of that tool.
+        gate.IsAutoApproved(childB, "shell", "https://different.com").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Clear_RemovesParentEntry_SiblingNoLongerSeesPolicy()
+    {
+        var gate = CreateGate();
+        const string parent = "coord-3";
+        const string childA = "child-A3";
+        const string childB = "child-B3";
+
+        gate.RegisterParentRun(childA, parent);
+        gate.RegisterParentRun(childB, parent);
+
+        var task = Register(gate, childA, "req-1", url: "https://example.com");
+        await gate.GrantAsync(childA, "req-1", ApprovalScope.Tool);
+        (await task).Should().BeTrue();
+
+        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();
+
+        // Clearing the parent run removes the propagated policy.
+        gate.Clear(parent);
+
+        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task NoRegistration_GrantInChildA_DoesNotPropagateToChildB()
+    {
+        var gate = CreateGate();
+        const string childA = "child-A4";
+        const string childB = "child-B4";
+
+        // Note: RegisterParentRun is NOT called.
+        var task = Register(gate, childA, "req-1", url: "https://example.com");
+        await gate.GrantAsync(childA, "req-1", ApprovalScope.Tool);
+        (await task).Should().BeTrue();
+
+        // Without a registered parent relationship, child B sees nothing.
+        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeFalse();
+    }
 }

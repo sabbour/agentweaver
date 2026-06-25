@@ -928,9 +928,9 @@ List the predefined Agentweaver blueprints.
 
 ---
 
-### `generate_blueprint`
+### `blueprint_generate`
 
-Generate a new blueprint from a plain-language description using the model.
+Generate a new blueprint from a natural language description of the team and goals.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

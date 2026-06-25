@@ -43,6 +43,13 @@ public sealed class McpBearerTokenMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
+        // Health probe — no authentication required.
+        if (context.Request.Path.StartsWithSegments("/healthz"))
+        {
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var header = context.Request.Headers.Authorization.ToString();
 
         if (string.IsNullOrEmpty(header) ||
@@ -55,9 +62,11 @@ public sealed class McpBearerTokenMiddleware
         var token = header[SchemePrefix.Length..].Trim();
 
         // Fast path: Agentweaver API key (in-memory lookup, O(1)).
+        // Store the raw token so AgentweaverApiClient can propagate it to the backend.
         if (_registry.TryResolveUser(token, out var apiUser))
         {
             context.Items[UserItemKey] = apiUser;
+            context.Items["mcp.api_key"] = token;
             await _next(context).ConfigureAwait(false);
             return;
         }

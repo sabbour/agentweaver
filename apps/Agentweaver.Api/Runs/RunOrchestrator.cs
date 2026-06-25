@@ -4,6 +4,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Domain;
+using System.Text;
 
 namespace Agentweaver.Api.Runs;
 
@@ -358,12 +359,35 @@ public sealed class RunOrchestrator
         // stack duplicated the charter and carried coordinator-style instructions to write artifacts
         // into session-state/.copilot paths that don't exist inside a child's worktree, which the
         // sandbox correctly rejected and stalled the child (Defect C).
+        //
+        // EXCEPTION: active architectural/scope DECISIONS are injected (decisions only — never the
+        // core_context/learnings/session layers). Decisions are non-negotiable team boundaries
+        // (highest-value context) and do not duplicate the charter or carry artifact-write
+        // instructions, so they are safe for child workers and ensure scope constraints reach the
+        // agents doing the actual work.
         if (!string.IsNullOrEmpty(run.ParentRunId))
         {
             var childCharter = !string.IsNullOrEmpty(run.AgentCharter)
                 ? run.AgentCharter
                 : ResolveAgentCharter(run);
-            return (run.Task, AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter)));
+
+            string? childDecisions = null;
+            if (run.ProjectId.HasValue)
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
+                    childDecisions = await memoryCompiler.CompileDecisionsAsync(
+                        run.ProjectId.Value.ToString(), ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Decision compilation failed for child run {RunId} — proceeding without", run.Id);
+                }
+            }
+
+            return (run.Task, AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter, childDecisions)));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)
@@ -421,13 +445,15 @@ public sealed class RunOrchestrator
 
     /// <summary>
     /// Builds the LEAN system prompt for a coordinator CHILD run: the agent <paramref name="charter"/>
-    /// EXACTLY ONCE (when present) followed by an explicit working-directory sandbox boundary. A child
-    /// ALWAYS receives the boundary even when it has no charter — this is never null. The boundary is
-    /// what prevents the Defect C/#2/#5 stall where a child tried to write a findings brief to a
-    /// session-state path, was sandbox-rejected as outside its worktree, and hung. The coordinator
-    /// memory/decision stack is deliberately NOT included here.
+    /// EXACTLY ONCE (when present), followed by any active architectural/scope <paramref name="decisions"/>
+    /// (team-wide boundaries — decisions only, never the full memory stack), followed by an explicit
+    /// working-directory sandbox boundary. A child ALWAYS receives the boundary even when it has no
+    /// charter — this is never null. The boundary is what prevents the Defect C/#2/#5 stall where a
+    /// child tried to write a findings brief to a session-state path, was sandbox-rejected as outside
+    /// its worktree, and hung. The coordinator core_context/learnings/session stack is deliberately
+    /// NOT included here — only the high-value decisions layer.
     /// </summary>
-    internal static string ComposeChildSystemPrompt(string? charter)
+    internal static string ComposeChildSystemPrompt(string? charter, string? decisions = null)
     {
         const string boundary =
             "## Working-directory sandbox boundary\n" +
@@ -448,9 +474,13 @@ public sealed class RunOrchestrator
             "If a task requires you to produce a markdown document, report, or other artifact, write " +
             "it as a named file in your working directory.";
 
-        return string.IsNullOrEmpty(charter)
-            ? $"{boundary}\n\n---\n\n{deliverableCapture}"
-            : $"{charter}\n\n---\n\n{boundary}\n\n---\n\n{deliverableCapture}";
+        var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(charter))
+            sb.Append(charter).Append("\n\n---\n\n");
+        if (!string.IsNullOrEmpty(decisions))
+            sb.Append(decisions.TrimEnd()).Append("\n\n---\n\n");
+        sb.Append(boundary).Append("\n\n---\n\n").Append(deliverableCapture);
+        return sb.ToString();
     }
 
     /// <summary>
