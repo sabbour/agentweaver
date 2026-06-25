@@ -121,7 +121,7 @@ export function DecomposePreviewDialog({
                     <div key={i} className={styles.item}>
                       <div className={styles.itemHeader}>
                         <Text className={styles.itemTitle}>{item.title}</Text>
-                        {item.alreadyExists && (
+                        {item.already_exists && (
                           <Badge appearance="tint" color="informative" size="small">
                             Already exists
                           </Badge>

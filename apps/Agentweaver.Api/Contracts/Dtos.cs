@@ -1093,6 +1093,7 @@ public sealed record RunCardDto
     [JsonPropertyName("started_at")] public required DateTimeOffset StartedAt { get; init; }
     [JsonPropertyName("ended_at")] public DateTimeOffset? EndedAt { get; init; }
     [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
+    [JsonPropertyName("has_pending_approval")] public bool HasPendingApproval { get; init; }
 }
 
 /// <summary>A board column with its cards (TaskCardDto for intake, RunCardDto for workflow).</summary>

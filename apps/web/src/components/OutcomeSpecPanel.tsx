@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -183,6 +183,9 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   const [answers, setAnswers] = useState<string[]>([]);
   const [extraFeedback, setExtraFeedback] = useState('');
   const [revising, setRevising] = useState(false);
+  // Snapshot of spec content at the moment a revise request is submitted. Used to detect
+  // when the coordinator has finished re-drafting (content changes while revising=true).
+  const revisingSnapshotRef = useRef<string | null>(null);
 
   // Decompose / "Break into tasks" state
   const [decomposePreviewOpen, setDecomposePreviewOpen] = useState(false);
@@ -292,6 +295,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
       const updated = await apiClient.reviseOutcomeSpec(runId, composed);
       if (updated) setSpecFromApi(updated);
       else await fetchSpec();
+      revisingSnapshotRef.current = JSON.stringify({ goal: spec?.goal, desiredOutcome: spec?.desiredOutcome });
       setRevising(true);
       setReviseOpen(false);
       setAnswers([]);
@@ -320,11 +324,30 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     return [qa, extraFeedback.trim()].filter((s) => s.length > 0).join('\n\n');
   }, [clarifying, answers, extraFeedback]);
 
-  // Once a freshly re-drafted spec returns to awaiting_confirmation, clear the
-  // "incorporating your changes" state so the panel reflects the new spec.
+  // Clear the revising spinner when the spec content changes — this fires when the coordinator
+  // finishes re-drafting, even when the status stays `awaiting_confirmation` throughout
+  // (i.e. the backend never transitions through `drafting`). The snapshot was captured at the
+  // moment the revise request was sent, so any content change signals a fresh draft.
+  const specContentKey = JSON.stringify({ goal: spec?.goal, desiredOutcome: spec?.desiredOutcome });
   useEffect(() => {
-    if (status === 'awaiting_confirmation') setRevising(false);
-  }, [status]);
+    if (!revising || revisingSnapshotRef.current === null) return;
+    if (specContentKey !== revisingSnapshotRef.current) {
+      setRevising(false);
+      revisingSnapshotRef.current = null;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revising, specContentKey]);
+
+  // 30-second safety-net: clear the spinner even if the content hasn't changed (e.g. the
+  // coordinator re-drafted an identical spec, or the SSE stream didn't deliver new events).
+  useEffect(() => {
+    if (!revising) return;
+    const timer = setTimeout(() => {
+      setRevising(false);
+      revisingSnapshotRef.current = null;
+    }, 30_000);
+    return () => clearTimeout(timer);
+  }, [revising]);
 
   // Open the revise dialog with one empty answer slot per clarifying question.
   // Answering the questions IS the revise feedback the coordinator re-drafts from.
@@ -343,9 +366,9 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     setDecomposePreviewOpen(true);
     try {
       const result = await apiClient.decomposeSpec(projectId, null, false);
-      setDecomposeItems(result.proposedItems);
-      setDecomposeWasCapped(result.wasCapped);
-      setDecomposeTotal(result.totalFound);
+      setDecomposeItems(result.proposed_items);
+      setDecomposeWasCapped(result.was_capped);
+      setDecomposeTotal(result.total_found);
     } catch (err) {
       setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
@@ -359,9 +382,9 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     setDecomposeError(null);
     try {
       const result = await apiClient.decomposeSpec(projectId, null, true);
-      setDecomposeItems(result.proposedItems);
-      setDecomposeWasCapped(result.wasCapped);
-      setDecomposeTotal(result.totalFound);
+      setDecomposeItems(result.proposed_items);
+      setDecomposeWasCapped(result.was_capped);
+      setDecomposeTotal(result.total_found);
       setDecomposePreviewOpen(false);
       setDecomposeSuccess(true);
     } catch (err) {

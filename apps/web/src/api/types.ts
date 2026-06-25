@@ -763,6 +763,7 @@ export interface RunCardDto {
   started_at: string;
   ended_at?: string | null;
   archived_at?: string | null;
+  has_pending_approval?: boolean;
 }
 
 export type BoardCardDto = TaskCardDto | RunCardDto;
@@ -1133,14 +1134,24 @@ export interface WorkspaceFileNode {
 export interface ProposedBacklogItem {
   title: string;
   description?: string;
-  alreadyExists: boolean;
+  already_exists: boolean;
 }
 
 // POST /api/projects/{id}/backlog/decompose response.
 // When confirm=false: dry-run preview (no tasks created).
-// When confirm=true:  tasks are created; proposedItems reflects what was written.
+// When confirm=true:  tasks are created; proposed_items reflects what was written.
 export interface DecomposeResponse {
-  proposedItems: ProposedBacklogItem[];
-  wasCapped: boolean;
-  totalFound: number;
+  proposed_items: ProposedBacklogItem[];
+  was_capped: boolean;
+  total_found: number;
+}
+
+// ── Feature 017 — Sandbox preview port-forward ───────────────────────────────
+// POST /api/runs/{runId}/sandbox/port-forward
+export interface PortForwardSessionDto {
+  session_id: string;
+  local_port: number;
+  target_port: number;
+  pod_name: string;
+  started_at: string;
 }

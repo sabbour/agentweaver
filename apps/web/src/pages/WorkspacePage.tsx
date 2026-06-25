@@ -172,9 +172,9 @@ export function WorkspacePage() {
     setDecomposePreviewOpen(true);
     try {
       const result = await apiClient.decomposeSpec(projectId, selectedPath, false);
-      setDecomposeItems(result.proposedItems);
-      setDecomposeWasCapped(result.wasCapped);
-      setDecomposeTotal(result.totalFound);
+      setDecomposeItems(result.proposed_items);
+      setDecomposeWasCapped(result.was_capped);
+      setDecomposeTotal(result.total_found);
     } catch (err) {
       setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
@@ -188,9 +188,9 @@ export function WorkspacePage() {
     setDecomposeError(null);
     try {
       const result = await apiClient.decomposeSpec(projectId, selectedPath, true);
-      setDecomposeItems(result.proposedItems);
-      setDecomposeWasCapped(result.wasCapped);
-      setDecomposeTotal(result.totalFound);
+      setDecomposeItems(result.proposed_items);
+      setDecomposeWasCapped(result.was_capped);
+      setDecomposeTotal(result.total_found);
       setDecomposePreviewOpen(false);
     } catch (err) {
       setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));

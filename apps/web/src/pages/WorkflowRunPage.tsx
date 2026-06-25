@@ -8,6 +8,8 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  Field,
+  Input,
   Spinner,
   Text,
   Title2,
@@ -20,6 +22,7 @@ import {
   DismissRegular,
   MergeRegular,
   NotebookRegular,
+  OpenRegular,
   PersonRegular,
   ShieldRegular,
   ShieldKeyholeRegular,
@@ -32,7 +35,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent, type EventType } from '../api/sse';
 import { apiClient } from '../api/apiClient';
-import type { TeamDto, GraphDescriptor } from '../api/types';
+import type { TeamDto, GraphDescriptor, PortForwardSessionDto } from '../api/types';
 import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
@@ -259,6 +262,14 @@ export function WorkflowRunPage() {
   const [autoApprove,    setAutoApprove]    = useState(false);
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
 
+  // Sandbox preview port-forward state.
+  const [sandboxBackend,      setSandboxBackend]      = useState<string | undefined>(undefined);
+  const [previewDialogOpen,   setPreviewDialogOpen]   = useState(false);
+  const [previewTargetPort,   setPreviewTargetPort]   = useState('3000');
+  const [previewSession,      setPreviewSession]      = useState<PortForwardSessionDto | undefined>(undefined);
+  const [previewBusy,         setPreviewBusy]         = useState(false);
+  const [previewError,        setPreviewError]        = useState<string | undefined>(undefined);
+
   // A run is a coordinator CHILD when GET /api/runs/{id} returns a non-null parent_run_id.
   const isChild = parentRunId !== undefined && parentRunId !== null && parentRunId !== '';
 
@@ -385,6 +396,17 @@ export function WorkflowRunPage() {
     return undefined;
   }, [events]);
 
+  // Derive sandbox backend from the sandbox.selected event so the Preview button can be
+  // shown only when the Kubernetes backend is active.
+  useEffect(() => {
+    for (const evt of events) {
+      if (evt.type === 'sandbox.selected') {
+        const backend = evt.payload['backend'] ?? evt.payload['Backend'];
+        if (backend) { setSandboxBackend(String(backend)); break; }
+      }
+    }
+  }, [events]);
+
   // Bubbled questions (agent.question_asked / agent.question_answered). Pair by requestId so an
   // unanswered question renders a prominent answer box and an answered one collapses to a muted
   // state. Defensive payload key reads (requestId|request_id, etc.) tolerate backend casing.
@@ -427,8 +449,7 @@ export function WorkflowRunPage() {
 
   // Pending tool-approval detection: a `tool.approval_required` whose request has not yet been
   // resolved. Resolution is tracked the same way the timeline reducer settles approvals — a
-  // `tool.result`/`tool.error` arriving for the matching callId (callId === requestId). We also
-  // honour explicit approval grant/deny events if the backend ever emits them.
+  // `tool.result`/`tool.error` arriving for the matching callId (callId === requestId).
   const hasPendingApproval = useMemo<boolean>(() => {
     const requested = new Set<string>();
     const resolved = new Set<string>();
@@ -440,9 +461,6 @@ export function WorkflowRunPage() {
       } else if (evt.type === 'tool.result' || evt.type === 'tool.error') {
         const callId = String(p['callId'] ?? p['call_id'] ?? '');
         if (callId) resolved.add(callId);
-      } else if (evt.type === ('tool.approval_granted' as EventType) || evt.type === ('tool.approval_denied' as EventType)) {
-        const requestId = String(p['request_id'] ?? p['requestId'] ?? '');
-        if (requestId) resolved.add(requestId);
       }
     }
     for (const id of requested) {
@@ -731,6 +749,32 @@ export function WorkflowRunPage() {
       .finally(() => setAutoApproveBusy(false));
   };
 
+  const startPreview = () => {
+    const port = parseInt(previewTargetPort, 10);
+    if (isNaN(port) || port <= 0 || port > 65535) {
+      setPreviewError('Enter a valid port number (1–65535).');
+      return;
+    }
+    if (!executionId) return;
+    setPreviewBusy(true);
+    setPreviewError(undefined);
+    apiClient.startPortForward(executionId, port)
+      .then((session) => setPreviewSession(session))
+      .catch((err) => setPreviewError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setPreviewBusy(false));
+  };
+
+  const stopPreview = () => {
+    if (!executionId || !previewSession) return;
+    setPreviewBusy(true);
+    apiClient.stopPortForward(executionId, previewSession.session_id)
+      .then(() => setPreviewSession(undefined))
+      .catch(() => { /* ignore stop errors */ })
+      .finally(() => setPreviewBusy(false));
+  };
+
+  const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
+
   return (
     <div className={styles.root}>
       {/* Breadcrumb */}
@@ -756,6 +800,16 @@ export function WorkflowRunPage() {
             onChange={(checked) => toggleAutoApprove(checked)}
             labelPosition="before"
           />
+        )}
+        {isKubernetesSandbox && runActive && (
+          <Button
+            appearance="secondary"
+            size="small"
+            icon={<OpenRegular />}
+            onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}
+          >
+            Preview
+          </Button>
         )}
       </div>
 
@@ -858,6 +912,81 @@ export function WorkflowRunPage() {
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setModalExecId(undefined)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Sandbox preview port-forward dialog */}
+      <Dialog open={previewDialogOpen} onOpenChange={(_, d) => { if (!d.open) setPreviewDialogOpen(false); }}>
+        <DialogSurface style={{ maxWidth: '480px' }}>
+          <DialogBody>
+            <DialogTitle
+              action={
+                <Button
+                  appearance="subtle"
+                  aria-label="Close"
+                  icon={<DismissRegular />}
+                  onClick={() => setPreviewDialogOpen(false)}
+                />
+              }
+            >
+              Sandbox Preview
+            </DialogTitle>
+            <DialogContent style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM }}>
+              {!previewSession ? (
+                <>
+                  <Text>
+                    Forward a port from the sandbox pod to your local machine.
+                    Enter the port your app is listening on inside the sandbox.
+                  </Text>
+                  <Field label="Target port (inside sandbox)" validationMessage={previewError} validationState={previewError ? 'error' : 'none'}>
+                    <Input
+                      type="number"
+                      value={previewTargetPort}
+                      onChange={(_, d) => setPreviewTargetPort(d.value)}
+                      disabled={previewBusy}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Text>
+                    Port-forward active. Connect to{' '}
+                    <strong>localhost:{previewSession.local_port}</strong> to reach port{' '}
+                    {previewSession.target_port} on pod <code>{previewSession.pod_name}</code>.
+                  </Text>
+                  <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                    Session ID: {previewSession.session_id}
+                  </Text>
+                </>
+              )}
+            </DialogContent>
+            <DialogActions>
+              {!previewSession ? (
+                <>
+                  <Button
+                    appearance="primary"
+                    onClick={startPreview}
+                    disabled={previewBusy}
+                    icon={previewBusy ? <Spinner size="extra-tiny" /> : undefined}
+                  >
+                    Start
+                  </Button>
+                  <Button appearance="secondary" onClick={() => setPreviewDialogOpen(false)}>Cancel</Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    appearance="secondary"
+                    onClick={stopPreview}
+                    disabled={previewBusy}
+                  >
+                    Stop
+                  </Button>
+                  <Button appearance="secondary" onClick={() => setPreviewDialogOpen(false)}>Close</Button>
+                </>
+              )}
             </DialogActions>
           </DialogBody>
         </DialogSurface>

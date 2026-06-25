@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Badge, Button, Caption1, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { ArchiveRegular } from '@fluentui/react-icons';
+import { ArchiveRegular, ShieldExclamationRegular } from '@fluentui/react-icons';
 import type { RunCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
@@ -135,10 +135,11 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
       <div className={styles.header}>
         <Text className={styles.task}>{card.task || '(coordinator run)'}</Text>
         <div className={styles.headerActions}>
-          {/* TODO(tool-approval): show a warning Badge with a shield icon here when the run
-              has a pending tool approval. The backend RunCardDto (apps/web/src/api/types.ts)
-              does not currently expose a `pending_approval_count` / `has_pending_approval`
-              field, so the board card cannot surface this signal yet. */}
+          {card.has_pending_approval && (
+            <Badge appearance="tint" color="warning" icon={<ShieldExclamationRegular />} size="small">
+              Approval needed
+            </Badge>
+          )}
           <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
           <Button
             appearance="subtle"

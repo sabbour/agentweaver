@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -79,6 +80,7 @@ public sealed class BoardProjectionService
 
             var runIds = runs.Select(r => r.Id.ToString()).ToList();
             var planStages = await GetWorkPlanStagesAsync(runIds, ct).ConfigureAwait(false);
+            var pendingApprovalRunIds = await GetRunIdsWithPendingApprovalAsync(runIds, ct).ConfigureAwait(false);
 
             // Bucket each top-level run into the column its persisted state currently maps to.
             var byStage = new Dictionary<string, List<RunCardDto>>(StringComparer.Ordinal);
@@ -113,6 +115,7 @@ public sealed class BoardProjectionService
                     StartedAt = run.StartedAt,
                     EndedAt = run.EndedAt,
                     ArchivedAt = run.ArchivedAt,
+                    HasPendingApproval = pendingApprovalRunIds.Contains(run.Id.ToString()),
                 });
             }
 
@@ -367,6 +370,70 @@ public sealed class BoardProjectionService
     private enum Bucket { Active, Queued, Blocked, Done }
 
     private readonly record struct SubtaskRow(string CoordinatorRunId, string AssignedAgent, string Status, string Title);
+
+    /// <summary>
+    /// Returns the set of run IDs (from <paramref name="runIds"/>) that have at least one
+    /// <c>tool.approval_required</c> event whose requestId has no matching <c>tool.result</c> or
+    /// <c>tool.error</c> callId — i.e. the approval is still pending. Uses the same resolution
+    /// logic as the frontend <c>hasPendingApproval</c> memo in <c>WorkflowRunPage.tsx</c>.
+    /// </summary>
+    private async Task<HashSet<string>> GetRunIdsWithPendingApprovalAsync(
+        IReadOnlyCollection<string> runIds, CancellationToken ct)
+    {
+        if (runIds.Count == 0) return [];
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var approvalEvents = await db.RunEvents.AsNoTracking()
+            .Where(e => runIds.Contains(e.RunId) && e.EventType == EventTypes.ToolApprovalRequired)
+            .Select(e => new { e.RunId, e.PayloadJson })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        if (approvalEvents.Count == 0) return [];
+
+        var resolvedEvents = await db.RunEvents.AsNoTracking()
+            .Where(e => runIds.Contains(e.RunId) &&
+                        (e.EventType == EventTypes.ToolResult || e.EventType == EventTypes.ToolError))
+            .Select(e => new { e.RunId, e.PayloadJson })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        // Build per-run resolved callId sets.
+        var resolvedByRun = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var evt in resolvedEvents)
+        {
+            if (!resolvedByRun.TryGetValue(evt.RunId, out var set))
+                resolvedByRun[evt.RunId] = set = new HashSet<string>(StringComparer.Ordinal);
+            var callId = ExtractStringField(evt.PayloadJson, "callId")
+                ?? ExtractStringField(evt.PayloadJson, "call_id");
+            if (callId is not null) set.Add(callId);
+        }
+
+        var pending = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var evt in approvalEvents)
+        {
+            var requestId = ExtractStringField(evt.PayloadJson, "requestId")
+                ?? ExtractStringField(evt.PayloadJson, "request_id");
+            if (requestId is null) continue;
+            if (!resolvedByRun.TryGetValue(evt.RunId, out var resolved) || !resolved.Contains(requestId))
+                pending.Add(evt.RunId);
+        }
+        return pending;
+    }
+
+    private static string? ExtractStringField(string json, string field)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty(field, out var el) && el.ValueKind == JsonValueKind.String
+                ? el.GetString()
+                : null;
+        }
+        catch { return null; }
+    }
 
     private sealed class AgentQueueAccumulator
     {
