@@ -297,6 +297,7 @@ function subtaskStatusHint(status: string): string {
 const ASSEMBLY_EVENT_PHASE: Record<string, OrchPhase> = {
   'coordinator.assembly_started': 'assembling',
   'coordinator.assembly_review_requested': 'in_review',
+  'coordinator.assembly_changes_requested': 'dispatching', // re-dispatch resets the phase
   'coordinator.assembly_completed': 'complete',
   'coordinator.assembly_failed': 'failed',
   'coordinator.assembly_blocked': 'blocked',
