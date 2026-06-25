@@ -55,6 +55,7 @@ public sealed record WorkflowNodeDto
     [JsonPropertyName("gate_kind")] public string? GateKind { get; init; }
     [JsonPropertyName("agent")] public string? Agent { get; init; }
     [JsonPropertyName("prompt")] public string? Prompt { get; init; }
+    [JsonPropertyName("charter")] public string? Charter { get; init; }
     [JsonPropertyName("target")] public string? Target { get; init; }
     [JsonPropertyName("steps")] public IReadOnlyList<string>? Steps { get; init; }
     [JsonPropertyName("branches")] public IReadOnlyList<string>? Branches { get; init; }
@@ -304,6 +305,7 @@ public static class WorkflowDtoMapper
                 GateKind = n.GateKind,
                 Agent = n.Agent,
                 Prompt = n.Prompt,
+                Charter = n.Charter,
                 Target = n.Target,
                 Steps = n.Steps.Count == 0 ? null : n.Steps,
                 Branches = n.Branches.Count == 0 ? null : n.Branches,

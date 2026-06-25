@@ -58,4 +58,49 @@ public sealed class BlueprintGenerationParserTests
         result.Blueprint.Roster.Should().Contain(new[] { "backend-engineer", "docs-writer" });
         result.Blueprint.SandboxProfile.Should().Be("restricted");
     }
+
+    [Fact]
+    public void Parse_BespokeRoles_AreExtracted()
+    {
+        var raw = """
+            {
+              "id": "travel-planner",
+              "name": "Travel Planner",
+              "description": "Plans trips.",
+              "roster": ["travel-researcher", "docs-writer"],
+              "bespoke_roles": [
+                { "id": "travel-researcher", "title": "Travel Researcher",
+                  "charter": "You research destinations. You weigh climate and logistics." }
+              ],
+              "workflows": ["default"],
+              "review_policy": "default",
+              "sandbox_profile": "default"
+            }
+            """;
+
+        var result = BlueprintGenerationParser.Parse(raw);
+        result.Succeeded.Should().BeTrue();
+        result.Blueprint!.BespokeRoles.Should().ContainSingle();
+        var bespoke = result.Blueprint.BespokeRoles[0];
+        bespoke.Id.Should().Be("travel-researcher");
+        bespoke.Title.Should().Be("Travel Researcher");
+        bespoke.Charter.Should().Contain("research destinations");
+    }
+
+    [Fact]
+    public void Parse_BespokeRoleMissingCharter_IsSkipped()
+    {
+        var raw = """
+            {
+              "id": "x", "name": "X", "description": "d",
+              "roster": ["a"],
+              "bespoke_roles": [ { "id": "a", "title": "A" } ],
+              "review_policy": "default", "sandbox_profile": "default"
+            }
+            """;
+
+        var result = BlueprintGenerationParser.Parse(raw);
+        result.Succeeded.Should().BeTrue();
+        result.Blueprint!.BespokeRoles.Should().BeEmpty();
+    }
 }

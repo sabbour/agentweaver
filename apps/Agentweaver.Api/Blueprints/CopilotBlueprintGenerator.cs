@@ -81,10 +81,13 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
               and schedule tracking (a work-monitor role). It does NOT need generic software-delivery
               or engineering roles.
             - Only pick software/engineering roles when the domain is ACTUALLY software development.
-            - You MUST choose the roster ONLY from the existing catalog roles listed here. Do not
-              invent, rename, or introduce any role not in this list. Use the exact role ids.
+            - PREFER catalog roles — they have pre-built charters and are immediately runnable. Use
+              catalog ids whenever adequate. If no catalog role fits a domain function, you MAY include
+              a bespoke role id (e.g. 'travel-researcher') in the roster AND add it to a new
+              `bespoke_roles` array. Bespoke roles are a last resort — only mint one when the catalog
+              has nothing close.
 
-            Available catalog roles (choose the roster from these ids only):
+            Available catalog roles (prefer these ids):
             {{rolesList}}
 
             WORKFLOW SELECTION — match on PROCESS FIT, never on name similarity:
@@ -113,7 +116,11 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
             - "name": string. A short human-readable name specific to the domain.
             - "description": string. One or two sentences describing the SPECIFIC operational process
               for this domain and which agents run it.
-            - "roster": array of role id strings (at least one, 3-6 is typical). Every id MUST be one of the catalog ids above.
+            - "roster": array of role id strings (at least one, 3-6 is typical). PREFER catalog ids;
+              any id NOT in the catalog MUST also appear in "bespoke_roles" below.
+            - "bespoke_roles": array of objects, each with "id" (string, kebab-case), "title" (string),
+              and "charter" (string, 2-4 sentences). Only include roles NOT in the catalog. Omit or use
+              [] if all roster roles are from the catalog.
             - "workflows": array of workflow id strings (only those whose process fits, or [] if none fit).
             - "review_policy": string. Use "default".
             - "sandbox_profile": string. One of: {{sandboxList}}.

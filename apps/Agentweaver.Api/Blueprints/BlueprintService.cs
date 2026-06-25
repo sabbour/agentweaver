@@ -124,6 +124,11 @@ public sealed class BlueprintService
         }
         else
         {
+            // Bespoke roles are minted by generation when no catalog role fits; their ids are valid
+            // roster entries that resolve to an inline charter rather than a catalog role.
+            var bespokeIds = new HashSet<string>(
+                blueprint.BespokeRoles.Select(b => b.Id), StringComparer.OrdinalIgnoreCase);
+
             foreach (var roleId in blueprint.Roster)
             {
                 if (string.IsNullOrWhiteSpace(roleId))
@@ -132,8 +137,26 @@ public sealed class BlueprintService
                     continue;
                 }
                 if (_catalog.HasRole(roleId)) continue;
-                errors.Add($"role '{roleId}' is not in the catalog. " +
-                           "Blueprints may roster only existing catalog roles.");
+                if (bespokeIds.Contains(roleId)) continue;
+                errors.Add($"role '{roleId}' is not in the catalog and has no bespoke definition. " +
+                           "Roster roles must be catalog roles or declared in 'bespoke_roles'.");
+            }
+
+            // Validate each bespoke role's shape and that it is actually rostered.
+            var rosterSet = new HashSet<string>(blueprint.Roster, StringComparer.OrdinalIgnoreCase);
+            foreach (var b in blueprint.BespokeRoles)
+            {
+                if (string.IsNullOrWhiteSpace(b.Id))
+                {
+                    errors.Add("a bespoke role is missing its 'id'.");
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(b.Charter))
+                    errors.Add($"bespoke role '{b.Id}' is missing its 'charter'.");
+                if (_catalog.HasRole(b.Id))
+                    errors.Add($"bespoke role '{b.Id}' collides with an existing catalog role id.");
+                if (!rosterSet.Contains(b.Id))
+                    errors.Add($"bespoke role '{b.Id}' is not referenced in the roster.");
             }
         }
 
@@ -186,8 +209,12 @@ public sealed class BlueprintService
             }
         }
 
+        var bespokeById = blueprint.BespokeRoles.Count == 0
+            ? null
+            : blueprint.BespokeRoles.ToDictionary(b => b.Id, b => b, StringComparer.OrdinalIgnoreCase);
+
         var (proposal, _) = await _casting
-            .ProposeManualCastAsync(projectId, blueprint.Roster, universeOverride: null, ct)
+            .ProposeManualCastAsync(projectId, blueprint.Roster, universeOverride: null, ct, bespokeById)
             .ConfigureAwait(false);
         await _casting
             .ConfirmProposalAsync(projectId, proposal.ProposalId, intent: "new", ct)

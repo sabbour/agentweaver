@@ -94,6 +94,7 @@ public static class WorkflowDefinitionLoader
                 GateKind = string.IsNullOrWhiteSpace(n.GateKind) ? null : n.GateKind,
                 Agent = n.Agent,
                 Prompt = n.Prompt,
+                Charter = string.IsNullOrWhiteSpace(n.Charter) ? null : n.Charter,
                 Target = n.Target,
                 Steps = n.Steps is null ? [] : [.. n.Steps],
                 Branches = n.Branches is null ? [] : [.. n.Branches],
@@ -273,6 +274,7 @@ internal sealed class NodeYamlDto
     public string? GateKind { get; set; }
     public string? Agent { get; set; }
     public string? Prompt { get; set; }
+    public string? Charter { get; set; }
     public string? Target { get; set; }
     public List<string>? Steps { get; set; }
     public List<string>? Branches { get; set; }

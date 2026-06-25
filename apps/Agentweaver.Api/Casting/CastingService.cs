@@ -208,7 +208,8 @@ public sealed class CastingService
         string projectId,
         IReadOnlyList<string> roleIds,
         string? universeOverride,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyDictionary<string, BespokeRole>? bespokeRoles = null)
     {
         var (project, owner) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
 
@@ -252,6 +253,32 @@ public sealed class CastingService
             var role = _catalog.LoadRole(roleId);
             if (role is null)
             {
+                // Not a catalog role — accept it only when the caller supplied a bespoke definition
+                // (an inline charter). The bespoke role becomes a custom cast member whose charter is
+                // written verbatim at confirm time, so no catalog template is required.
+                if (bespokeRoles is not null && bespokeRoles.TryGetValue(roleId, out var bespoke))
+                {
+                    var (bname, bIsNamed) = allocations[i];
+                    var bespokeRole = new Role(
+                        Id: bespoke.Id,
+                        Title: bespoke.Title,
+                        Summary: bespoke.Charter,
+                        DefaultModel: string.Empty,
+                        Capabilities: [],
+                        Responsibilities: [],
+                        Boundaries: []);
+                    var bespokeCharter = RenderBespokeCharter(bname, bespoke.Title, bespoke.Charter);
+
+                    proposedMembers.Add(new ProposedMember(
+                        ProposedName: bname,
+                        Role: bespokeRole,
+                        CharterMarkdown: bespokeCharter,
+                        IsNamed: bIsNamed,
+                        DefaultModel: string.Empty,
+                        Justification: $"Bespoke role minted by blueprint: {bespoke.Title}"));
+                    continue;
+                }
+
                 unknownRoleIds.Add(roleId);
                 continue;
             }
@@ -1450,6 +1477,13 @@ public sealed class CastingService
         var slug = memberName.Trim().ToLowerInvariant().Replace(' ', '-');
         return $".squad/agents/{slug}/charter.md";
     }
+
+    /// <summary>
+    /// Renders charter markdown for a bespoke (non-catalog) role from its inline charter text. The
+    /// allocated agent name heads the document followed by the authored persona/expertise paragraphs.
+    /// </summary>
+    private static string RenderBespokeCharter(string name, string title, string charter) =>
+        $"# {name} \u2014 {title}\n\n{charter.Trim()}\n";
 
     // -----------------------------------------------------------------------
     // Phase 5 — Git Sync

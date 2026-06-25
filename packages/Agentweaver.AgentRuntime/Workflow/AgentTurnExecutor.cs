@@ -32,6 +32,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
+    private readonly string? _agentNodeCharter;
 
     public AgentTurnExecutor(
         IWorkflowTurnAgent agent,
@@ -39,7 +40,8 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         Func<string, ChannelWriter<RunEvent>?> getRecordingWriter,
         ILogger<AgentTurnExecutor> logger,
         string? apiBaseUrl = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        string? agentNodeCharter = null)
         : base("agent-turn")
     {
         _agent = agent;
@@ -48,6 +50,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         _logger = logger;
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
+        _agentNodeCharter = string.IsNullOrWhiteSpace(agentNodeCharter) ? null : agentNodeCharter;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -61,12 +64,26 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
 
         try
         {
+            // When the workflow node declared a bespoke inline charter (a role with no catalog
+            // charter), prepend it to the run's system prompt so the agent adopts the authored
+            // persona. Skipped when the run already carries the same charter (e.g. the node used a
+            // catalog role whose charter was resolved upstream into SystemPromptContext).
+            var systemPromptContext = input.SystemPromptContext;
+            if (_agentNodeCharter is not null &&
+                (string.IsNullOrEmpty(systemPromptContext) ||
+                 !systemPromptContext.Contains(_agentNodeCharter, StringComparison.Ordinal)))
+            {
+                systemPromptContext = string.IsNullOrEmpty(systemPromptContext)
+                    ? _agentNodeCharter
+                    : _agentNodeCharter + "\n\n---\n\n" + systemPromptContext;
+            }
+
             await _agent.SetupAsync(
                 input.WorktreePath,
                 input.RepositoryPath,
                 input.RunId,
                 input.ModelId,
-                input.SystemPromptContext,
+                systemPromptContext,
                 writer,
                 input.ProjectId,
                 input.AgentName,

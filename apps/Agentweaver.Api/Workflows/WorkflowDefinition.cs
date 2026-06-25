@@ -103,6 +103,15 @@ public sealed record WorkflowNode
     /// <summary>The prompt text for a <see cref="WorkflowNodeType.Prompt"/> node.</summary>
     public string? Prompt { get; init; }
 
+    /// <summary>
+    /// Optional inline charter for a bespoke (non-catalog) agent role. Set ONLY when the node's
+    /// <see cref="Role"/> is a bespoke id that no catalog role covers; defines the agent's persona,
+    /// domain expertise, and approach (2-4 sentences). Null when the node uses a catalog role id, in
+    /// which case the catalog charter resolves automatically. Round-trips through the YAML `charter`
+    /// key and feeds the run's agent charter at execution time.
+    /// </summary>
+    public string? Charter { get; init; }
+
     /// <summary>For a <see cref="WorkflowNodeType.PeerReview"/> or <see cref="WorkflowNodeType.FanIn"/>
     /// node: the id of the node whose output is reviewed/joined.</summary>
     public string? Target { get; init; }

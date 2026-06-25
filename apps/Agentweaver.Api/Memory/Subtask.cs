@@ -17,6 +17,15 @@ public sealed class Subtask
     public string? LockedOutAgents { get; set; }
 
     /// <summary>
+    /// Optional bespoke charter authored inline by the coordinator's decomposition when no catalog
+    /// role adequately covers this subtask's function. When set, it flows to the dispatched child
+    /// <see cref="Agentweaver.Domain.Run.AgentCharter"/> and overrides file-based charter resolution,
+    /// letting the coordinator mint a domain-specific agent persona without a catalog role. Null when
+    /// the subtask maps to a catalog/roster role (the common case).
+    /// </summary>
+    public string? AgentCharter { get; set; }
+
+    /// <summary>
     /// Recovery guidance attached when a parked/failed subtask is RESUMED via steering
     /// (<see cref="Agentweaver.Api.Coordinator.CoordinatorSteeringService"/>). Carries the human's
     /// steering instruction plus the failure context so the re-dispatched worker re-does the work

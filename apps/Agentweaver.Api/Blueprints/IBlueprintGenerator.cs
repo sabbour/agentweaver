@@ -90,9 +90,33 @@ public static class BlueprintGenerationParser
                 StrArray("roster"),
                 StrArray("workflows") is { Count: > 0 } wfs ? wfs : [Str("workflow") ?? "default"],
                 Str("review_policy") ?? "default",
-                Str("sandbox_profile") ?? "default");
+                Str("sandbox_profile") ?? "default")
+            {
+                BespokeRoles = BespokeRoleArray("bespoke_roles"),
+            };
 
             return new BlueprintGenerationResult(blueprint, []);
+        }
+
+        IReadOnlyList<BespokeRole> BespokeRoleArray(string name)
+        {
+            if (!root.TryGetProperty(name, out var el) || el.ValueKind != JsonValueKind.Array) return [];
+            var list = new List<BespokeRole>();
+            foreach (var item in el.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                string? Prop(string p) =>
+                    item.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+                var id = Prop("id");
+                var title = Prop("title");
+                var charter = Prop("charter");
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(charter)) continue;
+                list.Add(new BespokeRole(
+                    id!.Trim(),
+                    string.IsNullOrWhiteSpace(title) ? id!.Trim() : title!.Trim(),
+                    charter!.Trim()));
+            }
+            return list;
         }
     }
 }

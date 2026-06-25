@@ -283,13 +283,20 @@ public sealed class RunWorkflowFactory
         // FileSystem checkpoint alongside the workflow state. Tests substitute a fake agent.
         var copilotAgent = _agentFactory.CreateWorkerAgent();
 
+        // Resolve an inline bespoke charter from the effective definition's agent node (if any), so a
+        // generated workflow that mints a domain-specific role with an inline `charter` runs the agent
+        // under that persona. Catalog-role nodes carry no charter and fall through to file resolution.
+        var agentNodeCharter = ResolveAgentNodeCharter(
+            effectiveDefinition ?? Workflows.BuiltInWorkflows.Default.Definition!);
+
         var agentTurnExecutor = new AgentTurnExecutor(
             copilotAgent,
             _worktreeOps,
             GetRecordingWriter,
             _loggerFactory.CreateLogger<AgentTurnExecutor>(),
             apiBaseUrl: _apiBaseUrl,
-            apiKey: _apiKey);
+            apiKey: _apiKey,
+            agentNodeCharter: agentNodeCharter);
 
         var mergeExecutor = new MergeExecutor(
             _mergeCoordinator,
@@ -771,6 +778,25 @@ public sealed class RunWorkflowFactory
             "rubberduck" or "rubber-duck" => "rubberduck",
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Returns the inline bespoke charter for the workflow's agent turn, if the definition declares
+    /// one. Prefers the start node when it is a prompt node carrying a <c>charter</c>, otherwise the
+    /// first prompt node with a non-empty charter. Returns null when no agent node declares a bespoke
+    /// charter (the common case: catalog roles resolve their charter from <c>.squad/agents</c>).
+    /// </summary>
+    private static string? ResolveAgentNodeCharter(WorkflowDefinition definition)
+    {
+        bool IsPromptWithCharter(WorkflowNode n) =>
+            n.Type == WorkflowNodeType.Prompt && !string.IsNullOrWhiteSpace(n.Charter);
+
+        var startNode = definition.Nodes.FirstOrDefault(
+            n => string.Equals(n.Id, definition.Start, StringComparison.Ordinal));
+        if (startNode is not null && IsPromptWithCharter(startNode))
+            return startNode.Charter!.Trim();
+
+        return definition.Nodes.FirstOrDefault(IsPromptWithCharter)?.Charter?.Trim();
     }
 
     /// <summary>

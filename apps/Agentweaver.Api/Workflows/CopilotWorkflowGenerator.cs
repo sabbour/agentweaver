@@ -108,22 +108,22 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               `event: task-added-to-ready` (the only supported event).
             - start: string (required). The id of the entry node where execution begins.
             - nodes: list (required, >= 1). Each node: { id, type, label, role?, kind?, agent?, prompt?,
-              target?, steps?, branches? }.
+              charter?, target?, steps?, branches? }.
             - edges: list. Each edge: { from, to, when? }. `from`/`to` MUST reference existing node ids.
               `when` guards the edge on a verdict (e.g. approved, request-changes, declined, merged, blocked).
 
-            NODE TYPES and runtime semantics:
-            - agent / prompt: an agent turn against a prompt (the unit of work).
-            - peer_review / review: a reviewing agent evaluates an upstream node's output and emits a verdict.
-            - check: a gate that routes on an upstream verdict. MUST declare `branches:` (the verdicts it
-              routes on) and have one outgoing edge per declared verdict.
-            - merge: applies a produced change (irreversible action gated by review). Verdicts: merged | blocked.
-            - scribe: records the run outcome.
-            - serial: an ordered sequence whose child `steps:` run strictly in declared order.
-            - fan_out: dispatch multiple parallel branches/subtasks.
-            - fan_in: join that waits for all required branches (uses `target:`).
-            - rai: a responsible-AI safety gate.
-            - terminal: a terminal/no-op sink (e.g. Done, Declined).
+            NODE TYPES — ONLY use the following. Other types (peer_review, serial, fan_out, fan_in,
+            coordinator_composed) are accepted by the schema loader but have NO runtime executor and
+            will cause a binding error when the workflow runs. Do not use them.
+
+            - prompt: an agent turn. The unit of work. Required: `role` (from the roles list below),
+              `prompt` (the task instruction for the agent).
+            - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on) and
+              have exactly one outgoing edge per declared branch. Optional `kind` field for specialised
+              gates: `human-review` (human HITL review gate), `rai` (responsible-AI safety gate).
+            - merge: applies a produced change to the repository. Verdicts: merged | blocked.
+            - scribe: records the run outcome. Place before terminal `done` nodes.
+            - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
 
             VALIDATION RULES (your output MUST satisfy all):
             - id, name, trigger.type, start, and at least one node are required.
@@ -131,8 +131,15 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - A `check` node MUST declare `branches:` and have a matching outgoing edge for each verdict.
             - A `serial` node's `steps:` MUST reference declared node ids.
 
-            Available roles for the `agent`/`role` fields (use ONLY these ids so the workflow is runnable):
+            Available roles for the `agent`/`role` fields. PREFER these catalog ids — they have pre-built
+            charters and are immediately runnable. Use a catalog id whenever one fits adequately:
             {{rolesList}}
+
+            BESPOKE ROLES: If no catalog role adequately covers a node's function, you MAY define a bespoke
+            role by using a descriptive id (e.g. "travel-researcher", "itinerary-editor") AND adding a
+            `charter` string field to that node (2-4 sentences describing the agent's expertise and
+            approach). Only use bespoke roles as a last resort when the catalog has no close match.
+            When using a catalog id, do NOT add a `charter` field — the catalog charter is used automatically.
 
             FEW-SHOT EXAMPLES (study the structure, gate routing, and complete verdict branching):
             {{examples}}

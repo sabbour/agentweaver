@@ -1,6 +1,13 @@
 namespace Agentweaver.Squad.Model;
 
 /// <summary>
+/// A bespoke (non-catalog) role minted by blueprint generation when no catalog role adequately
+/// covers a domain function. Carries an inline charter that is written verbatim to the provisioned
+/// agent's <c>.squad/agents/{name}/charter.md</c> so the agent runs under the authored persona.
+/// </summary>
+public sealed record BespokeRole(string Id, string Title, string Charter);
+
+/// <summary>
 /// A team blueprint: a named, reusable starting point for a project that captures a roster of
 /// catalog roles plus a set of workflows, review policy, and sandbox profile to apply on creation.
 /// A Blueprint now bundles one or more functional workflow ids; the first in the set is the default.
@@ -22,4 +29,11 @@ public sealed record Blueprint(
     /// backward-compatible API surfaces that reference a single workflow id.
     /// </summary>
     public string Workflow => Workflows.Count > 0 ? Workflows[0] : "default";
+
+    /// <summary>
+    /// Roster role ids that are NOT in the catalog and carry an inline charter. Each id here also
+    /// appears in <see cref="Roster"/>. Empty for blueprints that roster only catalog roles (the
+    /// common case). Provisioned by writing the inline charter to the agent's charter file.
+    /// </summary>
+    public IReadOnlyList<BespokeRole> BespokeRoles { get; init; } = [];
 }
