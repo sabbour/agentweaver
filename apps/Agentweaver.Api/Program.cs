@@ -135,9 +135,13 @@ builder.Services.AddAgentRuntime();
 
 // ISandboxExecutorRouter (017-US2): explicit router replaces fragile last-registration-wins pattern.
 // Overrides the ISandboxExecutor registered by AddAgentRuntime() — last registration wins.
+builder.Services.AddSingleton<IPodNameRegistry, PodNameRegistry>();
 builder.Services.AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>();
 builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     sp.GetRequiredService<ISandboxExecutorRouter>().Resolve());
+
+// Port-forward service (017-preview): manages kubectl port-forward sessions per run.
+builder.Services.AddSingleton<PortForwardService>();
 
 // Authentication
 builder.Services.AddMemoryCache();
@@ -294,6 +298,7 @@ app.MapWorkflowDefinitionEndpoints();
 app.MapReviewPolicyEndpoints();
 app.MapDiagnosticsEndpoints();
 app.MapMetricsEndpoints();
+app.MapSandboxEndpoints();
 
 app.Run();
 

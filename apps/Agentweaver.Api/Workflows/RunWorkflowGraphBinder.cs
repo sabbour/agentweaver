@@ -40,7 +40,8 @@ internal sealed record RunWorkflowBindings(
     ExecutorBinding BlockedAdapter,
     ExecutorBinding ReviewChangesAdapter,
     ExecutorBinding TerminalDeclined,
-    int MaxIterations);
+    int MaxIterations,
+    IRunWorkflowWiringSupport Wiring);
 
 /// <summary>
 /// Binds a <see cref="WorkflowDefinition"/> onto the live MAF graph (Feature 010 wf-maf-binding,
@@ -67,6 +68,25 @@ internal static class RunWorkflowGraphBinder
     private static readonly INodeExecutorFactory Factory = new NodeExecutorRegistry();
 
     /// <summary>
+    /// Mutable per-build wiring state threaded through the edge expansion. Accumulates the scribe-output
+    /// executors actually wired (canonical merge / no-changes paths AND generic direct-completion paths),
+    /// so the terminal "done" sink can declare exactly those as graph outputs (<c>WithOutputFrom</c>) —
+    /// a definition that records its outcome without a merge still terminates correctly.
+    /// </summary>
+    private sealed class WireContext
+    {
+        public required GraphDescriptorBuilder G { get; init; }
+        public required WorkflowDefinition Definition { get; init; }
+        public required RunWorkflowBindings B { get; init; }
+        public IRunWorkflowWiringSupport S => B.Wiring;
+        public List<ExecutorBinding> ScribeOutputs { get; } = new();
+    }
+
+    /// <summary>The edge verdicts that make a peer-review node a real verdict GATE (vs. a plain turn).</summary>
+    private static readonly HashSet<string> VerdictWhens =
+        new(StringComparer.Ordinal) { "approved", "request-changes", "declined", "pass", "fail" };
+
+    /// <summary>
     /// Wires the full (non-child) run pipeline from <paramref name="definition"/> onto
     /// <paramref name="builder"/> using the real executors in <paramref name="bindings"/>.
     /// </summary>
@@ -77,22 +97,35 @@ internal static class RunWorkflowGraphBinder
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(bindings);
 
+        var ctx = new WireContext { G = builder, Definition = definition, B = bindings };
+
         // Entry plumbing: the hidden input storer feeds the start node's executor (unconditional). The
-        // start node is resolved by its declared id and its TYPE — not a hardcoded "agent".
+        // start node is resolved by its declared id and its TYPE — not a hardcoded "agent". A start that
+        // is a producing turn (prompt, or a peer-review used as a plain review turn) enters its per-node
+        // agent executor.
         var startNode = GetNode(definition, definition.Start);
-        builder.AddEdge(bindings.AgentInputStorer, Factory.ResolveExecutor(startNode, bindings));
+        builder.AddEdge(bindings.AgentInputStorer, ResolveEntry(ctx, startNode));
 
         // Each logical edge expands to its raw executor wiring + predicate.
         foreach (var edge in definition.Edges)
-            WireEdge(builder, definition, edge, bindings);
+            WireEdge(ctx, edge);
 
         // Terminal nodes declare which executors are graph outputs (WithOutputFrom).
         foreach (var node in definition.Nodes)
         {
             if (node.Type == WorkflowNodeType.Terminal)
-                WireOutputs(builder, definition, node, bindings);
+                WireOutputs(ctx, node);
         }
     }
+
+    /// <summary>Resolves the executor a definition's START node is entered at.</summary>
+    private static ExecutorBinding ResolveEntry(WireContext ctx, WorkflowNode startNode) =>
+        EffectiveKind(ctx.Definition, startNode) switch
+        {
+            NodeKind.Agent => ctx.S.ResolveAgentNode(startNode),
+            NodeKind.PeerReview => ctx.S.ResolvePeerReviewNode(startNode),
+            _ => Factory.ResolveExecutor(startNode, ctx.B),
+        };
 
     private static WorkflowNode GetNode(WorkflowDefinition definition, string nodeId)
     {
@@ -110,27 +143,33 @@ internal static class RunWorkflowGraphBinder
     /// keep the existing policy plumbing for parity with multi-gate review-policy workflows. The predicates
     /// are the exact lambdas previously inline in <c>BuildWorkflow</c>; do not alter them (parity).
     /// </summary>
-    private static void WireEdge(GraphDescriptorBuilder g, WorkflowDefinition definition, WorkflowEdge edge, RunWorkflowBindings b)
+    private static void WireEdge(WireContext ctx, WorkflowEdge edge)
     {
+        var definition = ctx.Definition;
+        var b = ctx.B;
         var fromNode = GetNode(definition, edge.From);
         var toNode = GetNode(definition, edge.To);
-        var fromKind = NodeClassifier.Classify(fromNode);
-        var toKind = NodeClassifier.Classify(toNode);
 
         // Node types accepted at load time but not yet wired to a runtime executor fail closed here.
-        RejectUnwiredKind(fromNode, fromKind);
-        RejectUnwiredKind(toNode, toKind);
+        RejectUnwiredKind(fromNode, NodeClassifier.Classify(fromNode));
+        RejectUnwiredKind(toNode, NodeClassifier.Classify(toNode));
+
+        // Wiring keys on the EFFECTIVE kind: a peer-review node with verdict-routed outgoing edges is a
+        // real AI review GATE; a peer-review node with a single unconditional outgoing edge is a plain
+        // producing turn (it wires identically to an Agent node).
+        var fromKind = EffectiveKind(definition, fromNode);
+        var toKind = EffectiveKind(definition, toNode);
 
         // Extra/renamed review-policy gates keep their dedicated policy plumbing (parity with Feature 010
         // multi-gate review policies). The canonical default gates (rai/review) never receive a policy
         // binding, so the default workflow always takes the canonical path below.
         if (b.PolicyGateBindings.ContainsKey(edge.From) || b.PolicyGateBindings.ContainsKey(edge.To))
         {
-            if (TryWirePolicyEdge(g, definition, edge, b))
+            if (TryWirePolicyEdge(ctx.G, definition, edge, b))
                 return;
         }
 
-        if (TryWireCanonicalEdge(g, edge, fromNode, toNode, fromKind, toKind, b))
+        if (TryWireCanonicalEdge(ctx, edge, fromNode, toNode, fromKind, toKind))
             return;
 
         throw new WorkflowBindException(
@@ -146,29 +185,30 @@ internal static class RunWorkflowGraphBinder
     /// come from <paramref name="b"/>, picked by TYPE.
     /// </summary>
     private static bool TryWireCanonicalEdge(
-        GraphDescriptorBuilder g, WorkflowEdge edge, WorkflowNode fromNode, WorkflowNode toNode,
-        NodeKind fromKind, NodeKind toKind, RunWorkflowBindings b)
+        WireContext ctx, WorkflowEdge edge, WorkflowNode fromNode, WorkflowNode toNode,
+        NodeKind fromKind, NodeKind toKind)
     {
+        var g = ctx.G;
+        var b = ctx.B;
+        var s = ctx.S;
         var when = edge.When;
-
-        // A peer-review node is an agent turn (AI reviewing an AI's output): it is entered at the agent
-        // executor and emits an AgentTurnOutput, exactly like a prompt node. Wire its edges identically to
-        // an Agent node so a peer_review -> check gate (or check -> peer_review loop) resolves.
-        fromKind = NormalizeForWiring(fromKind);
-        toKind = NormalizeForWiring(toKind);
 
         switch (fromKind, toKind, when)
         {
+            // ───────────────────────── Canonical five-stage pipeline ─────────────────────────
+            // (agent / rai / human-review / merge / scribe nodes are resolved by TYPE; the agent
+            //  executor is per-node so chained turns each get their own MAF node.)
+
             // agent turn -> RAI gate (unconditional).
             case (NodeKind.Agent, NodeKind.Rai, null):
-                g.AddEdge(ResolveAgent(b), ResolveRai(toNode, b));
+                g.AddEdge(s.ResolveAgentNode(fromNode), ResolveRai(toNode, b));
                 return true;
 
             // RAI REVISE (iteration < cap) -> revision adapter -> loop back to agent.
             case (NodeKind.Rai, NodeKind.Agent, "revise"):
                 g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), b.RaiRevisionAdapter,
                     output => output is not null && output.RaiRevisionRequired && output.Iteration < b.MaxIterations)
-                 .AddEdge(b.RaiRevisionAdapter, ResolveAgent(b), idempotent: true);
+                 .AddEdge(b.RaiRevisionAdapter, s.ResolveAgentNode(toNode), idempotent: true);
                 return true;
 
             // Content safety: agent turn flagged on an empty diff -> fail immediately, never reaching review.
@@ -186,6 +226,7 @@ internal static class RunWorkflowGraphBinder
                  .AddEdge(b.TerminalNoOp, b.ScribeInputNoChanges)
                  .AddEdge(b.ScribeInputNoChanges, b.ScribeBindingNoChanges)
                  .AddEdge(b.ScribeBindingNoChanges, b.ScribeOutputNoChanges);
+                ctx.ScribeOutputs.Add(b.ScribeOutputNoChanges);
                 return true;
 
             // Otherwise (OK / RED with a diff / revise-at-cap) -> review adapter -> human review gate.
@@ -206,7 +247,7 @@ internal static class RunWorkflowGraphBinder
             case (NodeKind.HumanReview, NodeKind.Agent, "request-changes"):
                 g.AddEdge<WorkflowReviewDecision>(ResolveReview(fromNode, b), b.ReviewChangesAdapter,
                     decision => decision is not null && !decision.Approved && decision.RequestChanges)
-                 .AddEdge(b.ReviewChangesAdapter, ResolveAgent(b), idempotent: true);
+                 .AddEdge(b.ReviewChangesAdapter, s.ResolveAgentNode(toNode), idempotent: true);
                 return true;
 
             // Hard-declined -> terminal.
@@ -222,6 +263,7 @@ internal static class RunWorkflowGraphBinder
                  .AddEdge(b.TerminalMerge, b.ScribeInputMerge)
                  .AddEdge(b.ScribeInputMerge, b.ScribeBindingMerge)
                  .AddEdge(b.ScribeBindingMerge, b.ScribeOutputMerge);
+                ctx.ScribeOutputs.Add(b.ScribeOutputMerge);
                 return true;
 
             // Merge blocked -> re-enter the review gate via HITL.
@@ -234,6 +276,159 @@ internal static class RunWorkflowGraphBinder
             // Scribe -> done: the scribe output executors ARE the graph outputs (WithOutputFrom); no raw edge.
             case (NodeKind.Scribe, NodeKind.Terminal, null):
                 return true;
+
+            // ───────────────────────── Generic catalog topologies (Feature 015 US3) ─────────────────────────
+            // Per-node agent executors + per-edge adapters minted by the wiring support, so chained turns,
+            // AI peer-review verdict gates, and direct completions bind onto the real executors.
+
+            // Sequential agent turn: first turn's output feeds the next turn's task (same worktree).
+            case (NodeKind.Agent, NodeKind.Agent, null):
+            {
+                var adapter = s.SequentialAgentAdapter(edge);
+                g.AddEdge(s.ResolveAgentNode(fromNode), adapter)
+                 .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            // Producer agent turn -> AI peer-review verdict gate. The produced diff is stored so the
+            // gate's downstream merge/scribe adapters can reconstruct it.
+            case (NodeKind.Agent, NodeKind.PeerReview, null):
+            {
+                var storer = s.StoreAgentOutputAdapter(edge);
+                g.AddEdge(s.ResolveAgentNode(fromNode), storer)
+                 .AddEdge(storer, s.ResolvePeerReviewNode(toNode));
+                return true;
+            }
+
+            // Agent turn -> direct completion (record the outcome with no merge).
+            case (NodeKind.Agent, NodeKind.Scribe, null):
+            {
+                var path = s.AgentScribePath(edge);
+                g.AddEdge(s.ResolveAgentNode(fromNode), path.Input)
+                 .AddEdge(path.Input, path.Scribe)
+                 .AddEdge(path.Scribe, path.Output);
+                ctx.ScribeOutputs.Add(path.Output);
+                return true;
+            }
+
+            // Producer agent turn -> human review gate directly (no RAI stage in between).
+            case (NodeKind.Agent, NodeKind.HumanReview, null):
+            {
+                var req = s.AgentToReviewRequestAdapter(edge);
+                g.AddEdge(s.ResolveAgentNode(fromNode), req)
+                 .AddEdge(req, ResolveReview(toNode, b));
+                return true;
+            }
+
+            // RAI cleared (has a diff) -> merge directly (publish-style: no human gate before merge).
+            case (NodeKind.Rai, NodeKind.Merge, "review"):
+            {
+                var adapter = s.AgentToMergeAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), adapter,
+                    output => output is not null && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff))
+                 .AddEdge(adapter, b.MergeBinding);
+                return true;
+            }
+
+            // RAI cleared (has a diff) -> next agent turn (e.g. produce a code review).
+            case (NodeKind.Rai, NodeKind.Agent, "review"):
+            {
+                var adapter = s.SequentialAgentAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), adapter,
+                    output => output is not null && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff))
+                 .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            // RAI cleared (has a diff) -> AI peer-review verdict gate.
+            case (NodeKind.Rai, NodeKind.PeerReview, "review"):
+            {
+                var storer = s.StoreAgentOutputAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), storer,
+                    output => output is not null && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff))
+                 .AddEdge(storer, s.ResolvePeerReviewNode(toNode));
+                return true;
+            }
+
+            // Peer-review APPROVED / PASS -> merge.
+            case (NodeKind.PeerReview, NodeKind.Merge, "approved"):
+            case (NodeKind.PeerReview, NodeKind.Merge, "pass"):
+            {
+                var adapter = s.ReviewToMergeAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, b.MergeBinding);
+                return true;
+            }
+
+            // Peer-review PASS -> RAI gate (e.g. a QA gate that precedes the safety check).
+            case (NodeKind.PeerReview, NodeKind.Rai, "pass"):
+            {
+                var adapter = s.ReviewToAgentOutputAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, ResolveRai(toNode, b));
+                return true;
+            }
+
+            // Peer-review REQUEST-CHANGES / FAIL -> loop back to a producer agent with feedback.
+            case (NodeKind.PeerReview, NodeKind.Agent, "request-changes"):
+            case (NodeKind.PeerReview, NodeKind.Agent, "fail"):
+            {
+                var adapter = s.ReviewToAgentReviseAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && !decision.Approved && decision.RequestChanges)
+                 .AddEdge(adapter, s.ResolveAgentNode(toNode), idempotent: true);
+                return true;
+            }
+
+            // Peer-review hard-declined -> terminal.
+            case (NodeKind.PeerReview, NodeKind.Terminal, "declined"):
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), b.TerminalDeclined,
+                    decision => decision is null || (!decision.Approved && !decision.RequestChanges));
+                return true;
+
+            // Human review APPROVED -> next agent turn (e.g. postmortem before the scribe).
+            case (NodeKind.HumanReview, NodeKind.Agent, "approved"):
+            {
+                var adapter = s.ReviewToAgentForwardAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(ResolveReview(fromNode, b), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            // Human review APPROVED -> direct completion (record with no merge stage).
+            case (NodeKind.HumanReview, NodeKind.Scribe, "approved"):
+            {
+                var path = s.ReviewScribePath(edge);
+                g.AddEdge<WorkflowReviewDecision>(ResolveReview(fromNode, b), path.Input,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(path.Input, path.Scribe)
+                 .AddEdge(path.Scribe, path.Output);
+                ctx.ScribeOutputs.Add(path.Output);
+                return true;
+            }
+
+            // Merge blocked -> re-enter an AI peer-review verdict gate.
+            case (NodeKind.Merge, NodeKind.PeerReview, "blocked"):
+            {
+                var adapter = s.MergeToAgentOutputAdapter(edge);
+                g.AddEdge<MergeOutput>(b.MergeBinding, adapter,
+                    output => output is not null && output.Status == "blocked")
+                 .AddEdge(adapter, s.ResolvePeerReviewNode(toNode), idempotent: true);
+                return true;
+            }
+
+            // Merge blocked -> re-enter a producer agent turn.
+            case (NodeKind.Merge, NodeKind.Agent, "blocked"):
+            {
+                var adapter = s.MergeToAgentReviseAdapter(edge);
+                g.AddEdge<MergeOutput>(b.MergeBinding, adapter,
+                    output => output is not null && output.Status == "blocked")
+                 .AddEdge(adapter, s.ResolveAgentNode(toNode), idempotent: true);
+                return true;
+            }
 
             default:
                 return false;
@@ -258,14 +453,23 @@ internal static class RunWorkflowGraphBinder
     }
 
     /// <summary>
-    /// Collapses kinds that share an executor/output contract onto a single canonical kind for edge
-    /// wiring. A <see cref="NodeKind.PeerReview"/> node is an agent turn (it resolves to the agent binding
-    /// and emits an <c>AgentTurnOutput</c>), so it wires identically to a <see cref="NodeKind.Agent"/> node.
+    /// The wiring kind a node behaves as. A <see cref="NodeKind.PeerReview"/> node is a real AI review
+    /// GATE only when it has verdict-routed outgoing edges (approved / request-changes / pass / fail /
+    /// declined); a peer-review node with a single unconditional outgoing edge is a plain producing turn
+    /// and wires identically to a <see cref="NodeKind.Agent"/> node. All other kinds pass through unchanged.
     /// </summary>
-    private static NodeKind NormalizeForWiring(NodeKind kind) =>
-        kind == NodeKind.PeerReview ? NodeKind.Agent : kind;
+    private static NodeKind EffectiveKind(WorkflowDefinition def, WorkflowNode node)
+    {
+        var kind = NodeClassifier.Classify(node);
+        if (kind != NodeKind.PeerReview)
+            return kind;
+        return HasVerdictRouting(def, node) ? NodeKind.PeerReview : NodeKind.Agent;
+    }
 
-    private static ExecutorBinding ResolveAgent(RunWorkflowBindings b) => b.AgentBinding;
+    /// <summary>True when the node has at least one outgoing edge whose verdict marks it a review gate.</summary>
+    private static bool HasVerdictRouting(WorkflowDefinition def, WorkflowNode node) =>
+        def.Edges.Any(e => string.Equals(e.From, node.Id, StringComparison.Ordinal)
+            && e.When is not null && VerdictWhens.Contains(e.When));
 
     private static ExecutorBinding ResolveRai(WorkflowNode node, RunWorkflowBindings b) =>
         b.PolicyGateBindings.TryGetValue(node.Id, out var binding) ? binding : b.RaiBinding;

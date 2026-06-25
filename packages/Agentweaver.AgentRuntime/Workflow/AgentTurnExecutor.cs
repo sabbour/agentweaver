@@ -14,9 +14,9 @@ namespace Agentweaver.AgentRuntime.Workflow;
 public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput>, IWorkflowNodeMeta
 {
     /// <inheritdoc />
-    public string LogicalNodeId => "agent";
+    public string LogicalNodeId { get; }
     /// <inheritdoc />
-    public string DisplayLabel => "Agent";
+    public string DisplayLabel { get; }
     /// <inheritdoc />
     public string Role => "agent";
     /// <inheritdoc />
@@ -41,9 +41,14 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         ILogger<AgentTurnExecutor> logger,
         string? apiBaseUrl = null,
         string? apiKey = null,
-        string? agentNodeCharter = null)
-        : base("agent-turn")
+        string? agentNodeCharter = null,
+        string name = "agent-turn",
+        string logicalNodeId = "agent",
+        string displayLabel = "Agent")
+        : base(name)
     {
+        LogicalNodeId = logicalNodeId;
+        DisplayLabel = displayLabel;
         _agent = agent;
         _worktreeOps = worktreeOps;
         _getRecordingWriter = getRecordingWriter;
@@ -59,7 +64,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         var writer = _getRecordingWriter(input.RunId);
         bool safetyFlagged = false;
 
-        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "started", "Agent turn",
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "started", DisplayLabel,
             agentName: input.AgentName);
 
         try
@@ -100,13 +105,13 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         }
         catch
         {
-            WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "failed", "Agent turn");
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
             throw;
         }
 
         if (safetyFlagged)
         {
-            WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "failed", "Agent turn");
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
             return new AgentTurnOutput(
                 input.RunId,
                 TreeHash: string.Empty,
@@ -124,7 +129,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         string diff = _worktreeOps.GetDiff(input.RepositoryPath, input.OriginatingBranch, input.WorktreeBranch);
         int stepCount = _worktreeOps.GetStepCount(input.RunId);
 
-        WorkflowStepEvents.Emit(writer, _logger, input.RunId, "agent", "completed", "Agent turn",
+        WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "completed", DisplayLabel,
             agentName: input.AgentName);
 
         return new AgentTurnOutput(
@@ -150,3 +155,4 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             || ex.Message.Contains("content_filter", StringComparison.OrdinalIgnoreCase);
     }
 }
+

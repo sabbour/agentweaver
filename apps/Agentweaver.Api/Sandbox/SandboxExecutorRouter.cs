@@ -17,11 +17,14 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
 {
     private readonly IConfiguration _config;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IPodNameRegistry? _podRegistry;
 
-    public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory)
+    public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
+        IPodNameRegistry? podRegistry = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
+        _podRegistry = podRegistry;
     }
 
     public ISandboxExecutor Resolve()
@@ -56,7 +59,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             logger.LogInformation(
                 "SandboxExecutorRouter: selecting KubernetesSandboxExecutor (namespace={Namespace})",
                 sandboxOptions.Namespace);
-            return new KubernetesSandboxExecutor(k8sClient, sandboxOptions, k8sLogger);
+            return new KubernetesSandboxExecutor(k8sClient, sandboxOptions, k8sLogger, _podRegistry);
         }
         catch (Exception ex)
         {

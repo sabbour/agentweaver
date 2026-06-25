@@ -39,7 +39,14 @@ public sealed record SandboxCommand(
     IReadOnlyDictionary<string, string>? Environment,
     SandboxFsPolicy FilesystemPolicy,
     int TimeoutMs,
-    bool NetworkEnabled = false);
+    bool NetworkEnabled = false,
+    /// <summary>
+    /// The Agentweaver run ID that owns this command. When set, the Kubernetes executor uses
+    /// this as the SandboxClaim name prefix and registers the bound pod name in
+    /// <see cref="Agentweaver.Api.Sandbox.IPodNameRegistry"/> so that the preview
+    /// port-forward service can locate the pod later.
+    /// </summary>
+    string? AgentweaverRunId = null);
 
 /// <summary>
 /// Filesystem policy handed to the sandbox engine. DeniedPaths maps to

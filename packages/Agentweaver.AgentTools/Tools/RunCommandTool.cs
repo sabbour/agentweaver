@@ -70,7 +70,8 @@ internal sealed class RunCommandTool : ISandboxTool
                 var fsPolicy = SandboxFsPolicyBuilder.Build(ctx.SandboxRoot, ctx.Options.AllowedRepositoryRoots);
                 var cmd = new SandboxCommand(command, ctx.WorkingDirectory, null, fsPolicy,
                     timeout_ms ?? ctx.Options.DefaultTimeoutMs,
-                    NetworkEnabled: ctx.Options.NetworkEnabled);
+                    NetworkEnabled: ctx.Options.NetworkEnabled,
+                    AgentweaverRunId: string.IsNullOrEmpty(ctx.RunId) ? null : ctx.RunId);
                 var result = await ctx.Executor.ExecuteAsync(cmd, ct);
                 var stdout = ctx.Redactor.Redact(result.Stdout);
                 var stderr = ctx.Redactor.Redact(result.Stderr);

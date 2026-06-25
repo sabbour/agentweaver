@@ -38,10 +38,12 @@ internal sealed class NodeExecutorRegistry : INodeExecutorFactory
         {
             case NodeKind.Agent:
             case NodeKind.PeerReview:
-                // A peer-review node is an AGENT turn (an AI reviewing another node's output), not a
-                // human-in-the-loop gate. It is entered at the same agent-turn executor, then routes its
-                // verdict into a downstream check gate.
-                return bindings.AgentBinding;
+                // A producing/peer-review node is entered at its OWN per-node executor (minted and cached
+                // by the wiring support), so chained turns each get a distinct MAF node. The binder resolves
+                // these directly via the wiring support; this branch keeps the factory total for that kind.
+                return kind == NodeKind.PeerReview
+                    ? bindings.Wiring.ResolvePeerReviewNode(node)
+                    : bindings.Wiring.ResolveAgentNode(node);
 
             case NodeKind.Rai:
                 return bindings.PolicyGateBindings.TryGetValue(node.Id, out var rai) ? rai : bindings.RaiBinding;

@@ -25,6 +25,15 @@ public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<Projects
     {
         _factory = factory;
         _client = factory.CreateAuthenticatedClient();
+
+        // Org authorization (Auth:GitHub:AllowedOrg = "microsoft") is enforced by the in-process host,
+        // so — like the sibling HTTP integration tests — sign the installation scope in with a login
+        // that is a public member of the org. Without a stored token the org middleware short-circuits
+        // every request with 401 before the endpoint runs.
+        _factory.TokenStore.SetAsync(
+            GitHubTokenScope.Installation,
+            new GitHubToken("access-tok", null, null, "sabbour", null, Array.Empty<string>()))
+            .GetAwaiter().GetResult();
     }
 
     // ── Default workflow (FR-041) ───────────────────────────────────────────────────────────────

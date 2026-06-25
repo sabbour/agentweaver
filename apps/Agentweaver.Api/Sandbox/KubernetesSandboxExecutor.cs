@@ -40,6 +40,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
     private readonly IKubernetes _client;
     private readonly KubernetesSandboxOptions _options;
     private readonly ILogger<KubernetesSandboxExecutor> _logger;
+    private readonly IPodNameRegistry? _podRegistry;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -51,18 +52,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
     internal KubernetesSandboxExecutor(
         IKubernetes client,
         KubernetesSandboxOptions options,
-        ILogger<KubernetesSandboxExecutor> logger)
+        ILogger<KubernetesSandboxExecutor> logger,
+        IPodNameRegistry? podRegistry = null)
     {
         _client = client;
         _options = options;
         _logger = logger;
+        _podRegistry = podRegistry;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
-        var runId = Guid.NewGuid().ToString("N")[..16];
-        var claimName = $"run-{runId}";
+        // Use the Agentweaver run ID as the claim name when available so the pod can be
+        // looked up by run ID later (preview port-forward). Fall back to a random ID.
+        string claimBase = string.IsNullOrEmpty(command.AgentweaverRunId)
+            ? Guid.NewGuid().ToString("N")[..16]
+            : command.AgentweaverRunId.Replace("-", "")[..Math.Min(16, command.AgentweaverRunId.Replace("-", "").Length)];
+        var claimName = $"run-{claimBase}";
 
         var timeoutMs = command.TimeoutMs > 0
             ? command.TimeoutMs
@@ -82,6 +89,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: claim {Claim} bound to pod {Pod}", claimName, podName);
 
+            // Register pod name so PortForwardService can locate it by Agentweaver run ID.
+            if (!string.IsNullOrEmpty(command.AgentweaverRunId))
+                _podRegistry?.Register(command.AgentweaverRunId, podName);
+
             return await ExecInPodAsync(podName, command, token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -93,6 +104,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
         finally
         {
             await DeleteClaimAsync(claimName);
+            if (!string.IsNullOrEmpty(command.AgentweaverRunId))
+                _podRegistry?.Unregister(command.AgentweaverRunId);
         }
     }
 
