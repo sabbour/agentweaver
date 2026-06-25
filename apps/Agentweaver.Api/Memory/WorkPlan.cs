@@ -10,6 +10,14 @@ public sealed class WorkPlan
     public required string CoordinatorRunId { get; set; }
     public string? IsolationSummary { get; set; }
     public string? IntegrationBranch { get; set; }
+
+    /// <summary>
+    /// The id of the functional workflow the coordinator selected for this task (Feature 015 US5).
+    /// Persisted so downstream phases (decomposition, dispatch) drive execution from the selected
+    /// topology rather than treating selection as advisory. Null when the project carries a single
+    /// workflow (selection skipped) — downstream consumers fall back to the project default.
+    /// </summary>
+    public string? WorkflowId { get; set; }
     public required string Status { get; set; }      // planned | dispatching | awaiting_assembly | assembling | in_review | complete | assembly_blocked | assembly_failed | assembly_declined
 
     /// <summary>

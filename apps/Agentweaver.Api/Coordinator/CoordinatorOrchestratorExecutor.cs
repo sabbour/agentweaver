@@ -128,10 +128,12 @@ public sealed class CoordinatorOrchestratorExecutor
 
         // Feature 015 US5: pick the best-fit functional workflow for THIS task from the project's
         // available set and surface it (with rationale + override hint). Single-workflow projects skip
-        // selection silently. Selection never blocks orchestration — it always resolves to a workflow.
-        await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
+        // selection silently. Selection never blocks orchestration — it always resolves to a workflow,
+        // and the resolved workflow now DRIVES the rest of the pipeline (decomposition + persistence)
+        // rather than being advisory.
+        var selectedWorkflow = await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
 
-        var drafts = await DecomposeWithModelAsync(input, spec, ct).ConfigureAwait(false)
+        var drafts = await DecomposeWithModelAsync(input, spec, selectedWorkflow, ct).ConfigureAwait(false)
                      ?? DecomposeDeterministic(spec);
         if (drafts.Count == 0)
             drafts = DecomposeDeterministic(spec);
@@ -154,10 +156,11 @@ public sealed class CoordinatorOrchestratorExecutor
             assigned.Add(new AssignedSubtask(d, agentName, model));
         }
 
-        var (workPlanId, persisted) = await PersistPlanAsync(db, input, spec, assigned, cycleNote, ct)
+        var (workPlanId, persisted) = await PersistPlanAsync(
+            db, input, spec, assigned, cycleNote, selectedWorkflow?.Id, ct)
             .ConfigureAwait(false);
 
-        EmitWorkPlanEvent(input.RunId, workPlanId, persisted);
+        EmitWorkPlanEvent(input.RunId, workPlanId, selectedWorkflow?.Id, persisted);
     }
 
     // -----------------------------------------------------------------------
@@ -165,37 +168,63 @@ public sealed class CoordinatorOrchestratorExecutor
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Selects the best-fit functional workflow for the task and surfaces it on the coordinator run
-    /// stream. A project carrying a single workflow skips selection silently (no event, no model
-    /// call). An explicit user override ("use {workflow-id}" carried in the human's revise feedback)
-    /// always wins over the coordinator's pick. Best-effort: any failure leaves orchestration to
-    /// proceed on the project default.
+    /// Selects the best-fit functional workflow for the task, surfaces it on the coordinator run
+    /// stream, and RETURNS it so downstream phases (decomposition + persistence) execute from the
+    /// selected topology rather than treating selection as advisory. A project carrying a single
+    /// eligible workflow skips selection silently (no event, no model call) and returns that workflow.
+    /// An explicit user override ("use {workflow-id}" carried in the human's revise feedback) always
+    /// wins over the coordinator's pick.
+    ///
+    /// Failures are NOT silently swallowed: if any step throws, this logs a warning and returns the
+    /// project DEFAULT workflow as an explicit fallback (or null only when the project/default cannot
+    /// be resolved at all), so the caller always knows which workflow it is planning against.
     /// </summary>
-    private async Task SelectWorkflowAsync(
+    private async Task<WorkflowDefinition?> SelectWorkflowAsync(
         IServiceScope scope, CoordinatorDraftInput input, OutcomeSpec spec, CancellationToken ct)
     {
+        WorkflowDefinition? defaultDef = null;
         try
         {
             var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
             var registry = scope.ServiceProvider.GetRequiredService<WorkflowRegistry>();
             var selector = scope.ServiceProvider.GetRequiredService<IWorkflowSelector>();
 
-            if (!Guid.TryParse(input.ProjectId, out var projectGuid)) return;
+            if (!Guid.TryParse(input.ProjectId, out var projectGuid)) return null;
             var project = await projectStore.GetAsync(new ProjectId(projectGuid), ct).ConfigureAwait(false);
-            if (project is null) return;
+            if (project is null) return null;
 
-            // Order the default first so it is the selector's deterministic fallback.
-            var defaultDef = registry.ResolveDefault(project).Definition;
+            // Resolve the default first so it is both the selector's deterministic fallback AND the
+            // explicit fallback this method returns if anything below throws or no workflow is eligible.
+            defaultDef = registry.ResolveDefault(project).Definition;
             var availableResults = registry.GetOrLoad(project).Available
                 .Where(r => r.Definition is not null)
                 .OrderByDescending(r => defaultDef is not null &&
                     string.Equals(r.Definition!.Id, defaultDef.Id, StringComparison.Ordinal))
                 .ThenBy(r => r.Definition!.Id, StringComparer.Ordinal)
                 .ToList();
+
+            // Filter candidates to workflows whose declared trigger matches HOW this run was invoked
+            // (manual interactive start vs. heartbeat backlog pickup). A workflow's trigger is no
+            // longer pure metadata: a manual run never selects a heartbeat/event workflow and a
+            // heartbeat pickup never selects a manual-only workflow. When NO workflow's trigger
+            // matches, fall back to the project default rather than picking a mismatched workflow.
+            var invocationKind = await ResolveInvocationKindAsync(scope, input.RunId, ct).ConfigureAwait(false);
+            var eligibleResults = availableResults
+                .Where(r => WorkflowTriggerEvaluator.IsEligible(r.Definition!.Trigger, invocationKind))
+                .ToList();
+            if (eligibleResults.Count == 0)
+            {
+                _logger.LogInformation(
+                    "Coordinator workflow selection for run {RunId}: no workflow declares a trigger matching a {Invocation} invocation; using the project default.",
+                    input.RunId, invocationKind);
+                return defaultDef;
+            }
+            availableResults = eligibleResults;
+
             var available = availableResults.Select(r => r.Definition!).ToList();
 
-            // Single (or zero) workflow: skip selection silently.
-            if (available.Count <= 1) return;
+            // Single (or zero) eligible workflow: skip selection silently, but still drive planning from it.
+            if (available.Count <= 1) return available.FirstOrDefault() ?? defaultDef;
 
             var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
             var customWorkflowIds = availableResults
@@ -212,19 +241,51 @@ public sealed class CoordinatorOrchestratorExecutor
                 {
                     EmitWorkflowSelectedEvent(input.RunId, overridden,
                         $"Using '{overridden.Name}' as requested.", wasAutoSelected: false, available);
-                    return;
+                    return overridden;
                 }
             }
 
             var result = await selector.SelectAsync(context, ct).ConfigureAwait(false);
             EmitWorkflowSelectedEvent(input.RunId, result.Selected, result.Rationale, result.WasAutoSelected, available);
+            return result.Selected;
         }
         catch (Exception ex)
         {
+            // Explicit fallback (option a): log a warning and plan against the project default
+            // workflow instead of silently dropping the selection result.
             _logger.LogWarning(ex,
-                "Coordinator workflow selection failed for run {RunId}; proceeding on the project default.",
-                input.RunId);
+                "Coordinator workflow selection failed for run {RunId}; falling back to the project default workflow '{DefaultId}'.",
+                input.RunId, defaultDef?.Id ?? "(unresolved)");
+            return defaultDef;
         }
+    }
+
+    /// <summary>
+    /// Resolves how this coordinator run was invoked so workflow selection only considers workflows
+    /// whose declared trigger matches. A run stamped <see cref="RunOrigin.BacklogPickup"/> was started
+    /// by the heartbeat picking up a Ready task (<see cref="WorkflowInvocationKind.Heartbeat"/>); every
+    /// other origin is treated as an explicit manual start (<see cref="WorkflowInvocationKind.Manual"/>).
+    /// Best-effort: any failure resolving the run defaults to a manual invocation.
+    /// </summary>
+    private static async Task<WorkflowInvocationKind> ResolveInvocationKindAsync(
+        IServiceScope scope, string runId, CancellationToken ct)
+    {
+        try
+        {
+            if (RunId.TryParse(runId, out var parsed))
+            {
+                var runStore = scope.ServiceProvider.GetRequiredService<SqliteRunStore>();
+                var run = await runStore.GetAsync(parsed, ct).ConfigureAwait(false);
+                if (run is not null && run.Origin == RunOrigin.BacklogPickup)
+                    return WorkflowInvocationKind.Heartbeat;
+            }
+        }
+        catch
+        {
+            // Best-effort: fall through to a manual invocation on any lookup failure.
+        }
+
+        return WorkflowInvocationKind.Manual;
     }
 
     private void EmitWorkflowSelectedEvent(
@@ -294,7 +355,7 @@ public sealed class CoordinatorOrchestratorExecutor
     // -----------------------------------------------------------------------
 
     private async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
-        CoordinatorDraftInput input, OutcomeSpec spec, CancellationToken ct)
+        CoordinatorDraftInput input, OutcomeSpec spec, WorkflowDefinition? selectedWorkflow, CancellationToken ct)
     {
         CopilotAIAgent? agent = null;
         try
@@ -722,6 +783,7 @@ public sealed class CoordinatorOrchestratorExecutor
         OutcomeSpec spec,
         List<AssignedSubtask> assigned,
         string? cycleNote,
+        string? workflowId,
         CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
@@ -810,13 +872,14 @@ public sealed class CoordinatorOrchestratorExecutor
         return (workPlan.Id, persisted);
     }
 
-    private void EmitWorkPlanEvent(string runId, int workPlanId, List<PersistedSubtask> subtasks)
+    private void EmitWorkPlanEvent(string runId, int workPlanId, string? workflowId, List<PersistedSubtask> subtasks)
     {
         var entry = _streamStore.Get(runId);
         entry?.RecordNext(EventTypes.CoordinatorWorkPlan, new
         {
             workPlanId,
             status = "planned",
+            workflowId,
             subtasks = subtasks.Select(s => new
             {
                 id = s.Id,
