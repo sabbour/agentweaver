@@ -4,7 +4,7 @@ import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { AgentMessageBubble } from './AgentMessageBubble';
 import { ToolCallCard } from './ToolCallCard';
 import { LifecycleEventCard } from './LifecycleEventCard';
-import type { TurnGroupItem, TurnStep, ToolCallItem, ApprovalRequestItem } from '../timeline/types';
+import type { TurnGroupItem, TurnStep, ToolCallItem, ApprovalRequestItem, AgentMessageItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
 
 const useStyles = makeStyles({
@@ -25,6 +25,19 @@ const useStyles = makeStyles({
     textAlign: 'left',
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
+    ':hover': { opacity: 0.75 },
+  },
+  /** Button style for a report_intent line acting as a cluster toggle header. */
+  intentToggleHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    cursor: 'pointer',
+    background: 'none',
+    border: 'none',
+    padding: '1px 0',
+    textAlign: 'left',
+    color: tokens.colorNeutralForeground3,
     ':hover': { opacity: 0.75 },
   },
   chevron: {
@@ -78,6 +91,15 @@ function splitClusters(steps: TurnStep[]): Cluster[] {
   return result;
 }
 
+/** Returns true if any step in the cluster has an error or a non-zero exit code. */
+function hasClusterErrors(cluster: ToolCluster): boolean {
+  return cluster.steps.some(s =>
+    s.error != null ||
+    (s.result?.content?.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== undefined &&
+     s.result.content.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== '0')
+  );
+}
+
 interface ToolClusterRowProps {
   cluster: ToolCluster;
   defaultExpanded: boolean;
@@ -118,6 +140,98 @@ const ToolClusterRow = memo(function ToolClusterRow({ cluster, defaultExpanded, 
   );
 });
 
+interface HeaderedClusterRowProps {
+  /** The inline step (agent-message or report_intent) that acts as the toggle header. */
+  headerStep: TurnStep;
+  cluster: ToolCluster;
+  defaultExpanded: boolean;
+  streamStatus: StreamStatus;
+  isLiveRun: boolean;
+}
+
+/**
+ * Renders an inline step (report_intent annotation or agent-message bubble) as a
+ * clickable collapse/expand toggle for the tool cluster that immediately follows it.
+ *
+ * - report_intent: the intent text itself becomes the toggle button (chevron inline).
+ * - agent-message: the bubble renders as-is; a compact "Used N tools" row below it
+ *   serves as the toggle affordance.
+ */
+const HeaderedClusterRow = memo(function HeaderedClusterRow({
+  headerStep,
+  cluster,
+  defaultExpanded,
+  streamStatus,
+  isLiveRun,
+}: HeaderedClusterRowProps) {
+  const styles = useStyles();
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const toggle = () => setExpanded(e => !e);
+  const n = cluster.steps.length;
+
+  const chevron = expanded
+    ? <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
+    : <ChevronRightRegular className={styles.chevron} aria-hidden="true" />;
+
+  let headerNode: React.ReactNode;
+
+  if (headerStep.kind === 'tool-call' && (headerStep as ToolCallItem).toolName === 'report_intent') {
+    // report_intent: the compact intent text IS the toggle button.
+    headerNode = (
+      <button
+        className={styles.intentToggleHeader}
+        onClick={toggle}
+        aria-expanded={expanded}
+      >
+        {chevron}
+        <Text size={100} style={{ color: 'inherit' }}>
+          {(headerStep as ToolCallItem).humanTitle}
+        </Text>
+      </button>
+    );
+  } else {
+    // agent-message (or other inline): render the content normally, then a compact
+    // toggle row immediately below it.
+    const msg = headerStep as AgentMessageItem;
+    headerNode = (
+      <>
+        <AgentMessageBubble
+          content={msg.content}
+          streaming={msg.streaming}
+          isLiveRun={isLiveRun}
+        />
+        <button
+          className={styles.toolsHeader}
+          onClick={toggle}
+          aria-expanded={expanded}
+        >
+          {chevron}
+          <Text size={100} style={{ color: 'inherit' }}>
+            Used {n} tool{n === 1 ? '' : 's'}
+          </Text>
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {headerNode}
+      {expanded && (
+        <div className={styles.toolsList}>
+          {cluster.steps.map((step, i) => (
+            <ToolCallCard
+              key={step.callId != null ? String(step.callId) : 'tc-' + i}
+              item={step}
+              streamStatus={streamStatus}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+});
+
 interface TurnGroupProps {
   item: TurnGroupItem;
   isLiveRun: boolean;
@@ -140,6 +254,24 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
       {clusters.map((cluster, i) => {
         if (cluster.kind === 'inline') {
           const step = cluster.step;
+          const nextItem = clusters[i + 1];
+
+          // Completed turn: if this non-approval inline step immediately precedes a tool
+          // cluster, use it as the collapsible toggle header for that cluster.
+          if (isComplete && nextItem?.kind === 'cluster' && step.kind !== 'approval-request') {
+            return (
+              <HeaderedClusterRow
+                key={'hc-' + i}
+                headerStep={step}
+                cluster={nextItem}
+                defaultExpanded={hasClusterErrors(nextItem)}
+                streamStatus={streamStatus}
+                isLiveRun={isLiveRun}
+              />
+            );
+          }
+
+          // Normal inline rendering
           if (step.kind === 'agent-message') {
             return (
               <AgentMessageBubble
@@ -170,7 +302,7 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
               />
             );
           }
-          // report_intent — render as a compact system annotation, not a tool call row
+          // report_intent — compact system annotation
           if ((step as ToolCallItem).toolName === 'report_intent') {
             return (
               <Text
@@ -192,25 +324,26 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
           );
         }
 
-        // Tool cluster — collapse when turn is complete, expand when active
-        // Auto-expand if any step has an error or non-zero exit code
+        // Tool cluster — check if the preceding inline step already rendered it as a
+        // HeaderedClusterRow (in which case we skip here to avoid double-rendering).
+        const prevItem = clusters[i - 1];
+        if (isComplete && prevItem?.kind === 'inline' && prevItem.step.kind !== 'approval-request') {
+          return null;
+        }
+
+        // Completed cluster with no inline header: use the "Used N tools" fallback row.
         if (isComplete) {
-          const hasErrors = cluster.steps.some(s =>
-            s.error != null ||
-            (s.result?.content?.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== undefined &&
-             s.result.content.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== '0')
-          );
           return (
             <ToolClusterRow
-              key={"cluster-" + i + (isComplete ? "-done" : "-live")}
+              key={"cluster-" + i + "-done"}
               cluster={cluster}
-              defaultExpanded={hasErrors}
+              defaultExpanded={hasClusterErrors(cluster)}
               streamStatus={streamStatus}
             />
           );
         }
 
-        // Active turn: show tool calls inline
+        // Active turn: show tool calls inline (always expanded; users see streaming progress).
         return (
           <div key={"cluster-" + i} className={styles.toolsList}>
             {cluster.steps.map((step, j) => (
