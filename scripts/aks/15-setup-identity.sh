@@ -91,14 +91,6 @@ az identity federated-credential create \
   --audience api://AzureADTokenExchange
 
 echo ""
-echo "=== Step 7: Install Secrets Store CSI driver add-on with rotation ==="
-az aks enable-addons \
-  --name "${CLUSTER_NAME}" \
-  --resource-group "${RESOURCE_GROUP}" \
-  --addons azure-keyvault-secrets-provider \
-  --enable-secret-rotation \
-  --rotation-poll-interval 2m
-
 echo ""
 echo "=== Summary ==="
 echo "  IDENTITY_CLIENT_ID=${IDENTITY_CLIENT_ID}"
