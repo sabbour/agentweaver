@@ -61,6 +61,7 @@ public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Prog
                 ["Checkpoints:Path"]                      = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
+                ["Testing:BypassGitHubTokenAuth"]        = "true",
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",

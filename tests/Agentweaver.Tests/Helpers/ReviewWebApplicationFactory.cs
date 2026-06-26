@@ -40,6 +40,7 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
                 ["Checkpoints:Path"]                      = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
+                ["Testing:BypassGitHubTokenAuth"]        = "true",
                 // Primary owner key (Auth:ApiKey + Auth:User).
                 ["Auth:ApiKey"]                           = OwnerApiKey,
                 ["Auth:User"]                             = OwnerUser,

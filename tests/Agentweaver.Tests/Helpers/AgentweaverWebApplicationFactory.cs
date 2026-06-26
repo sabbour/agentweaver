@@ -38,6 +38,7 @@ public sealed class AgentweaverWebApplicationFactory : WebApplicationFactory<Pro
                 ["Checkpoints:Path"] = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
+                ["Testing:BypassGitHubTokenAuth"]        = "true",
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
                 ["Git:Author:Name"] = "Test",

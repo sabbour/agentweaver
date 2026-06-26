@@ -4,45 +4,42 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
-using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
 
 /// <summary>
-/// Web application factory for project-related integration tests.
-/// Replaces OsCredentialStoreGitHubTokenStore with InMemoryGitHubTokenStore,
-/// uses LocalFilesystemWorkspaceProvider pointed at an isolated temp directory,
-/// and stubs out ProjectGitInitializer to skip real git operations.
+/// Web application factory for MCP OAuth 2.1 integration tests (Feature 009 — MCP OAuth).
+///
+/// Configures a test API and AS under a synthetic issuer/audience so the metadata, PKCE,
+/// and backward-compat tests can run against the in-process server without real GitHub credentials
+/// or real Key Vault signing keys.
+///
+/// When Tank lands T1-T3 (metadata + token endpoints), tests here will become live.
+/// Until then, tests that depend on those endpoints are marked Skip with a clear TODO.
 /// </summary>
-public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
+public sealed class OAuthWebApplicationFactory : WebApplicationFactory<Program>
 {
-    public const string TestApiKey = "projects-test-api-key-54321";
-    public const string TestUser   = "projects-test-user";
+    // Static API key preserved for the S4 backward-compat path.
+    public const string TestApiKey  = "oauth-test-api-key-11111";
+    public const string TestUser    = "oauth-test-user";
+    public const string TestIssuer  = "http://localhost";
+    public const string TestAudience = "http://localhost/mcp";
 
     private readonly string _dbPath;
-    private readonly string _workspaceRoot;
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
     private readonly string _coordinatorCheckpointsPath;
 
-    public InMemoryGitHubTokenStore TokenStore { get; } = new();
-
-    public ProjectsWebApplicationFactory()
+    public OAuthWebApplicationFactory()
     {
         var unique = Guid.NewGuid().ToString("N");
-        _dbPath          = Path.Combine(Path.GetTempPath(), $"agentweaver-proj-{unique}.db");
-        _workspaceRoot   = Path.Combine(Path.GetTempPath(), $"agentweaver-proj-ws-{unique}");
-        _worktreesPath   = Path.Combine(Path.GetTempPath(), $"agentweaver-proj-wt-{unique}");
-        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-proj-cp-{unique}");
-        _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-proj-ccp-{unique}");
-
-        Directory.CreateDirectory(_workspaceRoot);
+        _dbPath          = Path.Combine(Path.GetTempPath(), $"agentweaver-oauth-{unique}.db");
+        _worktreesPath   = Path.Combine(Path.GetTempPath(), $"agentweaver-oauth-wt-{unique}");
+        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-oauth-cp-{unique}");
+        _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-oauth-ccp-{unique}");
     }
 
-    /// <summary>
-    /// Creates an authenticated HttpClient using the test API key.
-    /// </summary>
     public HttpClient CreateAuthenticatedClient()
     {
         var client = CreateClient();
@@ -50,6 +47,8 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestApiKey);
         return client;
     }
+
+    public HttpClient CreateUnauthenticatedClient() => CreateClient();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -61,12 +60,20 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
                 ["Worktrees:BasePath"]                    = _worktreesPath,
                 ["Checkpoints:Path"]                      = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
+                // Auth bypass (test-only)
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
+                // Static API key for S4 backward-compat tests
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
-                ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
+                // GitHub OAuth app stubs (required at startup)
+                ["Auth:GitHub:ClientId"]                  = "test-oauth-client-id",
                 ["Auth:GitHub:BaseUrl"]                   = "https://github.com",
+                // OAuth AS config (Tank T1 uses Auth:OAuth:Issuer / Auth:OAuth:Audience)
+                ["Auth:OAuth:Issuer"]                    = TestIssuer,
+                ["Auth:OAuth:Audience"]                  = TestAudience,
+                ["Auth:Mcp:AllowGitHubPassthrough"]      = "true",
+                // Misc required config
                 ["Git:Author:Name"]                       = "Test",
                 ["Git:Author:Email"]                      = "test@localhost",
                 ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",
@@ -82,24 +89,12 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
 
         builder.ConfigureServices(services =>
         {
-            // Replace OS credential store with in-memory store for tests.
             RemoveService<IGitHubTokenStore>(services);
-            services.AddSingleton<IGitHubTokenStore>(TokenStore);
+            services.AddSingleton<IGitHubTokenStore, InMemoryGitHubTokenStore>();
 
-            // Replace ProjectGitInitializer with a no-op stub.
             RemoveService<ProjectGitInitializer>(services);
             services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializer>();
         });
-    }
-
-    /// <summary>
-    /// Creates a project working directory under the isolated workspace root.
-    /// </summary>
-    public string NewWorkingDirectory()
-    {
-        var dir = Path.Combine(_workspaceRoot, Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        return dir;
     }
 
     protected override void Dispose(bool disposing)
@@ -108,41 +103,15 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
         if (!disposing) return;
 
         foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
-        {
             try { File.Delete(p); } catch { /* best effort */ }
-        }
 
-        foreach (var dir in new[] { _workspaceRoot, _worktreesPath, _checkpointsPath, _coordinatorCheckpointsPath })
-        {
+        foreach (var dir in new[] { _worktreesPath, _checkpointsPath, _coordinatorCheckpointsPath })
             try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
-        }
     }
 
     private static void RemoveService<T>(IServiceCollection services)
     {
-        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(T));
-        if (descriptor is not null) services.Remove(descriptor);
-    }
-}
-
-/// <summary>
-/// Stub ProjectGitInitializer that skips real git operations for tests.
-/// InitBlank just creates the directory and returns the branch name; Clone creates the directory and returns "main".
-/// </summary>
-internal sealed class NoOpProjectGitInitializer : ProjectGitInitializer
-{
-    public NoOpProjectGitInitializer(Microsoft.Extensions.Logging.ILogger<ProjectGitInitializer> logger)
-        : base(logger) { }
-
-    public override string InitBlank(string workingDirectory, string defaultBranch)
-    {
-        Directory.CreateDirectory(workingDirectory);
-        return defaultBranch;
-    }
-
-    public override string Clone(string workingDirectory, string sourceRepository, string accessToken)
-    {
-        Directory.CreateDirectory(workingDirectory);
-        return "main";
+        var d = services.FirstOrDefault(s => s.ServiceType == typeof(T));
+        if (d is not null) services.Remove(d);
     }
 }
