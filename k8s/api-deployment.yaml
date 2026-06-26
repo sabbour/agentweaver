@@ -49,6 +49,12 @@ spec:
               value: /tmp
             - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
               value: /tmp/.net
+            # EF design-time host build runs Program.Main, which trips OAuthConfigGuard.
+            # Pin Issuer/Audience here too so `efbundle` migrations pass the Production guard.
+            - name: Auth__OAuth__Issuer
+              value: https://${HOST}
+            - name: Auth__OAuth__Audience
+              value: https://${HOST}/mcp
           volumeMounts:
             - name: data
               mountPath: /data
