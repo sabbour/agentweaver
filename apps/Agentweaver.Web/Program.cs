@@ -3,19 +3,13 @@ var app = builder.Build();
 
 var fileProvider = app.Environment.WebRootFileProvider;
 
-// Rewrite /docs clean URLs before static file handling
+// Redirect /docs to /docs/ so default files work
 app.Use(async (context, next) =>
 {
-    var path = context.Request.Path.Value ?? "";
-    if (path.Equals("/docs", StringComparison.OrdinalIgnoreCase) ||
-        path.Equals("/docs/", StringComparison.OrdinalIgnoreCase))
+    if (context.Request.Path.Value?.Equals("/docs", StringComparison.OrdinalIgnoreCase) == true)
     {
-        context.Request.Path = "/docs/index.html";
-    }
-    else if (path.StartsWith("/docs/", StringComparison.OrdinalIgnoreCase) &&
-             !Path.HasExtension(path))
-    {
-        context.Request.Path = path + ".html";
+        context.Response.Redirect("/docs/", permanent: false);
+        return;
     }
     await next();
 });
