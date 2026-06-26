@@ -8,7 +8,6 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ApiError } from '../../api/client';
 import type { Project } from '../../api/types';
 import { useProjectList } from '../../hooks/useProjectList';
 import { NAV_ITEMS, type NavItemDef } from './navConfig';
