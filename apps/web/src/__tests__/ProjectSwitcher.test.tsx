@@ -10,6 +10,7 @@ vi.mock('../api/apiClient', () => ({
 }));
 
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { ProjectSwitcher, projectSwitchTarget } from '../components/shell/ProjectSwitcher';
 import type { Project } from '../api/types';
 
@@ -125,5 +126,36 @@ describe('ProjectSwitcher — switching navigates to the equivalent page', () =>
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toBe('/projects/B/board'),
     );
+  });
+});
+
+describe('ProjectSwitcher — 401 auth error', () => {
+  it('shows sign-in affordance and never "No projects yet" on a 401', async () => {
+    vi.mocked(apiClient.listProjects).mockRejectedValue(new ApiError(401, 'Unauthorized'));
+
+    renderSwitcherAt('/projects/A/board', 'A');
+
+    // Wait for the rejected promise to be processed.
+    const combo = screen.getByLabelText('Project switcher') as HTMLInputElement;
+    await waitFor(() => expect(combo.placeholder).toBe('Sign in to view projects'));
+
+    // The combobox must NOT be disabled on auth error (user needs to interact with it).
+    expect(combo.disabled).toBe(false);
+
+    // Opening the combobox must show the sign-in option, not "No projects yet".
+    fireEvent.click(combo);
+    const signInOption = await screen.findByText('Sign in with GitHub');
+    expect(signInOption).toBeDefined();
+    expect(screen.queryByText('No projects yet')).toBeNull();
+  });
+
+  it('still shows "Projects unavailable" (disabled) for non-auth errors', async () => {
+    vi.mocked(apiClient.listProjects).mockRejectedValue(new Error('Network failure'));
+
+    renderSwitcherAt('/projects/A/board', 'A');
+
+    const combo = screen.getByLabelText('Project switcher') as HTMLInputElement;
+    await waitFor(() => expect(combo.placeholder).toBe('Projects unavailable'));
+    expect(combo.disabled).toBe(true);
   });
 });

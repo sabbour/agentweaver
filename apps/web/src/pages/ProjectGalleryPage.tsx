@@ -567,6 +567,7 @@ export function ProjectGalleryPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [authRequired, setAuthRequired] = useState(false);
   const [dataDir, setDataDir] = useState<string | null>(null);
 
   useEffect(() => {
@@ -582,11 +583,16 @@ export function ProjectGalleryPage() {
     apiClient.listProjects()
       .then((list) => { if (!cancelled) setProjects(list); })
       .catch((err) => {
-        if (!cancelled) setError(
-          err instanceof ApiError
-            ? `API error ${err.status}: ${err.body}`
-            : err instanceof Error ? err.message : String(err),
-        );
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 401) {
+          setAuthRequired(true);
+        } else {
+          setError(
+            err instanceof ApiError
+              ? `API error ${err.status}: ${err.body}`
+              : err instanceof Error ? err.message : String(err),
+          );
+        }
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -602,13 +608,29 @@ export function ProjectGalleryPage() {
 
       {loading && <Spinner label="Loading projects" />}
 
+      {!loading && authRequired && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            Sign in with GitHub to see your projects.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button
+              size="small"
+              onClick={() => { window.location.href = '/auth/github/authorize'; }}
+            >
+              Sign in with GitHub
+            </Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
 
-      {!loading && !error && projects.length === 0 && (
+      {!loading && !error && !authRequired && projects.length === 0 && (
         <div className={styles.emptyState}>
           <Text>No projects yet. Create one to get started.</Text>
           <div className={styles.toolbar}>

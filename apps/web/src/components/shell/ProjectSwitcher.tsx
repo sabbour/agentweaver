@@ -9,6 +9,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { apiClient } from '../../api/apiClient';
+import { ApiError } from '../../api/client';
 import type { Project } from '../../api/types';
 import { NAV_ITEMS, type NavItemDef } from './navConfig';
 
@@ -105,6 +106,7 @@ export function ProjectSwitcher({
   const [projects, setProjects] = useState<Project[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [authError, setAuthError] = useState(false);
   const [comboValue, setComboValue] = useState('');
   const [recentIds, setRecentIds] = useState<string[]>(() => getRecentIds());
 
@@ -117,10 +119,17 @@ export function ProjectSwitcher({
           setProjects(list);
           setLoaded(true);
           setLoadError(false);
+          setAuthError(false);
         }
       })
-      .catch(() => {
-        if (!cancelled) setLoadError(true);
+      .catch((err) => {
+        if (!cancelled) {
+          if (err instanceof ApiError && err.status === 401) {
+            setAuthError(true);
+          } else {
+            setLoadError(true);
+          }
+        }
       });
     return () => {
       cancelled = true;
@@ -186,11 +195,13 @@ export function ProjectSwitcher({
     navigate(projectSwitchTarget(pathname, projectId, targetId));
   }
 
-  const placeholder = loadError
-    ? 'Projects unavailable'
-    : projectId
-      ? 'Select project…'
-      : 'No project selected';
+  const placeholder = authError
+    ? 'Sign in to view projects'
+    : loadError
+      ? 'Projects unavailable'
+      : projectId
+        ? 'Select project…'
+        : 'No project selected';
 
   return (
     <Tooltip content={currentName || placeholder} relationship="label" positioning="below-start">
@@ -203,11 +214,15 @@ export function ProjectSwitcher({
         disabled={loadError}
         onInput={(e) => setComboValue(e.currentTarget.value)}
         onOptionSelect={(_, data) => {
+          if (data.optionValue === '__signin__') {
+            window.location.href = '/auth/github/authorize';
+            return;
+          }
           if (data.optionValue) handleSwitch(data.optionValue);
         }}
         onBlur={() => setComboValue(currentName)}
       >
-        {recentProjects.length > 0 && (
+        {recentProjects.length > 0 && !authError && (
           <OptionGroup label="Recent">
             {recentProjects.map((p) => (
               <Option key={p.project_id} value={p.project_id} text={p.name}>
@@ -216,15 +231,20 @@ export function ProjectSwitcher({
             ))}
           </OptionGroup>
         )}
-        <OptionGroup label={recentProjects.length > 0 ? 'All projects' : undefined}>
-          {filtered.map((p) => (
+        <OptionGroup label={recentProjects.length > 0 && !authError ? 'All projects' : undefined}>
+          {!authError && filtered.map((p) => (
             <Option key={p.project_id} value={p.project_id} text={p.name}>
               {p.name}
             </Option>
           ))}
-          {filtered.length === 0 && (
+          {!authError && filtered.length === 0 && (
             <Option value="" disabled text="">
               {projects.length === 0 ? 'No projects yet' : `No projects match "${comboValue}"`}
+            </Option>
+          )}
+          {authError && (
+            <Option value="__signin__" text="Sign in with GitHub">
+              Sign in with GitHub
             </Option>
           )}
         </OptionGroup>

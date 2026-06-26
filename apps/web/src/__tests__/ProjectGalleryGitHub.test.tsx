@@ -118,3 +118,33 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     expect(req.source_repository).toBe('me/manual-repo');
   });
 });
+
+describe('ProjectGalleryPage — listProjects 401', () => {
+  it('shows sign-in affordance (not "No projects yet") when listProjects returns 401', async () => {
+    vi.mocked(apiClient.listProjects).mockRejectedValue(new ApiError(401, 'Unauthorized'));
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+
+    // Should show sign-in affordance.
+    await waitFor(() =>
+      expect(screen.getByText(/Sign in with GitHub to see your projects/)).toBeDefined(),
+    );
+    expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).toBeDefined();
+
+    // Must NOT show "No projects yet" — that's for a genuinely empty account.
+    expect(screen.queryByText(/No projects yet/)).toBeNull();
+    // Must NOT show a raw API error message.
+    expect(screen.queryByText(/API error 401/)).toBeNull();
+  });
+
+  it('still shows "No projects yet" when listProjects succeeds with an empty list', async () => {
+    vi.mocked(apiClient.listProjects).mockResolvedValue([]);
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+
+    await waitFor(() =>
+      expect(screen.getByText('No projects yet. Create one to get started.')).toBeDefined(),
+    );
+    expect(screen.queryByText(/Sign in with GitHub to see your projects/)).toBeNull();
+  });
+});
