@@ -33,6 +33,7 @@ internal sealed class McpProgram
         builder.Services.AddHttpClient();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<McpApiKeyRegistry>();
+        builder.Services.AddSingleton<McpAccessTokenValidator>();
 
         var mcpBuilder = builder.Services.AddMcpServer().WithToolsFromAssembly();
 
@@ -46,6 +47,30 @@ internal sealed class McpProgram
         if (!useStdio)
         {
             app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
+
+            // RFC 9728 §3a — Protected Resource Metadata. Served unauthenticated so MCP clients can
+            // discover the Authorization Server. Both the root and the resource-suffixed path are
+            // served because clients (Copilot CLI / VS Code) probe the suffixed form.
+            var protectedResourceMetadata = (HttpContext ctx) =>
+            {
+                var configuredIssuer = ctx.RequestServices
+                    .GetRequiredService<IConfiguration>()["Auth:Mcp:Issuer"];
+                var issuer = !string.IsNullOrWhiteSpace(configuredIssuer)
+                    ? configuredIssuer.TrimEnd('/')
+                    : $"{ctx.Request.Scheme}://{ctx.Request.Host.Value}";
+
+                return Results.Json(new Dictionary<string, object>
+                {
+                    ["resource"] = $"{issuer}/mcp",
+                    ["authorization_servers"] = new[] { issuer },
+                    ["bearer_methods_supported"] = new[] { "header" },
+                    ["scopes_supported"] = new[] { "mcp:invoke" },
+                    ["resource_documentation"] = $"{issuer}/docs",
+                });
+            };
+            app.MapGet("/.well-known/oauth-protected-resource", protectedResourceMetadata);
+            app.MapGet("/.well-known/oauth-protected-resource/mcp", protectedResourceMetadata);
+
             app.UseMiddleware<McpBearerTokenMiddleware>();
         }
 

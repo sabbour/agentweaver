@@ -18,6 +18,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly IGitHubOrgAuthorizationService _authzService;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<GitHubOrgAuthorizationMiddleware> _logger;
     private readonly bool _bypassForTests;
 
@@ -45,6 +46,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
     {
         _next = next;
         _authzService = authzService;
+        _configuration = configuration;
         _logger = logger;
 
         // F1: org-authorization bypass is honored ONLY in Development. In any other environment the
@@ -99,6 +101,28 @@ public sealed class GitHubOrgAuthorizationMiddleware
         if (caller is null)
         {
             await WriteUnauthorizedAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        // T7: callers authenticated via an Agentweaver-minted OAuth access token had org membership
+        // enforced by the Authorization Server at token issuance (and re-checked on each refresh).
+        // The token is audience-bound and signature-validated, so we trust its org claim here instead
+        // of making a per-request GitHub org call with a token that is not a GitHub credential.
+        if (caller.IsOAuthJwt)
+        {
+            var allowedOrg = _configuration["Auth:GitHub:AllowedOrg"]?.Trim();
+            if (!string.IsNullOrWhiteSpace(allowedOrg)
+                && string.Equals(caller.Org, allowedOrg, StringComparison.OrdinalIgnoreCase))
+            {
+                await _next(context).ConfigureAwait(false);
+                return;
+            }
+
+            _logger.LogWarning(
+                "Access denied for OAuth caller '{Login}': token org claim '{Org}' does not match the required organization.",
+                caller.GitHubLogin ?? caller.User, caller.Org);
+            await WriteForbiddenAsync(context,
+                "Access denied. OAuth token is not scoped to the required GitHub organization.").ConfigureAwait(false);
             return;
         }
 

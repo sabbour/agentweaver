@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Auth.OAuth;
 
 namespace Agentweaver.Api.Memory;
 
@@ -15,6 +16,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<Subtask> Subtasks => Set<Subtask>();
     public DbSet<SubtaskDependency> SubtaskDependencies => Set<SubtaskDependency>();
     public DbSet<SteeringDirective> SteeringDirectives => Set<SteeringDirective>();
+    public DbSet<McpRefreshToken> McpRefreshTokens => Set<McpRefreshToken>();
+    public DbSet<McpRevokedJti> McpRevokedJtis => Set<McpRevokedJti>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -67,5 +70,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .OnDelete(DeleteBehavior.Restrict);
 
         model.Entity<SteeringDirective>().HasIndex(s => new { s.CoordinatorRunId, s.Status });
+
+        model.Entity<McpRefreshToken>().HasIndex(t => t.TokenHash).IsUnique();
+        model.Entity<McpRefreshToken>().HasIndex(t => t.ChainId);
+        model.Entity<McpRefreshToken>().HasIndex(t => new { t.Subject, t.ClientId });
+        model.Entity<McpRevokedJti>().HasIndex(j => j.Jti).IsUnique();
+        model.Entity<McpRevokedJti>().HasIndex(j => j.ExpiresAt);
     }
 }

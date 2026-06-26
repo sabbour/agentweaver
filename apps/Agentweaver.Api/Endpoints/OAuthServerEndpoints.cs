@@ -1,5 +1,6 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -41,7 +42,7 @@ public static class OAuthServerEndpoints
                 revocation_endpoint = $"{issuer}/oauth/revoke",      // TODO(T4): revocation
                 scopes_supported = new[] { "mcp:invoke", "offline_access" },
                 response_types_supported = new[] { "code" },
-                grant_types_supported = new[] { "authorization_code" }, // refresh_token re-added in T4
+                grant_types_supported = new[] { "authorization_code", "refresh_token" },
                 code_challenge_methods_supported = new[] { "S256" }, // S256 only — plain is rejected
                 token_endpoint_auth_methods_supported = new[] { "none" },
             });
@@ -108,12 +109,16 @@ public static class OAuthServerEndpoints
             }
         }).AllowAnonymous().RequireRateLimiting(RateLimitPolicy);
 
-        // ---- T3: Token endpoint (authorization_code; refresh_token placeholder -> T4) ------------
+        // ---- T3/T4: Token endpoint (authorization_code + rotating refresh_token grants) ----------
         app.MapPost("/oauth/token", async (
             HttpContext ctx,
             McpOAuthBrokerService broker,
             McpTokenService tokenService,
-            IConfiguration config) =>
+            McpRefreshTokenStore refreshStore,
+            IGitHubOrgAuthorizationService orgAuth,
+            IGitHubAccessTokenProvider gitHubTokens,
+            IConfiguration config,
+            ILogger<Program> logger) =>
         {
             ctx.Response.Headers["Cache-Control"] = "no-store";
             ctx.Response.Headers["Pragma"] = "no-cache";
@@ -123,6 +128,8 @@ public static class OAuthServerEndpoints
 
             var form = await ctx.Request.ReadFormAsync(ctx.RequestAborted).ConfigureAwait(false);
             var grantType = form["grant_type"].ToString();
+            var issuer = OAuthServerConfig.ResolveIssuer(ctx, config);
+            var audience = OAuthServerConfig.ResolveAudience(issuer, config);
 
             if (string.Equals(grantType, "authorization_code", StringComparison.Ordinal))
             {
@@ -132,33 +139,109 @@ public static class OAuthServerEndpoints
                 if (error is not null)
                     return BadOAuthRequest(error.Error, error.ErrorDescription);
 
-                var issuer = OAuthServerConfig.ResolveIssuer(ctx, config);
-                var audience = OAuthServerConfig.ResolveAudience(issuer, config);
                 var org = config["Auth:GitHub:AllowedOrg"]?.Trim();
+                var clientId = form["client_id"].ToString();
 
                 var accessToken = tokenService.CreateAccessToken(
                     issuer, audience, grant!.Subject, grant.GithubLogin, org);
 
-                // F4: no refresh_token is issued until T4 lands a real rotating refresh-token store.
-                // Returning a non-functional placeholder caused conformant clients to attempt (and
-                // silently fail) auto-refresh, so it is omitted from both this response and the AS
-                // metadata grant_types_supported. T4 re-adds it once the store + rotation exist.
+                // T4: issue a rotating refresh token bound to sub + client_id (stored hashed).
+                var refreshToken = await refreshStore.IssueAsync(
+                    new McpRefreshGrant(grant.Subject, grant.GithubLogin, clientId, grant.Scope, org),
+                    ctx.RequestAborted).ConfigureAwait(false);
+
                 return Results.Json(new
                 {
                     access_token = accessToken,
                     token_type = "Bearer",
                     expires_in = (int)McpTokenService.AccessTokenLifetime.TotalSeconds,
                     scope = grant.Scope,
+                    refresh_token = refreshToken,
                 });
             }
 
             if (string.Equals(grantType, "refresh_token", StringComparison.Ordinal))
             {
-                // TODO(T4): implement rotating refresh-token grant (validate hash, rotate, reuse-detect).
-                return BadOAuthRequest("invalid_request", "refresh_token grant is not yet implemented (T4).");
+                var rotation = await refreshStore.RotateAsync(
+                    form["refresh_token"], form["client_id"], ctx.RequestAborted).ConfigureAwait(false);
+
+                if (rotation.Error is not null)
+                    return BadOAuthRequest(rotation.Error, rotation.ErrorDescription ?? "Refresh failed.");
+
+                var grant = rotation.Grant!;
+
+                // T4: re-validate org membership on refresh so revoked org access propagates within
+                // one access-token lifetime. Best-effort: if the brokered GitHub token is unavailable
+                // we fall back to the org captured at issuance (documented in the design).
+                if (orgAuth.IsConfigured)
+                {
+                    var gitHubToken = await gitHubTokens
+                        .GetValidAccessTokenAsync(GitHubTokenScope.ForUser(grant.GithubLogin), ctx.RequestAborted)
+                        .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(gitHubToken))
+                    {
+                        var membership = await orgAuth
+                            .CheckMembershipAsync(gitHubToken, grant.GithubLogin, ctx.RequestAborted)
+                            .ConfigureAwait(false);
+                        if (membership != OrgAuthResult.Allowed)
+                        {
+                            await refreshStore.RevokeAsync(form["refresh_token"], ctx.RequestAborted).ConfigureAwait(false);
+                            logger.LogWarning(
+                                "Refused refresh for {Login}: org membership re-check returned {Result}.",
+                                grant.GithubLogin, membership);
+                            return Results.Json(
+                                new { error = "access_denied", error_description = "Org membership is no longer valid." },
+                                statusCode: StatusCodes.Status403Forbidden);
+                        }
+                    }
+                }
+
+                var accessToken = tokenService.CreateAccessToken(
+                    issuer, audience, grant.Subject, grant.GithubLogin, grant.Org);
+
+                return Results.Json(new
+                {
+                    access_token = accessToken,
+                    token_type = "Bearer",
+                    expires_in = (int)McpTokenService.AccessTokenLifetime.TotalSeconds,
+                    scope = grant.Scope,
+                    refresh_token = rotation.NewRefreshToken,
+                });
             }
 
-            return BadOAuthRequest("unsupported_grant_type", "grant_type must be authorization_code.");
+            return BadOAuthRequest("unsupported_grant_type", "grant_type must be authorization_code or refresh_token.");
+        }).AllowAnonymous().RequireRateLimiting(RateLimitPolicy);
+
+        // ---- T4: Revocation endpoint (RFC 7009) -------------------------------------------------
+        // Always returns 200, even for an unknown/invalid token, per RFC 7009 §2.2. Revokes the
+        // refresh-token chain and, when the value is an Agentweaver access token, denylists its jti
+        // until natural expiry so it cannot be replayed before it lapses.
+        app.MapPost("/oauth/revoke", async (
+            HttpContext ctx,
+            McpTokenService tokenService,
+            McpRefreshTokenStore refreshStore,
+            IConfiguration config) =>
+        {
+            ctx.Response.Headers["Cache-Control"] = "no-store";
+            ctx.Response.Headers["Pragma"] = "no-cache";
+
+            if (!ctx.Request.HasFormContentType)
+                return BadOAuthRequest("invalid_request", "Expected application/x-www-form-urlencoded body.");
+
+            var form = await ctx.Request.ReadFormAsync(ctx.RequestAborted).ConfigureAwait(false);
+            var token = form["token"].ToString();
+
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                await refreshStore.RevokeAsync(token, ctx.RequestAborted).ConfigureAwait(false);
+
+                var issuer = OAuthServerConfig.ResolveIssuer(ctx, config);
+                var audience = OAuthServerConfig.ResolveAudience(issuer, config);
+                if (tokenService.TryReadJtiAndExpiry(token, issuer, audience, out var jti, out var expiresAt))
+                    await refreshStore.DenyJtiAsync(jti!, expiresAt, ctx.RequestAborted).ConfigureAwait(false);
+            }
+
+            return Results.Ok();
         }).AllowAnonymous().RequireRateLimiting(RateLimitPolicy);
     }
 

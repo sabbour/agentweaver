@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
@@ -23,6 +24,8 @@ public sealed class McpBearerTokenMiddleware
 
     private readonly RequestDelegate _next;
     private readonly McpApiKeyRegistry _registry;
+    private readonly McpAccessTokenValidator _tokenValidator;
+    private readonly IConfiguration _configuration;
     private readonly IMemoryCache _cache;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<McpBearerTokenMiddleware> _logger;
@@ -30,12 +33,16 @@ public sealed class McpBearerTokenMiddleware
     public McpBearerTokenMiddleware(
         RequestDelegate next,
         McpApiKeyRegistry registry,
+        McpAccessTokenValidator tokenValidator,
+        IConfiguration configuration,
         IMemoryCache cache,
         IHttpClientFactory httpClientFactory,
         ILogger<McpBearerTokenMiddleware> logger)
     {
         _next = next;
         _registry = registry;
+        _tokenValidator = tokenValidator;
+        _configuration = configuration;
         _cache = cache;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
@@ -43,8 +50,9 @@ public sealed class McpBearerTokenMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Health probe — no authentication required.
-        if (context.Request.Path.StartsWithSegments("/healthz"))
+        // Health probe and the unauthenticated RFC 9728 resource-metadata documents — no auth required.
+        if (context.Request.Path.StartsWithSegments("/healthz")
+            || context.Request.Path.StartsWithSegments("/.well-known/oauth-protected-resource"))
         {
             await _next(context).ConfigureAwait(false);
             return;
@@ -55,13 +63,14 @@ public sealed class McpBearerTokenMiddleware
         if (string.IsNullOrEmpty(header) ||
             !header.StartsWith(SchemePrefix, StringComparison.OrdinalIgnoreCase))
         {
-            await WriteUnauthorizedAsync(context).ConfigureAwait(false);
+            // No token supplied — emit the discovery challenge without an error code (spec-acceptable).
+            await WriteUnauthorizedAsync(context, includeError: false).ConfigureAwait(false);
             return;
         }
 
         var token = header[SchemePrefix.Length..].Trim();
 
-        // Fast path: Agentweaver API key (in-memory lookup, O(1)).
+        // Fast path: Agentweaver API key (in-memory lookup, O(1)). Tried FIRST for CI/automation.
         // Store both the resolved user and the raw token so AgentweaverApiClient can propagate it.
         if (_registry.TryResolveUser(token, out var apiUser))
         {
@@ -71,30 +80,55 @@ public sealed class McpBearerTokenMiddleware
             return;
         }
 
-        // Slow path: GitHub OAuth token, cached for 5 minutes.
-        var cacheKey = $"gh:{token}";
-        if (!_cache.TryGetValue(cacheKey, out string? gitHubLogin))
+        // Second path: Agentweaver-minted OAuth access token (signed JWT). Validated OFFLINE via the
+        // AS's cached JWKS (iss/aud/exp/RS256). The validated JWT is forwarded to the API, which
+        // performs the authoritative jti-denylist check and per-user org enforcement (T7).
+        var oauthIdentity = await _tokenValidator.ValidateAsync(token, context, context.RequestAborted)
+            .ConfigureAwait(false);
+        if (oauthIdentity is not null)
         {
-            gitHubLogin = await ValidateGitHubTokenAsync(token, context.RequestAborted)
-                .ConfigureAwait(false);
-
-            // Cache valid logins for 5 min; cache negative results briefly to limit GitHub API hammering.
-            _cache.Set(
-                cacheKey,
-                gitHubLogin,
-                gitHubLogin is not null ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(30));
-        }
-
-        if (gitHubLogin is null)
-        {
-            await WriteUnauthorizedAsync(context).ConfigureAwait(false);
+            context.Items[UserItemKey] = oauthIdentity.GitHubLogin;
+            context.Items["mcp.bearer_token"] = token;
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
-        context.Items[UserItemKey] = gitHubLogin;
-        // Store the raw token so AgentweaverApiClient forwards it to the backend as the caller's identity.
-        context.Items["mcp.bearer_token"] = token;
-        await _next(context).ConfigureAwait(false);
+        // Third path (transitional, gated): raw GitHub OAuth token, cached for 5 minutes. Disabled by
+        // setting Auth:Mcp:AllowGitHubPassthrough=false once all clients have migrated to the AS flow.
+        if (AllowGitHubPassthrough())
+        {
+            var cacheKey = $"gh:{token}";
+            if (!_cache.TryGetValue(cacheKey, out string? gitHubLogin))
+            {
+                gitHubLogin = await ValidateGitHubTokenAsync(token, context.RequestAborted)
+                    .ConfigureAwait(false);
+
+                // Cache valid logins for 5 min; cache negative results briefly to limit GitHub API hammering.
+                _cache.Set(
+                    cacheKey,
+                    gitHubLogin,
+                    gitHubLogin is not null ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(30));
+            }
+
+            if (gitHubLogin is not null)
+            {
+                context.Items[UserItemKey] = gitHubLogin;
+                // Store the raw token so AgentweaverApiClient forwards it as the caller's identity.
+                context.Items["mcp.bearer_token"] = token;
+                await _next(context).ConfigureAwait(false);
+                return;
+            }
+        }
+
+        // A token was supplied but failed every path — invalid_token challenge.
+        await WriteUnauthorizedAsync(context, includeError: true).ConfigureAwait(false);
+    }
+
+    /// <summary>Whether the transitional raw-GitHub-token path is enabled. Defaults to <c>true</c>.</summary>
+    private bool AllowGitHubPassthrough()
+    {
+        var flag = _configuration["Auth:Mcp:AllowGitHubPassthrough"];
+        return string.IsNullOrWhiteSpace(flag) || !string.Equals(flag, "false", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Returns the resolved GitHub login, or null when the token is invalid/expired.</summary>
@@ -125,11 +159,31 @@ public sealed class McpBearerTokenMiddleware
         }
     }
 
-    private static async Task WriteUnauthorizedAsync(HttpContext context)
+    private async Task WriteUnauthorizedAsync(HttpContext context, bool includeError)
     {
+        // RFC 9728 §5.1 — advertise the resource-metadata URL so MCP clients can discover the AS.
+        var issuer = ResolveIssuer(context);
+        var resourceMetadata = $"{issuer}/.well-known/oauth-protected-resource";
+        var challenge = includeError
+            ? $"Bearer realm=\"agentweaver-mcp\", error=\"invalid_token\", resource_metadata=\"{resourceMetadata}\""
+            : $"Bearer realm=\"agentweaver-mcp\", resource_metadata=\"{resourceMetadata}\"";
+
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.Headers.WWWAuthenticate = challenge;
         context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync("{\"error\":\"Bearer token required\"}")
+        await context.Response
+            .WriteAsync("{\"error\":\"invalid_token\",\"error_description\":\"Bearer token required\"}")
             .ConfigureAwait(false);
+    }
+
+    /// <summary>Issuer = configured <c>Auth:Mcp:Issuer</c>, else derived from the incoming request host.</summary>
+    private string ResolveIssuer(HttpContext context)
+    {
+        var configured = _configuration["Auth:Mcp:Issuer"];
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured.TrimEnd('/');
+
+        var request = context.Request;
+        return $"{request.Scheme}://{request.Host.Value}";
     }
 }

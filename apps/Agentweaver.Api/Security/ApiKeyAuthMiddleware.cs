@@ -4,8 +4,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Agentweaver.Api.Auth.OAuth;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// Authenticated caller resolved from the bearer GitHub token. Set on the request by
@@ -21,6 +23,17 @@ public sealed class CallerContext
     /// <c>SubmittingUser</c> matches EITHER <see cref="User"/> OR this GitHub login.
     /// </summary>
     public string? GitHubLogin { get; init; }
+
+    /// <summary>
+    /// True when this caller was authenticated from an Agentweaver-minted OAuth access token (T7),
+    /// rather than a raw GitHub token or static API key. For these callers org membership was already
+    /// enforced by the Authorization Server at token issuance (and re-checked on refresh), so the
+    /// org-authorization middleware trusts <see cref="Org"/> instead of making a GitHub org call.
+    /// </summary>
+    public bool IsOAuthJwt { get; init; }
+
+    /// <summary>The org claim carried by an Agentweaver OAuth access token (T7). Null for other callers.</summary>
+    public string? Org { get; init; }
 
     /// <summary>
     /// True when this caller owns a resource attributed to <paramref name="ownerUser"/>: it matches
@@ -55,6 +68,8 @@ public sealed class GitHubTokenAuthMiddleware
     private readonly RequestDelegate _next;
     private readonly IMemoryCache _cache;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly McpTokenService _tokenService;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<GitHubTokenAuthMiddleware> _logger;
     private readonly bool _bypassForTests;
     private readonly Dictionary<string, string> _testApiKeyMap;
@@ -65,11 +80,14 @@ public sealed class GitHubTokenAuthMiddleware
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         IHostEnvironment environment,
+        McpTokenService tokenService,
         ILogger<GitHubTokenAuthMiddleware> logger)
     {
         _next = next;
         _cache = cache;
         _httpClientFactory = httpClientFactory;
+        _tokenService = tokenService;
+        _configuration = configuration;
         _logger = logger;
 
         // F1: only honor the test bypass in Development. In any non-Development environment the flag
@@ -141,6 +159,32 @@ public sealed class GitHubTokenAuthMiddleware
         }
 
         var token = header[SchemePrefixStr.Length..].Trim();
+
+        // T7: Agentweaver-minted OAuth access token (JWT). Validate offline against the signing key
+        // (iss/aud/exp/RS256) so MCP→API calls carry the real per-user identity instead of collapsing
+        // onto the shared service key (fixes the confused-deputy limitation). A revoked jti is rejected.
+        var issuer = OAuthServerConfig.ResolveIssuer(context, _configuration);
+        var audience = OAuthServerConfig.ResolveAudience(issuer, _configuration);
+        if (_tokenService.TryValidateAccessToken(token, issuer, audience, out var claims) && claims is not null)
+        {
+            var refreshStore = context.RequestServices.GetRequiredService<McpRefreshTokenStore>();
+            if (await refreshStore.IsJtiDeniedAsync(claims.Jti, context.RequestAborted).ConfigureAwait(false))
+            {
+                await WriteUnauthorizedAsync(context).ConfigureAwait(false);
+                return;
+            }
+
+            context.Items[CallerItemKey] = new CallerContext
+            {
+                User = claims.Subject,
+                GitHubLogin = claims.GitHubLogin,
+                IsOAuthJwt = true,
+                Org = claims.Org,
+            };
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var cacheKey = ComputeTokenHash(token);
 
         if (!_cache.TryGetValue(cacheKey, out string? login))

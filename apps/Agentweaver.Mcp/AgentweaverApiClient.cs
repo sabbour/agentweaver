@@ -18,11 +18,10 @@ public sealed class AgentweaverApiClient
     private readonly HttpClient _http;
     private readonly McpConfig _config;
     // Injected when registered as scoped/singleton-with-accessor.
-    // When present, the caller's own API key is forwarded to the backend so the
-    // backend sees the real caller identity instead of the shared service identity.
-    // GitHub OAuth callers have no per-user API key, so they fall back to the
-    // shared AGENTWEAVER_API_KEY (limitation: all OAuth-authenticated calls reach
-    // the backend as the service identity).
+    // When present, the caller's own bearer token (API key, or an Agentweaver-minted OAuth access
+    // token validated by McpBearerTokenMiddleware) is forwarded to the backend so the backend sees
+    // the real caller identity instead of the shared service identity. Only stdio mode (no inbound
+    // HTTP context) falls back to the shared AGENTWEAVER_API_KEY.
     private readonly IHttpContextAccessor? _httpContextAccessor;
 
     private static readonly JsonSerializerOptions JsonOptions = new()

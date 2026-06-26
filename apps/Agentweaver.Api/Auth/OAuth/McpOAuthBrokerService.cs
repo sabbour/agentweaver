@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using Agentweaver.Domain;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Agentweaver.Api.Auth.OAuth;
@@ -122,6 +123,7 @@ public sealed class McpOAuthBrokerService
 
     private readonly GitHubOAuthRedirectService _gitHub;
     private readonly IGitHubOrgAuthorizationService _orgAuth;
+    private readonly IGitHubTokenStore _gitHubTokens;
     private readonly ILogger<McpOAuthBrokerService> _logger;
 
     private readonly ConcurrentDictionary<string, PendingAuthorization> _pending = new();
@@ -130,10 +132,12 @@ public sealed class McpOAuthBrokerService
     public McpOAuthBrokerService(
         GitHubOAuthRedirectService gitHub,
         IGitHubOrgAuthorizationService orgAuth,
+        IGitHubTokenStore gitHubTokens,
         ILogger<McpOAuthBrokerService> logger)
     {
         _gitHub = gitHub;
         _orgAuth = orgAuth;
+        _gitHubTokens = gitHubTokens;
         _logger = logger;
     }
 
@@ -203,6 +207,28 @@ public sealed class McpOAuthBrokerService
         _codes[authorizationCode] = new IssuedCode(
             login, login, pending.CodeChallenge, pending.RedirectUri, pending.ClientId, pending.Scope,
             DateTimeOffset.UtcNow.Add(AuthorizationCodeLifetime));
+
+        // Persist the brokered GitHub token under the per-user scope so the AS can re-check org
+        // membership when this user's access token is refreshed (T4). Stored only if no richer token
+        // already exists for the user (avoid clobbering a web-sign-in token that carries refresh material).
+        // The GitHub token is never returned to the MCP client.
+        try
+        {
+            var userScope = GitHubTokenScope.ForUser(login);
+            var existing = await _gitHubTokens.GetAsync(userScope, ct).ConfigureAwait(false);
+            if (existing.Status != GitHubTokenStatus.SignedIn)
+            {
+                await _gitHubTokens.SetAsync(
+                    userScope,
+                    new GitHubToken(gitHubAccessToken, null, null, login, null, []),
+                    ct).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: refresh-time org re-check degrades to the issuance-time org value.
+            _logger.LogWarning(ex, "Could not persist brokered GitHub token for {Login}; refresh org re-check will be best-effort.", login);
+        }
 
         _logger.LogInformation("Issued MCP authorization code for GitHub login {Login}.", login);
         return new BrokerCallbackResult(BrokerOutcome.Success, pending.RedirectUri, pending.ClientState,

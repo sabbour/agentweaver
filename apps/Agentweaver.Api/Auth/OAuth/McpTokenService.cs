@@ -139,6 +139,68 @@ public sealed class McpTokenService : IDisposable
         };
     }
 
+    /// <summary>Claims extracted from a validated Agentweaver access token.</summary>
+    public sealed record AccessTokenClaims(string Subject, string GitHubLogin, string? Org, string? Jti, string Scope);
+
+    /// <summary>
+    /// Validates an Agentweaver-minted access token (signature via the in-process signing key, plus
+    /// strict iss/aud/exp checks) and extracts its identity claims. Returns false for any token that
+    /// is not a valid Agentweaver JWT for this issuer/audience (e.g. a raw GitHub token or API key),
+    /// so callers can fall through to the legacy validation paths. Never throws.
+    /// </summary>
+    public bool TryValidateAccessToken(string token, string issuer, string audience, out AccessTokenClaims? claims)
+    {
+        claims = null;
+        if (string.IsNullOrWhiteSpace(token) || token.Count(c => c == '.') != 2)
+            return false;
+
+        try
+        {
+            var handler = new JsonWebTokenHandler();
+            var result = handler.ValidateTokenAsync(token, CreateValidationParameters(issuer, audience)).GetAwaiter().GetResult();
+            if (!result.IsValid || result.SecurityToken is not JsonWebToken jwt)
+                return false;
+
+            var subject = jwt.TryGetClaim("sub", out var sub) ? sub.Value : null;
+            if (string.IsNullOrEmpty(subject))
+                return false;
+
+            var ghLogin = jwt.TryGetClaim("gh_login", out var gh) ? gh.Value : subject;
+            var org = jwt.TryGetClaim("org", out var o) ? o.Value : null;
+            var jti = jwt.TryGetClaim("jti", out var j) ? j.Value : null;
+            var scope = jwt.TryGetClaim("scope", out var s) ? s.Value : AccessTokenScope;
+
+            claims = new AccessTokenClaims(subject, ghLogin, org, jti, scope);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Validates an Agentweaver-minted access token and extracts its <c>jti</c> and expiry. Used by
+    /// <c>/oauth/revoke</c> to denylist the token's id until natural expiry. Returns false when the
+    /// token is not a valid token for this issuer/audience (revoke then no-ops on the access-token path).
+    /// </summary>
+    public bool TryReadJtiAndExpiry(string token, string issuer, string audience, out string? jti, out DateTimeOffset expiresAt)
+    {
+        jti = null;
+        expiresAt = default;
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+
+        var handler = new JsonWebTokenHandler();
+        var result = handler.ValidateTokenAsync(token, CreateValidationParameters(issuer, audience)).GetAwaiter().GetResult();
+        if (!result.IsValid || result.SecurityToken is not JsonWebToken jwt)
+            return false;
+
+        jti = jwt.TryGetClaim("jti", out var jtiClaim) ? jtiClaim.Value : null;
+        expiresAt = jwt.ValidTo == default ? DateTimeOffset.UtcNow.Add(AccessTokenLifetime) : new DateTimeOffset(jwt.ValidTo, TimeSpan.Zero);
+        return !string.IsNullOrEmpty(jti);
+    }
+
     private static string ComputeKeyId(RSAParameters publicParameters)
     {
         // Deterministic kid derived from the public key material (RFC 7638-style), so the same key
