@@ -19,21 +19,29 @@ export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 1;
 export const ZOOM_STEP = 0.1;
 
-export const clampZoom = (z: number): number =>
-  Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
+export const clampZoom = (z: number, max = MAX_ZOOM): number =>
+  Math.min(max, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
+
+export interface CtrlScrollZoomOptions {
+  /** Upper zoom bound for this instance. Defaults to MAX_ZOOM (1 = 100%). */
+  maxZoom?: number;
+}
 
 export interface CtrlScrollZoom {
   /** Current zoom factor (1 = 100%). Apply via CSS `style={{ zoom }}`. */
   zoom: number;
-  /** Zoom in by one step (clamped to MAX_ZOOM). */
+  /** Zoom in by one step (clamped to effective max). */
   zoomIn: () => void;
   /** Zoom out by one step (clamped to MIN_ZOOM). */
   zoomOut: () => void;
   /** Callback ref to attach to the scroll viewport that receives the wheel gesture. */
   viewportRef: (node: HTMLElement | null) => void;
+  /** Effective upper zoom bound for this hook instance. */
+  maxZoom: number;
 }
 
-export function useCtrlScrollZoom(): CtrlScrollZoom {
+export function useCtrlScrollZoom(options?: CtrlScrollZoomOptions): CtrlScrollZoom {
+  const effectiveMax = options?.maxZoom ?? MAX_ZOOM;
   const [zoom, setZoom] = useState(1);
   const cleanupRef = useRef<(() => void) | null>(null);
 
@@ -46,17 +54,17 @@ export function useCtrlScrollZoom(): CtrlScrollZoom {
       const onWheel = (e: WheelEvent) => {
         if (!e.ctrlKey) return;
         e.preventDefault();
-        setZoom((z) => clampZoom(z - Math.sign(e.deltaY) * ZOOM_STEP));
+        setZoom((z) => clampZoom(z - Math.sign(e.deltaY) * ZOOM_STEP, effectiveMax));
       };
       node.addEventListener('wheel', onWheel, { passive: false });
       cleanupRef.current = () => node.removeEventListener('wheel', onWheel);
     }
-  }, []);
+  }, [effectiveMax]);
 
-  const zoomIn = useCallback(() => setZoom((z) => clampZoom(z + ZOOM_STEP)), []);
-  const zoomOut = useCallback(() => setZoom((z) => clampZoom(z - ZOOM_STEP)), []);
+  const zoomIn = useCallback(() => setZoom((z) => clampZoom(z + ZOOM_STEP, effectiveMax)), [effectiveMax]);
+  const zoomOut = useCallback(() => setZoom((z) => clampZoom(z - ZOOM_STEP, effectiveMax)), [effectiveMax]);
 
-  return { zoom, zoomIn, zoomOut, viewportRef };
+  return { zoom, zoomIn, zoomOut, viewportRef, maxZoom: effectiveMax };
 }
 
 const useControlStyles = makeStyles({
@@ -81,10 +89,12 @@ export interface ZoomControlsProps {
   zoom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  /** Effective max zoom; defaults to MAX_ZOOM (1 = 100%). */
+  maxZoom?: number;
 }
 
 /** The shared "Ctrl + Scroll to zoom" hint, +/- buttons, and live % readout. */
-export function ZoomControls({ zoom, onZoomIn, onZoomOut }: ZoomControlsProps) {
+export function ZoomControls({ zoom, onZoomIn, onZoomOut, maxZoom = MAX_ZOOM }: ZoomControlsProps) {
   const styles = useControlStyles();
   return (
     <div className={styles.zoomBar}>
@@ -105,7 +115,7 @@ export function ZoomControls({ zoom, onZoomIn, onZoomOut }: ZoomControlsProps) {
         appearance="subtle"
         icon={<ZoomInRegular />}
         aria-label="Zoom in"
-        disabled={zoom >= MAX_ZOOM}
+        disabled={zoom >= maxZoom}
         onClick={onZoomIn}
       />
     </div>

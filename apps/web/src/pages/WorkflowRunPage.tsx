@@ -235,7 +235,7 @@ export function WorkflowRunPage() {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
 
   // Ctrl+Scroll zoom over the workflow diagram (workflow-zoom) — shared with the board.
-  const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
+  const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
 
   // Scroll target for the "Jump to approval" banner action. Points at the workflow graph
   // section, where the running node carries the tool-approval badge.
@@ -861,7 +861,7 @@ export function WorkflowRunPage() {
           </div>
         ) : (
         <>
-          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
           <div className={styles.dagContainer} ref={viewportRef}>
             <div style={{ zoom, width: '100%', height: '100%' }}>
               <ReactFlow

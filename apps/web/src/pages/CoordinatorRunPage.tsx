@@ -1013,7 +1013,7 @@ export function CoordinatorRunPage() {
   const { events, status: streamStatus } = useRunStream(runId ?? '');
 
   // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
-  const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
+  const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
 
   // REST seed: coordinator GraphDescriptor (GET /api/runs/{id}/graph, coordinator variant).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
@@ -1959,7 +1959,7 @@ export function CoordinatorRunPage() {
             <CoordinatorSessionContext.Provider value={scrollToSession}>
             <CoordExpandContext.Provider value={expandValue}>
             <CoordViewRunContext.Provider value={openChildRun}>
-              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
               <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
                 <div style={{ zoom, width: '100%', height: '100%' }}>
                 <ReactFlow
