@@ -45,10 +45,12 @@ internal static class AgentweaverApiTools
     /// <param name="agentName">The agent name used as the submitter identity in API requests.</param>
     /// <param name="apiBaseUrl">The Agentweaver API base URL (e.g. <c>http://localhost:5000</c>).</param>
     /// <param name="apiKey">Bearer token for API authentication; may be null for unauthenticated local dev.</param>
+    /// <param name="httpClientOverride">Optional pre-configured HttpClient (for testing). If null a new client is created from <paramref name="apiBaseUrl"/>/<paramref name="apiKey"/>.</param>
     internal static IEnumerable<AIFunction> Build(
-        string projectId, string agentName, string apiBaseUrl, string? apiKey)
+        string projectId, string agentName, string apiBaseUrl, string? apiKey,
+        HttpClient? httpClientOverride = null)
     {
-        var http = CreateHttpClient(apiBaseUrl, apiKey);
+        var http = httpClientOverride ?? CreateHttpClient(apiBaseUrl, apiKey);
 
         yield return AIFunctionFactory.Create(
             async (
@@ -63,8 +65,11 @@ internal static class AgentweaverApiTools
                     $"api/projects/{projectId}/decisions/inbox",
                     new { agent_name = agentName, slug, type, title, content, rationale },
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return $"Decision submitted to inbox: {title}";
+                return await HandleWriteResponseAsync(
+                    "submit_decision", response,
+                    successMessage: $"Decision submitted to inbox: {title}",
+                    conflictMessage: $"Decision '{slug}' already recorded (already merged or rejected — no changes).",
+                    ct).ConfigureAwait(false);
             },
             "submit_decision",
             "Submit an architectural, scope, or process decision to the project decision inbox for team review. " +
@@ -82,8 +87,8 @@ internal static class AgentweaverApiTools
                     $"api/projects/{projectId}/agents/{agentName}/memory",
                     new { type, importance, content, tags },
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return "Memory recorded.";
+                return await HandleWriteResponseAsync(
+                    "record_memory", response, "Memory recorded.", null, ct).ConfigureAwait(false);
             },
             "record_memory",
             "Record a learning, pattern, or insight into agent memory for future reference. " +
@@ -98,8 +103,8 @@ internal static class AgentweaverApiTools
                     $"api/projects/{projectId}/sessions/current",
                     new { summary },
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return "Session updated.";
+                return await HandleWriteResponseAsync(
+                    "update_session", response, "Session updated.", null, ct).ConfigureAwait(false);
             },
             "update_session",
             "Append a progress note or completion summary to the current project session log. " +
@@ -117,8 +122,11 @@ internal static class AgentweaverApiTools
                     $"api/projects/{projectId}/decisions/inbox",
                     new { agent_name = agentName, slug, type, title, content },
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return $"Inbox entry submitted: {title}";
+                return await HandleWriteResponseAsync(
+                    "submit_inbox_entry", response,
+                    successMessage: $"Inbox entry submitted: {title}",
+                    conflictMessage: $"Inbox entry '{slug}' already recorded (already merged or rejected — no changes).",
+                    ct).ConfigureAwait(false);
             },
             "submit_inbox_entry",
             "Submit a general inbox entry such as a learning, update, or boundary conflict flag. " +
@@ -133,8 +141,11 @@ internal static class AgentweaverApiTools
                 var response = await http.GetAsync(
                     $"api/projects/{projectId}/decisions/inbox{query}",
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode)
+                    return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var body = string.Empty;
+                try { body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
+                return $"list_inbox failed: HTTP {(int)response.StatusCode} — {body}";
             },
             "list_inbox",
             "List pending decision inbox entries for this project. Returns JSON. " +
@@ -149,8 +160,11 @@ internal static class AgentweaverApiTools
                     $"api/projects/{projectId}/decisions/inbox/{entryId}/merge",
                     new { },
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return $"Inbox entry {entryId} merged into decisions.";
+                return await HandleWriteResponseAsync(
+                    "merge_inbox_entry", response,
+                    successMessage: $"Inbox entry {entryId} merged into decisions.",
+                    conflictMessage: $"Inbox entry {entryId} is not pending or does not exist.",
+                    ct).ConfigureAwait(false);
             },
             "merge_inbox_entry",
             "Merge a pending inbox entry into the project decision log. " +
@@ -164,8 +178,9 @@ internal static class AgentweaverApiTools
                     $"api/projects/{projectId}/memory/export",
                     new { },
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return "Memory exported to .squad/ and .agentweaver/context/.";
+                return await HandleWriteResponseAsync(
+                    "export_memory", response,
+                    "Memory exported to .squad/ and .agentweaver/context/.", null, ct).ConfigureAwait(false);
             },
             "export_memory",
             "Export all project decisions, inbox entries, memories, and session context to .squad/ " +
@@ -208,8 +223,11 @@ internal static class AgentweaverApiTools
                     $"api/projects/{projectId}/backlog/tasks",
                     new { title, description },
                     ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var body = string.Empty;
+                try { body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
+                return response.IsSuccessStatusCode
+                    ? body
+                    : $"backlog_capture_task failed: HTTP {(int)response.StatusCode} — {body}";
             },
             "backlog_capture_task",
             "MCP-equivalent Agentweaver backlog_capture_task scoped to the current project. " +
@@ -299,6 +317,29 @@ internal static class AgentweaverApiTools
             "MCP-equivalent Agentweaver orchestration_topology. Returns a combined work-plan and children snapshot.");
     }
 
+    /// <summary>
+    /// Handles a write response: returns the success message on 2xx, the conflict message on 409 (if provided),
+    /// or a descriptive non-throwing error string for any other non-2xx status.
+    /// Never throws for server-side errors — the agent sees the error as a tool result and can continue/retry.
+    /// </summary>
+    private static async Task<string> HandleWriteResponseAsync(
+        string toolName,
+        HttpResponseMessage response,
+        string successMessage,
+        string? conflictMessage,
+        CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode)
+            return successMessage;
+
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict && conflictMessage is not null)
+            return conflictMessage;
+
+        var body = string.Empty;
+        try { body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
+        return $"{toolName} failed: HTTP {(int)response.StatusCode} — {body}";
+    }
+
     private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)
     {
         var http = new HttpClient { BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + '/') };
@@ -352,14 +393,26 @@ internal static class AgentweaverApiTools
     private static async Task<string> GetJsonAsync(HttpClient http, string path, CancellationToken ct)
     {
         var response = await http.GetAsync(path, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var content = string.Empty;
+        try { content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
+        return response.IsSuccessStatusCode
+            ? content
+            : $"GET {path} failed: HTTP {(int)response.StatusCode} — {content}";
     }
 
     private static async Task<JsonElement> GetJsonElementAsync(HttpClient http, string path, CancellationToken ct)
     {
         var json = await GetJsonAsync(http, path, ct).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.Clone();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            // GetJsonAsync returned an error string (non-2xx path) — return a JSON string element
+            // so callers can propagate the message without crashing.
+            return JsonDocument.Parse(JsonSerializer.Serialize(json)).RootElement.Clone();
+        }
     }
 }

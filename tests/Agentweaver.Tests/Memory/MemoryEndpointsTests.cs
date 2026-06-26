@@ -382,6 +382,39 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    [Fact]
+    public async Task Test_InboxSubmit_ConflictOnMergedSlug_Returns409()
+    {
+        // When a slug was already merged (status != "pending"), re-submitting the same slug must 409.
+        // This is the live scenario that caused opaque "Tool execution failed" in the agent runtime.
+        var projectId = await CreateProjectAsync();
+        var decisionId = await SeedDecisionAsync(projectId, "smith", "architectural", "Existing", "decision");
+        await SeedInboxEntryAsync(projectId, "smith", "already-merged-slug", "architectural",
+            "Done", "done", status: "merged", decisionId: decisionId, mergedAt: DateTimeOffset.UtcNow);
+
+        var response = await SubmitInboxAsync(projectId, slug: "already-merged-slug",
+            title: "Re-submit attempt", content: "Should conflict");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "re-submitting a slug whose entry is already merged must return 409, not update the entry");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task Test_InboxSubmit_ConflictOnRejectedSlug_Returns409()
+    {
+        var projectId = await CreateProjectAsync();
+        await SeedInboxEntryAsync(projectId, "smith", "already-rejected-slug", "architectural",
+            "Rejected", "rejected content", status: "rejected");
+
+        var response = await SubmitInboxAsync(projectId, slug: "already-rejected-slug",
+            title: "Re-submit attempt", content: "Should conflict");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "re-submitting a slug whose entry is already rejected must return 409");
+    }
+
     private async Task<string> CreateProjectAsync()
     {
         var response = await _client.PostAsJsonAsync("/api/projects", new
