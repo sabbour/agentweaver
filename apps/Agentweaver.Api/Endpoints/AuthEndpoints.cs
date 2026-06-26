@@ -50,7 +50,7 @@ app.MapGet("/auth/github/callback", async (
     IConfiguration configuration,
     CancellationToken ct) =>
 {
-    var frontendUrl = configuration["Auth:GitHub:FrontendUrl"] ?? "http://localhost:8080";
+    var frontendUrl = (configuration["Auth:GitHub:FrontendUrl"] ?? "http://localhost:8080").TrimEnd('/');
 
     if (!string.IsNullOrWhiteSpace(error))
         return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");

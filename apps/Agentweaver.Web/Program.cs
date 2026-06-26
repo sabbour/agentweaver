@@ -1,18 +1,26 @@
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-// Serve VitePress docs at /docs/ (before general static files so /docs/ resolves index.html)
-app.UseFileServer(new FileServerOptions
+var fileProvider = app.Environment.WebRootFileProvider;
+
+// Rewrite /docs clean URLs before static file handling
+app.Use(async (context, next) =>
 {
-    RequestPath = "/docs",
-    EnableDefaultFiles = true,
-    EnableDirectoryBrowsing = false
+    var path = context.Request.Path.Value ?? "";
+    if (path.Equals("/docs", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/docs/", StringComparison.OrdinalIgnoreCase))
+    {
+        context.Request.Path = "/docs/index.html";
+    }
+    else if (path.StartsWith("/docs/", StringComparison.OrdinalIgnoreCase) &&
+             !Path.HasExtension(path))
+    {
+        context.Request.Path = path + ".html";
+    }
+    await next();
 });
 
 app.UseDefaultFiles();
-
-// Long-lived immutable cache for Vite's content-hashed asset bundles.
-// HTML files intentionally get no cache header so browsers always revalidate.
 app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = ctx =>
@@ -25,7 +33,7 @@ app.UseStaticFiles(new StaticFileOptions
     }
 });
 
-// SPA fallback — only for non-/docs paths
+// SPA fallback — skip /docs paths (VitePress is static HTML, not SPA)
 app.MapFallback(context =>
 {
     if (context.Request.Path.StartsWithSegments("/docs"))
@@ -34,8 +42,7 @@ app.MapFallback(context =>
         return Task.CompletedTask;
     }
     context.Response.ContentType = "text/html";
-    return context.Response.SendFileAsync(
-        app.Environment.WebRootFileProvider.GetFileInfo("index.html"));
+    return context.Response.SendFileAsync(fileProvider.GetFileInfo("index.html"));
 });
 
 app.Run();

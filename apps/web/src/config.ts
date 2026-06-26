@@ -68,6 +68,9 @@ export function captureSessionAuthFromUrl(): void {
   params.delete('sessionToken');
   params.delete('login');
   params.delete('github_login');
-  const next = `${window.location.pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`;
+  params.delete('auth');
+  // Normalize double slashes to prevent SecurityError on history.replaceState
+  const pathname = window.location.pathname.replace(/\/\/+/g, '/') || '/';
+  const next = `${pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`;
   window.history.replaceState({}, document.title, next);
 }
