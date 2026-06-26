@@ -1,9 +1,0 @@
-{
-  "id": "blueprint-platform-sre",
-  "name": "Platform SRE",
-  "description": "A platform reliability team for incident response, triage, and sustainable delivery of resilient infrastructure.",
-  "roster": ["incident-lead", "triage-lead", "devops-engineer", "backend-engineer", "security-engineer", "qa-engineer"],
-  "workflows": ["incident-response", "bug-fix", "software-delivery"],
-  "review_policy": "default",
-  "sandbox_profile": "default"
-}

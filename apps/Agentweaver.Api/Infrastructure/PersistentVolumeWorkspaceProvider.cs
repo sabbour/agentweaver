@@ -42,7 +42,16 @@ public sealed class PersistentVolumeWorkspaceProvider : IProjectWorkspaceProvide
                 throw new WorkspaceUnavailableException(
                     $"Persistent volume for project '{id}' is not mounted at '{workingDirectory}'. " +
                     "Ensure the volume is provisioned and attached before creating or running against this project.");
-            Directory.CreateDirectory(workingDirectory);
+            try
+            {
+                Directory.CreateDirectory(workingDirectory);
+            }
+            catch (Exception ex)
+            {
+                throw new WorkspaceUnavailableException(
+                    $"Cannot create project directory '{workingDirectory}' on the persistent volume. " +
+                    $"Check that the volume is writable by the running user (uid/gid/fsGroup). Detail: {ex.GetType().Name}: {ex.Message}", ex);
+            }
         }
 
         // Writable probe

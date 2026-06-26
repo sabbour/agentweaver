@@ -1,0 +1,32 @@
+# Custom StorageClass for the workspace PVC.
+#
+# WHY THIS EXISTS:
+#   The AKS built-in `azurefile-csi-premium` StorageClass has no mountOptions,
+#   so Azure Files SMB shares mount root-owned and ignore the pod's fsGroup: 1000.
+#   The API container runs as uid/gid 1000 with readOnlyRootFilesystem:true, so
+#   Directory.CreateDirectory under /workspace throws UnauthorizedAccessException.
+#
+# IMMUTABILITY NOTE:
+#   StorageClass mountOptions are immutable after creation. Rather than patching the
+#   cluster-managed built-in StorageClass (which is not in this repo and cannot be
+#   patched), we define a new StorageClass here so all changes go through GitOps.
+#
+# APPLY ORDER: apply this file BEFORE recreating the workspace PVC.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-csi-premium-uid1000
+provisioner: file.csi.azure.com
+parameters:
+  skuName: Premium_LRS
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - dir_mode=0755
+  - file_mode=0644
+  - uid=1000
+  - gid=1000
+  - mfsymlinks
+  - cache=strict
+  - actimeo=30

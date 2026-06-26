@@ -137,10 +137,18 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
   };
 }
 
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('blank', onCreated);
   const [folderName, setFolderName] = useState('');
+  const [folderEdited, setFolderEdited] = useState(false);
   const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && !d.saving);
 
   const handleFolderChange = (value: string) => {
@@ -149,7 +157,7 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
   };
 
   return (
-    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setFolderName(''); } }}>
+    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setFolderName(''); setFolderEdited(false); } }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="primary">Create blank project</Button>
       </DialogTrigger>
@@ -159,7 +167,14 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
           <DialogContent>
             <div className={styles.dialogFields}>
               <Field label="Name" required>
-                <Input value={d.name} onChange={(_, v) => d.setName(v.value)} placeholder="My project" />
+                <Input
+                  value={d.name}
+                  onChange={(_, v) => {
+                    d.setName(v.value);
+                    if (!folderEdited) handleFolderChange(slugify(v.value));
+                  }}
+                  placeholder="My project"
+                />
               </Field>
               <Field
                 label="Repository folder"
@@ -169,7 +184,10 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
                 <Input
                   contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
                   value={folderName}
-                  onChange={(_, v) => handleFolderChange(v.value)}
+                  onChange={(_, v) => {
+                    setFolderEdited(v.value !== '');
+                    handleFolderChange(v.value);
+                  }}
                   placeholder="my-repo"
                 />
               </Field>
@@ -260,6 +278,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
   const { repos, loading: reposLoading, authRequired, error: reposError, reload: reloadRepos } = useGitHubRepos(d.open);
   const [repoFilter, setRepoFilter] = useState('');
   const [folderName, setFolderName] = useState('');
+  const [folderEdited, setFolderEdited] = useState(false);
   const canCreate = Boolean(
     d.name.trim() && d.workingDirectory.trim() && d.sourceRepository.trim() && !d.saving,
   );
@@ -274,7 +293,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
   );
 
   return (
-    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setRepoFilter(''); setFolderName(''); } }}>
+    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setRepoFilter(''); setFolderName(''); setFolderEdited(false); } }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="secondary">Create from GitHub</Button>
       </DialogTrigger>
@@ -284,7 +303,14 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
           <DialogContent>
             <div className={styles.dialogFields}>
               <Field label="Name" required>
-                <Input value={d.name} onChange={(_, v) => d.setName(v.value)} placeholder="My project" />
+                <Input
+                  value={d.name}
+                  onChange={(_, v) => {
+                    d.setName(v.value);
+                    if (!folderEdited) handleFolderChange(slugify(v.value));
+                  }}
+                  placeholder="My project"
+                />
               </Field>
               <Field label="Source repository" required hint="Search GitHub, or type owner/repo manually">
                 <Combobox
@@ -346,7 +372,10 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                 <Input
                   contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
                   value={folderName}
-                  onChange={(_, v) => handleFolderChange(v.value)}
+                  onChange={(_, v) => {
+                    setFolderEdited(v.value !== '');
+                    handleFolderChange(v.value);
+                  }}
                   placeholder="my-repo"
                 />
               </Field>

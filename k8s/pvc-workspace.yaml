@@ -5,7 +5,7 @@ metadata:
   namespace: agentweaver
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: azurefile-csi-premium
+  storageClassName: azurefile-csi-premium-uid1000
   resources:
     requests:
       storage: 50Gi

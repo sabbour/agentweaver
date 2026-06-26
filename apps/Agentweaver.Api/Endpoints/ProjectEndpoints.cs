@@ -188,7 +188,9 @@ app.MapPost("/api/projects", async (
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to create project");
-        return Results.Problem("Failed to create the project.", statusCode: 500);
+        return Results.Problem(
+            $"Failed to create the project. {ex.GetType().Name}: {ex.Message}",
+            statusCode: 500);
     }
 });
 

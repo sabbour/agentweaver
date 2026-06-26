@@ -45,13 +45,12 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         var blueprints = body.GetProperty("blueprints").EnumerateArray().ToList();
-        blueprints.Should().HaveCount(6);
+        blueprints.Should().HaveCount(5);
 
         var ids = blueprints.Select(b => b.GetProperty("id").GetString()).ToList();
         ids.Should().Contain(new[]
         {
             "blueprint-content-authoring",
-            "blueprint-platform-sre",
             "blueprint-ai-agent-engineering",
             "blueprint-product-management",
             "blueprint-software-development",
