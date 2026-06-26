@@ -202,6 +202,47 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     // Helpers
     // =========================================================================
 
+    // =========================================================================
+    // PC-09: CreateBlankAsync does NOT write default.yaml — the built-in
+    //   workflow provides 'default' without a reserved-id conflict
+    // =========================================================================
+    [Fact]
+    public async Task CreateBlankAsync_DoesNotMaterializeDefaultWorkflowYaml()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store   = new SqliteProjectStore(testDb.Db);
+        var service = BuildService(store);
+        var dir     = NewDir();
+
+        var project = await service.CreateBlankAsync("Workflow Check", dir, null, null, null, "user");
+
+        var defaultYaml = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "default.yaml");
+        File.Exists(defaultYaml).Should().BeFalse(
+            "materializing default.yaml causes a reserved-id conflict in WorkflowRegistry; the built-in default is provided without an on-disk copy");
+    }
+
+    // =========================================================================
+    // PC-10: WorkflowRegistry for a new blank project returns exactly ONE
+    //   'default' workflow entry, and it must be Valid (built-in, no duplicate)
+    // =========================================================================
+    [Fact]
+    public async Task WorkflowRegistry_NewBlankProject_ExactlyOneDefaultWorkflow_Valid()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store   = new SqliteProjectStore(testDb.Db);
+        var service = BuildService(store);
+        var dir     = NewDir();
+
+        var project  = await service.CreateBlankAsync("Registry Check", dir, null, null, null, "user");
+        var registry = new Agentweaver.Api.Workflows.WorkflowRegistry();
+        var results  = registry.List(project);
+
+        var defaultEntries = results.Where(r => r.Definition?.Id == "default" || r.Source == "built-in").ToList();
+        defaultEntries.Should().HaveCount(1, "exactly one 'default' workflow must be present");
+        defaultEntries[0].IsValid.Should().BeTrue("the built-in default must always be valid");
+        defaultEntries[0].IsBuiltIn.Should().BeTrue("the single default entry must be the built-in");
+    }
+
     /// <summary>Stub git initializer: creates directories without real git operations.</summary>
     private sealed class NoOpGitInitializer : ProjectGitInitializer
     {

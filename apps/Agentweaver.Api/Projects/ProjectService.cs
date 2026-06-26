@@ -80,10 +80,9 @@ public sealed class ProjectService
             throw;
         }
 
-        // Materialize the default workflow into the new project (Feature 010). Best-effort: never fail
-        // creation if this write fails — the loader regenerates the default from DefaultWorkflowTemplate
-        // at runtime. A blank project is empty, so this always writes default.yaml.
-        TryMaterializeDefaultWorkflow(workingDir);
+        // Materialize the default review policy into the new project (Feature 010). Best-effort: never fail
+        // creation if this write fails — the loader regenerates the default from DefaultReviewPolicyTemplate
+        // at runtime. A blank project is empty, so this always writes the default policy.
         TryMaterializeDefaultReviewPolicy(workingDir);
 
         var project = new Project
@@ -168,11 +167,10 @@ public sealed class ProjectService
             throw;
         }
 
-        // Materialize the default workflow into the cloned project (Feature 010). Best-effort and
-        // non-clobbering: TryMaterialize skips the write when .agentweaver/workflows/default.yaml
-        // already exists, so a repo that ships its own workflows is never overwritten. Never fails
-        // creation; the loader regenerates the default from DefaultWorkflowTemplate at runtime.
-        TryMaterializeDefaultWorkflow(workingDir);
+        // Materialize the default review policy into the cloned project (Feature 010). Best-effort and
+        // non-clobbering: TryMaterialize skips the write when the file already exists, so a repo that
+        // ships its own review policies is never overwritten. Never fails creation; the loader
+        // regenerates the default from DefaultReviewPolicyTemplate at runtime.
         TryMaterializeDefaultReviewPolicy(workingDir);
 
         var project = new Project
@@ -447,25 +445,6 @@ public sealed class ProjectService
         {
             _logger.LogWarning(ex, "Failed to clean up directory {Path} during rollback", path);
         }
-    }
-
-    /// <summary>
-    /// Best-effort materialization of the default workflow into the project's working directory at
-    /// <c>.agentweaver/workflows/default.yaml</c> (Feature 010). Non-clobbering and never throws:
-    /// project creation must not fail if this write fails, because the workflow loader regenerates the
-    /// default from <see cref="DefaultWorkflowTemplate"/> at runtime.
-    /// </summary>
-    private void TryMaterializeDefaultWorkflow(string workingDir)
-    {
-        var written = DefaultWorkflowTemplate.TryMaterialize(workingDir, out var error);
-        if (error is not null)
-            _logger.LogWarning(
-                "Failed to materialize the default workflow into {Path} ({Error}); the runtime default will be used instead.",
-                Path.Combine(workingDir, DefaultWorkflowTemplate.RelativeFilePath), error);
-        else if (written)
-            _logger.LogInformation(
-                "Materialized the default workflow into {Path}.",
-                Path.Combine(workingDir, DefaultWorkflowTemplate.RelativeFilePath));
     }
 
     /// <summary>
