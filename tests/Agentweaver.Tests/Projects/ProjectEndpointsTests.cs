@@ -370,4 +370,21 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
     }
+
+    // =========================================================================
+    // PE-15: GET /healthz/workspace returns 200 with local-filesystem provider
+    //   (LocalFilesystemWorkspaceProvider.IsMountRootHealthy is always true)
+    // =========================================================================
+    [Fact]
+    public async Task GetWorkspaceReadiness_Returns200_ForLocalProvider()
+    {
+        // This factory uses the default LocalFilesystemWorkspaceProvider which always reports healthy.
+        var unauthClient = _factory.CreateClient();
+
+        var response = await unauthClient.GetAsync("/healthz/workspace");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("ok");
+    }
 }

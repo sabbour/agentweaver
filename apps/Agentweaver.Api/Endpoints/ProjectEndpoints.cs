@@ -183,7 +183,9 @@ app.MapPost("/api/projects", async (
     }
     catch (WorkspaceUnavailableException ex)
     {
-        return Results.BadRequest(new { error = ex.Message });
+        return Results.Json(
+            new { error = "workspace_unavailable", message = ex.Message },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (Exception ex)
     {

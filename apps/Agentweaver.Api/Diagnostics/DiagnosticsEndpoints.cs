@@ -25,6 +25,19 @@ public static class DiagnosticsEndpoints
         // Lightweight liveness probe: no database, GitHub, Key Vault, or workspace checks.
         app.MapGet("/api/ping", () => Results.Ok(new { status = "ok" }));
 
+        // Workspace mount readiness probe. Returns 200 when the workspace mount root is
+        // present and writable; 503 when the volume is missing or read-only. Kubernetes
+        // readiness probes call this path unauthenticated — it is exempt from GitHub token
+        // auth (path does not start with /api) and from org-auth (exempt prefix /healthz).
+        app.MapGet("/healthz/workspace", (IProjectWorkspaceProvider workspaceProvider) =>
+        {
+            var healthy = workspaceProvider.IsMountRootHealthy();
+            return healthy
+                ? Results.Ok(new { status = "ok" })
+                : Results.Json(new { status = "unavailable", error = "workspace_mount_unavailable" },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
         // FR-016: Global system diagnostics — real executed checks, no mocks.
         // Reachable from the MCP server at parity (FR-016a).
         app.MapGet("/api/diagnostics", async (

@@ -73,9 +73,37 @@ public sealed class PersistentVolumeWorkspaceProvider : IProjectWorkspaceProvide
 
     public bool IsAvailable(string workingDirectory)
     {
-        if (!Directory.Exists(workingDirectory)) return false;
-        // Quick writable probe
+        // NOTE: Do not use Directory.Exists() here. On CIFS mounts with actimeo caching, .NET's
+        // statx(2)-based existence check can return ENOENT on reachable directories, producing a
+        // false negative that makes healthy projects appear unavailable. A write-probe is the
+        // reliable check: if the directory is accessible and writable the probe succeeds; if it
+        // is genuinely missing or the mount is gone the write fails (ENOENT → false).
         var probe = Path.Combine(workingDirectory, $".agentweaver-probe-{Guid.NewGuid():N}");
+        try
+        {
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Probes the mount root itself (Workspace:PersistentVolume:MountRoot). Returns true when
+    /// a temp file can be created and deleted at the mount root. Used by the
+    /// /healthz/workspace readiness endpoint so Kubernetes drops unmounted pods from the Service.
+    ///
+    /// IMPORTANT: Uses a write-probe only — no Directory.Exists() / statx(2). On Azure Files
+    /// CIFS mounts with actimeo caching, statx(2) returns ENOENT on the mount root even when
+    /// mkdir(2) and file writes work correctly. A false healthy=false here would permanently
+    /// exclude the pod from the Service. Healthy = write+delete succeeds; unhealthy = it throws.
+    /// </summary>
+    public bool IsMountRootHealthy()
+    {
+        var probe = Path.Combine(_mountRoot, $".agentweaver-mount-probe-{Guid.NewGuid():N}");
         try
         {
             File.WriteAllText(probe, string.Empty);

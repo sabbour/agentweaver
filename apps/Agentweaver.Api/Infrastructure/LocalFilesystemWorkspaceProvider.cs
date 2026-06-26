@@ -42,6 +42,9 @@ public sealed class LocalFilesystemWorkspaceProvider : IProjectWorkspaceProvider
     public bool IsAvailable(string workingDirectory) =>
         Directory.Exists(workingDirectory);
 
+    // Local filesystem has no volume mount; always report healthy.
+    public bool IsMountRootHealthy() => true;
+
     public Task ReleaseAsync(ProjectId id, string workingDirectory, CancellationToken ct = default) =>
         Task.CompletedTask;
 }

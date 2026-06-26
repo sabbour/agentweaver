@@ -323,6 +323,20 @@ using (var scope = app.Services.CreateScope())
     await memoryDb.Database.MigrateAsync();
 }
 await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
+
+// Startup mount-health warning: log early if the persistent-volume root is missing or read-only.
+// The app continues — the /healthz/workspace readiness probe will keep unmounted pods out of the
+// Service until the volume attaches, so traffic is not served. This log aids incident diagnosis.
+{
+    var workspaceProvider = app.Services.GetRequiredService<IProjectWorkspaceProvider>();
+    if (!workspaceProvider.IsMountRootHealthy())
+    {
+        app.Logger.LogWarning(
+            "Workspace mount-root health check failed at startup. " +
+            "The workspace volume may not be mounted or may be read-only. " +
+            "Pod will be excluded from the Service until /healthz/workspace returns 200.");
+    }
+}
 // Coordinator (parent) runs are recovered AFTER the generic sweep (which has already failed any
 // stranded child runs) so a re-dispatched subtask always launches a fresh child. This re-arms the
 // dispatch / collective-assembly engine from the persisted work plan, or resumes the spec-phase MAF

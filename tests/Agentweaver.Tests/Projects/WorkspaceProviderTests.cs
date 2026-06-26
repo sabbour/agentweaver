@@ -157,4 +157,39 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
             .Build();
         return new PersistentVolumeWorkspaceProvider(config);
     }
+
+    // =========================================================================
+    // WP-09 — PersistentVolume.IsMountRootHealthy returns true when mount present + writable
+    // =========================================================================
+    [Fact]
+    public void PersistentVolume_IsMountRootHealthy_TrueWhenPresentAndWritable()
+    {
+        var mountRoot = NewDir(create: true);
+        var provider  = BuildPersistentVolumeProvider(mountRoot);
+
+        provider.IsMountRootHealthy().Should().BeTrue();
+    }
+
+    // =========================================================================
+    // WP-10 — PersistentVolume.IsMountRootHealthy returns false when mount missing
+    // =========================================================================
+    [Fact]
+    public void PersistentVolume_IsMountRootHealthy_FalseWhenMountMissing()
+    {
+        var mountRoot = NewDir(create: false); // does not exist
+        var provider  = BuildPersistentVolumeProvider(mountRoot);
+
+        provider.IsMountRootHealthy().Should().BeFalse();
+    }
+
+    // =========================================================================
+    // WP-11 — Local.IsMountRootHealthy always returns true
+    // =========================================================================
+    [Fact]
+    public void Local_IsMountRootHealthy_AlwaysTrue()
+    {
+        var provider = new LocalFilesystemWorkspaceProvider();
+
+        provider.IsMountRootHealthy().Should().BeTrue();
+    }
 }

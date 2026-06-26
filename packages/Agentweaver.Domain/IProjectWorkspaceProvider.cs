@@ -33,6 +33,14 @@ public interface IProjectWorkspaceProvider
     bool IsAvailable(string workingDirectory);
 
     /// <summary>
+    /// Probes the workspace mount root itself (not a per-project subdirectory). Returns true
+    /// when the mount root exists and is writable. Used by the /healthz/workspace readiness
+    /// endpoint so Kubernetes can drop unmounted pods from the Service before they serve traffic.
+    /// LocalFilesystem implementations always return true (local dev has no mounted volume).
+    /// </summary>
+    bool IsMountRootHealthy() => true;
+
+    /// <summary>
     /// Releases any runtime resources held for the workspace (e.g. unmounting a
     /// persistent volume in cloud). No-op for the local filesystem provider.
     /// </summary>
