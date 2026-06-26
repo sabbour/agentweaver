@@ -325,7 +325,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   <MessageBarActions>
                     <Button
                       size="small"
-                      onClick={() => { window.location.href = `${API_URL}/auth/github/authorize`; }}
+                      onClick={() => { window.location.href = '/auth/github/authorize'; }}
                     >
                       Connect GitHub
                     </Button>
