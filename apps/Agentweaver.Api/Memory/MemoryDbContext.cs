@@ -18,6 +18,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<SteeringDirective> SteeringDirectives => Set<SteeringDirective>();
     public DbSet<McpRefreshToken> McpRefreshTokens => Set<McpRefreshToken>();
     public DbSet<McpRevokedJti> McpRevokedJtis => Set<McpRevokedJti>();
+    public DbSet<McpClientRegistration> McpClientRegistrations => Set<McpClientRegistration>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -76,5 +77,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<McpRefreshToken>().HasIndex(t => new { t.Subject, t.ClientId });
         model.Entity<McpRevokedJti>().HasIndex(j => j.Jti).IsUnique();
         model.Entity<McpRevokedJti>().HasIndex(j => j.ExpiresAt);
+        model.Entity<McpClientRegistration>().HasIndex(c => c.ClientId).IsUnique();
     }
 }

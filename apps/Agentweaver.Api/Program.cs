@@ -123,6 +123,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpTokenService>();
 builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService>();
 // T4: rotating refresh-token store + jti denylist (scoped: backed by the scoped MemoryDbContext).
 builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpRefreshTokenStore>();
+builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpClientStore>();
 
 // F3: rate-limit the public OAuth flow endpoints. /oauth/authorize triggers a GitHub API call and
 // /oauth/token can be probed at volume, so apply a fixed-window limiter (20 req/min per client IP).
