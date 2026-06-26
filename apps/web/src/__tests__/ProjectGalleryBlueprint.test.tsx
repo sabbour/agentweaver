@@ -82,7 +82,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data' } as never);
+  vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
   vi.mocked(apiClient.listProjects).mockResolvedValue([]);
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([BP_BACKEND, BP_DOCS]);
   vi.mocked(apiClient.createProject).mockImplementation(async () => makeProject('new', 'New'));
@@ -232,5 +232,52 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
     expect(req.blueprint_id).toBeUndefined();
     expect(req.blueprint).toBeUndefined();
+  });
+});
+
+describe('ProjectGalleryPage — workspace_auto_assigned', () => {
+  it('hides the Repository folder field when workspace_auto_assigned is true', async () => {
+    vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+      data_directory: '/data',
+      workspace_auto_assigned: true,
+    } as never);
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    const trigger = await screen.findByRole('button', { name: 'Create blank project' });
+    fireEvent.click(trigger);
+
+    await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
+    expect(screen.queryByPlaceholderText('my-repo')).toBeNull();
+    expect(screen.queryByText(/Repository folder/)).toBeNull();
+  });
+
+  it('derives working_directory from name slug when workspace_auto_assigned is true', async () => {
+    vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+      data_directory: '/data',
+      workspace_auto_assigned: true,
+    } as never);
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    const trigger = await screen.findByRole('button', { name: 'Create blank project' });
+    fireEvent.click(trigger);
+
+    await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
+
+    // Only the name field is needed — no folder field to fill.
+    fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'My Project' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
+    const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
+    expect(req.working_directory).toBe('my-project');
+  });
+
+  it('shows the Repository folder field when workspace_auto_assigned is false (default)', async () => {
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    const trigger = await screen.findByRole('button', { name: 'Create blank project' });
+    fireEvent.click(trigger);
+
+    await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
+    expect(screen.getByPlaceholderText('my-repo')).toBeDefined();
   });
 });

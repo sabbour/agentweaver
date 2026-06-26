@@ -58,7 +58,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data' } as never);
+  vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
   vi.mocked(apiClient.listProjects).mockResolvedValue([]);
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([]);
   vi.mocked(apiClient.createProject).mockImplementation(async () => makeProject('new', 'New'));
@@ -151,5 +151,50 @@ describe('ProjectGalleryPage — listProjects 401', () => {
       expect(screen.getByText('No projects yet. Create one to get started.')).toBeDefined(),
     );
     expect(screen.queryByText(/Sign in with GitHub to see your projects/)).toBeNull();
+  });
+});
+
+describe('ProjectGalleryPage — GitHub dialog, workspace_auto_assigned', () => {
+  it('hides the Repository folder field in the GitHub dialog when workspace_auto_assigned is true', async () => {
+    vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+      data_directory: '/data',
+      workspace_auto_assigned: true,
+    } as never);
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    const trigger = await screen.findByRole('button', { name: 'Create from GitHub' });
+    fireEvent.click(trigger);
+
+    // Folder field must not be present.
+    await waitFor(() => expect(apiClient.listGitHubAccounts).toHaveBeenCalled());
+    expect(screen.queryByPlaceholderText('my-repo')).toBeNull();
+  });
+
+  it('submits working_directory derived from the repo slug when workspace_auto_assigned is true', async () => {
+    vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+      data_directory: '/data',
+      workspace_auto_assigned: true,
+    } as never);
+    vi.mocked(apiClient.listGitHubAccounts).mockRejectedValue(new ApiError(401, 'unauthorized'));
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    const trigger = await screen.findByRole('button', { name: 'Create from GitHub' });
+    fireEvent.click(trigger);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Connect your GitHub account to list repositories/)).toBeDefined(),
+    );
+
+    // Fill name and repo manually (auth required path, no folder field).
+    fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'Hello World' } });
+    const repoCombobox = screen.getByRole('combobox', { name: 'Repository' });
+    fireEvent.input(repoCombobox, { target: { value: 'octocat/hello-world' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
+    const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
+    expect(req.working_directory).toBe('hello-world');
+    expect(req.source_repository).toBe('octocat/hello-world');
   });
 });

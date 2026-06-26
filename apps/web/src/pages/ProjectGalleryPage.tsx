@@ -184,7 +184,7 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
+function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCreated: (p: Project) => void; dataDir: string | null; workspaceAutoAssigned: boolean }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('blank', onCreated);
   const [folderName, setFolderName] = useState('');
@@ -212,26 +212,32 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
                     value={d.name}
                     onChange={(_, v) => {
                       d.setName(v.value);
-                      if (!folderEdited) handleFolderChange(slugify(v.value));
+                      if (workspaceAutoAssigned) {
+                        d.setWorkingDirectory(slugify(v.value));
+                      } else if (!folderEdited) {
+                        handleFolderChange(slugify(v.value));
+                      }
                     }}
                     placeholder="My project"
                   />
                 </Field>
-                <Field
-                  label="Repository folder"
-                  required
-                  hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
-                >
-                  <Input
-                    contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
-                    value={folderName}
-                    onChange={(_, v) => {
-                      setFolderEdited(v.value !== '');
-                      handleFolderChange(v.value);
-                    }}
-                    placeholder="my-repo"
-                  />
-                </Field>
+                {!workspaceAutoAssigned && (
+                  <Field
+                    label="Repository folder"
+                    required
+                    hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
+                  >
+                    <Input
+                      contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+                      value={folderName}
+                      onChange={(_, v) => {
+                        setFolderEdited(v.value !== '');
+                        handleFolderChange(v.value);
+                      }}
+                      placeholder="my-repo"
+                    />
+                  </Field>
+                )}
                 {d.error && (
                   <MessageBar intent="error">
                     <MessageBarBody>{d.error}</MessageBarBody>
@@ -362,7 +368,7 @@ function useGitHubData(open: boolean) {
   };
 }
 
-function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
+function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCreated: (p: Project) => void; dataDir: string | null; workspaceAutoAssigned: boolean }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('github', onCreated);
   const {
@@ -407,7 +413,11 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                     value={d.name}
                     onChange={(_, v) => {
                       d.setName(v.value);
-                      if (!folderEdited) handleFolderChange(slugify(v.value));
+                      if (workspaceAutoAssigned) {
+                        d.setWorkingDirectory(slugify(v.value));
+                      } else if (!folderEdited) {
+                        handleFolderChange(slugify(v.value));
+                      }
                     }}
                     placeholder="My project"
                   />
@@ -492,9 +502,12 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                       const fullName = data.optionValue ?? '';
                       d.setSourceRepository(fullName);
                       setRepoFilter(fullName);
-                      // Auto-fill folder from the repo slug when not manually overridden.
                       const slug = fullName.split('/')[1] ?? fullName;
-                      if (slug && !folderEdited) handleFolderChange(slugify(slug));
+                      if (workspaceAutoAssigned) {
+                        if (slug) d.setWorkingDirectory(slugify(slug));
+                      } else if (slug && !folderEdited) {
+                        handleFolderChange(slugify(slug));
+                      }
                       if (!d.name.trim() && slug) {
                         d.setName(slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
                       }
@@ -526,21 +539,23 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   </MessageBar>
                 )}
 
-                <Field
-                  label="Repository folder"
-                  required
-                  hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
-                >
-                  <Input
-                    contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
-                    value={folderName}
-                    onChange={(_, v) => {
-                      setFolderEdited(v.value !== '');
-                      handleFolderChange(v.value);
-                    }}
-                    placeholder="my-repo"
-                  />
-                </Field>
+                {!workspaceAutoAssigned && (
+                  <Field
+                    label="Repository folder"
+                    required
+                    hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
+                  >
+                    <Input
+                      contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+                      value={folderName}
+                      onChange={(_, v) => {
+                        setFolderEdited(v.value !== '');
+                        handleFolderChange(v.value);
+                      }}
+                      placeholder="my-repo"
+                    />
+                  </Field>
+                )}
 
                 {d.error && (
                   <MessageBar intent="error">
@@ -605,11 +620,17 @@ export function ProjectGalleryPage() {
   const navigate = useNavigate();
   const { projects, loading, authError, loadError, errorMessage, appendProject } = useProjectList();
   const [dataDir, setDataDir] = useState<string | null>(null);
+  const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     apiClient.getServerInfo()
-      .then((info) => { if (!cancelled) setDataDir(info.data_directory); })
+      .then((info) => {
+        if (!cancelled) {
+          setDataDir(info.data_directory);
+          setWorkspaceAutoAssigned(info.workspace_auto_assigned ?? false);
+        }
+      })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -650,8 +671,8 @@ export function ProjectGalleryPage() {
         <div className={styles.emptyState}>
           <Text>No projects yet. Create one to get started.</Text>
           <div className={styles.toolbar}>
-            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} />
-            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} />
+            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
           </div>
         </div>
       )}
@@ -659,8 +680,8 @@ export function ProjectGalleryPage() {
       {!loading && projects.length > 0 && (
         <>
           <div className={styles.toolbar}>
-            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} />
-            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} />
+            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
           </div>
           <div className={styles.grid}>
             {projects.map((p) => (

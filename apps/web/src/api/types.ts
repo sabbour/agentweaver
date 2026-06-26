@@ -2,6 +2,7 @@ export type ModelSource = 'github-copilot' | 'microsoft-foundry';
 
 export interface ServerInfo {
   data_directory: string;
+  workspace_auto_assigned?: boolean;
 }
 
 export type RunStatus =
