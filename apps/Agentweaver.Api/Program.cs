@@ -103,6 +103,8 @@ builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>()
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient("github-authz")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient("github")
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 
 // Project infrastructure (must be before AddAgentRuntime)
@@ -156,7 +158,6 @@ builder.Services.AddSingleton<PortForwardService>();
 
 // Authentication
 builder.Services.AddMemoryCache();
-builder.Services.AddSingleton<ApiKeyRegistry>();
 builder.Services.AddSingleton<IGitHubOrgAuthorizationService, GitHubOrgAuthorizationService>();
 
 // Repository path validation (A2 security fix)
@@ -296,7 +297,7 @@ app.UseExceptionHandler(err => err.Run(async context =>
 }));
 
 app.UseCors();
-app.UseMiddleware<ApiKeyAuthMiddleware>();
+app.UseMiddleware<GitHubTokenAuthMiddleware>();
 app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
 
 app.MapRunEndpoints();

@@ -42,17 +42,17 @@ public sealed class AgentweaverApiClient
     }
 
     /// <summary>
-    /// Returns the API key to use for this request.
-    /// When the inbound caller authenticated with an Agentweaver API key
-    /// (<c>mcp.api_key</c> is present in the HTTP context), that key is
-    /// propagated so the backend receives the real caller identity.
-    /// For GitHub OAuth callers the shared service key is used.
+    /// Returns the Bearer token to use for this request.
+    /// Prefers the caller's own token stored in <c>mcp.bearer_token</c> (set by the inbound
+    /// middleware after validating the GitHub token), so the backend receives the real caller
+    /// identity. Falls back to the configured shared API key only when no per-request token
+    /// is available (e.g. stdio mode).
     /// </summary>
     private string GetEffectiveApiKey()
     {
         var ctx = _httpContextAccessor?.HttpContext;
-        if (ctx?.Items.TryGetValue("mcp.api_key", out var callerKey) == true && callerKey is string key)
-            return key;
+        if (ctx?.Items.TryGetValue("mcp.bearer_token", out var callerToken) == true && callerToken is string token)
+            return token;
         return _config.ApiKey;
     }
 

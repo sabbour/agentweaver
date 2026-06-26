@@ -60,8 +60,9 @@ app.MapGet("/auth/github/callback", async (
 
     try
     {
-        await oauthService.ExchangeCodeAsync(code, state, ct).ConfigureAwait(false);
-        return Results.Redirect($"{frontendUrl}/?auth=success");
+        var (login, accessToken) = await oauthService.ExchangeCodeAsync(code, state, ct).ConfigureAwait(false);
+        return Results.Redirect(
+            $"{frontendUrl}/?auth=success&session_token={Uri.EscapeDataString(accessToken)}&login={Uri.EscapeDataString(login)}");
     }
     catch (Exception ex)
     {

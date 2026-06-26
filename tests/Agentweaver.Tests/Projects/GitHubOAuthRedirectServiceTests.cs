@@ -30,10 +30,11 @@ public sealed class GitHubOAuthRedirectServiceTests
         var state = ExtractState(svc.BeginAuthorization());
 
         var before = DateTimeOffset.UtcNow;
-        var login = await svc.ExchangeCodeAsync("the-code", state);
+        var (login, accessToken) = await svc.ExchangeCodeAsync("the-code", state);
         var after = DateTimeOffset.UtcNow;
 
         login.Should().Be("octocat");
+        accessToken.Should().Be("ghu_access");
 
         var token = await store.GetTokenAsync(GitHubTokenScope.Installation);
         token.Should().NotBeNull();

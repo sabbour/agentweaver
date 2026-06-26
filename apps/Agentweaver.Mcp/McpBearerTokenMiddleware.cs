@@ -62,11 +62,11 @@ public sealed class McpBearerTokenMiddleware
         var token = header[SchemePrefix.Length..].Trim();
 
         // Fast path: Agentweaver API key (in-memory lookup, O(1)).
-        // Store the raw token so AgentweaverApiClient can propagate it to the backend.
+        // Store both the resolved user and the raw token so AgentweaverApiClient can propagate it.
         if (_registry.TryResolveUser(token, out var apiUser))
         {
             context.Items[UserItemKey] = apiUser;
-            context.Items["mcp.api_key"] = token;
+            context.Items["mcp.bearer_token"] = token;
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -92,6 +92,8 @@ public sealed class McpBearerTokenMiddleware
         }
 
         context.Items[UserItemKey] = gitHubLogin;
+        // Store the raw token so AgentweaverApiClient forwards it to the backend as the caller's identity.
+        context.Items["mcp.bearer_token"] = token;
         await _next(context).ConfigureAwait(false);
     }
 

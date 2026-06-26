@@ -34,8 +34,6 @@ spec:
             - -c
             - |
               set -eu
-              export AGENTWEAVER_API_KEY="$(cat /mnt/secrets-store/mcp-api-key)"
-              export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-auth-api-key)"
               export Auth__User="$(cat /mnt/secrets-store/mcp-auth-user)"
               exec dotnet Agentweaver.Mcp.dll
           ports:

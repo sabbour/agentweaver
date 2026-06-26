@@ -14,15 +14,13 @@ internal sealed class McpProgram
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_API_URL")
             ?? "http://localhost:5000";
         var apiKey = builder.Configuration["Agentweaver:ApiKey"]
-            ?? Environment.GetEnvironmentVariable("AGENTWEAVER_API_KEY");
+            ?? Environment.GetEnvironmentVariable("AGENTWEAVER_API_KEY")
+            ?? string.Empty;
 
-        if (useStdio && string.IsNullOrWhiteSpace(apiKey))
-        {
-            Console.Error.WriteLine("AGENTWEAVER_API_KEY is required.");
-            return 1;
-        }
+        // In stdio mode, the MCP server forwards the caller's own Bearer token to the backend.
+        // A shared API key is no longer required.
 
-        var mcpConfig = new McpConfig(apiUrl, apiKey ?? string.Empty);
+        var mcpConfig = new McpConfig(apiUrl, apiKey);
         builder.Services.AddSingleton(mcpConfig);
         builder.Services.AddSingleton(sp =>
         {

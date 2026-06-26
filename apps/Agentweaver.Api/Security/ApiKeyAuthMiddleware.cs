@@ -1,10 +1,14 @@
 namespace Agentweaver.Api.Security;
 
-using Agentweaver.Domain;
+using System.Security.Cryptography;
+using System.Text;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using Microsoft.Extensions.Caching.Memory;
 
 /// <summary>
-/// Authenticated caller resolved from the bearer API key. Set on the request by
-/// <see cref="ApiKeyAuthMiddleware"/> and read by the run endpoints to enforce
+/// Authenticated caller resolved from the bearer GitHub token. Set on the request by
+/// <see cref="GitHubTokenAuthMiddleware"/> and read by the run endpoints to enforce
 /// per-run ownership.
 /// </summary>
 public sealed class CallerContext
@@ -12,17 +16,14 @@ public sealed class CallerContext
     public required string User { get; init; }
 
     /// <summary>
-    /// The signed-in GitHub login resolved for this caller's token scope, or null when signed out /
-    /// unavailable. A run is owned by the caller when its <c>SubmittingUser</c> matches EITHER the
-    /// API-key principal (<see cref="User"/>) OR this GitHub login. This is what lets a backlog-pickup
-    /// run — whose <c>SubmittingUser</c> is the captured GitHub login (e.g. "sabbour"), not the
-    /// API-key principal (e.g. "local-developer") — remain viewable by the signed-in human.
+    /// The signed-in GitHub login for this caller. A run is owned by the caller when its
+    /// <c>SubmittingUser</c> matches EITHER <see cref="User"/> OR this GitHub login.
     /// </summary>
     public string? GitHubLogin { get; init; }
 
     /// <summary>
     /// True when this caller owns a resource attributed to <paramref name="ownerUser"/>: it matches
-    /// the API-key principal or the signed-in GitHub login (Ordinal, null-safe).
+    /// the principal or the signed-in GitHub login (Ordinal, null-safe).
     /// </summary>
     public bool Owns(string? ownerUser) =>
         ownerUser is not null &&
@@ -31,28 +32,33 @@ public sealed class CallerContext
 }
 
 /// <summary>
-/// Validates the bearer API key on every request and attaches the resolved
-/// caller identity. Requests without a valid key are rejected with 401 before
-/// any run logic runs (Principles III, XI). Non-API routes are allowed through
-/// so the root health endpoint stays reachable.
+/// Validates a GitHub OAuth Bearer token on every API request and attaches the resolved
+/// caller identity. The GitHub /user endpoint is called once and the result is cached for 5 minutes
+/// (keyed by SHA-256 of the token). Non-API routes and health/ping paths are exempt.
 /// </summary>
-public sealed class ApiKeyAuthMiddleware
+public sealed class GitHubTokenAuthMiddleware
 {
-    private const string CallerItemKey = "agentweaver.caller";
+    internal const string CallerItemKey = "agentweaver.caller";
+    private const string SchemePrefixStr = "Bearer ";
 
     private readonly RequestDelegate _next;
-    private readonly ApiKeyRegistry _registry;
+    private readonly IMemoryCache _cache;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<GitHubTokenAuthMiddleware> _logger;
 
-    public ApiKeyAuthMiddleware(RequestDelegate next, ApiKeyRegistry registry)
+    public GitHubTokenAuthMiddleware(
+        RequestDelegate next,
+        IMemoryCache cache,
+        IHttpClientFactory httpClientFactory,
+        ILogger<GitHubTokenAuthMiddleware> logger)
     {
         _next = next;
-        _registry = registry;
+        _cache = cache;
+        _httpClientFactory = httpClientFactory;
+        _logger = logger;
     }
 
-    public async Task InvokeAsync(
-        HttpContext context,
-        IGitHubTokenStore tokenStore,
-        IGitHubTokenScopeProvider scopeProvider)
+    public async Task InvokeAsync(HttpContext context)
     {
         if (!context.Request.Path.StartsWithSegments("/api")
             || context.Request.Path.Equals("/api/ping", StringComparison.OrdinalIgnoreCase)
@@ -63,49 +69,65 @@ public sealed class ApiKeyAuthMiddleware
         }
 
         var header = context.Request.Headers.Authorization.ToString();
-        const string scheme = "Bearer ";
-        if (string.IsNullOrEmpty(header) || !header.StartsWith(scheme, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrEmpty(header) || !header.StartsWith(SchemePrefixStr, StringComparison.OrdinalIgnoreCase))
         {
             await WriteUnauthorizedAsync(context).ConfigureAwait(false);
             return;
         }
 
-        var token = header[scheme.Length..].Trim();
-        if (!_registry.TryResolveUser(token, out var user))
+        var token = header[SchemePrefixStr.Length..].Trim();
+        var cacheKey = ComputeTokenHash(token);
+
+        if (!_cache.TryGetValue(cacheKey, out string? login))
+        {
+            login = await ValidateGitHubTokenAsync(token, context.RequestAborted).ConfigureAwait(false);
+            _cache.Set(
+                cacheKey,
+                login,
+                login is not null ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(30));
+        }
+
+        if (login is null)
         {
             await WriteUnauthorizedAsync(context).ConfigureAwait(false);
             return;
         }
 
-        // Enrich the caller with the signed-in GitHub login once per request so the owner check stays
-        // a cheap, synchronous string compare. Identity resolution reads from local storage (file / OS
-        // credential store / in-memory) — never the network — and is wrapped so a failure can never
-        // block or fail the request (the login simply stays null).
-        var gitHubLogin = await TryResolveGitHubLoginAsync(tokenStore, scopeProvider, user, context.RequestAborted)
-            .ConfigureAwait(false);
-
-        context.Items[CallerItemKey] = new CallerContext { User = user, GitHubLogin = gitHubLogin };
+        context.Items[CallerItemKey] = new CallerContext { User = login, GitHubLogin = login };
         await _next(context).ConfigureAwait(false);
     }
 
     public static CallerContext GetCaller(HttpContext context) =>
         (CallerContext)context.Items[CallerItemKey]!;
 
-    private static async Task<string?> TryResolveGitHubLoginAsync(
-        IGitHubTokenStore tokenStore, IGitHubTokenScopeProvider scopeProvider, string user, CancellationToken ct)
+    private async Task<string?> ValidateGitHubTokenAsync(string token, CancellationToken ct)
     {
         try
         {
-            var scope = scopeProvider.Resolve(user);
-            var entry = await tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
-            if (entry.Status != GitHubTokenStatus.SignedIn) return null;
-            return (await tokenStore.GetIdentityAsync(scope, ct).ConfigureAwait(false))?.Login;
+            using var client = _httpClientFactory.CreateClient("github");
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            request.Headers.UserAgent.ParseAdd("Agentweaver/1.0");
+
+            using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+            return doc.RootElement.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : null;
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Ownership enrichment is best-effort: never block the request on identity resolution.
+            _logger.LogWarning(ex, "GitHub token validation failed");
             return null;
         }
+    }
+
+    private static string ComputeTokenHash(string token)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        return $"gh-token:{Convert.ToHexString(bytes)}";
     }
 
     private static async Task WriteUnauthorizedAsync(HttpContext context)
@@ -114,4 +136,14 @@ public sealed class ApiKeyAuthMiddleware
         context.Response.ContentType = "application/json";
         await context.Response.WriteAsync("{\"error\":\"unauthorized\"}").ConfigureAwait(false);
     }
+}
+
+/// <summary>
+/// Backward-compatibility shim: exposes <see cref="GetCaller"/> so existing endpoint code that
+/// references <c>ApiKeyAuthMiddleware.GetCaller(context)</c> continues to compile without changes.
+/// </summary>
+public static class ApiKeyAuthMiddleware
+{
+    public static CallerContext GetCaller(HttpContext context) =>
+        GitHubTokenAuthMiddleware.GetCaller(context);
 }

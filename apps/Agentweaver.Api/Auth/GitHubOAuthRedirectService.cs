@@ -75,8 +75,8 @@ public sealed class GitHubOAuthRedirectService
                $"&state={Uri.EscapeDataString(state)}";
     }
 
-    /// <summary>Exchanges an authorization code for a token. Returns login on success.</summary>
-    public async Task<string> ExchangeCodeAsync(string code, string state, CancellationToken ct = default)
+    /// <summary>Exchanges an authorization code for a token. Returns (login, accessToken) on success.</summary>
+    public async Task<(string Login, string AccessToken)> ExchangeCodeAsync(string code, string state, CancellationToken ct = default)
     {
         // Validate CSRF state
         if (!_pendingStates.TryRemove(state, out var expiry) || DateTimeOffset.UtcNow > expiry)
@@ -123,7 +123,7 @@ public sealed class GitHubOAuthRedirectService
         await _tokenStore.SetAsync(GitHubTokenScope.Installation, token, ct).ConfigureAwait(false);
 
         _logger.LogInformation("GitHub OAuth redirect flow completed for login {Login}", login);
-        return login;
+        return (login, body.AccessToken!);
     }
 
     private async Task<(string Login, string? AvatarUrl)> FetchUserAsync(string accessToken, CancellationToken ct)
