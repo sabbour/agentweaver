@@ -76,8 +76,8 @@ function AuthGate() {
 
   useEffect(() => {
     let cancelled = false;
-    captureSessionAuthFromUrl();
-    apiClient.getGitHubAuthStatus()
+    captureSessionAuthFromUrl()
+      .then(() => apiClient.getGitHubAuthStatus())
       .then((res) => {
         if (cancelled) return;
         if (res.status === 'signed_in') {

@@ -52,6 +52,7 @@ app.MapGet("/auth/github/callback", async (
     string? error,
     GitHubOAuthRedirectService oauthService,
     Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService oauthBroker,
+    WebSessionExchangeService webSessionExchange,
     IConfiguration configuration,
     CancellationToken ct) =>
 {
@@ -89,13 +90,30 @@ app.MapGet("/auth/github/callback", async (
     try
     {
         var (login, accessToken) = await oauthService.ExchangeCodeAsync(code, state, ct).ConfigureAwait(false);
+        // F5: do not place the access token (or login) in the redirect URL — it would leak to
+        // browser history, server access logs, and Referer headers. Issue a short-lived, single-use
+        // one-time code instead; the frontend exchanges it server-side via POST /api/auth/session/exchange.
+        var oneTimeCode = webSessionExchange.Issue(accessToken, login);
         return Results.Redirect(
-            $"{frontendUrl}/?auth=success&session_token={Uri.EscapeDataString(accessToken)}&login={Uri.EscapeDataString(login)}");
+            $"{frontendUrl}/?auth=success&code={Uri.EscapeDataString(oneTimeCode)}");
     }
     catch (Exception ex)
     {
         return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
     }
+}).AllowAnonymous();
+
+// POST /api/auth/session/exchange — redeem a web sign-in one-time code for the session token (F5).
+// AllowAnonymous: the opaque, single-use code is itself the credential. The GitHub access token is
+// never placed in a URL; it is returned only here, in the response body, over the server-side POST.
+app.MapPost("/api/auth/session/exchange", (
+    SessionExchangeRequest request,
+    WebSessionExchangeService webSessionExchange) =>
+{
+    if (request is null || !webSessionExchange.TryRedeem(request.Code, out var accessToken, out var login))
+        return Results.BadRequest(new { error = "invalid_code" });
+
+    return Results.Ok(new SessionExchangeResponse(accessToken, login));
 }).AllowAnonymous();
 
 // POST /api/auth/github/device — start device flow
@@ -404,4 +422,15 @@ file sealed record GitHubAccountResponse(
     [property: System.Text.Json.Serialization.JsonPropertyName("name")]    string? Name,
     [property: System.Text.Json.Serialization.JsonPropertyName("avatar_url")] string AvatarUrl,
     [property: System.Text.Json.Serialization.JsonPropertyName("type")]    string Type
+);
+
+/// <summary>Request body for POST /api/auth/session/exchange (F5 one-time code redemption).</summary>
+file sealed record SessionExchangeRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("code")] string? Code
+);
+
+/// <summary>Success response for POST /api/auth/session/exchange.</summary>
+file sealed record SessionExchangeResponse(
+    [property: System.Text.Json.Serialization.JsonPropertyName("session_token")] string SessionToken,
+    [property: System.Text.Json.Serialization.JsonPropertyName("login")]         string Login
 );

@@ -58,19 +58,48 @@ export function clearSessionAuth(): void {
   }
 }
 
-export function captureSessionAuthFromUrl(): void {
+export async function captureSessionAuthFromUrl(): Promise<void> {
   const params = new URLSearchParams(window.location.search);
-  const token = params.get('session_token') ?? params.get('sessionToken');
-  if (!token) return;
+  const auth = params.get('auth');
+  const code = params.get('code');
 
-  setSessionAuth(token, params.get('login') ?? params.get('github_login'));
-  params.delete('session_token');
-  params.delete('sessionToken');
-  params.delete('login');
-  params.delete('github_login');
-  params.delete('auth');
-  // Normalize double slashes to prevent SecurityError on history.replaceState
-  const pathname = window.location.pathname.replace(/\/\/+/g, '/') || '/';
-  const next = `${pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`;
-  window.history.replaceState({}, document.title, next);
+  const stripAuthParams = () => {
+    params.delete('code');
+    params.delete('auth');
+    // Remove legacy raw-token params that must never appear in URLs going forward.
+    params.delete('session_token');
+    params.delete('sessionToken');
+    params.delete('login');
+    params.delete('github_login');
+    // Normalize double slashes to prevent SecurityError on history.replaceState
+    const pathname = window.location.pathname.replace(/\/\/+/g, '/') || '/';
+    const next = `${pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`;
+    window.history.replaceState({}, document.title, next);
+  };
+
+  if (auth !== 'success' || !code) {
+    // Nothing to exchange; still strip any stale auth params present.
+    if (params.has('code') || params.has('auth') || params.has('session_token') || params.has('sessionToken')) {
+      stripAuthParams();
+    }
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/auth/session/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ code }),
+    });
+    if (response.ok) {
+      const data = await response.json() as { session_token: string; login: string };
+      setSessionAuth(data.session_token, data.login);
+    }
+    // On failure (e.g. 400 invalid_code) leave unauthenticated — do not throw.
+  } catch {
+    // Network errors — leave unauthenticated silently.
+  } finally {
+    stripAuthParams();
+  }
 }

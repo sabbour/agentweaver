@@ -127,6 +127,7 @@ builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 //    microsoft org membership, then issues PKCE-bound authorization codes.
 builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpTokenService>();
 builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService>();
+builder.Services.AddSingleton<Agentweaver.Api.Auth.WebSessionExchangeService>();
 // T4: rotating refresh-token store + jti denylist (scoped: backed by the scoped MemoryDbContext).
 builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpRefreshTokenStore>();
 builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpClientStore>();
