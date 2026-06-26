@@ -4,7 +4,6 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { API_URL } from '../config';
 
 const useStyles = makeStyles({
   page: {

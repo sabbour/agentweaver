@@ -30,7 +30,6 @@ import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubRepo, Project } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { BlueprintPicker, applyBlueprintToRequest, NO_BLUEPRINT, type BlueprintSelection } from '../components/BlueprintPicker';
-import { API_URL } from '../config';
 
 const useStyles = makeStyles({
   root: {

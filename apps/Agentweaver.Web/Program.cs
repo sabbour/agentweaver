@@ -1,6 +1,14 @@
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
+// Serve VitePress docs at /docs/ (before general static files so /docs/ resolves index.html)
+app.UseFileServer(new FileServerOptions
+{
+    RequestPath = "/docs",
+    EnableDefaultFiles = true,
+    EnableDirectoryBrowsing = false
+});
+
 app.UseDefaultFiles();
 
 // Long-lived immutable cache for Vite's content-hashed asset bundles.
@@ -15,14 +23,6 @@ app.UseStaticFiles(new StaticFileOptions
             ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
         }
     }
-});
-
-// Serve VitePress docs at /docs/ with directory browsing (index.html auto-resolve)
-app.UseFileServer(new FileServerOptions
-{
-    RequestPath = "/docs",
-    EnableDefaultFiles = true,
-    EnableDirectoryBrowsing = false
 });
 
 // SPA fallback — only for non-/docs paths

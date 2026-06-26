@@ -95,10 +95,32 @@ spec:
         - protocol: TCP
           port: 8080
 ---
+# Allow API and MCP pods to reach external HTTPS endpoints (GitHub API, Azure Key Vault, etc.)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-gateway-to-api
+  name: allow-app-external-https-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - agentweaver-api
+          - agentweaver-mcp
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   namespace: agentweaver
   labels:
     app.kubernetes.io/part-of: agentweaver
