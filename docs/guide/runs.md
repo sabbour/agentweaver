@@ -8,15 +8,15 @@ A **Run** is a unit of work that Agentweaver executes on your behalf. You descri
 
 ## Two ways to start a run
 
-### Start an orchestration (coordinator mode)
+### Start a coordinator orchestration
 
-From inside a project, click **Start orchestration** at the top of the project page.
+From inside a project, open the **Board** page and click **Start task** (or use the **Start task** button from the runs list or Flow page).
 
-Enter your task as a natural-language goal:
+Enter your task as a natural-language goal in the **Goal** field:
 
 > "Refactor the authentication module to use JWT and add integration tests."
 
-Click **Start**. The coordinator orchestration begins and you're taken to the topology view.
+Click **Start task**. The coordinator orchestration begins and you're taken to the topology view.
 
 ![Start orchestration dialog](/guide/images/start-orchestration.png)
 
@@ -132,18 +132,9 @@ If the run's sandbox policy requires approval before executing certain tool call
 
 Enable **Auto-approve tools** in the run header to skip per-call approval prompts for the remainder of that run.
 
-## RAI verdicts
+## RAI check
 
-Each agent run passes a **Responsible AI (RAI)** check before its output is used. The RAI stage produces one of four verdicts:
-
-| Verdict | What happens |
-|---|---|
-| **GREEN** | Output proceeds to the next stage (human review or assembly) |
-| **YELLOW** | Output proceeds with recorded advisories surfaced to the reviewer |
-| **REVISE** | Output is sent back to the agent for revision |
-| **RED** | Output is rejected; the original agent is locked out from further retries |
-
-RED verdicts are surfaced in the run detail. YELLOW advisories appear in the review diff alongside the changes.
+Each agent run passes a **Responsible AI (RAI)** check before its output proceeds. If the check flags the output, the run automatically loops back — the agent revises and the check re-runs. This loopback is visible as a "Revise" edge in the pipeline graph. If the check passes, the run proceeds to the next stage (human review or assembly).
 
 ## Run states
 

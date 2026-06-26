@@ -35,12 +35,11 @@ You can only drag tasks between **Backlog** and **Ready**. The coordinator owns 
 
 ## Capturing tasks
 
-Click **+ Add task** in the Backlog column to create a new task. Each task has:
+The **Backlog** column has a capture bar at the top. Type a short task title and press **Enter** or click **Add**.
 
-- **Title** — a short description of the work
-- **Description** — the full context the coordinator needs to scope the work
+To add more detail after creating a task, hover the card and click the **Edit** icon. The edit form has both a **Title** and **Description** field — use the description to give the coordinator full context: the goal, expected outcome, and any constraints.
 
-Good descriptions lead to sharper OutcomeSpecs. Include the goal, the expected outcome, and any constraints that matter.
+Good descriptions lead to sharper OutcomeSpecs. You can also set a **workflow override** per task card by clicking the workflow menu on the card — this pins that task to a specific workflow instead of letting the coordinator auto-select one.
 
 ::: tip Import from Markdown
 From the **Workspace** page, you can browse the project repository and import Markdown files directly as backlog tasks — useful for turning spec files, PRDs, or issue descriptions into queued work.

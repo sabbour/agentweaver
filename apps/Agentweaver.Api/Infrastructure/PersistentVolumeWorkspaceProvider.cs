@@ -35,11 +35,15 @@ public sealed class PersistentVolumeWorkspaceProvider : IProjectWorkspaceProvide
     public Task<WorkspaceHandle> EnsureWorkspaceAsync(
         ProjectId id, string workingDirectory, CancellationToken ct = default)
     {
-        // Validate the mount is present — do NOT create it (operator responsibility).
+        // Create per-project directory if it doesn't exist (mount root must be present).
         if (!Directory.Exists(workingDirectory))
-            throw new WorkspaceUnavailableException(
-                $"Persistent volume for project '{id}' is not mounted at '{workingDirectory}'. " +
-                "Ensure the volume is provisioned and attached before creating or running against this project.");
+        {
+            if (!Directory.Exists(_mountRoot))
+                throw new WorkspaceUnavailableException(
+                    $"Persistent volume for project '{id}' is not mounted at '{workingDirectory}'. " +
+                    "Ensure the volume is provisioned and attached before creating or running against this project.");
+            Directory.CreateDirectory(workingDirectory);
+        }
 
         // Writable probe
         var probe = Path.Combine(workingDirectory, $".agentweaver-probe-{Guid.NewGuid():N}");

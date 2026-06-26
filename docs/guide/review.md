@@ -4,7 +4,7 @@ title: Reviewing and Merging
 
 # Reviewing and Merging
 
-When all agents finish their work and the coordinator assembles the combined output, the run enters the **review** stage. This is your gate — nothing merges until you explicitly approve. For coordinator orchestrations, this happens **once** over the combined output of all agents, not once per agent.
+When all agents finish their work and the coordinator assembles the combined output, the run enters the **review** stage. This is your gate — nothing merges until you explicitly approve.
 
 ## The review pipeline
 
@@ -12,51 +12,28 @@ When all agents finish their work and the coordinator assembles the combined out
 flowchart LR
     A[All agents complete] --> B[Results assembled]
     B --> C[RAI check]
-    C -- GREEN --> D[Human review]
-    C -- YELLOW --> D2[Human review\nwith advisories]
-    C -- REVISE --> E[Agent revises]
+    C -- Pass --> D[Human review]
+    C -- Revision needed --> E[Agent revises]
     E --> C
-    C -- RED --> F[Rejected\nAgent locked out]
-    D -- Approve --> G[Merge]
-    D2 -- Approve --> G
-    D -- Request changes --> H[Coordinator dispatches revisions]
-    H --> C
+    D -- Commit and Merge --> G[Merged]
+    D -- Change --> H[Agent revises]
+    H --> D
     D -- Decline --> I[Declined]
     G --> J[Scribe records session]
 ```
 
-### RAI verdicts before human review
+### Automatic RAI check
 
-Before your review step, a **Responsible AI (RAI)** check runs on the assembled output:
+Before your review step, a **Responsible AI (RAI)** check runs on the assembled output. If the check flags the output, the agent is automatically sent back for revision — this loopback is visible as a "Revise" edge in the run's workflow pipeline graph. The human review step is only presented when the RAI check passes.
 
-| Verdict | Effect |
-|---|---|
-| **GREEN** | Proceeds to your review — clean bill of health |
-| **YELLOW** | Proceeds to your review with advisories. The diff shows the specific concerns so you can decide with full context. |
-| **REVISE** | Sent back to the agent for revision. The agent revises and the RAI check runs again. |
-| **RED** | Rejected outright. The original agent is locked from further retries on this item. Surfaces in the run detail with the rejection reason. |
+## The file panel
 
-::: warning RED is final for the agent
-A RED verdict locks the original agent out of retrying that output. The coordinator will dispatch the fix to a different agent or surface the issue for your attention.
-:::
+When a run reaches the review stage, the **file panel** on the left side of the run detail page automatically expands to show the review controls.
 
-## The approval banner
+The panel has two tabs:
 
-When a run reaches the review stage, a sticky **approval banner** appears at the top of the run detail page:
-
-> ⚠ **This run is awaiting your review.** Review the changes below and approve or decline.
-
-The banner stays visible as you scroll through the diff and event timeline.
-
-## Viewing the diff
-
-The run detail shows the full diff of all changes the agents produced. Each file change shows:
-
-- The file path
-- Lines added (green) and lines removed (red)
-- The unified diff
-
-YELLOW RAI advisories appear inline next to the relevant sections of the diff.
+- **Changes** — lists every file the agents modified, with added/removed line counts. Click a file to open a diff viewer.
+- **Files** — full workspace browser showing all files in the agent's worktree.
 
 ![Run diff view](/guide/images/run-diff.png)
 
@@ -68,26 +45,23 @@ The event timeline gives you the full audit trail — every agent message, tool 
 
 ## Approving
 
-If the changes look correct:
+If the changes look correct, click **Commit and Merge** in the file panel.
 
-1. Click **Approve** in the approval banner or at the bottom of the diff.
-2. Confirm the action.
+Agentweaver merges the combined worktree output to the originating branch. The run status changes to **Merged**.
 
-Agentweaver runs the merge with conflict detection. If no conflicts are found, the combined worktree output is merged to the originating branch and the run status changes to **Merged**.
-
-::: warning Conflict detection
-If the merge surfaces a conflict (the target branch has moved since the run started), Agentweaver shows you the conflict instead of merging silently. Resolve the conflict and re-submit the approval, or use standard git to resolve and merge manually.
+::: warning Merge conflicts
+If the merge surfaces a conflict (the target branch has moved since the run started), Agentweaver reports the conflict and preserves the worktree for manual resolution.
 :::
 
 ## Requesting changes
 
 If the output needs revision:
 
-1. Click **Request changes** in the approval banner.
-2. Describe what needs to be fixed.
-3. Submit.
+1. Click **Change** in the file panel.
+2. Describe what the agent should change in the text field.
+3. Click **Send**.
 
-The feedback flows to the coordinator, which decomposes it into new subtasks and dispatches them. The run re-enters the agent execution phase. You'll review again when the revisions are ready.
+The feedback is delivered to the agent, which revises and re-runs. The run re-enters the agent execution phase and you'll review again when the revisions are ready.
 
 ::: tip Be specific
 The more specific your feedback ("The error message in `auth.ts` line 42 should describe the specific validation failure, not a generic error"), the more targeted the revision.
@@ -95,10 +69,7 @@ The more specific your feedback ("The error message in `auth.ts` line 42 should 
 
 ## Declining
 
-To discard the changes entirely:
-
-1. Click **Decline** in the approval banner.
-2. Confirm.
+To discard the changes entirely, click **Decline** in the file panel.
 
 The run status changes to **Declined**. The worktrees are discarded and the originating branch stays unchanged.
 
@@ -119,11 +90,11 @@ The originating branch now contains exactly the changes you approved.
 
 Each project has a **Review Policy** that governs which automated checks run before the human review step:
 
-| Step | What it checks |
+| Step | What it does |
 |---|---|
-| **Rubberduck** | Automated first-pass review — catches obvious issues |
-| **RAI** | Responsible AI safety check — GREEN/YELLOW/REVISE/RED verdict |
-| **Human review** | Your explicit approve/reject gate — always the final step |
+| **Rubberduck** | Automated first-pass review — catches obvious issues before the RAI check |
+| **RAI** | Responsible AI safety check — may trigger automatic revision loops |
+| **Human review** | Your explicit approve/decline gate — always the final step |
 
 Configure the active steps in [Project Settings → Review policy](./projects#review-policy).
 
