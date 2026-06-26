@@ -53,7 +53,9 @@ kind: DefaultDomainCertificate
 metadata:
   name: cert
   namespace: ${NAMESPACE}
-spec: {}
+spec:
+  target:
+    secret: agentweaver-tls
 EOF
 fi
 
@@ -118,9 +120,13 @@ apply_rendered mcp-httproute.yaml
 apply_rendered backup-cronjob.yaml
 
 echo ""
-echo "Applying sandbox template and warm pool (required for production)..."
-apply_rendered sandbox-template.yaml
-apply_rendered sandbox-warmpool.yaml
+echo "Applying sandbox template and warm pool (if CRD is available)..."
+if kubectl api-resources --api-group=extensions.agents.x-k8s.io 2>/dev/null | grep -q SandboxTemplate; then
+  apply_rendered sandbox-template.yaml
+  apply_rendered sandbox-warmpool.yaml
+else
+  echo "  [SKIP] agent-sandbox CRD not installed — sandbox template skipped."
+fi
 
 echo ""
 echo "Waiting for gateway/agentweaver-gateway to become Programmed (up to 3 min)..."

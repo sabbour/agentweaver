@@ -41,12 +41,12 @@ RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERS
     && chmod 0755 /usr/local/bin/kubectl \
     && kubectl version --client=true
 
-RUN groupadd --gid 1000 appgroup \
-    && useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
+RUN getent group 1000 || groupadd --gid 1000 appgroup; \
+    id -u 1000 >/dev/null 2>&1 || useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home appuser
 
-RUN mkdir -p /data /app/logs && chown -R appuser:appgroup /data /app
+RUN mkdir -p /data /app/logs && chown -R 1000:1000 /data /app
 
-COPY --from=build --chown=appuser:appgroup /app/publish .
+COPY --from=build --chown=1000:1000 /app/publish .
 
 USER 1000
 

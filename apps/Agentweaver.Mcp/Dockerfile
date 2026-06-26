@@ -16,10 +16,10 @@ RUN dotnet publish "apps/Agentweaver.Mcp/Agentweaver.Mcp.csproj" \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-RUN groupadd --gid 1000 appgroup \
-    && useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
+RUN getent group 1000 || groupadd --gid 1000 appgroup; \
+    id -u 1000 >/dev/null 2>&1 || useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home appuser
 
-COPY --from=build --chown=appuser:appgroup /app/publish .
+COPY --from=build --chown=1000:1000 /app/publish .
 
 USER 1000
 

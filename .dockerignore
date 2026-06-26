@@ -18,15 +18,22 @@
 # Node
 node_modules
 
-# .NET build artifacts
-**/bin
+# .NET build artifacts (but not checked-in native binaries)
+**/bin/Debug
+**/bin/Release
 **/obj
 
 # Test results
 **/TestResults
+tests
 
 # Scripts and docs (not needed in runtime images)
 scripts
 docs
 specs
 *.md
+
+# Large non-runtime directories
+**/node_modules
+.squad
+.specify

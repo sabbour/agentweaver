@@ -12,3 +12,5 @@ apps/web/**/*.ts  text eol=lf
 apps/web/**/*.tsx text eol=lf
 apps/web/**/*.css text eol=lf
 apps/web/**/*.json text eol=lf
+
+apps/web/docker-entrypoint.sh text eol=lf

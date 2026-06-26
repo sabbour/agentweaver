@@ -22,29 +22,13 @@ RUN dotnet publish apps/Agentweaver.Web/Agentweaver.Web.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-RUN groupadd --gid 1000 appgroup \
-    && useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
+RUN getent group 1000 || groupadd --gid 1000 appgroup; \
+    id -u 1000 >/dev/null 2>&1 || useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home appuser
 
-COPY --from=dotnet-build --chown=appuser:appgroup /app/publish .
-COPY --from=web-build --chown=appuser:appgroup /app/dist ./wwwroot
-
-RUN cat > /app/docker-entrypoint.sh <<'EOF'
-#!/bin/sh
-set -eu
-json_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-api_url="$(json_escape "${AGENTWEAVER_API_URL:-/api}")"
-api_key="$(json_escape "${AGENTWEAVER_API_KEY:-}")"
-cat > /app/wwwroot/env-config.js <<EOC
-window.__AGENTWEAVER_CONFIG__ = {
-  API_URL: "${api_url}",
-  API_KEY: "${api_key}"
-};
-EOC
-exec dotnet Agentweaver.Web.dll
-EOF
-RUN chmod 0755 /app/docker-entrypoint.sh && chown appuser:appgroup /app/docker-entrypoint.sh /app/wwwroot
+COPY --from=dotnet-build --chown=1000:1000 /app/publish .
+COPY --from=web-build --chown=1000:1000 /app/dist ./wwwroot
+COPY --chown=1000:1000 apps/web/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod 0755 /app/docker-entrypoint.sh
 
 USER 1000
 
@@ -54,4 +38,4 @@ ENV ASPNETCORE_URLS=http://+:8080
 ENV ASPNETCORE_ENVIRONMENT=Production
 ENV AGENTWEAVER_API_URL=/api
 
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]

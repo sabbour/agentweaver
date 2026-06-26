@@ -26,6 +26,8 @@ public sealed class GitHubOrgAuthorizationMiddleware
     private static readonly string[] ExemptPrefixes =
     [
         "/health",
+        "/api/health",
+        "/api/ping",
         "/auth",
         "/api/auth",
         "/mcp",

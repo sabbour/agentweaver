@@ -3,7 +3,7 @@
 
 # -- Azure resource parameters ------------------------------------------------
 RESOURCE_GROUP="${RESOURCE_GROUP:-agentweaver-rg}"
-CLUSTER_NAME="${CLUSTER_NAME:-agentweaver-aks}"
+CLUSTER_NAME="${CLUSTER_NAME:-agentweaver-aks-2}"
 ACR_NAME="${ACR_NAME:-agentweaverregistry}"
 LOCATION="${LOCATION:-westus2}"
 
