@@ -8,41 +8,42 @@ SQLite stores both mutable run state and the append-only event log. The durable 
 
 ## End-to-end flow
 
-```text
-Submit task
-    |
-    v
-POST /api/runs
-    |
-    +--> create run record
-    +--> create worktree branch and worktree path
-    +--> emit run.started
-    |
-    v
-Agent loop
-    |
-    +--> governance gate (deny-by-default) → read_file / write_file inside worktree
-    +--> append events to SQLite
-    +--> publish events to live subscribers
-    |
-    v
-run.completed | run.failed | run.bounded
-    |
-    +--> if completed: commit worktree and emit review.requested
-    |
-    v
-Human review gate
-    |
-    +--> review.declined --------------> originating branch unchanged
-    |
-    +--> review.approved
-              |
-              v
-         LibGit2Sharp merge
-              |
-              +--> merge.completed
-              |
-              +--> merge.failed
+```mermaid
+flowchart TD
+    Submit["Submit task or goal<br/>POST /api/runs"]
+
+    subgraph setup["Run setup"]
+        Record["Create run record"]
+        Worktree["Create worktree branch + path"]
+        Started["Emit run.started"]
+    end
+
+    subgraph loop["Agent loop"]
+        Gate["Governance gate<br/>deny-by-default"]
+        Tools["Execute tool<br/>read_file / write_file / shell<br/>inside worktree boundary"]
+        Events["Append event to SQLite<br/>Publish to live subscribers"]
+    end
+
+    Terminal{{"run.completed<br/>run.failed<br/>run.bounded"}}
+
+    Review["Human review gate<br/>review.requested"]
+
+    Declined["review.declined<br/>originating branch unchanged"]
+    Approved["review.approved"]
+    Merge["LibGit2Sharp merge"]
+    MergeOK["merge.completed"]
+    MergeFail["merge.failed<br/>originating branch unchanged"]
+
+    Submit --> Record --> Worktree --> Started
+    Started --> Gate
+    Gate -->|"allowed"| Tools --> Events --> Gate
+    Gate -->|"denied"| Events
+    Events --> Terminal
+    Terminal -->|"completed"| Review
+    Review --> Declined
+    Review --> Approved --> Merge
+    Merge --> MergeOK
+    Merge --> MergeFail
 ```
 
 ## Main components

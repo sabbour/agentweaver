@@ -1,8 +1,8 @@
-import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
-export default defineConfig({
+export default withMermaid({
   title: 'Agentweaver',
-  description: 'AI agent runs inside a sandboxed git worktree. You review before anything merges.',
+  description: 'Orchestrate AI agent teams that build and ship code — with full observability and human oversight at every step.',
   base: '/docs/',
   ignoreDeadLinks: true,
   markdown: {
@@ -12,9 +12,11 @@ export default defineConfig({
     // relies on `{.class}`/`{#anchor}` syntax.
     attrs: { disable: true },
   },
+  mermaid: {},
   themeConfig: {
+    logo: '/agentweaver.png',
     nav: [
-      { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Guide', link: '/guide/' },
       { text: 'Reference', link: '/reference/api' },
       { text: 'Architecture', link: '/architecture/overview' },
     ],
@@ -23,8 +25,22 @@ export default defineConfig({
         {
           text: 'Guide',
           items: [
+            { text: 'What is Agentweaver?', link: '/guide/' },
+            { text: 'Authentication', link: '/guide/authentication' },
+            { text: 'Projects', link: '/guide/projects' },
+            { text: 'Agent Teams & Blueprints', link: '/guide/teams' },
+            { text: 'Workflows', link: '/guide/workflows' },
+            { text: 'Board and Backlog', link: '/guide/board' },
+            { text: 'Runs', link: '/guide/runs' },
+            { text: 'Review & Merge', link: '/guide/review' },
+          ],
+        },
+        {
+          text: 'Setup',
+          items: [
             { text: 'Getting started', link: '/guide/getting-started' },
             { text: 'Configuration', link: '/guide/configuration' },
+            { text: 'Deploy to AKS', link: '/guide/deployment-aks' },
           ],
         },
       ],
@@ -48,6 +64,7 @@ export default defineConfig({
             { text: 'Overview', link: '/architecture/overview' },
             { text: 'Sandbox', link: '/architecture/sandbox' },
             { text: 'Events', link: '/architecture/events' },
+            { text: 'AKS Architecture', link: '/architecture-aks' },
           ],
         },
       ],

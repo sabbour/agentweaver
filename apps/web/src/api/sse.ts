@@ -207,7 +207,7 @@ export function useRunStream(runId: string, baseUrl: string = API_URL, maxEvents
     };
 
     const connectOnce = async (): Promise<boolean> => {
-      const url = `${baseUrl.replace(/\/+$/, '')}/api/runs/${encodeURIComponent(runId)}/stream`;
+      const url = `${baseUrl.replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}/stream`;
       const token = getSessionToken();
       const headers: Record<string, string> = { Accept: 'text/event-stream' };
       if (token) headers.Authorization = `Bearer ${token}`;

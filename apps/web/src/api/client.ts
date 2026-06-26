@@ -71,37 +71,37 @@ export class AgentweaverApiClient {
   }
 
   submitRun(req: SubmitRunRequest): Promise<SubmitRunResponse> {
-    return this.request<SubmitRunResponse>('POST', '/api/runs', req);
+    return this.request<SubmitRunResponse>('POST', '/runs', req);
   }
 
   getRun(runId: string): Promise<RunDetail> {
-    return this.request<RunDetail>('GET', `/api/runs/${encodeURIComponent(runId)}`);
+    return this.request<RunDetail>('GET', `/runs/${encodeURIComponent(runId)}`);
   }
 
   retryRun(runId: string): Promise<RetryRunResponse> {
-    return this.request<RetryRunResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/retry`, {});
+    return this.request<RetryRunResponse>('POST', `/runs/${encodeURIComponent(runId)}/retry`, {});
   }
 
   // Persisted run events (FR-022). Seeds the execution timeline for terminal/parked
   // runs whose live SSE stream is closed (e.g. a finished coordinator child). The
   // backend persists and replays the events here; 404 until the log exists.
   getRunEvents(runId: string): Promise<PersistedRunEvent[]> {
-    return this.request<PersistedRunEvent[]>('GET', `/api/runs/${encodeURIComponent(runId)}/events`);
+    return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
   }
 
   getSandboxPolicy(repositoryPath: string): Promise<SandboxPolicy> {
     const encoded = encodeURIComponent(repositoryPath);
-    return this.request<SandboxPolicy>('GET', `/api/sandbox-policy?repository_path=${encoded}`);
+    return this.request<SandboxPolicy>('GET', `/sandbox-policy?repository_path=${encoded}`);
   }
 
   getRunFiles(runId: string, filter?: string): Promise<WorkspaceFileEntry[]> {
     const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
-    return this.request<WorkspaceFileEntry[]>('GET', `/api/runs/${encodeURIComponent(runId)}/files${query}`);
+    return this.request<WorkspaceFileEntry[]>('GET', `/runs/${encodeURIComponent(runId)}/files${query}`);
   }
 
   getRunFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
-    return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}`);
+    return this.request<WorkspaceFileDiff>('GET', `/runs/${encodeURIComponent(runId)}/files/${encoded}`);
   }
 
   // Collective assembly artifacts for a coordinator run. The coordinator owns no worktree; these
@@ -109,16 +109,16 @@ export class AgentweaverApiClient {
   // standard Changes/Files rail can review the assembled output. Returns [] before assembly runs.
   getAssemblyFiles(runId: string, filter?: string): Promise<WorkspaceFileEntry[]> {
     const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
-    return this.request<WorkspaceFileEntry[]>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/files${query}`);
+    return this.request<WorkspaceFileEntry[]>('GET', `/runs/${encodeURIComponent(runId)}/assembly/files${query}`);
   }
 
   getAssemblyFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
-    return this.request<WorkspaceFileDiff>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/files/${encoded}`);
+    return this.request<WorkspaceFileDiff>('GET', `/runs/${encodeURIComponent(runId)}/assembly/files/${encoded}`);
   }
 
   getAssemblyWorkspace(runId: string): Promise<WorkspaceNode[]> {
-    return this.request<WorkspaceNode[]>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/workspace`);
+    return this.request<WorkspaceNode[]>('GET', `/runs/${encodeURIComponent(runId)}/assembly/workspace`);
   }
 
   // Per-file CONTENT of the collective integration branch tip, for the review modal's Preview/source
@@ -126,78 +126,78 @@ export class AgentweaverApiClient {
   // this reads the blob from agentweaver/integration/{id} instead.
   getAssemblyFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
-    return this.request<WorkspaceFileContent>('GET', `/api/runs/${encodeURIComponent(runId)}/assembly/content/${encoded}`);
+    return this.request<WorkspaceFileContent>('GET', `/runs/${encodeURIComponent(runId)}/assembly/content/${encoded}`);
   }
 
   getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
-    return this.request<WorkspaceFileContent>('GET', `/api/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
+    return this.request<WorkspaceFileContent>('GET', `/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
   }
 
   getRunWorkspace(runId: string): Promise<WorkspaceNode[]> {
-    return this.request<WorkspaceNode[]>('GET', `/api/runs/${encodeURIComponent(runId)}/workspace`);
+    return this.request<WorkspaceNode[]>('GET', `/runs/${encodeURIComponent(runId)}/workspace`);
   }
 
   commitRun(runId: string): Promise<CommitResponse> {
-    return this.request<CommitResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/commit`, {});
+    return this.request<CommitResponse>('POST', `/runs/${encodeURIComponent(runId)}/commit`, {});
   }
 
   requestChanges(runId: string, comment: string): Promise<RequestChangesResponse> {
-    return this.request<RequestChangesResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/request-changes`, { comment });
+    return this.request<RequestChangesResponse>('POST', `/runs/${encodeURIComponent(runId)}/request-changes`, { comment });
   }
 
   updateSandboxPolicy(policy: SandboxPolicy): Promise<SandboxPolicy> {
-    return this.request<SandboxPolicy>('PUT', '/api/sandbox-policy', policy);
+    return this.request<SandboxPolicy>('PUT', '/sandbox-policy', policy);
   }
 
   // Projects
   listProjects(): Promise<Project[]> {
-    return this.request<Project[]>('GET', '/api/projects');
+    return this.request<Project[]>('GET', '/projects');
   }
 
   getProject(projectId: string): Promise<Project> {
-    return this.request<Project>('GET', `/api/projects/${encodeURIComponent(projectId)}`);
+    return this.request<Project>('GET', `/projects/${encodeURIComponent(projectId)}`);
   }
 
   createProject(req: CreateProjectRequest): Promise<Project> {
-    return this.request<Project>('POST', '/api/projects', req);
+    return this.request<Project>('POST', '/projects', req);
   }
 
   listBlueprints(): Promise<Blueprint[]> {
-    return this.request<Blueprint[] | ListBlueprintsResponse>('GET', '/api/blueprints')
+    return this.request<Blueprint[] | ListBlueprintsResponse>('GET', '/blueprints')
       .then(normalizeBlueprintList);
   }
 
   generateBlueprint(description: string): Promise<GenerateBlueprintResponse> {
-    return this.request<GenerateBlueprintResponse>('POST', '/api/blueprints/generate', { description });
+    return this.request<GenerateBlueprintResponse>('POST', '/blueprints/generate', { description });
   }
 
   renameProject(projectId: string, name: string): Promise<void> {
-    return this.request<void>('PATCH', `/api/projects/${encodeURIComponent(projectId)}`, { name });
+    return this.request<void>('PATCH', `/projects/${encodeURIComponent(projectId)}`, { name });
   }
 
   updateProjectProviderSettings(projectId: string, req: UpdateProjectProviderSettingsRequest): Promise<void> {
-    return this.request<void>('PUT', `/api/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
+    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
   relinkProject(projectId: string, workingDirectory: string): Promise<void> {
-    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/relink`, { working_directory: workingDirectory });
+    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/relink`, { working_directory: workingDirectory });
   }
 
   deleteProject(projectId: string): Promise<void> {
-    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}?confirm=true`);
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}?confirm=true`);
   }
 
   startProjectRun(projectId: string, req: CreateProjectRunRequest): Promise<SubmitRunResponse> {
-    return this.request<SubmitRunResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/runs`, req);
+    return this.request<SubmitRunResponse>('POST', `/projects/${encodeURIComponent(projectId)}/runs`, req);
   }
 
   listProjectRuns(projectId: string): Promise<WorkflowRunDto[]> {
-    return this.request<WorkflowRunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs`);
+    return this.request<WorkflowRunDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/runs`);
   }
 
   createProjectRun(projectId: string, request: CreateRunRequest): Promise<CreateProjectRunResponse> {
-    return this.request<CreateProjectRunResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/runs`, request);
+    return this.request<CreateProjectRunResponse>('POST', `/projects/${encodeURIComponent(projectId)}/runs`, request);
   }
 
   getProjectRuns(projectId: string, options?: {
@@ -213,135 +213,135 @@ export class AgentweaverApiClient {
     if (options?.limit != null) query.set('limit', String(options.limit));
     const queryString = query.toString();
     const suffix = queryString ? `?${queryString}` : '';
-    return this.request<WorkflowRunDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs${suffix}`);
+    return this.request<WorkflowRunDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/runs${suffix}`);
   }
 
   getWorkflowRun(projectId: string, workflowRunId: string): Promise<WorkflowRunDto> {
-    return this.request<WorkflowRunDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(workflowRunId)}`);
+    return this.request<WorkflowRunDto>('GET', `/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(workflowRunId)}`);
   }
 
   deleteRun(runId: string): Promise<void> {
-    return this.request<void>('DELETE', `/api/runs/${encodeURIComponent(runId)}`);
+    return this.request<void>('DELETE', `/runs/${encodeURIComponent(runId)}`);
   }
 
   archiveRun(runId: string): Promise<void> {
-    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/archive`, {});
+    return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/archive`, {});
   }
 
   // GitHub auth
   getServerInfo(): Promise<ServerInfo> {
-    return this.request<ServerInfo>('GET', '/api/server/info');
+    return this.request<ServerInfo>('GET', '/server/info');
   }
 
   startGitHubDeviceFlow(): Promise<GitHubDeviceFlow> {
-    return this.request<GitHubDeviceFlow>('POST', '/api/auth/github/device', {});
+    return this.request<GitHubDeviceFlow>('POST', '/auth/github/device', {});
   }
 
   pollGitHubAuth(): Promise<GitHubPollResult> {
-    return this.request<GitHubPollResult>('POST', '/api/auth/github/poll', {});
+    return this.request<GitHubPollResult>('POST', '/auth/github/poll', {});
   }
 
   getGitHubAuthStatus(): Promise<GitHubAuthStatusResponse> {
-    return this.request<GitHubAuthStatusResponse>('GET', '/api/auth/github');
+    return this.request<GitHubAuthStatusResponse>('GET', '/auth/github');
   }
 
   signOutGitHub(): Promise<void> {
-    return this.request<void>('POST', '/api/auth/github/sign-out', {});
+    return this.request<void>('POST', '/auth/github/sign-out', {});
   }
 
   listGitHubRepos(): Promise<GitHubRepo[]> {
-    return this.request<GitHubRepo[]>('GET', '/api/github/repos');
+    return this.request<GitHubRepo[]>('GET', '/github/repos');
   }
 
   // Catalog
   getRoles(): Promise<RoleDto[]> {
-    return this.request<RoleDto[]>('GET', '/api/catalog/roles');
+    return this.request<RoleDto[]>('GET', '/catalog/roles');
   }
 
   // Casting
   getTemplates(): Promise<TeamTemplateDto[]> {
-    return this.request<TeamTemplateDto[]>('GET', '/api/casting/templates');
+    return this.request<TeamTemplateDto[]>('GET', '/casting/templates');
   }
 
   getUniverses(projectId: string): Promise<{ universes: string[] }> {
-    return this.request<{ universes: string[] }>('GET', `/api/projects/${encodeURIComponent(projectId)}/casting/universes`);
+    return this.request<{ universes: string[] }>('GET', `/projects/${encodeURIComponent(projectId)}/casting/universes`);
   }
 
   createProposal(projectId: string, req: CreateProposalRequest): Promise<CastProposalDto> {
-    return this.request<CastProposalDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals`, req);
+    return this.request<CastProposalDto>('POST', `/projects/${encodeURIComponent(projectId)}/casting/proposals`, req);
   }
 
   getProposal(projectId: string, proposalId: string): Promise<CastProposalDto> {
-    return this.request<CastProposalDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
+    return this.request<CastProposalDto>('GET', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
   }
 
   amendProposal(projectId: string, proposalId: string, req: AmendProposalRequest): Promise<CastProposalDto> {
-    return this.request<CastProposalDto>('PATCH', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`, req);
+    return this.request<CastProposalDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`, req);
   }
 
   confirmProposal(projectId: string, proposalId: string, req: ConfirmProposalRequest): Promise<void> {
-    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}/confirm`, req);
+    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}/confirm`, req);
   }
 
   rejectProposal(projectId: string, proposalId: string): Promise<void> {
-    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
   }
 
   // Team
   getTeam(projectId: string): Promise<TeamDto> {
-    return this.request<TeamDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team`);
+    return this.request<TeamDto>('GET', `/projects/${encodeURIComponent(projectId)}/team`);
   }
 
   getMemberCharter(projectId: string, memberName: string): Promise<CharterDto> {
-    return this.request<CharterDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`);
+    return this.request<CharterDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`);
   }
 
   updateMemberCharter(projectId: string, memberName: string, content: string): Promise<void> {
-    return this.request<void>('PUT', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`, { content });
+    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`, { content });
   }
 
   addMember(projectId: string, req: AddMemberRequest): Promise<TeamMemberDto> {
-    return this.request<TeamMemberDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/team/members`, req);
+    return this.request<TeamMemberDto>('POST', `/projects/${encodeURIComponent(projectId)}/team/members`, req);
   }
 
   removeMember(projectId: string, memberName: string): Promise<void> {
-    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`);
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`);
   }
 
   reroleMember(projectId: string, memberName: string, req: ReroleRequest): Promise<TeamMemberDto> {
-    return this.request<TeamMemberDto>('PATCH', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`, req);
+    return this.request<TeamMemberDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`, req);
   }
 
   getMemberHistory(projectId: string, memberName: string): Promise<HistoryDto> {
-    return this.request<HistoryDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/history`);
+    return this.request<HistoryDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/history`);
   }
 
   getDecisions(projectId: string): Promise<import('./types').DecisionDto[]> {
-    return this.request<import('./types').DecisionDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/decisions`);
+    return this.request<import('./types').DecisionDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/decisions`);
   }
 
   getDecisionsInbox(projectId: string): Promise<import('./types').DecisionInboxEntryDto[]> {
-    return this.request<import('./types').DecisionInboxEntryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox`);
+    return this.request<import('./types').DecisionInboxEntryDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/decisions/inbox`);
   }
 
   mergeDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
-    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/merge`, {});
+    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/merge`, {});
   }
 
   promoteDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
-    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/promote`, {});
+    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/promote`, {});
   }
 
   rejectDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
-    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/reject`, {});
+    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/reject`, {});
   }
 
   getAgentMemory(projectId: string, agentName: string): Promise<import('./types').AgentMemoryDto[]> {
-    return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`);
+    return this.request<import('./types').AgentMemoryDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`);
   }
 
   getProjectMemory(projectId: string): Promise<import('./types').AgentMemoryDto[]> {
-    return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/memory`);
+    return this.request<import('./types').AgentMemoryDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/memory`);
   }
 
   createAgentMemory(
@@ -349,7 +349,7 @@ export class AgentweaverApiClient {
     agentName: string,
     body: { type: string; content: string; importance?: string; tags?: string },
   ): Promise<import('./types').AgentMemoryDto> {
-    return this.request<import('./types').AgentMemoryDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`, body);
+    return this.request<import('./types').AgentMemoryDto>('POST', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`, body);
   }
 
   updateAgentMemory(
@@ -358,67 +358,67 @@ export class AgentweaverApiClient {
     memoryId: string,
     body: { type?: string; content?: string; importance?: string; tags?: string },
   ): Promise<import('./types').AgentMemoryDto> {
-    return this.request<import('./types').AgentMemoryDto>('PUT', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}`, body);
+    return this.request<import('./types').AgentMemoryDto>('PUT', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}`, body);
   }
 
   // Sync
   getSyncStatus(projectId: string): Promise<SyncStatusDto> {
-    return this.request<SyncStatusDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/team/sync`);
+    return this.request<SyncStatusDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/sync`);
   }
 
   commitSync(projectId: string, req: SyncCommitRequest): Promise<SyncCommitResponseDto> {
-    return this.request<SyncCommitResponseDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/team/sync`, req);
+    return this.request<SyncCommitResponseDto>('POST', `/projects/${encodeURIComponent(projectId)}/team/sync`, req);
   }
 
   // Orchestration (Feature 008 — Squad Coordinator Agent)
   startOrchestration(projectId: string, goal: string): Promise<StartOrchestrationResponse> {
-    return this.request<StartOrchestrationResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/orchestrations`, { goal });
+    return this.request<StartOrchestrationResponse>('POST', `/projects/${encodeURIComponent(projectId)}/orchestrations`, { goal });
   }
 
   // Project Workspace browsing (read-only). The backend exposes the project repo
   // at its current branch plus active run worktree branches as selectable refs.
   getProjectWorkspaceRefs(projectId: string): Promise<WorkspaceRefsResponse> {
-    return this.request<WorkspaceRefsResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace/refs`);
+    return this.request<WorkspaceRefsResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/refs`);
   }
 
   getProjectWorkspace(projectId: string, ref?: string): Promise<WorkspaceNode[]> {
     const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
-    return this.request<WorkspaceNode[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace${query}`);
+    return this.request<WorkspaceNode[]>('GET', `/projects/${encodeURIComponent(projectId)}/workspace${query}`);
   }
 
   getProjectWorkspaceFileContent(projectId: string, path: string, ref?: string): Promise<WorkspaceFileContent> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
-    return this.request<WorkspaceFileContent>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace/files/${encoded}/content${query}`);
+    return this.request<WorkspaceFileContent>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/files/${encoded}/content${query}`);
   }
 
   getOutcomeSpec(runId: string): Promise<OutcomeSpec> {
-    return this.request<OutcomeSpec>('GET', `/api/runs/${encodeURIComponent(runId)}/outcome-spec`);
+    return this.request<OutcomeSpec>('GET', `/runs/${encodeURIComponent(runId)}/outcome-spec`);
   }
 
   confirmOutcomeSpec(runId: string): Promise<OutcomeSpec | null> {
-    return this.request<OutcomeSpec | null>('POST', `/api/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, {});
+    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, {});
   }
 
   reviseOutcomeSpec(runId: string, feedback: string): Promise<OutcomeSpec | null> {
-    return this.request<OutcomeSpec | null>('POST', `/api/runs/${encodeURIComponent(runId)}/outcome-spec/revise`, { feedback });
+    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/revise`, { feedback });
   }
 
   // Coordinator steering (Feature 008 Phase 2). The /steer endpoint is added by the
   // backend team in parallel; this codes against the agreed contract.
   steerCoordinator(coordinatorRunId: string, req: SteerCoordinatorRequest): Promise<SteerCoordinatorResponse> {
-    return this.request<SteerCoordinatorResponse>('POST', `/api/runs/${encodeURIComponent(coordinatorRunId)}/steer`, req);
+    return this.request<SteerCoordinatorResponse>('POST', `/runs/${encodeURIComponent(coordinatorRunId)}/steer`, req);
   }
 
   // Coordinator topology REST seed (Feature 008 Phase 2). The SSE topology snapshot is
   // emitted before the stream connects, so the page seeds nodes/edges from these on mount,
   // then applies SSE deltas on top (snapshot-race fix). 404 when the run has no plan yet.
   getWorkPlan(coordinatorRunId: string): Promise<WorkPlanResponse> {
-    return this.request<WorkPlanResponse>('GET', `/api/runs/${encodeURIComponent(coordinatorRunId)}/work-plan`);
+    return this.request<WorkPlanResponse>('GET', `/runs/${encodeURIComponent(coordinatorRunId)}/work-plan`);
   }
 
   getCoordinatorChildren(coordinatorRunId: string): Promise<CoordinatorChildResponse[]> {
-    return this.request<CoordinatorChildResponse[]>('GET', `/api/runs/${encodeURIComponent(coordinatorRunId)}/children`);
+    return this.request<CoordinatorChildResponse[]>('GET', `/runs/${encodeURIComponent(coordinatorRunId)}/children`);
   }
 
   // Collective human review over the assembled integration output (Feature 008 Phase 3).
@@ -431,7 +431,7 @@ export class AgentweaverApiClient {
       request_changes: decision === 'request_changes',
       feedback: comment,
     };
-    return this.request<void>('POST', `/api/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, body);
+    return this.request<void>('POST', `/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, body);
   }
 
   // Answer a worker's bubbled question (agent.question_asked). The answer must be POSTed against
@@ -441,7 +441,7 @@ export class AgentweaverApiClient {
   answerQuestion(runId: string, requestId: string, answer: string): Promise<AnswerQuestionResponse> {
     return this.request<AnswerQuestionResponse>(
       'POST',
-      `/api/runs/${encodeURIComponent(runId)}/questions/${encodeURIComponent(requestId)}/answer`,
+      `/runs/${encodeURIComponent(runId)}/questions/${encodeURIComponent(requestId)}/answer`,
       { answer },
     );
   }
@@ -449,34 +449,34 @@ export class AgentweaverApiClient {
   // Live per-run option toggles. auto-approve cascades to a coordinator's children; autopilot is
   // coordinator-only. Both 404 (not found) / 403 (not owner) / 409 (run not active).
   setAutoApprove(runId: string, enabled: boolean): Promise<AutoApproveResponse> {
-    return this.request<AutoApproveResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/auto-approve`, { enabled });
+    return this.request<AutoApproveResponse>('POST', `/runs/${encodeURIComponent(runId)}/auto-approve`, { enabled });
   }
 
   setAutopilot(runId: string, enabled: boolean): Promise<AutopilotResponse> {
-    return this.request<AutopilotResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/autopilot`, { enabled });
+    return this.request<AutopilotResponse>('POST', `/runs/${encodeURIComponent(runId)}/autopilot`, { enabled });
   }
 
   approveTool(runId: string, requestId: string, scope: 'once' | 'run' | 'always' | 'tool'): Promise<void> {
-    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/tool-approvals`, { request_id: requestId, scope });
+    return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/tool-approvals`, { request_id: requestId, scope });
   }
 
   denyTool(runId: string, requestId: string): Promise<void> {
-    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/tool-denials`, { request_id: requestId });
+    return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/tool-denials`, { request_id: requestId });
   }
 
   approveShell(runId: string, commandHash: string): Promise<void> {
-    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/shell-approvals`, { command_hash: commandHash });
+    return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/shell-approvals`, { command_hash: commandHash });
   }
 
   denyShell(runId: string, commandHash: string): Promise<void> {
-    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/shell-denials`, { command_hash: commandHash });
+    return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/shell-denials`, { command_hash: commandHash });
   }
 
   // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller
   // can fall back to the hardcoded executor graph until the backend endpoint ships.
   async getRunGraph(runId: string): Promise<GraphDescriptor | null> {
     try {
-      return await this.request<GraphDescriptor>('GET', `/api/runs/${encodeURIComponent(runId)}/graph`);
+      return await this.request<GraphDescriptor>('GET', `/runs/${encodeURIComponent(runId)}/graph`);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
@@ -487,51 +487,51 @@ export class AgentweaverApiClient {
   // snake_case backlog endpoints — all ordering/claim/validation logic lives server-side.
   getBoard(projectId: string, includeTerminalHistory = false): Promise<BoardDto> {
     const query = includeTerminalHistory ? '?include_terminal_history=true' : '';
-    return this.request<BoardDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/board${query}`);
+    return this.request<BoardDto>('GET', `/projects/${encodeURIComponent(projectId)}/board${query}`);
   }
 
   getWorkflowStages(projectId: string): Promise<WorkflowStagesResponse> {
-    return this.request<WorkflowStagesResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/workflow-stages`);
+    return this.request<WorkflowStagesResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workflow-stages`);
   }
 
   captureBacklogTask(projectId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
-    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks`, body);
+    return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks`, body);
   }
 
   editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
-    return this.request<BacklogTaskDto>('PATCH', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`, body);
+    return this.request<BacklogTaskDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`, body);
   }
 
   deleteBacklogTask(projectId: string, taskId: string): Promise<void> {
-    return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
   }
 
   archiveBacklogTask(projectId: string, taskId: string): Promise<void> {
-    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/archive`, {});
+    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/archive`, {});
   }
 
   moveTaskToReady(projectId: string, taskId: string, targetIndex?: number): Promise<BacklogTaskDto> {
-    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/ready`, { target_index: targetIndex ?? null });
+    return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/ready`, { target_index: targetIndex ?? null });
   }
 
   moveTaskToBacklog(projectId: string, taskId: string, targetIndex?: number): Promise<BacklogTaskDto> {
-    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/backlog`, { target_index: targetIndex ?? null });
+    return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/backlog`, { target_index: targetIndex ?? null });
   }
 
   reorderBacklogTask(projectId: string, taskId: string, targetIndex: number): Promise<BacklogTaskDto> {
-    return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/reorder`, { target_index: targetIndex });
+    return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/reorder`, { target_index: targetIndex });
   }
 
   sendAllBacklogToReady(projectId: string): Promise<{ moved: number }> {
-    return this.request<{ moved: number }>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/ready-all`, {});
+    return this.request<{ moved: number }>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/ready-all`, {});
   }
 
   getBacklogSettings(projectId: string): Promise<BacklogSettingsDto> {
-    return this.request<BacklogSettingsDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/backlog/settings`);
+    return this.request<BacklogSettingsDto>('GET', `/projects/${encodeURIComponent(projectId)}/backlog/settings`);
   }
 
   setBacklogSettings(projectId: string, settings: BacklogSettingsDto): Promise<BacklogSettingsDto> {
-    return this.request<BacklogSettingsDto>('PUT', `/api/projects/${encodeURIComponent(projectId)}/backlog/settings`, settings);
+    return this.request<BacklogSettingsDto>('PUT', `/projects/${encodeURIComponent(projectId)}/backlog/settings`, settings);
   }
 
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {
@@ -541,7 +541,7 @@ export class AgentweaverApiClient {
       'Content-Type': 'application/json',
     };
     const response = await fetch(
-      `${this.baseUrl}/api/runs/${encodeURIComponent(runId)}/review`,
+      `${this.baseUrl}/runs/${encodeURIComponent(runId)}/review`,
       { method: 'POST', headers, credentials: 'include', body: JSON.stringify(body) },
     );
     const text = await response.text();
@@ -566,7 +566,7 @@ export class AgentweaverApiClient {
   async checkHealth(): Promise<boolean> {
     const headers = this.authHeaders();
     try {
-      const res = await fetch(`${this.baseUrl}/api/health`, { method: 'GET', headers, credentials: 'include' });
+      const res = await fetch(`${this.baseUrl}/health`, { method: 'GET', headers, credentials: 'include' });
       if (res.status !== 404) return res.ok;
     } catch {
       // /api/health unreachable; fall through to the root probe.
@@ -581,17 +581,17 @@ export class AgentweaverApiClient {
 
   // System diagnostics snapshot (Spec 011, FR-016).
   getDiagnostics(): Promise<SystemDiagnosticsDto> {
-    return this.request<SystemDiagnosticsDto>('GET', '/api/diagnostics');
+    return this.request<SystemDiagnosticsDto>('GET', '/diagnostics');
   }
 
   // Project-scoped diagnostics (Spec 011, FR-016). Owner-authorized.
   getProjectDiagnostics(projectId: string): Promise<import('./types').ProjectDiagnosticsDto> {
-    return this.request<import('./types').ProjectDiagnosticsDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/diagnostics`);
+    return this.request<import('./types').ProjectDiagnosticsDto>('GET', `/projects/${encodeURIComponent(projectId)}/diagnostics`);
   }
 
   // Heartbeat service status (Spec 011, FR-017).
   getHeartbeatStatus(): Promise<HeartbeatStatusDto> {
-    return this.request<HeartbeatStatusDto>('GET', '/api/diagnostics/heartbeat');
+    return this.request<HeartbeatStatusDto>('GET', '/diagnostics/heartbeat');
   }
 
   // Workflow definitions (Spec 010, FR-039). Project-scoped, owner-authorized.
@@ -599,27 +599,27 @@ export class AgentweaverApiClient {
   // workflows/ from disk and returns the refreshed set; Get returns one full
   // definition.
   listWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
-    return this.request<import('./types').WorkflowListResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/workflows`);
+    return this.request<import('./types').WorkflowListResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workflows`);
   }
 
   syncWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
-    return this.request<import('./types').WorkflowListResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/workflows/sync`, {});
+    return this.request<import('./types').WorkflowListResponse>('POST', `/projects/${encodeURIComponent(projectId)}/workflows/sync`, {});
   }
 
   getWorkflow(projectId: string, workflowId: string): Promise<import('./types').WorkflowDetailDto> {
-    return this.request<import('./types').WorkflowDetailDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`);
+    return this.request<import('./types').WorkflowDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`);
   }
 
   // Set the project's default workflow (Feature 010, FR-041). A null id clears back
   // to the built-in default. Returns the refreshed list (with default_workflow_id).
   setDefaultWorkflow(projectId: string, workflowId: string | null): Promise<import('./types').WorkflowListResponse> {
-    return this.request<import('./types').WorkflowListResponse>('PUT', `/api/projects/${encodeURIComponent(projectId)}/workflows/default`, { workflow_id: workflowId });
+    return this.request<import('./types').WorkflowListResponse>('PUT', `/projects/${encodeURIComponent(projectId)}/workflows/default`, { workflow_id: workflowId });
   }
 
   // Set a per-task workflow override (Feature 010, FR-042). A null id clears it.
   // Throws ApiError 409 (body { error: 'task_claimed' }) if the task is already claimed.
   setTaskWorkflowOverride(projectId: string, taskId: string, workflowId: string | null): Promise<import('./types').WorkflowOverrideResponse> {
-    return this.request<import('./types').WorkflowOverrideResponse>('PUT', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/workflow-override`, { workflow_id: workflowId });
+    return this.request<import('./types').WorkflowOverrideResponse>('PUT', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/workflow-override`, { workflow_id: workflowId });
   }
 
   // Get the raw YAML content of a project workflow file (US7). Returns the YAML string; throws
@@ -627,7 +627,7 @@ export class AgentweaverApiClient {
   getWorkflowYaml(projectId: string, workflowId: string): Promise<string> {
     return this.request<import('./types').WorkflowYamlResponse>(
       'GET',
-      `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/yaml`,
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/yaml`,
     ).then((r) => r.yaml);
   }
 
@@ -636,7 +636,7 @@ export class AgentweaverApiClient {
   saveWorkflowYaml(projectId: string, workflowId: string, yaml: string): Promise<import('./types').WorkflowDetailDto> {
     return this.request<import('./types').WorkflowDetailDto>(
       'PUT',
-      `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`,
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`,
       { yaml },
     );
   }
@@ -647,7 +647,7 @@ export class AgentweaverApiClient {
   generateWorkflow(projectId: string, description: string): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean }> {
     return this.request<{ yaml: string; workflowId: string; wasCorrected: boolean }>(
       'POST',
-      `/api/projects/${encodeURIComponent(projectId)}/workflows/generate`,
+      `/projects/${encodeURIComponent(projectId)}/workflows/generate`,
       { description },
     );
   }
@@ -657,7 +657,7 @@ export class AgentweaverApiClient {
   getWorkflowGraph(projectId: string, workflowId: string): Promise<import('./types').WorkflowGraphDto> {
     return this.request<import('./types').WorkflowGraphDto>(
       'GET',
-      `/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/graph`,
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/graph`,
     );
   }
 
@@ -666,53 +666,53 @@ export class AgentweaverApiClient {
   // SetActive selects the active policy by name (null clears to the built-in
   // default); Sync re-reads .agentweaver/review-policies/ and returns the set.
   listReviewPolicies(projectId: string): Promise<import('./types').ReviewPolicyListResponse> {
-    return this.request<import('./types').ReviewPolicyListResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/review-policies`);
+    return this.request<import('./types').ReviewPolicyListResponse>('GET', `/projects/${encodeURIComponent(projectId)}/review-policies`);
   }
 
   getReviewPolicy(projectId: string, policyName: string): Promise<import('./types').ReviewPolicyDetailDto> {
-    return this.request<import('./types').ReviewPolicyDetailDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/review-policies/${encodeURIComponent(policyName)}`);
+    return this.request<import('./types').ReviewPolicyDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/review-policies/${encodeURIComponent(policyName)}`);
   }
 
   setActiveReviewPolicy(projectId: string, name: string | null): Promise<import('./types').ReviewPolicyListResponse> {
-    return this.request<import('./types').ReviewPolicyListResponse>('PUT', `/api/projects/${encodeURIComponent(projectId)}/review-policies/active`, { name });
+    return this.request<import('./types').ReviewPolicyListResponse>('PUT', `/projects/${encodeURIComponent(projectId)}/review-policies/active`, { name });
   }
 
   syncReviewPolicies(projectId: string): Promise<import('./types').ReviewPolicyListResponse> {
-    return this.request<import('./types').ReviewPolicyListResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/review-policies/sync`, {});
+    return this.request<import('./types').ReviewPolicyListResponse>('POST', `/projects/${encodeURIComponent(projectId)}/review-policies/sync`, {});
   }
 
   // Metrics (web IA reorg) — per-project dashboard + global "Now" overview.
   getProjectDashboard(projectId: string): Promise<import('./types').ProjectDashboardDto> {
-    return this.request<import('./types').ProjectDashboardDto>('GET', `/api/projects/${encodeURIComponent(projectId)}/dashboard`);
+    return this.request<import('./types').ProjectDashboardDto>('GET', `/projects/${encodeURIComponent(projectId)}/dashboard`);
   }
 
   getOverview(): Promise<import('./types').OverviewDto> {
-    return this.request<import('./types').OverviewDto>('GET', '/api/overview');
+    return this.request<import('./types').OverviewDto>('GET', '/overview');
   }
 
   // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).
   getWorkspaceFiles(projectId: string): Promise<WorkspaceFileNode[]> {
-    return this.request<WorkspaceFileNode[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/workspace/files`);
+    return this.request<WorkspaceFileNode[]>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/files`);
   }
 
   // Decompose a spec file into proposed backlog items (Feature 014, FR-003/004).
   // filePath=null uses the project's confirmed outcome spec stored on the server.
   // confirm=false → dry-run preview; confirm=true → create the tasks.
   decomposeSpec(projectId: string, filePath: string | null, confirm: boolean): Promise<DecomposeResponse> {
-    return this.request<DecomposeResponse>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/decompose`, { file_path: filePath, confirm });
+    return this.request<DecomposeResponse>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/decompose`, { file_path: filePath, confirm });
   }
 
   // Sandbox port-forward (017-preview): tunnel a sandbox pod port to the API server.
   startPortForward(runId: string, targetPort: number): Promise<PortForwardSessionDto> {
-    return this.request<PortForwardSessionDto>('POST', `/api/runs/${encodeURIComponent(runId)}/sandbox/port-forward`, { targetPort });
+    return this.request<PortForwardSessionDto>('POST', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward`, { targetPort });
   }
 
   stopPortForward(runId: string, sessionId: string): Promise<{ session_id: string; stopped: boolean }> {
-    return this.request<{ session_id: string; stopped: boolean }>('DELETE', `/api/runs/${encodeURIComponent(runId)}/sandbox/port-forward/${encodeURIComponent(sessionId)}`);
+    return this.request<{ session_id: string; stopped: boolean }>('DELETE', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward/${encodeURIComponent(sessionId)}`);
   }
 
   listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
-    return this.request<PortForwardSessionDto[]>('GET', `/api/runs/${encodeURIComponent(runId)}/sandbox/port-forward`);
+    return this.request<PortForwardSessionDto[]>('GET', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward`);
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

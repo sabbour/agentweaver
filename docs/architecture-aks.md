@@ -1,66 +1,59 @@
+---
+title: AKS Architecture
+---
+
 # AKS Architecture
 
 This document describes the architecture of the Agentweaver AKS deployment: its components, networking topology, security model, and storage design.
+
+For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-aks).
 
 ---
 
 ## Component diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Internet                                                                    │
-│                                                                             │
-│   Browser / API client                                                      │
-│         │  HTTPS :443                                                       │
-└─────────┼───────────────────────────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ AKS Cluster (eastus)                                                        │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │ namespace: agentweaver                                               │  │
-│  │                                                                      │  │
-│  │  ┌─────────────────────────────────────────────────────────┐        │  │
-│  │  │ Gateway: agentweaver-gateway (approuting-istio)         │        │  │
-│  │  │  - HTTPS listener :443, TLS Terminate                   │        │  │
-│  │  │  - cert: DefaultDomainCertificate (managed TLS)         │        │  │
-│  │  │                                                         │        │  │
-│  │  │  Gateway data plane pods                                │        │  │
-│  │  │  (agentweaver-gateway-approuting-istio Deployment)      │        │  │
-│  │  └──────────────┬──────────────────┬───────────────────────┘        │  │
-│  │                 │                  │                                 │  │
-│  │   HTTPRoute /api/*      HTTPRoute /mcp/*      HTTPRoute /            │  │
-│  │                 │              │                  │                  │  │
-│  │                 ▼              ▼                  ▼                  │  │
-│  │  ┌──────────────────┐ ┌──────────────┐ ┌──────────────────────┐    │  │
-│  │  │ agentweaver-api  │ │agentweaver-  │ │ agentweaver-frontend  │    │  │
-│  │  │ Service :8080    │ │mcp Svc :8080 │ │ Service :80            │    │  │
-│  │  └────────┬─────────┘ └──────┬───────┘ └──────────┬────────────┘    │  │
-│  │           │                  │                    │                  │  │
-│  │           ▼                  ▼                    ▼                  │  │
-│  │  ┌──────────────────┐ ┌──────────────┐ ┌──────────────────────┐    │  │
-│  │  │ API Pod          │ │ MCP Pod      │ │ Frontend Pods (x2)    │    │  │
-│  │  │ .NET 10 :8080    │ │ .NET 10 :8080│ │ ASP.NET Core :8080    │    │  │
-│  │  │ UID 1000         │ │ UID 1000     │ │ UID 1000              │    │  │
-│  │  │ replicas: 1      │ │ replicas: 1  │ │ replicas: 2           │    │  │
-│  │  └────────┬─────────┘ └──────────────┘ └──────────────────────┘    │  │
-│  │           │                                                         │  │
-│  │           ├───────────────────────────┐                            │  │
-│  │           ▼                           ▼                            │  │
-│  │  ┌──────────────────┐  ┌──────────────────────┐                   │  │
-│  │  │ PVC: agentweaver-│  │ PVC: agentweaver-    │                   │  │
-│  │  │ data (Azure Disk │  │ workspace (Azure     │                   │  │
-│  │  │ RWO) /data       │  │ Files RWX) /workspace│                   │  │
-│  │  └──────────────────┘  └──────────────────────┘                   │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                                                             │
-│  ACR: agentweaverregistry.azurecr.io                                       │
-│    agentweaver-api:<tag>                                                    │
-│    agentweaver-frontend:<tag>                                               │
-│    agentweaver-mcp:<tag>                                                    │
-│    agentweaver-sandbox:<tag>                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    Client["🌐 Browser / AI client<br/>HTTPS :443"]
+
+    subgraph AKS["AKS Cluster (westus2)"]
+        subgraph ns["namespace: agentweaver"]
+            GW["Gateway: agentweaver-gateway<br/>gatewayClassName: approuting-istio<br/>HTTPS :443 · TLS Terminate<br/>DefaultDomainCertificate"]
+
+            subgraph routing["HTTPRoutes"]
+                R_API["/api/* + /auth/*"]
+                R_MCP["/mcp/*"]
+                R_FE["/ (catch-all)"]
+            end
+
+            subgraph workloads["Workloads"]
+                API["API Pod<br/>.NET 10 · :8080<br/>replicas: 1 · Recreate"]
+                MCP["MCP Pod<br/>.NET 10 · :8080<br/>replicas: 1"]
+                FE["Frontend Pods ×2<br/>ASP.NET Core · :8080"]
+            end
+
+            subgraph sandbox_pool["SandboxWarmPool (×3)"]
+                SB["Sandbox Pod<br/>kata-vm-isolation<br/>non-root · read-only rootfs"]
+            end
+
+            DATA[("agentweaver-data<br/>Azure Disk · RWO<br/>10 Gi · /data")]
+            WS[("agentweaver-workspace<br/>Azure Files · RWX<br/>50 Gi · /workspace")]
+        end
+
+        ACR["ACR: agentweaverregistry.azurecr.io<br/>agentweaver-api:&lt;sha&gt; · agentweaver-frontend:&lt;sha&gt;<br/>agentweaver-mcp:&lt;sha&gt; · agentweaver-sandbox:&lt;sha&gt;"]
+    end
+
+    KV["🔑 Azure Key Vault<br/>agentweaver-kv"]
+
+    Client -->|HTTPS :443| GW
+    GW --> R_API --> API
+    GW --> R_MCP --> MCP
+    GW --> R_FE --> FE
+    MCP -->|"http :8080"| API
+    API --- DATA
+    API --- WS
+    API -->|"pods/exec"| SB
+    API & MCP -->|"CSI + Workload Identity"| KV
 ```
 
 ---
@@ -69,53 +62,46 @@ This document describes the architecture of the Agentweaver AKS deployment: its 
 
 ### Inbound request path
 
-```
-Client (HTTPS :443)
-  └─► Public LoadBalancer IP (provisioned by approuting-istio for agentweaver-gateway)
-        └─► Gateway agentweaver-gateway
-              TLS terminated with DefaultDomainCertificate (*.azureaksapps.io)
-              │
-              ├─► HTTPRoute agentweaver-api-route   (PathPrefix: /api)
-              │     └─► Service agentweaver-api :8080
-              │           └─► API Pod :8080
-              │
-              ├─► HTTPRoute agentweaver-mcp-route   (PathPrefix: /mcp)
-              │     └─► Service agentweaver-mcp :8080
-              │           └─► MCP Pod :8080
-              │
-              └─► HTTPRoute agentweaver-frontend-route  (PathPrefix: /)
-                    └─► Service agentweaver-frontend :80
-                          └─► Frontend Pod :8080 (ASP.NET Core)
-```
+```mermaid
+flowchart TD
+    Client["🌐 Client<br/>HTTPS :443"]
+    LB["Public LoadBalancer IP<br/>provisioned by approuting-istio"]
+    GW["Gateway: agentweaver-gateway<br/>TLS terminated<br/>DefaultDomainCertificate"]
 
-### Gateway API resource relationships
+    API_SVC["Service: agentweaver-api<br/>ClusterIP :8080"]
+    MCP_SVC["Service: agentweaver-mcp<br/>ClusterIP :8080"]
+    FE_SVC["Service: agentweaver-frontend<br/>ClusterIP :80"]
 
-```
-Gateway (agentweaver-gateway)
-  gatewayClassName: approuting-istio          ← managed by AKS App Routing add-on
-  listener https :443
-    hostname: agentweaver.<managed-domain>
-    tls.mode: Terminate
-    certificateRefs: [Secret/cert]
-    allowedRoutes.from: Same                  ← only same-namespace routes attach
+    API_POD["API Pod :8080"]
+    MCP_POD["MCP Pod :8080"]
+    FE_POD["Frontend Pod :8080<br/>ASP.NET Core · React SPA"]
 
-HTTPRoute (agentweaver-api-route)
-  parentRef: agentweaver-gateway
-  match: PathPrefix /api
-  backendRef: agentweaver-api :8080
-
-HTTPRoute (agentweaver-mcp-route)
-  parentRef: agentweaver-gateway
-  match: PathPrefix /mcp
-  backendRef: agentweaver-mcp :8080
-
-HTTPRoute (agentweaver-frontend-route)
-  parentRef: agentweaver-gateway
-  match: PathPrefix /
-  backendRef: agentweaver-frontend :80
+    Client --> LB --> GW
+    GW -->|"PathPrefix /api<br/>PathPrefix /auth"| API_SVC --> API_POD
+    GW -->|"PathPrefix /mcp<br/>/mcp/health → /healthz"| MCP_SVC --> MCP_POD
+    GW -->|"PathPrefix /<br/>(catch-all)"| FE_SVC --> FE_POD
 ```
 
 Route specificity: `/api` and `/mcp` (longer prefixes) win over `/` — no conflict.
+
+### Gateway API resource relationships
+
+```mermaid
+graph LR
+    GW["Gateway<br/>agentweaver-gateway<br/>gatewayClassName: approuting-istio<br/>listener https :443<br/>allowedRoutes.from: Same"]
+
+    R1["HTTPRoute<br/>agentweaver-api-route<br/>PathPrefix /api + /auth"]
+    R2["HTTPRoute<br/>agentweaver-mcp-route<br/>PathPrefix /mcp"]
+    R3["HTTPRoute<br/>agentweaver-frontend-route<br/>PathPrefix /"]
+
+    B1["agentweaver-api :8080"]
+    B2["agentweaver-mcp :8080"]
+    B3["agentweaver-frontend :80"]
+
+    GW -->|parentRef| R1 --> B1
+    GW -->|parentRef| R2 --> B2
+    GW -->|parentRef| R3 --> B3
+```
 
 ---
 
@@ -129,36 +115,58 @@ The `approuting-istio` gateway class means the Application Routing add-on uses a
 
 ### Security policies
 
-#### NetworkPolicy
+#### Network traffic diagram
 
-Three policies are applied in `k8s/networkpolicy-default-deny.yaml`:
+```mermaid
+flowchart LR
+    GW["Gateway Pod<br/>label: gateway.networking.k8s.io/<br/>gateway-name: agentweaver-gateway"]
+
+    subgraph workloads["Workloads — default-deny ingress + egress"]
+        API["API Pod"]
+        MCP["MCP Pod"]
+        FE["Frontend Pods"]
+        SB["Sandbox Pod<br/>deny-all ingress"]
+    end
+
+    GW -->|":8080 allowed"| API
+    GW -->|":8080 allowed"| MCP
+    GW -->|":8080 allowed"| FE
+
+    API -->|":8080 internal"| MCP
+    API -->|"pods/exec<br/>via kube-apiserver"| SB
+
+    API & MCP -->|":443 HTTPS<br/>FQDN allowlist"| GH["api.github.com<br/>github.com"]
+    API & MCP -->|"CSI driver"| KV["Azure Key Vault"]
+    API & MCP & FE -->|"UDP/TCP :53"| DNS["kube-dns"]
+
+    SB -->|":443 FQDN only<br/>api.github.com<br/>npmjs.org<br/>Azure AI"| EXT["External Services"]
+    SB -->|"UDP/TCP :53"| DNS
+```
+
+#### NetworkPolicy rules
 
 | Policy | Selector | Effect |
 |--------|----------|--------|
-| `default-deny-ingress` | all pods | Denies all inbound traffic by default |
-| `allow-gateway-to-api` | `app: agentweaver-api` | Allows ingress on :8080 from gateway pods only |
-| `allow-gateway-to-frontend` | `app: agentweaver-frontend` | Allows ingress on :8080 (the frontend pod port) from gateway pods only |
+| `default-deny-ingress` | all `app.kubernetes.io/part-of: agentweaver` pods (gateway excluded) | Denies all inbound by default |
+| `allow-gateway-to-api` | `app: agentweaver-api` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
+| `allow-gateway-to-frontend` | `app: agentweaver-frontend` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
+| `allow-gateway-to-mcp` | `app: agentweaver-mcp` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
+| `default-deny-egress-apps` | api, mcp, frontend | Denies all egress by default |
+| `allow-app-dns-egress` | api, mcp, frontend | UDP/TCP :53 to `kube-dns` |
+| `allow-app-internal-egress` | api, mcp, frontend | TCP :8080 to other `app.kubernetes.io/part-of: agentweaver` pods |
+| `allow-app-external-https-egress` | api, mcp only | TCP :443 to any external host |
+| `sandbox-deny-ingress` | `app: agentweaver-sandbox` | Denies all ingress |
+| `sandbox-egress-allowlist` | `app: agentweaver-sandbox` | DNS + TCP :443 to `140.82.112.0/20` (GitHub) |
 
-Both allow rules also include a fallback `namespaceSelector` for the managed
-`aks-istio-ingress` namespace, covering add-on variants where the gateway data plane
-runs outside the `agentweaver` namespace.
-
-Gateway pods are identified by the label `istio.io/gateway-name: agentweaver-gateway` (set automatically by the approuting-istio controller on the data plane pods it provisions in the same namespace).
+Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentweaver-gateway`, set automatically by the approuting-istio controller.
 
 #### Sandbox isolation
 
 Sandbox pods (`k8s/networkpolicy-sandbox.yaml`) have two policies:
 - **Ingress deny-all** — the API accesses sandbox pods via pod-exec through the kube-apiserver, not direct networking.
-- **Egress allow-list** — DNS (kube-dns) + HTTPS (port 443) to the internet, with the cluster pod CIDR excluded so sandboxes cannot reach the API pod. Plain HTTP (port 80) is not allowed.
+- **Egress allow-list** — DNS (`kube-dns`) + HTTPS on port 443 to the GitHub IP range `140.82.112.0/20` only. The cluster-internal pod and service CIDRs are not in the allow-list, so sandbox pods cannot reach API or other workload pods via the network.
 
-The pod CIDR exclusion (`except: 10.244.0.0/16`) is the default for Azure CNI Overlay. Verify with:
-```bash
-az aks show -g "${RESOURCE_GROUP}" -n "${CLUSTER_NAME}" --query networkProfile.podCidr -o tsv
-```
-
-#### FQDN-based egress
-
-External (internet) egress from sandbox pods is restricted to an FQDN allow-list by the companion `CiliumNetworkPolicy` in `k8s/cilium-network-policy-sandbox.yaml`, which uses `toFQDNs` rules. This policy requires the cluster to be provisioned with `--network-dataplane cilium --enable-acns`. Apply it alongside `networkpolicy-sandbox.yaml` so the broad `0.0.0.0/0` HTTPS allow is narrowed to the permitted domains (e.g. `github.com`, `npmjs.org`).
+The FQDN-based `CiliumNetworkPolicy` in `k8s/cilium-network-policy-sandbox.yaml` further narrows sandbox internet egress to specific hostnames: `api.github.com`, `registry.npmjs.org` (and `*.npmjs.org`), and Azure AI service domains. This policy requires `--network-dataplane cilium --enable-acns` at cluster creation and must be applied alongside `networkpolicy-sandbox.yaml`.
 
 ### Non-root containers
 
@@ -169,26 +177,87 @@ Both the API and Frontend containers run as UID 1000 (`runAsNonRoot: true`, `run
 Agent runs execute shell commands in per-run Kata VM isolated sandbox pods
 (`runtimeClassName: kata-vm-isolation`), claimed from a pre-warmed `SandboxWarmPool`
 via a `SandboxClaim` (`extensions.agents.x-k8s.io/v1alpha1`). This provides VM-grade
-isolation equivalent to the localhost mxc/WSL sandbox. The API selects the
-`KubernetesSandboxExecutor` automatically when it detects the in-cluster environment.
-See [aks-deployment.md](./aks-deployment.md#sandbox-setup) for setup.
+isolation. The API selects the `KubernetesSandboxExecutor` automatically when it detects
+the in-cluster environment (`KUBERNETES_SERVICE_HOST` is set).
+See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
 
 ### Secrets management
 
-The GitHub Copilot token is delivered from **Azure Key Vault** via the **Secrets Store
-CSI driver** and **workload identity** — there are no static credentials in any manifest.
-The API's `ServiceAccount` (`agentweaver-api`) is federated to a user-assigned managed
-identity through the cluster's OIDC issuer, and a `SecretProviderClass`
-(`k8s/secret-provider-class.yaml`) syncs the Key Vault secret into the
-`agentweaver-secrets` Kubernetes Secret. The deployment reads it via a `secretKeyRef`
-into the `Providers__GitHubCopilot__GitHubToken` environment variable. The CSI volume
-mount on `/mnt/secrets` is what triggers the sync. See
-[aks-deployment.md](./aks-deployment.md#how-the-token-flows-from-key-vault-to-the-pod)
-for the full token flow.
+Secrets are delivered from **Azure Key Vault** via the **Secrets Store CSI driver** and **Azure Workload Identity** — there are no static credentials in any manifest.
 
-The MCP deployment consumes a separate, manually created `agentweaver-mcp-secrets`
-Secret (created by `scripts/aks/30-deploy.sh` from the `MCP_API_KEY`, `MCP_AUTH_API_KEY`,
-and `MCP_AUTH_USER` environment variables).
+```mermaid
+flowchart LR
+    MI["Managed Identity<br/>agentweaver-api-identity<br/>Key Vault Secrets User"]
+    SA["ServiceAccount<br/>agentweaver-api<br/>azure.workload.identity/client-id"]
+    OIDC["AKS OIDC Issuer<br/>Federated Credential"]
+    KV["Azure Key Vault<br/>agentweaver-kv"]
+
+    SPC["SecretProviderClass<br/>agentweaver-secrets"]
+    SPCM["SecretProviderClass<br/>agentweaver-mcp-secrets"]
+
+    API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-api-key"]
+    MCP["MCP Pod<br/>/mnt/secrets-store/<br/>mcp-auth-user<br/>mcp-auth-api-key<br/>mcp-api-key"]
+
+    SA -->|"federated credential"| OIDC --> MI
+    MI -->|"Key Vault Secrets User"| KV
+    KV --> SPC -->|"CSI volume mount"| API
+    KV --> SPCM -->|"CSI volume mount"| MCP
+```
+
+The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. Two `SecretProviderClass` objects sync secrets from Key Vault into pod volumes:
+
+**`agentweaver-secrets`** (used by API pod, `k8s/secret-provider-class.yaml`):
+
+| Key Vault secret | File in `/mnt/secrets-store/` | Used for |
+|-----------------|------------------------------|----------|
+| `github-client-id` | `github-client-id` | GitHub OAuth App client ID → `GitHub__ClientId` env var |
+| `github-client-secret` | `github-client-secret` | GitHub OAuth App client secret → `GitHub__ClientSecret` env var |
+| `mcp-api-key` | `mcp-api-key` | Internal key used by MCP server to call the API → `Auth__ApiKey` / `Mcp__ApiKey` |
+
+**`agentweaver-mcp-secrets`** (used by MCP pod, `k8s/secretprovider-mcp.yaml`):
+
+| Key Vault secret | File in `/mnt/secrets-store/` | Used for |
+|-----------------|------------------------------|----------|
+| `mcp-auth-user` | `mcp-auth-user` | Username for inbound MCP authentication → `Auth__User` env var |
+| `mcp-auth-api-key` | `mcp-auth-api-key` | Inbound bearer key accepted from MCP callers |
+| `mcp-api-key` | `mcp-api-key` | Key used to authenticate MCP server calls to the API |
+
+Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
+
+Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`). The CSI driver re-fetches Key Vault secrets on this interval, but pods must be restarted to pick up new values (the startup shell script reads files once on launch).
+
+---
+
+## Authentication
+
+Agentweaver uses **GitHub OAuth** for user authentication. There are no API keys issued to end users.
+
+### Login flow
+
+1. User visits the frontend and clicks **Sign in with GitHub**
+2. Frontend redirects to `https://<host>/auth/github/login` (API endpoint)
+3. API redirects to GitHub OAuth authorization URL with the app's client ID
+4. User authorizes on GitHub; GitHub redirects back to `https://<host>/auth/github/callback`
+5. API exchanges the authorization code for an access token using `github-client-id` and `github-client-secret` (from Key Vault)
+6. API validates the token by calling `GET https://api.github.com/user` — the token is the user's GitHub OAuth token
+7. API checks the user's org membership (`Auth__GitHub__AllowedOrg: microsoft`) — users not in the org are rejected
+8. API issues a session and returns a cookie or Bearer token to the frontend
+
+### MCP authentication
+
+The MCP server (`agentweaver-mcp`) accepts inbound connections with a Bearer token. It forwards the caller's Bearer token as-is to the API (`AGENTWEAVER_API_URL: http://agentweaver-api:8080`). The API validates the token as a GitHub OAuth token via the same `GET /user` + org membership flow.
+
+For internal tooling or automated callers, an alternative `mcp-auth-api-key` / `mcp-auth-user` pair is also accepted (stored in Key Vault, mounted in the MCP pod).
+
+### External dependencies
+
+| Service | Purpose | Allowed by |
+|---------|---------|-----------|
+| `api.github.com` | OAuth token validation (`GET /user`), org membership | `CiliumNetworkPolicy` FQDN allowlist |
+| `github.com` | GitHub OAuth redirect and OAuth exchange | `CiliumNetworkPolicy` FQDN allowlist |
+| Azure Key Vault (`*.vault.azure.net`) | Secret fetch via CSI driver | HTTPS egress + workload identity |
+| Azure Container Registry (`agentweaverregistry.azurecr.io`) | Image pull (kubelet, not pod) | ACR attachment on cluster |
+| OpenTelemetry collector (`otel-collector.observability.svc.cluster.local:4317`) | Telemetry export (gRPC) | `CiliumNetworkPolicy` FQDN allowlist |
 
 ---
 
@@ -233,9 +302,9 @@ This prevents the `RWO` disk from being multi-attached (which Azure Disk does no
 
 ### EF Core migrations
 
-On startup, `Program.cs` runs `memoryDb.Database.MigrateAsync()` to apply any pending EF Core migrations. This is safe under the single-replica model: only one instance runs migrations at any time.
+On startup, the API runs database migrations via an **init container** (`migrate-memory-db`) that executes the EF bundle (`/app/efbundle`). This runs before the main API container starts, ensuring migrations are always applied before the application accepts traffic.
 
-A transition guard in `Program.cs` handles databases created before migrations were introduced (pre-migration DBs that have `AgentMemory` but no `__EFMigrationsHistory`), seeding the history table before calling `MigrateAsync`.
+The init container uses the same image as the API (`agentweaver-api:${IMAGE_TAG}`) and runs against the same data PVC.
 
 ### Ephemeral storage for testing
 

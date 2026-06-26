@@ -3,17 +3,6 @@ var app = builder.Build();
 
 var fileProvider = app.Environment.WebRootFileProvider;
 
-// Redirect /docs to /docs/ so default files work
-app.Use(async (context, next) =>
-{
-    if (context.Request.Path.Value?.Equals("/docs", StringComparison.OrdinalIgnoreCase) == true)
-    {
-        context.Response.Redirect("/docs/", permanent: false);
-        return;
-    }
-    await next();
-});
-
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {
@@ -27,16 +16,58 @@ app.UseStaticFiles(new StaticFileOptions
     }
 });
 
-// SPA fallback — skip /docs paths (VitePress is static HTML, not SPA)
-app.MapFallback(context =>
+// SPA fallback + docs directory index
+app.MapFallback(async context =>
 {
-    if (context.Request.Path.StartsWithSegments("/docs"))
+    var path = context.Request.Path.Value ?? "";
+
+    // /docs or /docs/ → serve docs/index.html
+    if (path.Equals("/docs", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/docs/", StringComparison.OrdinalIgnoreCase))
+    {
+        var docsIndex = fileProvider.GetFileInfo("docs/index.html");
+        if (docsIndex.Exists)
+        {
+            context.Response.ContentType = "text/html";
+            await context.Response.SendFileAsync(docsIndex);
+            return;
+        }
+    }
+
+    // /docs sub-paths without extension → try .html (VitePress clean URLs)
+    if (path.StartsWith("/docs/", StringComparison.OrdinalIgnoreCase) &&
+        !Path.HasExtension(path))
+    {
+        var htmlPath = path[1..] + ".html"; // strip leading /
+        var htmlFile = fileProvider.GetFileInfo(htmlPath);
+        if (htmlFile.Exists)
+        {
+            context.Response.ContentType = "text/html";
+            await context.Response.SendFileAsync(htmlFile);
+            return;
+        }
+        // Try as directory with index.html
+        var dirIndex = fileProvider.GetFileInfo(path[1..] + "/index.html");
+        if (dirIndex.Exists)
+        {
+            context.Response.ContentType = "text/html";
+            await context.Response.SendFileAsync(dirIndex);
+            return;
+        }
+        context.Response.StatusCode = 404;
+        return;
+    }
+
+    // All other /docs paths that weren't served by UseStaticFiles → 404
+    if (path.StartsWith("/docs", StringComparison.OrdinalIgnoreCase))
     {
         context.Response.StatusCode = 404;
-        return Task.CompletedTask;
+        return;
     }
+
+    // SPA fallback for React app
     context.Response.ContentType = "text/html";
-    return context.Response.SendFileAsync(fileProvider.GetFileInfo("index.html"));
+    await context.Response.SendFileAsync(fileProvider.GetFileInfo("index.html"));
 });
 
 app.Run();
