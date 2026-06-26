@@ -61,7 +61,14 @@ internal sealed class McpProgram
         if (useStdio)
             mcpBuilder.WithStdioServerTransport();
         else
-            mcpBuilder.WithHttpTransport();
+            // Stateless mode handles each request in its own HTTP scope, so the
+            // inbound HttpContext (and the caller's Bearer token captured by
+            // McpBearerTokenMiddleware) flows into tool execution. In the default
+            // stateful transport, tool methods run on the session message loop
+            // detached from the HTTP request, leaving IHttpContextAccessor.HttpContext
+            // null during tool calls — which caused the backend API to receive an
+            // empty bearer and reject every tool invocation with 401.
+            mcpBuilder.WithHttpTransport(o => o.Stateless = true);
 
         var app = builder.Build();
 
