@@ -41,16 +41,44 @@ app.MapGet("/auth/github/authorize", (GitHubOAuthRedirectService oauthService) =
     }
 }).AllowAnonymous();
 
-// GET /auth/github/callback — receive OAuth code from GitHub, exchange for token
+// GET /auth/github/callback — receive OAuth code from GitHub, exchange for token.
+// This single callback (the GitHub OAuth app's registered redirect URI) serves BOTH the web
+// sign-in flow and the MCP OAuth Authorization-Server broker leg (Option C). When the CSRF state
+// belongs to a pending MCP authorization, the brokered path issues an authorization code back to
+// the MCP client's loopback/registered redirect URI; otherwise the existing web path runs.
 app.MapGet("/auth/github/callback", async (
     string? code,
     string? state,
     string? error,
     GitHubOAuthRedirectService oauthService,
+    Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService oauthBroker,
     IConfiguration configuration,
     CancellationToken ct) =>
 {
     var frontendUrl = (configuration["Auth:GitHub:FrontendUrl"] ?? "http://localhost:8080").TrimEnd('/');
+
+    // MCP OAuth broker leg: correlate by the GitHub CSRF state.
+    if (!string.IsNullOrWhiteSpace(state) && oauthBroker.IsPendingState(state))
+    {
+        if (!string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(code))
+            return Results.BadRequest(new { error = "access_denied", error_description = error ?? "missing_code" });
+
+        var result = await oauthBroker.HandleGitHubCallbackAsync(code!, state!, ct).ConfigureAwait(false);
+        if (result.RedirectUri is null)
+            return Results.BadRequest(new { error = result.Error, error_description = result.ErrorDescription });
+
+        var separator = result.RedirectUri.Contains('?') ? '&' : '?';
+        var clientStateSuffix = string.IsNullOrEmpty(result.ClientState)
+            ? string.Empty
+            : $"&state={Uri.EscapeDataString(result.ClientState)}";
+
+        var query = result.Outcome == Agentweaver.Api.Auth.OAuth.BrokerOutcome.Success
+            ? $"code={Uri.EscapeDataString(result.Code!)}{clientStateSuffix}"
+            : $"error={Uri.EscapeDataString(result.Error ?? "access_denied")}" +
+              $"&error_description={Uri.EscapeDataString(result.ErrorDescription ?? string.Empty)}{clientStateSuffix}";
+
+        return Results.Redirect($"{result.RedirectUri}{separator}{query}");
+    }
 
     if (!string.IsNullOrWhiteSpace(error))
         return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");

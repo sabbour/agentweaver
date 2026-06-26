@@ -107,6 +107,14 @@ builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 
+// MCP OAuth 2.1 Authorization Server (Option C / Seraph design). T1-T3:
+//  - McpTokenService: signs short-lived (15m) audience-bound JWT access tokens; key from
+//    Auth:OAuth:SigningKey (Key Vault secret 'mcp-oauth-signing-key'), ephemeral dev fallback.
+//  - McpOAuthBrokerService: brokers GitHub login (reusing GitHubOAuthRedirectService) + enforces
+//    microsoft org membership, then issues PKCE-bound authorization codes.
+builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpTokenService>();
+builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService>();
+
 // Project infrastructure (must be before AddAgentRuntime)
 builder.Services.AddSingleton<SqliteProjectStore>();
 builder.Services.AddSingleton<IProjectStore>(sp => sp.GetRequiredService<SqliteProjectStore>());
@@ -310,6 +318,7 @@ app.MapCastingEndpoints();
 app.MapBlueprintEndpoints();
 app.MapTeamEndpoints();
 app.MapAuthEndpoints();
+app.MapOAuthServerEndpoints();
 app.MapDecisionsEndpoints();
 app.MapMemoryEndpoints();
 app.MapWorkflowDefinitionEndpoints();

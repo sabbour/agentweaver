@@ -30,6 +30,10 @@ public sealed class GitHubOrgAuthorizationMiddleware
         "/auth",
         "/api/auth",
         "/mcp",
+        // MCP OAuth 2.1 Authorization Server: public discovery + public-client flow must be
+        // reachable without a GitHub token (the flow is how a token is obtained in the first place).
+        "/oauth",
+        "/.well-known",
     ];
 
     public GitHubOrgAuthorizationMiddleware(

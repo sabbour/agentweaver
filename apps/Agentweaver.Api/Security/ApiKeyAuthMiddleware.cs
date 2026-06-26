@@ -5,6 +5,7 @@ using System.Text;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 
 /// <summary>
 /// Authenticated caller resolved from the bearer GitHub token. Set on the request by
@@ -35,6 +36,10 @@ public sealed class CallerContext
 /// Validates a GitHub OAuth Bearer token on every API request and attaches the resolved
 /// caller identity. The GitHub /user endpoint is called once and the result is cached for 5 minutes
 /// (keyed by SHA-256 of the token). Non-API routes and health/ping paths are exempt.
+///
+/// Setting <c>Testing:BypassGitHubTokenAuth=true</c> in configuration skips the GitHub call and
+/// maps the bearer token directly to a caller using the <c>Auth:ApiKey/User</c> + <c>Auth:Keys</c>
+/// config (same shape as McpApiKeyRegistry). For test harnesses only — never set in production.
 /// </summary>
 public sealed class GitHubTokenAuthMiddleware
 {
@@ -45,17 +50,38 @@ public sealed class GitHubTokenAuthMiddleware
     private readonly IMemoryCache _cache;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GitHubTokenAuthMiddleware> _logger;
+    private readonly bool _bypassForTests;
+    private readonly Dictionary<string, string> _testApiKeyMap;
 
     public GitHubTokenAuthMiddleware(
         RequestDelegate next,
         IMemoryCache cache,
         IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
         ILogger<GitHubTokenAuthMiddleware> logger)
     {
         _next = next;
         _cache = cache;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _bypassForTests = configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth");
+
+        _testApiKeyMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (_bypassForTests)
+        {
+            var singleKey  = configuration["Auth:ApiKey"];
+            var singleUser = configuration["Auth:User"];
+            if (!string.IsNullOrWhiteSpace(singleKey) && !string.IsNullOrWhiteSpace(singleUser))
+                _testApiKeyMap[singleKey] = singleUser;
+
+            foreach (var entry in configuration.GetSection("Auth:Keys").GetChildren())
+            {
+                var token = entry["Token"];
+                var user  = entry["User"];
+                if (!string.IsNullOrWhiteSpace(token) && !string.IsNullOrWhiteSpace(user))
+                    _testApiKeyMap[token] = user;
+            }
+        }
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -72,6 +98,16 @@ public sealed class GitHubTokenAuthMiddleware
         if (string.IsNullOrEmpty(header) || !header.StartsWith(SchemePrefixStr, StringComparison.OrdinalIgnoreCase))
         {
             await WriteUnauthorizedAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        // Test-only bypass: resolve caller from static config key map (no GitHub call).
+        if (_bypassForTests)
+        {
+            var bypassToken = header[SchemePrefixStr.Length..].Trim();
+            var resolvedUser = _testApiKeyMap.TryGetValue(bypassToken, out var u) ? u : bypassToken;
+            context.Items[CallerItemKey] = new CallerContext { User = resolvedUser, GitHubLogin = resolvedUser };
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
