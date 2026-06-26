@@ -161,7 +161,7 @@ public sealed class RunWorkflowFactory
             ?? Path.Combine(AppPaths.DataDirectory, "checkpoints");
         Directory.CreateDirectory(_checkpointDir);
 
-        _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
+        _apiBaseUrl = ResolveApiBaseUrl(configuration);
         // Prefer the single-key shorthand; fall back to the first entry in the multi-key list
         // so Scribe can always authenticate its self-calls regardless of which format the user uses.
         _apiKey = configuration["Auth:ApiKey"]
@@ -170,6 +170,75 @@ public sealed class RunWorkflowFactory
         var store = ResilientCheckpointStore.Create(
             _checkpointDir, _loggerFactory.CreateLogger<RunWorkflowFactory>());
         _checkpointManager = CheckpointManager.CreateJson(store);
+    }
+
+    /// <summary>
+    /// Resolves the API base URL used for in-process loopback tool calls (Scribe and every
+    /// agent's decision/memory/inbox tools). Resolution order:
+    /// <list type="number">
+    ///   <item>Explicit <c>Agentweaver:ApiBaseUrl</c> config / env override.</item>
+    ///   <item>Derived from the server's actual Kestrel binding (<c>ASPNETCORE_URLS</c> / the
+    ///   <c>urls</c> config key), replacing a wildcard host with <c>localhost</c>. This makes
+    ///   loopback calls hit the real listening port (e.g. 8080 in the container) without any
+    ///   extra configuration.</item>
+    ///   <item>Legacy dev fallback <c>http://localhost:5000</c>.</item>
+    /// </list>
+    /// Without this, an unset override on a non-5000 binding (AKS binds 8080) sent every loopback
+    /// tool call to a dead port → connection refused → "Tool execution failed".
+    /// </summary>
+    internal static string ResolveApiBaseUrl(IConfiguration configuration)
+    {
+        var explicitUrl = configuration["Agentweaver:ApiBaseUrl"];
+        if (!string.IsNullOrWhiteSpace(explicitUrl))
+        {
+            return explicitUrl;
+        }
+
+        // ASP.NET Core surfaces ASPNETCORE_URLS / DOTNET_URLS via the "urls" config key.
+        var serverUrls = configuration["urls"] ?? configuration["ASPNETCORE_URLS"];
+        var derived = DeriveLoopbackUrl(serverUrls);
+        return derived ?? "http://localhost:5000";
+    }
+
+    /// <summary>
+    /// Converts a server binding string (possibly semicolon-separated, possibly using a wildcard
+    /// host such as <c>+</c>, <c>*</c>, <c>0.0.0.0</c>, or <c>[::]</c>) into a concrete loopback
+    /// URL. Prefers an <c>http</c> binding over <c>https</c> to avoid self-signed cert issues on
+    /// the loopback path. Returns null if nothing parseable is found.
+    /// </summary>
+    private static string? DeriveLoopbackUrl(string? serverUrls)
+    {
+        if (string.IsNullOrWhiteSpace(serverUrls))
+        {
+            return null;
+        }
+
+        var candidates = serverUrls
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        string? Normalize(string url)
+        {
+            // Replace wildcard hosts with localhost so the URI is dialable. Uri.TryCreate rejects
+            // '+' and '*' as authority, so substitute before parsing.
+            var replaced = url
+                .Replace("://+:", "://localhost:")
+                .Replace("://*:", "://localhost:")
+                .Replace("://0.0.0.0:", "://localhost:")
+                .Replace("://[::]:", "://localhost:");
+
+            if (!Uri.TryCreate(replaced, UriKind.Absolute, out var uri))
+            {
+                return null;
+            }
+
+            var host = uri.Host is "0.0.0.0" or "::" or "[::]" ? "localhost" : uri.Host;
+            return $"{uri.Scheme}://{host}:{uri.Port}";
+        }
+
+        // Prefer http over https for loopback.
+        var http = candidates.FirstOrDefault(u => u.StartsWith("http://", StringComparison.OrdinalIgnoreCase));
+        var chosen = Normalize(http ?? candidates[0]);
+        return chosen;
     }
 
     public ChannelWriter<RunEvent>? GetRecordingWriter(string runId)

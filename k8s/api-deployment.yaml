@@ -96,6 +96,12 @@ spec:
               value: /data/agentweaver.db
             - name: Workspace__Path
               value: /workspace
+            # In-process loopback base URL for agent decision/memory/inbox tools and Scribe.
+            # The API binds 8080 (ASPNETCORE_URLS); without this they default to the dead :5000
+            # port → connection refused → "Tool execution failed". Explicit override of the
+            # code-level binding-derivation fallback.
+            - name: Agentweaver__ApiBaseUrl
+              value: http://localhost:8080
             - name: Workspace__Provider
               value: persistent-volume
             - name: Workspace__PersistentVolume__MountRoot
