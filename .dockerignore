@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.vs
+.vscode
+.idea
+
+# Development secrets (git-ignored, must not leak to images)
+**/appsettings.Development.json
+
+# Squad / AI
+.squad
+.copilot
+.github/agents
+
+# Node
+node_modules
+
+# .NET build artifacts
+**/bin
+**/obj
+
+# Test results
+**/TestResults
+
+# Scripts and docs (not needed in runtime images)
+scripts
+docs
+specs
+*.md

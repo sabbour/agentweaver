@@ -5,7 +5,7 @@
 RESOURCE_GROUP="${RESOURCE_GROUP:-agentweaver-rg}"
 CLUSTER_NAME="${CLUSTER_NAME:-agentweaver-aks}"
 ACR_NAME="${ACR_NAME:-agentweaverregistry}"
-LOCATION="${LOCATION:-eastus}"
+LOCATION="${LOCATION:-westus2}"
 
 # -- Key Vault + workload identity parameters ---------------------------------
 KEYVAULT_NAME="${KEYVAULT_NAME:-agentweaver-kv}"
