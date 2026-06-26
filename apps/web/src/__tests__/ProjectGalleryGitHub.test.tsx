@@ -11,6 +11,7 @@ vi.mock('../api/apiClient', () => ({
     createProject: vi.fn(),
     listBlueprints: vi.fn(),
     generateBlueprint: vi.fn(),
+    listGitHubAccounts: vi.fn(),
     listGitHubRepos: vi.fn(),
   },
 }));
@@ -18,7 +19,7 @@ vi.mock('../api/apiClient', () => ({
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
-import type { GitHubRepo, Project } from '../api/types';
+import type { GitHubAccount, GitHubRepo, Project } from '../api/types';
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -39,6 +40,7 @@ function makeProject(id: string, name: string): Project {
   };
 }
 
+const USER_ACCOUNT: GitHubAccount = { login: 'octocat', name: 'Octocat', avatar_url: 'https://example.com/avatar.png', type: 'user' };
 const REPO: GitHubRepo = { fullName: 'octocat/hello-world', defaultBranch: 'main', private: false, description: 'A sample repo' };
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -55,6 +57,9 @@ beforeEach(() => {
   vi.mocked(apiClient.listProjects).mockResolvedValue([]);
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([]);
   vi.mocked(apiClient.createProject).mockImplementation(async () => makeProject('new', 'New'));
+  // Default: accounts succeed (auto-selects first), repos start empty.
+  vi.mocked(apiClient.listGitHubAccounts).mockResolvedValue([USER_ACCOUNT] as never);
+  vi.mocked(apiClient.listGitHubRepos).mockResolvedValue([]);
 });
 
 afterEach(() => cleanup());
@@ -66,8 +71,8 @@ async function openGitHubDialog() {
 }
 
 describe('ProjectGalleryPage — GitHub repo listing auth', () => {
-  it('shows a connect affordance (not a silent empty list) when repos return 401', async () => {
-    vi.mocked(apiClient.listGitHubRepos).mockRejectedValue(new ApiError(401, 'unauthorized'));
+  it('shows a connect affordance (not a silent empty list) when accounts return 401', async () => {
+    vi.mocked(apiClient.listGitHubAccounts).mockRejectedValue(new ApiError(401, 'unauthorized'));
 
     await openGitHubDialog();
 
@@ -82,26 +87,27 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
 
     await openGitHubDialog();
 
-    // No auth/connect message when authenticated.
-    await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalled());
+    // Accounts loaded → repos loaded for first account.
+    await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
     expect(screen.queryByText(/Connect your GitHub account/)).toBeNull();
 
-    // Opening the combobox surfaces the fetched repo.
-    fireEvent.click(screen.getByRole('combobox'));
+    // Opening the repo combobox surfaces the fetched repo.
+    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
     await waitFor(() => expect(screen.getByText('octocat/hello-world')).toBeDefined());
   });
 
   it('still submits a manually typed owner/repo even when repos failed to load', async () => {
-    vi.mocked(apiClient.listGitHubRepos).mockRejectedValue(new ApiError(401, 'unauthorized'));
+    vi.mocked(apiClient.listGitHubAccounts).mockRejectedValue(new ApiError(401, 'unauthorized'));
 
     await openGitHubDialog();
     await waitFor(() =>
       expect(screen.getByText(/Connect your GitHub account to list repositories/)).toBeDefined(),
     );
 
+    // When auth is required the Organization picker is hidden; only the repo combobox remains.
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'My Project' } });
-    const combobox = screen.getByRole('combobox');
-    fireEvent.input(combobox, { target: { value: 'me/manual-repo' } });
+    const repoCombobox = screen.getByRole('combobox', { name: 'Repository' });
+    fireEvent.input(repoCombobox, { target: { value: 'me/manual-repo' } });
     fireEvent.change(screen.getByPlaceholderText('my-repo'), { target: { value: 'my-repo' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));

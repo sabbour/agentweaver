@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto } from './types';
 import { getSessionToken } from '../config';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -249,8 +249,13 @@ export class AgentweaverApiClient {
     return this.request<void>('POST', '/auth/github/sign-out', {});
   }
 
-  listGitHubRepos(): Promise<GitHubRepo[]> {
-    return this.request<GitHubRepo[]>('GET', '/github/repos');
+  listGitHubAccounts(): Promise<GitHubAccount[]> {
+    return this.request<GitHubAccount[]>('GET', '/github/accounts');
+  }
+
+  listGitHubRepos(account?: string): Promise<GitHubRepo[]> {
+    const path = account ? `/github/repos?account=${encodeURIComponent(account)}` : '/github/repos';
+    return this.request<GitHubRepo[]>('GET', path);
   }
 
   // Catalog

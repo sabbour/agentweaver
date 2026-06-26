@@ -397,6 +397,13 @@ export interface GitHubRepo {
   defaultBranch: string;
 }
 
+export interface GitHubAccount {
+  login: string;
+  name: string | null;
+  avatar_url: string;
+  type: 'user' | 'org';
+}
+
 // --- Casting / Team types ---
 
 export interface TeamTemplateDto {

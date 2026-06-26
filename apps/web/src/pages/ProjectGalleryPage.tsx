@@ -27,7 +27,7 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { CreateProjectRequest, GitHubRepo, Project } from '../api/types';
+import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { BlueprintPicker, applyBlueprintToRequest, NO_BLUEPRINT, type BlueprintSelection } from '../components/BlueprintPicker';
 
@@ -78,6 +78,17 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+  },
+  accountOption: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  accountAvatar: {
+    width: '20px',
+    height: '20px',
+    borderRadius: '50%',
+    flexShrink: 0,
   },
 });
 
@@ -218,67 +229,119 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
   );
 }
 
-function useGitHubRepos(open: boolean) {
-  const [repos, setRepos] = useState<GitHubRepo[]>([]);
-  const [fetched, setFetched] = useState(false);
+function useGitHubData(open: boolean) {
+  const [accounts, setAccounts] = useState<GitHubAccount[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [prevOpen, setPrevOpen] = useState(open);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountsKey, setAccountsKey] = useState(0);
 
-  // Derived-state pattern: reset `fetched` when the dialog opens so `loading` is
-  // truthy until the fetch completes.  Called during render (not inside an effect)
-  // so it avoids cascading-render concerns.
+  const [selectedAccount, setSelectedAccount] = useState<GitHubAccount | null>(null);
+  const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [reposLoading, setReposLoading] = useState(false);
+  const [reposError, setReposError] = useState<string | null>(null);
+  const [reposKey, setReposKey] = useState(0);
+
+  // Reset all state when the dialog (re-)opens.
+  const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
-      setFetched(false);
+      setAccounts([]);
+      setAccountsLoading(false);
       setAuthRequired(false);
-      setError(null);
+      setAccountsError(null);
+      setSelectedAccount(null);
+      setRepos([]);
+      setReposLoading(false);
+      setReposError(null);
     }
   }
 
+  // Load accounts when dialog opens.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    setAccountsLoading(true);
     setAuthRequired(false);
-    setError(null);
-    apiClient.listGitHubRepos()
-      .then((data) => { if (!cancelled) { setRepos(data); setFetched(true); } })
+    setAccountsError(null);
+    apiClient.listGitHubAccounts()
+      .then((data) => {
+        if (cancelled) return;
+        setAccounts(data);
+        setAccountsLoading(false);
+        // Auto-select the authenticated user (first entry).
+        if (data.length > 0) setSelectedAccount(data[0]);
+      })
       .catch((err: unknown) => {
         if (cancelled) return;
-        // A 401 means the app has no valid GitHub token — surface a connect path
-        // instead of a silent empty list. Other failures get a retryable error.
+        setAccountsLoading(false);
         if (err instanceof ApiError && err.status === 401) {
           setAuthRequired(true);
         } else {
-          setError(
+          setAccountsError(
             err instanceof ApiError
               ? `Error ${err.status}: ${err.body}`
               : err instanceof Error ? err.message : String(err),
           );
         }
-        setRepos([]);
-        setFetched(true);
       });
     return () => { cancelled = true; };
-  }, [open, reloadKey]);
+  }, [open, accountsKey]);
 
-  const reload = () => {
-    setFetched(false);
-    setReloadKey((k) => k + 1);
+  // Load repos whenever the selected account changes.
+  useEffect(() => {
+    if (!selectedAccount) { setRepos([]); return; }
+    let cancelled = false;
+    setReposLoading(true);
+    setReposError(null);
+    apiClient.listGitHubRepos(selectedAccount.login)
+      .then((data) => {
+        if (!cancelled) { setRepos(data); setReposLoading(false); }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setReposLoading(false);
+        setReposError(
+          err instanceof ApiError
+            ? `Error ${err.status}: ${err.body}`
+            : err instanceof Error ? err.message : String(err),
+        );
+        setRepos([]);
+      });
+    return () => { cancelled = true; };
+  }, [selectedAccount, reposKey]);
+
+  const changeAccount = (acc: GitHubAccount) => {
+    setSelectedAccount(acc);
+    setRepos([]);
+    setReposError(null);
   };
 
-  return { repos, loading: open && !fetched, authRequired, error, reload };
+  const reloadAccounts = () => setAccountsKey((k) => k + 1);
+  const reloadRepos = () => setReposKey((k) => k + 1);
+
+  return {
+    accounts, accountsLoading, authRequired, accountsError,
+    selectedAccount, changeAccount,
+    repos, reposLoading, reposError,
+    reloadAccounts, reloadRepos,
+  };
 }
 
 function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project) => void; dataDir: string | null }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('github', onCreated);
-  const { repos, loading: reposLoading, authRequired, error: reposError, reload: reloadRepos } = useGitHubRepos(d.open);
+  const {
+    accounts, accountsLoading, authRequired, accountsError,
+    selectedAccount, changeAccount,
+    repos, reposLoading, reposError,
+    reloadAccounts, reloadRepos,
+  } = useGitHubData(d.open);
   const [repoFilter, setRepoFilter] = useState('');
   const [folderName, setFolderName] = useState('');
   const [folderEdited, setFolderEdited] = useState(false);
+
   const canCreate = Boolean(
     d.name.trim() && d.workingDirectory.trim() && d.sourceRepository.trim() && !d.saving,
   );
@@ -293,7 +356,10 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
   );
 
   return (
-    <Dialog open={d.open} onOpenChange={(_, s) => { d.setOpen(s.open); if (!s.open) { d.reset(); setRepoFilter(''); setFolderName(''); setFolderEdited(false); } }}>
+    <Dialog open={d.open} onOpenChange={(_, s) => {
+      d.setOpen(s.open);
+      if (!s.open) { d.reset(); setRepoFilter(''); setFolderName(''); setFolderEdited(false); }
+    }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="secondary">Create from GitHub</Button>
       </DialogTrigger>
@@ -312,36 +378,39 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   placeholder="My project"
                 />
               </Field>
-              <Field label="Source repository" required hint="Search GitHub, or type owner/repo manually">
-                <Combobox
-                  freeform
-                  placeholder={reposLoading ? 'Loading repositories...' : 'Search or enter owner/repo'}
-                  value={d.sourceRepository}
-                  onInput={(e) => {
-                    const val = (e.target as HTMLInputElement).value;
-                    setRepoFilter(val);
-                    d.setSourceRepository(val);
-                  }}
-                  onOptionSelect={(_, data) => {
-                    d.setSourceRepository(data.optionValue ?? '');
-                    setRepoFilter(data.optionValue ?? '');
-                  }}
-                  disabled={reposLoading}
-                >
-                  {filteredRepos.map((repo) => (
-                    <Option key={repo.fullName ?? ''} value={repo.fullName ?? ''} text={repo.fullName ?? ''}>
-                      <div>
-                        <Text weight="semibold">{repo.fullName ?? '(unnamed)'}</Text>
-                        {repo.description && (
-                          <Text size={200} style={{ display: 'block', color: 'inherit', opacity: 0.7 }}>
-                            {repo.description}
-                          </Text>
-                        )}
-                      </div>
-                    </Option>
-                  ))}
-                </Combobox>
-              </Field>
+
+              {/* Stage 1: Organization / account picker (hidden when unauthenticated) */}
+              {!authRequired && (
+                <Field label="Organization" required hint="GitHub account or organization that owns the repository">
+                  <Combobox
+                    aria-label="Organization"
+                    placeholder={accountsLoading ? 'Loading accounts...' : 'Select an account...'}
+                    value={selectedAccount ? (selectedAccount.name ?? selectedAccount.login) : ''}
+                    selectedOptions={selectedAccount ? [selectedAccount.login] : []}
+                    onOptionSelect={(_, data) => {
+                      const acc = accounts.find(a => a.login === data.optionValue);
+                      if (acc) {
+                        changeAccount(acc);
+                        d.setSourceRepository('');
+                        setRepoFilter('');
+                      }
+                    }}
+                    disabled={accountsLoading}
+                  >
+                    {accounts.map(acc => (
+                      <Option key={acc.login} value={acc.login} text={acc.name ?? acc.login}>
+                        <div className={styles.accountOption}>
+                          <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />
+                          <span>{acc.name ?? acc.login}</span>
+                          {acc.type === 'org' && <Badge size="small" appearance="outline">Org</Badge>}
+                        </div>
+                      </Option>
+                    ))}
+                  </Combobox>
+                </Field>
+              )}
+
+              {/* 401 — prompt user to connect */}
               {authRequired && (
                 <MessageBar intent="warning">
                   <MessageBarBody>
@@ -357,6 +426,63 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   </MessageBarActions>
                 </MessageBar>
               )}
+
+              {/* Non-401 accounts error */}
+              {accountsError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody>
+                  <MessageBarActions>
+                    <Button size="small" onClick={reloadAccounts}>Retry</Button>
+                  </MessageBarActions>
+                </MessageBar>
+              )}
+
+              {/* Stage 2: Repository picker */}
+              <Field label="Source repository" required hint="Search GitHub, or type owner/repo manually">
+                <Combobox
+                  aria-label="Repository"
+                  freeform
+                  placeholder={
+                    accountsLoading ? 'Loading...' :
+                    !selectedAccount && !authRequired ? 'Select an account first' :
+                    reposLoading ? 'Loading repositories...' :
+                    'Search or enter owner/repo'
+                  }
+                  value={d.sourceRepository}
+                  onInput={(e) => {
+                    const val = (e.target as HTMLInputElement).value;
+                    setRepoFilter(val);
+                    d.setSourceRepository(val);
+                  }}
+                  onOptionSelect={(_, data) => {
+                    const fullName = data.optionValue ?? '';
+                    d.setSourceRepository(fullName);
+                    setRepoFilter(fullName);
+                    // Auto-fill folder from the repo slug when not manually overridden.
+                    const slug = fullName.split('/')[1] ?? fullName;
+                    if (slug && !folderEdited) handleFolderChange(slugify(slug));
+                    if (!d.name.trim() && slug) {
+                      d.setName(slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+                    }
+                  }}
+                  disabled={accountsLoading}
+                >
+                  {filteredRepos.map((repo) => (
+                    <Option key={repo.fullName ?? ''} value={repo.fullName ?? ''} text={repo.fullName ?? ''}>
+                      <div>
+                        <Text weight="semibold">{repo.fullName ?? '(unnamed)'}</Text>
+                        {repo.description && (
+                          <Text size={200} style={{ display: 'block', color: 'inherit', opacity: 0.7 }}>
+                            {repo.description}
+                          </Text>
+                        )}
+                      </div>
+                    </Option>
+                  ))}
+                </Combobox>
+              </Field>
+
+              {/* Repos load error */}
               {reposError && (
                 <MessageBar intent="error">
                   <MessageBarBody>Could not load repositories: {reposError}</MessageBarBody>
@@ -365,6 +491,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   </MessageBarActions>
                 </MessageBar>
               )}
+
               <Field
                 required
                 hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
