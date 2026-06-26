@@ -26,6 +26,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
     private static readonly string[] ExemptPrefixes =
     [
         "/health",
+        "/healthz",
         "/api/health",
         "/api/ping",
         "/auth",
@@ -164,6 +165,17 @@ public sealed class GitHubOrgAuthorizationMiddleware
             case OrgAuthResult.NotConfigured:
                 await WriteForbiddenAsync(context,
                     "Authorization not configured. Set Auth:GitHub:AllowedOrg.").ConfigureAwait(false);
+                return;
+
+            case OrgAuthResult.Inconclusive:
+                // The authenticated GitHub org check could not complete (transient outage / token
+                // problem). The caller's GitHub token already passed validation upstream, so this is a
+                // transient condition — fail closed but report it as unavailable rather than a denial.
+                _logger.LogWarning(
+                    "Org membership check for '{Login}' was inconclusive (transient GitHub failure).",
+                    login);
+                await WriteForbiddenAsync(context,
+                    "Could not verify GitHub organization membership at this time. Please retry.").ConfigureAwait(false);
                 return;
 
             default: // Denied

@@ -10,6 +10,27 @@ internal sealed class McpProgram
 
         var builder = WebApplication.CreateBuilder(args);
 
+        // Fix 1 (Seraph T4–T7 review): in HTTP (Resource Server) mode, the issuer/audience used to
+        // validate forwarded AS JWTs must be pinned to the PUBLIC host — NOT derived from the request
+        // host, which behind the gateway/internal routing would not match the token's aud
+        // (https://<HOST>/mcp). Fail fast at boot in Production if they are not configured. Stdio mode
+        // is single-user/local and performs no JWT validation, so it is exempt.
+        if (!useStdio && builder.Environment.IsProduction())
+        {
+            var missing = new[] { "Auth:Mcp:Issuer", "Auth:Mcp:Audience" }
+                .Where(key => string.IsNullOrWhiteSpace(builder.Configuration[key]))
+                .ToArray();
+            if (missing.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    "Refusing to start: the following OAuth configuration value(s) must be pinned to " +
+                    $"the public host in Production but are unset/empty: {string.Join(", ", missing)}. " +
+                    "Set Auth:Mcp:Issuer = https://<HOST> and Auth:Mcp:Audience = https://<HOST>/mcp. " +
+                    "Host-derived issuer/audience is permitted only in Development; in Production it " +
+                    "would break validation of forwarded AS access tokens (audience mismatch).");
+            }
+        }
+
         var apiUrl = builder.Configuration["Agentweaver:ApiUrl"]
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_API_URL")
             ?? "http://localhost:5000";

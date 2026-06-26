@@ -182,7 +182,10 @@ public static class OAuthServerEndpoints
 
                 // T4: re-validate org membership on refresh so revoked org access propagates within
                 // one access-token lifetime. Best-effort: if the brokered GitHub token is unavailable
-                // we fall back to the org captured at issuance (documented in the design).
+                // or the check is INCONCLUSIVE (the brokered token has expired / GitHub is unreachable)
+                // we fall back to the org captured at issuance rather than hard-denying — otherwise a
+                // private-org member would be locked out every ~8h when GitHub's user token expires
+                // (Seraph T4–T7 review, Fix 2). Only a DEFINITIVE non-membership revokes + denies.
                 if (orgAuth.IsConfigured)
                 {
                     var gitHubToken = await gitHubTokens
@@ -193,7 +196,8 @@ public static class OAuthServerEndpoints
                         var membership = await orgAuth
                             .CheckMembershipAsync(gitHubToken, grant.GithubLogin, ctx.RequestAborted)
                             .ConfigureAwait(false);
-                        if (membership != OrgAuthResult.Allowed)
+
+                        if (membership is OrgAuthResult.Denied or OrgAuthResult.OrgAccessNotGranted)
                         {
                             await refreshStore.RevokeAsync(form["refresh_token"], ctx.RequestAborted).ConfigureAwait(false);
                             logger.LogWarning(
@@ -202,6 +206,14 @@ public static class OAuthServerEndpoints
                             return Results.Json(
                                 new { error = "access_denied", error_description = "Org membership is no longer valid." },
                                 statusCode: StatusCodes.Status403Forbidden);
+                        }
+
+                        if (membership == OrgAuthResult.Inconclusive)
+                        {
+                            logger.LogInformation(
+                                "Org re-check inconclusive for {Login} on refresh (brokered GitHub token " +
+                                "likely expired); falling back to the issuance-time org claim '{Org}'.",
+                                grant.GithubLogin, grant.Org);
                         }
                     }
                 }

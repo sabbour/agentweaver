@@ -2,7 +2,7 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Agentweaver.Api.Auth;
 
-public enum OrgAuthResult { Allowed, Denied, NotConfigured, OrgAccessNotGranted }
+public enum OrgAuthResult { Allowed, Denied, NotConfigured, OrgAccessNotGranted, Inconclusive }
 
 public interface IGitHubOrgAuthorizationService
 {
@@ -70,7 +70,12 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
         var result = await ResolveMembershipAsync(accessToken, login, ct).ConfigureAwait(false);
 
-        _cache.Set(cacheKey, result, CacheTtl);
+        // Do NOT cache an inconclusive result — it reflects a transient failure to reach GitHub or an
+        // expired/invalid token, not a stable membership decision. Caching it would pin a temporary
+        // failure for the whole TTL.
+        if (result != OrgAuthResult.Inconclusive)
+            _cache.Set(cacheKey, result, CacheTtl);
+
         return result;
     }
 
@@ -81,9 +86,10 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/members/{Uri.EscapeDataString(login)}",
             ct).ConfigureAwait(false);
 
-        // If primary check fails (SAML redirect → 302, or not a member → 404), fall back to
-        // the public members endpoint before denying. This handles the common case where the
-        // token is not SAML-authorized so the private endpoint returns 302 rather than 403.
+        // If primary check fails (SAML redirect → 302, not a member → 404, or inconclusive → token
+        // expired/network/5xx), fall back to the public members endpoint (unauthenticated) before
+        // deciding. This handles the common case where the token is not SAML-authorized so the private
+        // endpoint returns 302/401 rather than a definitive answer.
         if (orgResult != CheckResult.Member)
         {
             var publicResult = await CheckEndpointAsync(
@@ -94,6 +100,21 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
             if (publicResult != CheckResult.Member)
             {
+                // Fix 2 (Seraph T4–T7 review): distinguish INCONCLUSIVE (we could not determine private
+                // membership because the authenticated call failed — expired token / 5xx / network)
+                // from a DEFINITIVE not-a-member (a valid token that returned 404/302). Callers such as
+                // the refresh-time re-check use this to avoid hard-denying private-org members whose
+                // brokered GitHub token has expired.
+                if (orgResult == CheckResult.Inconclusive)
+                {
+                    _logger.LogWarning(
+                        "Org membership re-check for '{Login}' on org '{Org}' was INCONCLUSIVE " +
+                        "(authenticated GitHub call failed — likely an expired/unauthorized token). " +
+                        "Not treating as a definitive non-membership.",
+                        login, _allowedOrg);
+                    return OrgAuthResult.Inconclusive;
+                }
+
                 _logger.LogWarning(
                     "GitHub login '{Login}' is not a public member of org '{Org}'. " +
                     "If you are a member, publicize your membership at https://github.com/orgs/{Org}/people.",
@@ -137,7 +158,7 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         return OrgAuthResult.Allowed;
     }
 
-    private enum CheckResult { Member, NotMember, OrgAccessNotGranted }
+    private enum CheckResult { Member, NotMember, OrgAccessNotGranted, Inconclusive }
 
     private async Task<CheckResult> CheckEndpointAsync(string accessToken, string url, CancellationToken ct,
         bool sendAuthHeader = true)
@@ -153,16 +174,40 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         request.Headers.UserAgent.ParseAdd("Agentweaver/1.0");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
 
-        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Network/transport failure — we genuinely don't know the membership status.
+            _logger.LogWarning(ex, "GitHub org check request to {Url} failed at the transport layer.", url);
+            return CheckResult.Inconclusive;
+        }
 
-        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-            return CheckResult.OrgAccessNotGranted;
+        using (response)
+        {
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                return CheckResult.OrgAccessNotGranted;
 
-        // 204 No Content = org membership confirmed.
-        // 200 OK = team membership endpoint returns 200 with an active/pending state body.
-        return response.StatusCode is System.Net.HttpStatusCode.NoContent
-                                   or System.Net.HttpStatusCode.OK
-            ? CheckResult.Member
-            : CheckResult.NotMember;
+            // 204 No Content = org membership confirmed.
+            // 200 OK = team membership endpoint returns 200 with an active/pending state body.
+            if (response.StatusCode is System.Net.HttpStatusCode.NoContent or System.Net.HttpStatusCode.OK)
+                return CheckResult.Member;
+
+            // An AUTHENTICATED call that comes back 401 (token expired/revoked) or 5xx (GitHub outage)
+            // is inconclusive — we cannot distinguish "not a member" from "couldn't ask". Unauthenticated
+            // public-member probes never carry a token, so a 401 there is not expected; only the
+            // authenticated path can produce a meaningful inconclusive signal.
+            if (sendAuthHeader
+                && (response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                    || (int)response.StatusCode >= 500))
+            {
+                return CheckResult.Inconclusive;
+            }
+
+            return CheckResult.NotMember;
+        }
     }
 }

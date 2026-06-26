@@ -36,6 +36,12 @@ var builder = WebApplication.CreateBuilder(args);
 Agentweaver.Api.Security.TestingBypassGuard.EnsureNotEnabledInProduction(
     builder.Environment, builder.Configuration);
 
+// Fix 1 (Seraph T4–T7 review): OAuth issuer/audience must be pinned to the PUBLIC host in Production
+// so MCP->API JWT validation (audience = https://<HOST>/mcp) succeeds on internal calls. Fail fast at
+// boot if they are not configured, rather than serving traffic where every forwarded JWT 401s.
+Agentweaver.Api.Security.OAuthConfigGuard.EnsureProductionIssuerAudiencePinned(
+    builder.Environment, builder.Configuration);
+
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
