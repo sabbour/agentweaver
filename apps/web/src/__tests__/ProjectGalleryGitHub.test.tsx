@@ -19,6 +19,7 @@ vi.mock('../api/apiClient', () => ({
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
+import { ProjectListProvider } from '../hooks/useProjectList';
 import type { GitHubAccount, GitHubRepo, Project } from '../api/types';
 
 function makeProject(id: string, name: string): Project {
@@ -46,7 +47,11 @@ const REPO: GitHubRepo = { fullName: 'octocat/hello-world', defaultBranch: 'main
 function Wrapper({ children }: { children: ReactNode }) {
   return (
     <FluentProvider theme={webLightTheme}>
-      <MemoryRouter>{children}</MemoryRouter>
+      <MemoryRouter>
+        <ProjectListProvider>
+          {children}
+        </ProjectListProvider>
+      </MemoryRouter>
     </FluentProvider>
   );
 }

@@ -12,6 +12,7 @@ vi.mock('../api/apiClient', () => ({
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { ProjectSwitcher, projectSwitchTarget } from '../components/shell/ProjectSwitcher';
+import { ProjectListProvider } from '../hooks/useProjectList';
 import type { Project } from '../api/types';
 
 function makeProject(id: string, name: string): Project {
@@ -80,10 +81,12 @@ function renderSwitcherAt(pathname: string, projectId: string) {
   return render(
     <FluentProvider theme={webLightTheme}>
       <MemoryRouter initialEntries={[pathname]}>
-        <ProjectSwitcher projectId={projectId} pathname={pathname} />
-        <Routes>
-          <Route path="*" element={<LocationProbe />} />
-        </Routes>
+        <ProjectListProvider>
+          <ProjectSwitcher projectId={projectId} pathname={pathname} />
+          <Routes>
+            <Route path="*" element={<LocationProbe />} />
+          </Routes>
+        </ProjectListProvider>
       </MemoryRouter>
     </FluentProvider>,
   );

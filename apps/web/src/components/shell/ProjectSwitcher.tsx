@@ -8,9 +8,9 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { Project } from '../../api/types';
+import { useProjectList } from '../../hooks/useProjectList';
 import { NAV_ITEMS, type NavItemDef } from './navConfig';
 
 // Spec 011, FR-011/FR-012/FR-014 — switch-only project switcher. Lists existing
@@ -103,38 +103,11 @@ export function ProjectSwitcher({
   const styles = useStyles();
   const navigate = useNavigate();
 
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState(false);
-  const [authError, setAuthError] = useState(false);
+  const { projects, loading, authError, loadError } = useProjectList();
+  const loaded = !loading;
+
   const [comboValue, setComboValue] = useState('');
   const [recentIds, setRecentIds] = useState<string[]>(() => getRecentIds());
-
-  useEffect(() => {
-    let cancelled = false;
-    apiClient
-      .listProjects()
-      .then((list) => {
-        if (!cancelled) {
-          setProjects(list);
-          setLoaded(true);
-          setLoadError(false);
-          setAuthError(false);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          if (err instanceof ApiError && err.status === 401) {
-            setAuthError(true);
-          } else {
-            setLoadError(true);
-          }
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Drop the persisted fallback if its project was deleted/renamed away, so the
   // switcher and nav don't point at a project that no longer exists.
@@ -185,6 +158,16 @@ export function ProjectSwitcher({
       .filter((p) => !isFiltering || p.name.toLowerCase().includes(q));
   }, [recentIds, projects, projectId, isFiltering, comboValue]);
 
+  // "All projects" excludes entries already shown under "Recent" to avoid duplicates.
+  const recentIdSet = useMemo(
+    () => new Set(recentProjects.map((p) => p.project_id)),
+    [recentProjects],
+  );
+  const filteredExcludingRecent = useMemo(
+    () => filtered.filter((p) => !recentIdSet.has(p.project_id)),
+    [filtered, recentIdSet],
+  );
+
   function handleSwitch(targetId: string) {
     const target = projects.find((p) => p.project_id === targetId);
     if (!target) return;
@@ -232,12 +215,12 @@ export function ProjectSwitcher({
           </OptionGroup>
         )}
         <OptionGroup label={recentProjects.length > 0 && !authError ? 'All projects' : undefined}>
-          {!authError && filtered.map((p) => (
+          {!authError && filteredExcludingRecent.map((p) => (
             <Option key={p.project_id} value={p.project_id} text={p.name}>
               {p.name}
             </Option>
           ))}
-          {!authError && filtered.length === 0 && (
+          {!authError && filteredExcludingRecent.length === 0 && recentProjects.length === 0 && (
             <Option value="" disabled text="">
               {projects.length === 0 ? 'No projects yet' : `No projects match "${comboValue}"`}
             </Option>

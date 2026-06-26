@@ -16,6 +16,7 @@ vi.mock('../api/apiClient', () => ({
 
 import { apiClient } from '../api/apiClient';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
+import { ProjectListProvider } from '../hooks/useProjectList';
 import type { Blueprint, Project } from '../api/types';
 
 function makeProject(id: string, name: string): Project {
@@ -70,7 +71,11 @@ const GENERATED: Blueprint = {
 function Wrapper({ children }: { children: ReactNode }) {
   return (
     <FluentProvider theme={webLightTheme}>
-      <MemoryRouter>{children}</MemoryRouter>
+      <MemoryRouter>
+        <ProjectListProvider>
+          {children}
+        </ProjectListProvider>
+      </MemoryRouter>
     </FluentProvider>
   );
 }

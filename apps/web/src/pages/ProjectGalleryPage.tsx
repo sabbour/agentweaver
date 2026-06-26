@@ -30,6 +30,7 @@ import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { BlueprintPicker, applyBlueprintToRequest, NO_BLUEPRINT, type BlueprintSelection } from '../components/BlueprintPicker';
+import { useProjectList } from '../hooks/useProjectList';
 
 const useStyles = makeStyles({
   root: {
@@ -78,6 +79,34 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+  },
+  dialogTwoCol: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXXL,
+    alignItems: 'flex-start',
+    '@media (max-width: 680px)': {
+      flexDirection: 'column',
+    },
+  },
+  dialogLeftCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    flex: '0 0 auto',
+    width: '280px',
+    minWidth: '240px',
+    '@media (max-width: 680px)': {
+      width: '100%',
+    },
+  },
+  dialogRightCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: '1 1 auto',
+    minWidth: '240px',
+    maxHeight: '460px',
+    overflowY: 'auto',
+    paddingRight: tokens.spacingHorizontalXS,
   },
   accountOption: {
     display: 'flex',
@@ -172,42 +201,46 @@ function CreateBlankDialog({ onCreated, dataDir }: { onCreated: (p: Project) => 
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="primary">Create blank project</Button>
       </DialogTrigger>
-      <DialogSurface>
+      <DialogSurface style={{ maxWidth: '860px' }}>
         <DialogBody>
           <DialogTitle>Create blank project</DialogTitle>
           <DialogContent>
-            <div className={styles.dialogFields}>
-              <Field label="Name" required>
-                <Input
-                  value={d.name}
-                  onChange={(_, v) => {
-                    d.setName(v.value);
-                    if (!folderEdited) handleFolderChange(slugify(v.value));
-                  }}
-                  placeholder="My project"
-                />
-              </Field>
-              <Field
-                label="Repository folder"
-                required
-                hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
-              >
-                <Input
-                  contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
-                  value={folderName}
-                  onChange={(_, v) => {
-                    setFolderEdited(v.value !== '');
-                    handleFolderChange(v.value);
-                  }}
-                  placeholder="my-repo"
-                />
-              </Field>
-              <BlueprintPicker active={d.open} value={d.blueprint} onChange={d.setBlueprint} />
-              {d.error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{d.error}</MessageBarBody>
-                </MessageBar>
-              )}
+            <div className={styles.dialogTwoCol}>
+              <div className={styles.dialogLeftCol}>
+                <Field label="Name" required>
+                  <Input
+                    value={d.name}
+                    onChange={(_, v) => {
+                      d.setName(v.value);
+                      if (!folderEdited) handleFolderChange(slugify(v.value));
+                    }}
+                    placeholder="My project"
+                  />
+                </Field>
+                <Field
+                  label="Repository folder"
+                  required
+                  hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
+                >
+                  <Input
+                    contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+                    value={folderName}
+                    onChange={(_, v) => {
+                      setFolderEdited(v.value !== '');
+                      handleFolderChange(v.value);
+                    }}
+                    placeholder="my-repo"
+                  />
+                </Field>
+                {d.error && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{d.error}</MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+              <div className={styles.dialogRightCol}>
+                <BlueprintPicker active={d.open} value={d.blueprint} onChange={d.setBlueprint} />
+              </div>
             </div>
           </DialogContent>
           <DialogActions>
@@ -363,155 +396,161 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="secondary">Create from GitHub</Button>
       </DialogTrigger>
-      <DialogSurface>
+      <DialogSurface style={{ maxWidth: '860px' }}>
         <DialogBody>
           <DialogTitle>Create project from GitHub</DialogTitle>
           <DialogContent>
-            <div className={styles.dialogFields}>
-              <Field label="Name" required>
-                <Input
-                  value={d.name}
-                  onChange={(_, v) => {
-                    d.setName(v.value);
-                    if (!folderEdited) handleFolderChange(slugify(v.value));
-                  }}
-                  placeholder="My project"
-                />
-              </Field>
+            <div className={styles.dialogTwoCol}>
+              <div className={styles.dialogLeftCol}>
+                <Field label="Name" required>
+                  <Input
+                    value={d.name}
+                    onChange={(_, v) => {
+                      d.setName(v.value);
+                      if (!folderEdited) handleFolderChange(slugify(v.value));
+                    }}
+                    placeholder="My project"
+                  />
+                </Field>
 
-              {/* Stage 1: Organization / account picker (hidden when unauthenticated) */}
-              {!authRequired && (
-                <Field label="Organization" required hint="GitHub account or organization that owns the repository">
+                {/* Stage 1: Organization / account picker (hidden when unauthenticated) */}
+                {!authRequired && (
+                  <Field label="Organization" required hint="GitHub account or organization that owns the repository">
+                    <Combobox
+                      aria-label="Organization"
+                      placeholder={accountsLoading ? 'Loading accounts...' : 'Select an account...'}
+                      value={selectedAccount ? (selectedAccount.name ?? selectedAccount.login) : ''}
+                      selectedOptions={selectedAccount ? [selectedAccount.login] : []}
+                      onOptionSelect={(_, data) => {
+                        const acc = accounts.find(a => a.login === data.optionValue);
+                        if (acc) {
+                          changeAccount(acc);
+                          d.setSourceRepository('');
+                          setRepoFilter('');
+                        }
+                      }}
+                      disabled={accountsLoading}
+                    >
+                      {accounts.map(acc => (
+                        <Option key={acc.login} value={acc.login} text={acc.name ?? acc.login}>
+                          <div className={styles.accountOption}>
+                            <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />
+                            <span>{acc.name ?? acc.login}</span>
+                            {acc.type === 'org' && <Badge size="small" appearance="outline">Org</Badge>}
+                          </div>
+                        </Option>
+                      ))}
+                    </Combobox>
+                  </Field>
+                )}
+
+                {/* 401 — prompt user to connect */}
+                {authRequired && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      Connect your GitHub account to list repositories, or type owner/repo manually.
+                    </MessageBarBody>
+                    <MessageBarActions>
+                      <Button
+                        size="small"
+                        onClick={() => { window.location.href = '/auth/github/authorize'; }}
+                      >
+                        Connect GitHub
+                      </Button>
+                    </MessageBarActions>
+                  </MessageBar>
+                )}
+
+                {/* Non-401 accounts error */}
+                {accountsError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody>
+                    <MessageBarActions>
+                      <Button size="small" onClick={reloadAccounts}>Retry</Button>
+                    </MessageBarActions>
+                  </MessageBar>
+                )}
+
+                {/* Stage 2: Repository picker */}
+                <Field label="Source repository" required hint="Search GitHub, or type owner/repo manually">
                   <Combobox
-                    aria-label="Organization"
-                    placeholder={accountsLoading ? 'Loading accounts...' : 'Select an account...'}
-                    value={selectedAccount ? (selectedAccount.name ?? selectedAccount.login) : ''}
-                    selectedOptions={selectedAccount ? [selectedAccount.login] : []}
+                    aria-label="Repository"
+                    freeform
+                    placeholder={
+                      accountsLoading ? 'Loading...' :
+                      !selectedAccount && !authRequired ? 'Select an account first' :
+                      reposLoading ? 'Loading repositories...' :
+                      'Search or enter owner/repo'
+                    }
+                    value={d.sourceRepository}
+                    onInput={(e) => {
+                      const val = (e.target as HTMLInputElement).value;
+                      setRepoFilter(val);
+                      d.setSourceRepository(val);
+                    }}
                     onOptionSelect={(_, data) => {
-                      const acc = accounts.find(a => a.login === data.optionValue);
-                      if (acc) {
-                        changeAccount(acc);
-                        d.setSourceRepository('');
-                        setRepoFilter('');
+                      const fullName = data.optionValue ?? '';
+                      d.setSourceRepository(fullName);
+                      setRepoFilter(fullName);
+                      // Auto-fill folder from the repo slug when not manually overridden.
+                      const slug = fullName.split('/')[1] ?? fullName;
+                      if (slug && !folderEdited) handleFolderChange(slugify(slug));
+                      if (!d.name.trim() && slug) {
+                        d.setName(slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
                       }
                     }}
                     disabled={accountsLoading}
                   >
-                    {accounts.map(acc => (
-                      <Option key={acc.login} value={acc.login} text={acc.name ?? acc.login}>
-                        <div className={styles.accountOption}>
-                          <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />
-                          <span>{acc.name ?? acc.login}</span>
-                          {acc.type === 'org' && <Badge size="small" appearance="outline">Org</Badge>}
+                    {filteredRepos.map((repo) => (
+                      <Option key={repo.fullName ?? ''} value={repo.fullName ?? ''} text={repo.fullName ?? ''}>
+                        <div>
+                          <Text weight="semibold">{repo.fullName ?? '(unnamed)'}</Text>
+                          {repo.description && (
+                            <Text size={200} style={{ display: 'block', color: 'inherit', opacity: 0.7 }}>
+                              {repo.description}
+                            </Text>
+                          )}
                         </div>
                       </Option>
                     ))}
                   </Combobox>
                 </Field>
-              )}
 
-              {/* 401 — prompt user to connect */}
-              {authRequired && (
-                <MessageBar intent="warning">
-                  <MessageBarBody>
-                    Connect your GitHub account to list repositories, or type owner/repo manually.
-                  </MessageBarBody>
-                  <MessageBarActions>
-                    <Button
-                      size="small"
-                      onClick={() => { window.location.href = '/auth/github/authorize'; }}
-                    >
-                      Connect GitHub
-                    </Button>
-                  </MessageBarActions>
-                </MessageBar>
-              )}
+                {/* Repos load error */}
+                {reposError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>Could not load repositories: {reposError}</MessageBarBody>
+                    <MessageBarActions>
+                      <Button size="small" onClick={reloadRepos}>Retry</Button>
+                    </MessageBarActions>
+                  </MessageBar>
+                )}
 
-              {/* Non-401 accounts error */}
-              {accountsError && (
-                <MessageBar intent="error">
-                  <MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody>
-                  <MessageBarActions>
-                    <Button size="small" onClick={reloadAccounts}>Retry</Button>
-                  </MessageBarActions>
-                </MessageBar>
-              )}
-
-              {/* Stage 2: Repository picker */}
-              <Field label="Source repository" required hint="Search GitHub, or type owner/repo manually">
-                <Combobox
-                  aria-label="Repository"
-                  freeform
-                  placeholder={
-                    accountsLoading ? 'Loading...' :
-                    !selectedAccount && !authRequired ? 'Select an account first' :
-                    reposLoading ? 'Loading repositories...' :
-                    'Search or enter owner/repo'
-                  }
-                  value={d.sourceRepository}
-                  onInput={(e) => {
-                    const val = (e.target as HTMLInputElement).value;
-                    setRepoFilter(val);
-                    d.setSourceRepository(val);
-                  }}
-                  onOptionSelect={(_, data) => {
-                    const fullName = data.optionValue ?? '';
-                    d.setSourceRepository(fullName);
-                    setRepoFilter(fullName);
-                    // Auto-fill folder from the repo slug when not manually overridden.
-                    const slug = fullName.split('/')[1] ?? fullName;
-                    if (slug && !folderEdited) handleFolderChange(slugify(slug));
-                    if (!d.name.trim() && slug) {
-                      d.setName(slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
-                    }
-                  }}
-                  disabled={accountsLoading}
+                <Field
+                  label="Repository folder"
+                  required
+                  hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
                 >
-                  {filteredRepos.map((repo) => (
-                    <Option key={repo.fullName ?? ''} value={repo.fullName ?? ''} text={repo.fullName ?? ''}>
-                      <div>
-                        <Text weight="semibold">{repo.fullName ?? '(unnamed)'}</Text>
-                        {repo.description && (
-                          <Text size={200} style={{ display: 'block', color: 'inherit', opacity: 0.7 }}>
-                            {repo.description}
-                          </Text>
-                        )}
-                      </div>
-                    </Option>
-                  ))}
-                </Combobox>
-              </Field>
+                  <Input
+                    contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+                    value={folderName}
+                    onChange={(_, v) => {
+                      setFolderEdited(v.value !== '');
+                      handleFolderChange(v.value);
+                    }}
+                    placeholder="my-repo"
+                  />
+                </Field>
 
-              {/* Repos load error */}
-              {reposError && (
-                <MessageBar intent="error">
-                  <MessageBarBody>Could not load repositories: {reposError}</MessageBarBody>
-                  <MessageBarActions>
-                    <Button size="small" onClick={reloadRepos}>Retry</Button>
-                  </MessageBarActions>
-                </MessageBar>
-              )}
-
-              <Field
-                required
-                hint={dataDir ? `Folder name inside ${dataDir}` : 'Absolute path to a git repository on the machine running the Agentweaver server'}
-              >
-                <Input
-                  contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
-                  value={folderName}
-                  onChange={(_, v) => {
-                    setFolderEdited(v.value !== '');
-                    handleFolderChange(v.value);
-                  }}
-                  placeholder="my-repo"
-                />
-              </Field>
-              <BlueprintPicker active={d.open} value={d.blueprint} onChange={d.setBlueprint} />
-              {d.error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{d.error}</MessageBarBody>
-                </MessageBar>
-              )}
+                {d.error && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{d.error}</MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+              <div className={styles.dialogRightCol}>
+                <BlueprintPicker active={d.open} value={d.blueprint} onChange={d.setBlueprint} />
+              </div>
             </div>
           </DialogContent>
           <DialogActions>
@@ -564,10 +603,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 export function ProjectGalleryPage() {
   const styles = useStyles();
   const navigate = useNavigate();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [authRequired, setAuthRequired] = useState(false);
+  const { projects, loading, authError, loadError, errorMessage, appendProject } = useProjectList();
   const [dataDir, setDataDir] = useState<string | null>(null);
 
   useEffect(() => {
@@ -578,28 +614,8 @@ export function ProjectGalleryPage() {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    apiClient.listProjects()
-      .then((list) => { if (!cancelled) setProjects(list); })
-      .catch((err) => {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 401) {
-          setAuthRequired(true);
-        } else {
-          setError(
-            err instanceof ApiError
-              ? `API error ${err.status}: ${err.body}`
-              : err instanceof Error ? err.message : String(err),
-          );
-        }
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
   const handleCreated = (project: Project) => {
-    setProjects((prev) => [...prev, project]);
+    appendProject(project);
   };
 
   return (
@@ -608,7 +624,7 @@ export function ProjectGalleryPage() {
 
       {loading && <Spinner label="Loading projects" />}
 
-      {!loading && authRequired && (
+      {!loading && authError && (
         <MessageBar intent="warning">
           <MessageBarBody>
             Sign in with GitHub to see your projects.
@@ -624,13 +640,13 @@ export function ProjectGalleryPage() {
         </MessageBar>
       )}
 
-      {error && (
+      {loadError && (
         <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
+          <MessageBarBody>{errorMessage ?? 'Failed to load projects.'}</MessageBarBody>
         </MessageBar>
       )}
 
-      {!loading && !error && !authRequired && projects.length === 0 && (
+      {!loading && !loadError && !authError && projects.length === 0 && (
         <div className={styles.emptyState}>
           <Text>No projects yet. Create one to get started.</Text>
           <div className={styles.toolbar}>

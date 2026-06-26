@@ -10,6 +10,7 @@ import {
   getLastActiveProjectId,
   setLastActiveProjectId,
 } from './projectContext';
+import { ProjectListProvider } from '../../hooks/useProjectList';
 
 // Spec 011 — the persistent navigation shell (FR-001). Left nav + top bar frame
 // the main content area and remain visible on every page, including deep run /
@@ -92,22 +93,24 @@ export function AppShell({ children }: AppShellProps) {
   );
 
   return (
-    <div className={styles.root}>
-      <LeftNav projectId={effectiveProjectId} activeKey={activeKey} />
-      <div className={styles.body}>
-        <TopBar
-          projectId={effectiveProjectId}
-          pathname={location.pathname}
-          isFallbackProject={isFallbackProject}
-          onFallbackProjectMissing={clearFallbackProject}
-        />
-        {/* Remount the routed page when the active project changes so it re-fetches
-            cleanly for the new project (key is projectId only — switching runId
-            within the same project keeps the page mounted, and the nav/top bar
-            never remount). Global pages share a stable key. */}
-        <main className={styles.main} key={routeProjectId ?? '__global__'}>{children}</main>
+    <ProjectListProvider>
+      <div className={styles.root}>
+        <LeftNav projectId={effectiveProjectId} activeKey={activeKey} />
+        <div className={styles.body}>
+          <TopBar
+            projectId={effectiveProjectId}
+            pathname={location.pathname}
+            isFallbackProject={isFallbackProject}
+            onFallbackProjectMissing={clearFallbackProject}
+          />
+          {/* Remount the routed page when the active project changes so it re-fetches
+              cleanly for the new project (key is projectId only — switching runId
+              within the same project keeps the page mounted, and the nav/top bar
+              never remount). Global pages share a stable key. */}
+          <main className={styles.main} key={routeProjectId ?? '__global__'}>{children}</main>
+        </div>
+        <StartOrchestrationFab currentProjectId={effectiveProjectId} />
       </div>
-      <StartOrchestrationFab currentProjectId={effectiveProjectId} />
-    </div>
+    </ProjectListProvider>
   );
 }
