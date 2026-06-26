@@ -192,4 +192,27 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
 
         provider.IsMountRootHealthy().Should().BeTrue();
     }
+
+    // =========================================================================
+    // WP-12 — Local.AutoAssignsPath is false (honours caller-supplied path)
+    // =========================================================================
+    [Fact]
+    public void Local_AutoAssignsPath_IsFalse()
+    {
+        var provider = new LocalFilesystemWorkspaceProvider();
+
+        provider.AutoAssignsPath.Should().BeFalse();
+    }
+
+    // =========================================================================
+    // WP-13 — PersistentVolume.AutoAssignsPath is true (ignores caller-supplied path)
+    // =========================================================================
+    [Fact]
+    public void PersistentVolume_AutoAssignsPath_IsTrue()
+    {
+        var mountRoot = NewDir(create: true);
+        var provider  = BuildPersistentVolumeProvider(mountRoot);
+
+        provider.AutoAssignsPath.Should().BeTrue();
+    }
 }

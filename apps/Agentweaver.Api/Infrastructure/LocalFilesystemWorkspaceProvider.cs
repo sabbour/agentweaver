@@ -12,6 +12,9 @@ public sealed class LocalFilesystemWorkspaceProvider : IProjectWorkspaceProvider
 {
     public string BackendName => "local-filesystem";
 
+    /// <inheritdoc />
+    public bool AutoAssignsPath => false;
+
     public Task<string> ResolveWorkingDirectoryAsync(
         ProjectId id, string requestedPath, CancellationToken ct = default)
     {

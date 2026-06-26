@@ -197,9 +197,10 @@ app.MapPost("/api/projects", async (
 });
 
 // GET /api/server/info — public server metadata (no auth required)
-app.MapGet("/api/server/info", () => Results.Ok(new
+app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider) => Results.Ok(new
 {
-    data_directory = AppPaths.DataDirectory,
+    data_directory          = AppPaths.DataDirectory,
+    workspace_auto_assigned = workspaceProvider.AutoAssignsPath,
 })).AllowAnonymous();
 
 // GET /api/projects — list all projects

@@ -23,6 +23,9 @@ public sealed class PersistentVolumeWorkspaceProvider : IProjectWorkspaceProvide
 
     public string BackendName => "persistent-volume";
 
+    /// <inheritdoc />
+    public bool AutoAssignsPath => true;
+
     public Task<string> ResolveWorkingDirectoryAsync(
         ProjectId id, string requestedPath, CancellationToken ct = default)
     {

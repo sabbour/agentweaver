@@ -14,6 +14,14 @@ public interface IProjectWorkspaceProvider
     string BackendName { get; }
 
     /// <summary>
+    /// When true, the provider ignores the caller-supplied path and auto-generates the
+    /// working directory from the project id (e.g. PersistentVolumeWorkspaceProvider on AKS).
+    /// When false, the provider honours the caller-supplied path (e.g. local dev).
+    /// Clients can use this to hide the "Repository folder" UI field when the path is irrelevant.
+    /// </summary>
+    bool AutoAssignsPath { get; }
+
+    /// <summary>
     /// Resolves the canonical absolute working-directory path for the project.
     /// Does not create or validate the directory; call EnsureWorkspaceAsync for that.
     /// </summary>
