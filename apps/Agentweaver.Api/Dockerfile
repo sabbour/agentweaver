@@ -50,6 +50,9 @@ COPY --from=build --chown=1000:1000 /app/publish .
 
 USER 1000
 
+# Allow git operations on workspace volumes owned by other users (Azure File shares mount as root)
+RUN mkdir -p ~/.config/git && printf '[safe]\n\tdirectory = *\n' > ~/.config/git/config
+
 EXPOSE 8080
 
 ENV ASPNETCORE_URLS=http://+:8080
