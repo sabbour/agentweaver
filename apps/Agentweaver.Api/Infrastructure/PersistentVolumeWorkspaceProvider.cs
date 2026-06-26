@@ -36,12 +36,13 @@ public sealed class PersistentVolumeWorkspaceProvider : IProjectWorkspaceProvide
         ProjectId id, string workingDirectory, CancellationToken ct = default)
     {
         // Create per-project directory if it doesn't exist (mount root must be present).
+        // NOTE: We intentionally skip Directory.Exists(_mountRoot) here. On Linux, .NET uses
+        // statx(2) for Directory.Exists checks; some kernel/CIFS combinations return ENOENT for
+        // statx() on the CIFS mount root even though stat(2) and mkdir(2) work correctly.
+        // Attempting CreateDirectory directly is the reliable probe: if the mount root truly
+        // isn't present, mkdir will fail with ENOENT and the catch block below surfaces that.
         if (!Directory.Exists(workingDirectory))
         {
-            if (!Directory.Exists(_mountRoot))
-                throw new WorkspaceUnavailableException(
-                    $"Persistent volume for project '{id}' is not mounted at '{workingDirectory}'. " +
-                    "Ensure the volume is provisioned and attached before creating or running against this project.");
             try
             {
                 Directory.CreateDirectory(workingDirectory);
@@ -49,8 +50,9 @@ public sealed class PersistentVolumeWorkspaceProvider : IProjectWorkspaceProvide
             catch (Exception ex)
             {
                 throw new WorkspaceUnavailableException(
-                    $"Cannot create project directory '{workingDirectory}' on the persistent volume. " +
-                    $"Check that the volume is writable by the running user (uid/gid/fsGroup). Detail: {ex.GetType().Name}: {ex.Message}", ex);
+                    $"Persistent volume for project '{id}' is not mounted at '{workingDirectory}'. " +
+                    $"Ensure the volume is provisioned, attached, and writable. " +
+                    $"Detail: {ex.GetType().Name}: {ex.Message}", ex);
             }
         }
 
