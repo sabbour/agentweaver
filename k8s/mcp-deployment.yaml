@@ -45,6 +45,23 @@ spec:
               value: Production
             - name: AGENTWEAVER_API_URL
               value: http://agentweaver-api:8080
+            # OAuth 2.1 Resource Server config — pinned to the public host so the
+            # JWT iss/aud claims match exactly, even when MCP→API calls arrive on
+            # the internal service address (http://agentweaver-api:8080).
+            # Tank startup guard fails Production boot if these are empty.
+            - name: Auth__Mcp__Issuer
+              value: https://${HOST}
+            - name: Auth__Mcp__Audience
+              value: https://${HOST}/mcp
+            # Use the internal API service URL for JWKS so the MCP pod never
+            # hairpins through the public gateway to fetch the signing public key.
+            # Covered by the allow-app-internal-egress NetworkPolicy (:8080).
+            - name: Auth__Mcp__JwksUri
+              value: http://agentweaver-api:8080/oauth/jwks
+            # Backward-compat: allow raw GitHub tokens while clients migrate.
+            # Flip to "false" once all MCP clients use Agentweaver-minted tokens.
+            - name: Auth__Mcp__AllowGitHubPassthrough
+              value: "true"
           volumeMounts:
             - name: secrets-store
               mountPath: /mnt/secrets-store
