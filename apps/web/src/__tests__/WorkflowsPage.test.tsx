@@ -78,9 +78,14 @@ describe('WorkflowsPage', () => {
 
     await waitFor(() => expect(screen.getByText('Default Workflow')).toBeDefined());
     expect(screen.getByText('Nightly Sweep')).toBeDefined();
-    expect(screen.getByText('Default')).toBeDefined();
+    // Section headers
+    expect(screen.getByText('Active workflow')).toBeDefined();
+    expect(screen.getByText('Invalid workflows')).toBeDefined();
+    // Badges
+    expect(screen.getByText('Active')).toBeDefined();
     expect(screen.getByText('Built-in')).toBeDefined();
     expect(screen.getByText('Invalid')).toBeDefined();
+    // Content
     expect(screen.getByText('Unknown node type: foo')).toBeDefined();
     expect(screen.getByText('Trigger: event (task-added-to-ready)')).toBeDefined();
   });

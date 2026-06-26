@@ -131,6 +131,41 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
   },
+  sections: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXL,
+  },
+  sectionGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  sectionHeader: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  activeCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `1.5px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  invalidCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke3}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
 });
 
 function describeTrigger(workflow: WorkflowSummaryDto): string {
@@ -314,6 +349,11 @@ export function WorkflowsPage() {
   const projectWorkflows = selectableWorkflows.filter((wf) => !wf.is_built_in);
   const builtInWorkflows = selectableWorkflows.filter((wf) => wf.is_built_in);
 
+  // Presentation grouping: Active (current default, valid) / Available (valid, not default) / Invalid
+  const activeWorkflow = workflows.find((wf) => wf.is_default && wf.valid) ?? null;
+  const availableWorkflows = workflows.filter((wf) => !wf.is_default && wf.valid);
+  const invalidWorkflows = workflows.filter((wf) => !wf.valid);
+
   const renderDefaultWorkflowItem = (wf: SelectableWorkflow) => (
     <MenuItem
       key={wf.id}
@@ -326,7 +366,7 @@ export function WorkflowsPage() {
           <Badge appearance="outline" color={wf.is_built_in ? 'informative' : 'brand'}>
             {wf.is_built_in ? 'Built-in' : 'Project'}
           </Badge>
-          {wf.is_default && <Badge appearance="filled" color="brand">Current</Badge>}
+          {wf.is_default && <Badge appearance="filled" color="brand">Active</Badge>}
         </div>
         <span className={styles.menuItemDescription}>
           {wf.description || `Workflow id: ${wf.id}`}
@@ -334,6 +374,81 @@ export function WorkflowsPage() {
       </div>
     </MenuItem>
   );
+
+  const renderWorkflowCard = (wf: WorkflowSummaryDto, section: 'active' | 'available' | 'invalid', index = 0) => {
+    const cardClass = section === 'active' ? styles.activeCard : section === 'invalid' ? styles.invalidCard : styles.card;
+    return (
+      <div key={wf.id ?? `${section}-${index}`} className={cardClass}>
+        <div className={styles.cardHeader}>
+          <span className={styles.cardName}>{wf.name ?? wf.id ?? 'Unnamed workflow'}</span>
+          {wf.id && <span className={styles.cardId}>{wf.id}</span>}
+          <div className={styles.badges}>
+            {section === 'active' && <Badge appearance="filled" color="brand">Active</Badge>}
+            {wf.is_built_in && <Badge appearance="outline" color="informative">Built-in</Badge>}
+            {section !== 'active' && (
+              <Badge appearance="tint" color={wf.valid ? 'success' : 'danger'}>
+                {wf.valid ? 'Valid' : 'Invalid'}
+              </Badge>
+            )}
+          </div>
+          {wf.id && wf.valid && (
+            <Button
+              appearance="subtle"
+              icon={expandedGraphId === wf.id ? <ChevronDownRegular /> : <ChevronRightRegular />}
+              iconPosition="after"
+              size="small"
+              onClick={() => { if (wf.id) toggleGraph(wf.id); }}
+            >
+              <NetworkCheckRegular aria-hidden="true" />
+              View graph
+            </Button>
+          )}
+          {wf.id && !wf.is_built_in && (
+            <Button
+              appearance="subtle"
+              icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <EditRegular />}
+              size="small"
+              disabled={editLoading}
+              onClick={() => { void handleEdit(wf); }}
+            >
+              Edit
+            </Button>
+          )}
+          {wf.id && !wf.is_built_in && (
+            <Button
+              appearance="subtle"
+              icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <FlowRegular />}
+              size="small"
+              disabled={editLoading}
+              onClick={() => { void handleEdit(wf, true); }}
+            >
+              Edit visually
+            </Button>
+          )}
+        </div>
+
+        {wf.description && <Text>{wf.description}</Text>}
+
+        <div className={styles.meta}>
+          <span>{describeTrigger(wf)}</span>
+          <span>Source: {wf.source}</span>
+        </div>
+
+        {!wf.valid && wf.error && (
+          <MessageBar intent="error">
+            <MessageBarBody>{wf.error}</MessageBarBody>
+          </MessageBar>
+        )}
+
+        {wf.id && expandedGraphId === wf.id && (
+          <WorkflowDefinitionInlinePanel
+            projectId={projectId}
+            workflowId={wf.id}
+          />
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className={styles.root}>
@@ -505,76 +620,43 @@ export function WorkflowsPage() {
           )}
 
           {!loading && workflows.length > 0 && (
-            <div className={styles.list}>
-              {workflows.map((wf, index) => (
-                <div key={wf.id ?? `invalid-${index}`} className={styles.card}>
-                  <div className={styles.cardHeader}>
-                    <span className={styles.cardName}>{wf.name ?? wf.id ?? 'Unnamed workflow'}</span>
-                    {wf.id && <span className={styles.cardId}>{wf.id}</span>}
-                    <div className={styles.badges}>
-                      {wf.is_default && <Badge appearance="filled" color="brand">Default</Badge>}
-                      {wf.is_built_in && <Badge appearance="outline" color="informative">Built-in</Badge>}
-                      <Badge appearance="tint" color={wf.valid ? 'success' : 'danger'}>
-                        {wf.valid ? 'Valid' : 'Invalid'}
-                      </Badge>
-                    </div>
-                    {wf.id && wf.valid && (
-                      <Button
-                        appearance="subtle"
-                        icon={expandedGraphId === wf.id ? <ChevronDownRegular /> : <ChevronRightRegular />}
-                        iconPosition="after"
-                        size="small"
-                        onClick={() => { if (wf.id) toggleGraph(wf.id); }}
-                      >
-                        <NetworkCheckRegular aria-hidden="true" />
-                        View graph
-                      </Button>
-                    )}
-                    {wf.id && !wf.is_built_in && (
-                      <Button
-                        appearance="subtle"
-                        icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <EditRegular />}
-                        size="small"
-                        disabled={editLoading}
-                        onClick={() => { void handleEdit(wf); }}
-                      >
-                        Edit
-                      </Button>
-                    )}
-                    {wf.id && !wf.is_built_in && (
-                      <Button
-                        appearance="subtle"
-                        icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <FlowRegular />}
-                        size="small"
-                        disabled={editLoading}
-                        onClick={() => { void handleEdit(wf, true); }}
-                      >
-                        Edit visually
-                      </Button>
-                    )}
+            <div className={styles.sections}>
+              {/* Active workflow — the one this project runs with */}
+              {activeWorkflow && (
+                <div className={styles.sectionGroup}>
+                  <div className={styles.sectionHeader}>
+                    <Text weight="semibold" size={400}>Active workflow</Text>
+                    <Text size={200}>The workflow this project uses for new runs</Text>
                   </div>
-
-                  {wf.description && <Text>{wf.description}</Text>}
-
-                  <div className={styles.meta}>
-                    <span>{describeTrigger(wf)}</span>
-                    <span>Source: {wf.source}</span>
-                  </div>
-
-                  {!wf.valid && wf.error && (
-                    <MessageBar intent="error">
-                      <MessageBarBody>{wf.error}</MessageBarBody>
-                    </MessageBar>
-                  )}
-
-                  {wf.id && expandedGraphId === wf.id && (
-                    <WorkflowDefinitionInlinePanel
-                      projectId={projectId}
-                      workflowId={wf.id}
-                    />
-                  )}
+                  {renderWorkflowCard(activeWorkflow, 'active')}
                 </div>
-              ))}
+              )}
+
+              {/* Available workflows — valid, can be switched to */}
+              {availableWorkflows.length > 0 && (
+                <div className={styles.sectionGroup}>
+                  <div className={styles.sectionHeader}>
+                    <Text weight="semibold" size={400}>Available workflows</Text>
+                    <Text size={200}>Valid workflows you can set as active using "Set as default"</Text>
+                  </div>
+                  <div className={styles.list}>
+                    {availableWorkflows.map((wf, index) => renderWorkflowCard(wf, 'available', index))}
+                  </div>
+                </div>
+              )}
+
+              {/* Invalid workflows — have errors, cannot run */}
+              {invalidWorkflows.length > 0 && (
+                <div className={styles.sectionGroup}>
+                  <div className={styles.sectionHeader}>
+                    <Text weight="semibold" size={400}>Invalid workflows</Text>
+                    <Text size={200}>These workflows have errors and cannot run or be set as active</Text>
+                  </div>
+                  <div className={styles.list}>
+                    {invalidWorkflows.map((wf, index) => renderWorkflowCard(wf, 'invalid', index))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>
