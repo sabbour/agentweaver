@@ -3,7 +3,8 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Agentweaver',
   description: 'AI agent runs inside a sandboxed git worktree. You review before anything merges.',
-  base: '/',
+  base: '/docs/',
+  ignoreDeadLinks: true,
   markdown: {
     // Endpoint headings end in route params like `{id}`/`{path}`, which
     // markdown-it-attrs otherwise parses as an (empty) attribute block and

@@ -27,11 +27,10 @@ node_modules
 **/TestResults
 tests
 
-# Scripts and docs (not needed in runtime images)
+# Scripts and specs (not needed in runtime images)
 scripts
-docs
 specs
-*.md
+/*.md
 
 # Large non-runtime directories
 **/node_modules

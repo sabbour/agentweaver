@@ -7,6 +7,14 @@ RUN npm ci
 COPY apps/web/ .
 RUN unset VITE_API_URL VITE_API_KEY; npm run build
 
+# Stage 1b: Build VitePress docs
+FROM node:22-alpine AS docs-build
+WORKDIR /docs
+COPY docs/package.json docs/package-lock.json* ./
+RUN npm ci
+COPY docs/ .
+RUN npx vitepress build .
+
 # Stage 2: Build the ASP.NET Core static file host
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS dotnet-build
 WORKDIR /src
@@ -27,6 +35,7 @@ RUN getent group 1000 || groupadd --gid 1000 appgroup; \
 
 COPY --from=dotnet-build --chown=1000:1000 /app/publish .
 COPY --from=web-build --chown=1000:1000 /app/dist ./wwwroot
+COPY --from=docs-build --chown=1000:1000 /docs/.vitepress/dist ./wwwroot/docs
 COPY --chown=1000:1000 apps/web/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod 0755 /app/docker-entrypoint.sh
 
