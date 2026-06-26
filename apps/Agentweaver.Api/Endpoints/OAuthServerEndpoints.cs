@@ -22,6 +22,9 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class OAuthServerEndpoints
 {
+    /// <summary>F3: named fixed-window rate-limit policy applied to the OAuth flow endpoints.</summary>
+    public const string RateLimitPolicy = "oauth";
+
     public static void MapOAuthServerEndpoints(this WebApplication app)
     {
         // ---- T1: Authorization Server Metadata (RFC 8414) ----------------------------------------
@@ -38,7 +41,7 @@ public static class OAuthServerEndpoints
                 revocation_endpoint = $"{issuer}/oauth/revoke",      // TODO(T4): revocation
                 scopes_supported = new[] { "mcp:invoke", "offline_access" },
                 response_types_supported = new[] { "code" },
-                grant_types_supported = new[] { "authorization_code", "refresh_token" },
+                grant_types_supported = new[] { "authorization_code" }, // refresh_token re-added in T4
                 code_challenge_methods_supported = new[] { "S256" }, // S256 only — plain is rejected
                 token_endpoint_auth_methods_supported = new[] { "none" },
             });
@@ -61,6 +64,7 @@ public static class OAuthServerEndpoints
         app.MapGet("/oauth/authorize", (
             HttpContext ctx,
             McpOAuthBrokerService broker,
+            IConfiguration config,
             ILogger<Program> logger,
             string? response_type,
             string? client_id,
@@ -76,8 +80,8 @@ public static class OAuthServerEndpoints
             if (string.IsNullOrWhiteSpace(client_id))
                 return InvalidRequest("client_id is required.");
 
-            if (!OAuthServerConfig.IsAllowedRedirectUri(redirect_uri))
-                return InvalidRequest("redirect_uri is missing or not an allowed loopback/HTTPS URI.");
+            if (!OAuthServerConfig.IsAllowedRedirectUri(redirect_uri, config))
+                return InvalidRequest("redirect_uri is missing or not an allowed loopback/allowlisted HTTPS URI.");
 
             if (!string.Equals(response_type, "code", StringComparison.Ordinal))
                 return BadOAuthRequest("unsupported_response_type", "Only response_type=code is supported.");
@@ -102,7 +106,7 @@ public static class OAuthServerEndpoints
                 logger.LogWarning("MCP OAuth authorize attempted but GitHub OAuth is not configured: {Message}", ex.Message);
                 return Results.Problem(ex.Message, statusCode: 503);
             }
-        }).AllowAnonymous();
+        }).AllowAnonymous().RequireRateLimiting(RateLimitPolicy);
 
         // ---- T3: Token endpoint (authorization_code; refresh_token placeholder -> T4) ------------
         app.MapPost("/oauth/token", async (
@@ -135,17 +139,16 @@ public static class OAuthServerEndpoints
                 var accessToken = tokenService.CreateAccessToken(
                     issuer, audience, grant!.Subject, grant.GithubLogin, org);
 
-                // TODO(T4): persist a rotating, hashed refresh token bound to sub+client_id. The opaque
-                // value is returned now so the response shape is final and T4 slots in without changing it.
-                var refreshTokenPlaceholder = McpOAuthBrokerService.GenerateOpaqueToken();
-
+                // F4: no refresh_token is issued until T4 lands a real rotating refresh-token store.
+                // Returning a non-functional placeholder caused conformant clients to attempt (and
+                // silently fail) auto-refresh, so it is omitted from both this response and the AS
+                // metadata grant_types_supported. T4 re-adds it once the store + rotation exist.
                 return Results.Json(new
                 {
                     access_token = accessToken,
                     token_type = "Bearer",
                     expires_in = (int)McpTokenService.AccessTokenLifetime.TotalSeconds,
                     scope = grant.Scope,
-                    refresh_token = refreshTokenPlaceholder,
                 });
             }
 
@@ -156,7 +159,7 @@ public static class OAuthServerEndpoints
             }
 
             return BadOAuthRequest("unsupported_grant_type", "grant_type must be authorization_code.");
-        }).AllowAnonymous();
+        }).AllowAnonymous().RequireRateLimiting(RateLimitPolicy);
     }
 
     private static IResult InvalidRequest(string description) =>

@@ -31,26 +31,48 @@ public static class OAuthServerConfig
     }
 
     /// <summary>
-    /// Exact-match redirect-URI policy: only loopback HTTP (RFC 8252) or HTTPS URIs are permitted;
-    /// fragments are rejected. Without Dynamic Client Registration (T5) there is no per-client
-    /// registered set yet, so HTTPS URIs are accepted structurally here and the EXACT string is
-    /// re-checked at token redemption against the value captured at /authorize.
-    /// TODO(T5): validate against the per-client registered redirect URIs from /oauth/register.
+    /// Redirect-URI policy. Permitted targets are:
+    ///  - loopback HTTP (RFC 8252): 127.0.0.1 / ::1 / localhost on any port (native clients), and
+    ///  - HTTPS URIs whose absolute string starts with one of the configured
+    ///    <c>Auth:OAuth:AllowedRedirectUriPrefixes</c> entries.
+    /// Fragments and <c>userinfo</c> (user@host) are always rejected.
+    ///
+    /// F2 (interim, pre-DCR): without Dynamic Client Registration (T5) there is no per-client
+    /// registered set, so the static prefix allowlist is the authoritative gate for non-loopback
+    /// redirects. When T5 lands, registered redirect URIs become authoritative and this allowlist
+    /// remains as defense-in-depth. If no prefixes are configured, ONLY loopback redirects are allowed.
+    /// The exact string is additionally re-checked at token redemption against the value captured at
+    /// /authorize.
     /// </summary>
-    public static bool IsAllowedRedirectUri(string? redirectUri)
+    public static bool IsAllowedRedirectUri(string? redirectUri, IConfiguration configuration)
     {
         if (string.IsNullOrWhiteSpace(redirectUri)) return false;
         if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri)) return false;
         if (!string.IsNullOrEmpty(uri.Fragment)) return false;
-
-        if (uri.Scheme == Uri.UriSchemeHttps)
-            return true;
+        // Reject embedded credentials (https://user@evil.com) — these can mislead URL parsers/users.
+        if (!string.IsNullOrEmpty(uri.UserInfo)) return false;
 
         if (uri.Scheme == Uri.UriSchemeHttp)
         {
             var host = uri.Host;
             return host is "127.0.0.1" or "::1"
                 || host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (uri.Scheme == Uri.UriSchemeHttps)
+        {
+            var allowedPrefixes = configuration
+                .GetSection("Auth:OAuth:AllowedRedirectUriPrefixes")
+                .Get<string[]>() ?? [];
+
+            foreach (var prefix in allowedPrefixes)
+            {
+                if (!string.IsNullOrWhiteSpace(prefix)
+                    && redirectUri.StartsWith(prefix.Trim(), StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         return false;

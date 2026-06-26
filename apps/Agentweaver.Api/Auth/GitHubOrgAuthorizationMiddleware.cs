@@ -40,12 +40,33 @@ public sealed class GitHubOrgAuthorizationMiddleware
         RequestDelegate next,
         IGitHubOrgAuthorizationService authzService,
         IConfiguration configuration,
+        IHostEnvironment environment,
         ILogger<GitHubOrgAuthorizationMiddleware> logger)
     {
         _next = next;
         _authzService = authzService;
         _logger = logger;
-        _bypassForTests = configuration.GetValue<bool>("Testing:BypassGitHubOrgAuthorization");
+
+        // F1: org-authorization bypass is honored ONLY in Development. In any other environment the
+        // flag is ignored so org membership enforcement cannot be silently disabled in production via
+        // an injected env var. TestingBypassGuard hard-fails the process if it is set under Production.
+        var bypassConfigured = configuration.GetValue<bool>("Testing:BypassGitHubOrgAuthorization");
+        _bypassForTests = environment.IsDevelopment() && bypassConfigured;
+
+        if (_bypassForTests)
+        {
+            _logger.LogCritical(
+                "GitHub org authorization BYPASS is ACTIVE (Testing:BypassGitHubOrgAuthorization=true, " +
+                "environment={Environment}). Org/team membership is NOT enforced. Development/test ONLY.",
+                environment.EnvironmentName);
+        }
+        else if (bypassConfigured)
+        {
+            _logger.LogCritical(
+                "Testing:BypassGitHubOrgAuthorization=true was configured but IGNORED because the " +
+                "environment is '{Environment}' (not Development). Org authorization remains enforced.",
+                environment.EnvironmentName);
+        }
     }
 
     public async Task InvokeAsync(HttpContext context)

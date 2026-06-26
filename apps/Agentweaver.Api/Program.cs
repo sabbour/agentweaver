@@ -30,6 +30,13 @@ using Agentweaver.Api.ReviewPolicies;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// F1 release-blocker guard: refuse to start if a test-only auth bypass flag is enabled under
+// Production. This runs before any service/pipeline setup so a misconfigured production deployment
+// fails fast at boot instead of serving traffic with GitHub token / org authorization disabled.
+Agentweaver.Api.Security.TestingBypassGuard.EnsureNotEnabledInProduction(
+    builder.Environment, builder.Configuration);
+
+
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
@@ -114,6 +121,28 @@ builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 //    microsoft org membership, then issues PKCE-bound authorization codes.
 builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpTokenService>();
 builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService>();
+
+// F3: rate-limit the public OAuth flow endpoints. /oauth/authorize triggers a GitHub API call and
+// /oauth/token can be probed at volume, so apply a fixed-window limiter (20 req/min per client IP).
+// Scoped to the "oauth" policy below — the .well-known metadata and JWKS are intentionally NOT
+// limited so discovery stays cheap and never throttles conformant clients.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(OAuthServerEndpoints.RateLimitPolicy, httpContext =>
+    {
+        var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey,
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst,
+            });
+    });
+});
 
 // Project infrastructure (must be before AddAgentRuntime)
 builder.Services.AddSingleton<SqliteProjectStore>();
@@ -305,6 +334,7 @@ app.UseExceptionHandler(err => err.Run(async context =>
 }));
 
 app.UseCors();
+app.UseRateLimiter();
 app.UseMiddleware<GitHubTokenAuthMiddleware>();
 app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
 

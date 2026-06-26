@@ -39,7 +39,13 @@ public sealed class CallerContext
 ///
 /// Setting <c>Testing:BypassGitHubTokenAuth=true</c> in configuration skips the GitHub call and
 /// maps the bearer token directly to a caller using the <c>Auth:ApiKey/User</c> + <c>Auth:Keys</c>
-/// config (same shape as McpApiKeyRegistry). For test harnesses only — never set in production.
+/// config (same shape as McpApiKeyRegistry). For test harnesses only.
+///
+/// SECURITY (F1): the bypass is honored ONLY when <see cref="IHostEnvironment.IsDevelopment"/> is
+/// true, so a stray <c>Testing__BypassGitHubTokenAuth=true</c> env var cannot disable GitHub token
+/// validation in a Production deployment. A complementary startup guard
+/// (<see cref="TestingBypassGuard"/>) fails the process fast if any bypass flag is set under
+/// Production, so the flag can never silently be on in a shared/hosted environment.
 /// </summary>
 public sealed class GitHubTokenAuthMiddleware
 {
@@ -58,13 +64,36 @@ public sealed class GitHubTokenAuthMiddleware
         IMemoryCache cache,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
+        IHostEnvironment environment,
         ILogger<GitHubTokenAuthMiddleware> logger)
     {
         _next = next;
         _cache = cache;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
-        _bypassForTests = configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth");
+
+        // F1: only honor the test bypass in Development. In any non-Development environment the flag
+        // is ignored regardless of how it was injected (config file, env var, secret). The startup
+        // guard (TestingBypassGuard) additionally hard-fails the process under Production.
+        var bypassConfigured = configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth");
+        _bypassForTests = environment.IsDevelopment() && bypassConfigured;
+
+        if (_bypassForTests)
+        {
+            _logger.LogCritical(
+                "GitHub token authentication BYPASS is ACTIVE (Testing:BypassGitHubTokenAuth=true, " +
+                "environment={Environment}). All bearer tokens on /api/* are accepted without GitHub " +
+                "validation. This is for local development/test ONLY and must never be enabled in a " +
+                "shared or production deployment.",
+                environment.EnvironmentName);
+        }
+        else if (bypassConfigured)
+        {
+            _logger.LogCritical(
+                "Testing:BypassGitHubTokenAuth=true was configured but IGNORED because the environment " +
+                "is '{Environment}' (not Development). GitHub token validation remains enforced.",
+                environment.EnvironmentName);
+        }
 
         _testApiKeyMap = new Dictionary<string, string>(StringComparer.Ordinal);
         if (_bypassForTests)
