@@ -34,6 +34,7 @@ public sealed class CoordinatorReconciler
     private readonly SqliteRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly ICoordinatorDispatch _dispatch;
+    private readonly ICoordinatorAssembly? _assembly;
     private readonly ILogger<CoordinatorReconciler> _logger;
 
     public CoordinatorReconciler(
@@ -41,12 +42,14 @@ public sealed class CoordinatorReconciler
         SqliteRunStore runStore,
         RunStreamStore streamStore,
         ICoordinatorDispatch dispatch,
-        ILogger<CoordinatorReconciler> logger)
+        ILogger<CoordinatorReconciler> logger,
+        ICoordinatorAssembly? assembly = null)
     {
         _scopeFactory = scopeFactory;
         _runStore = runStore;
         _streamStore = streamStore;
         _dispatch = dispatch;
+        _assembly = assembly;
         _logger = logger;
     }
 
@@ -57,30 +60,46 @@ public sealed class CoordinatorReconciler
     /// </summary>
     public async Task<int> SweepAsync(CancellationToken ct)
     {
-        List<string> orphanRunIds;
+        List<PlanCandidate> candidates;
         using (var scope = _scopeFactory.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            orphanRunIds = await db.WorkPlans
+            candidates = await db.WorkPlans
                 .AsNoTracking()
-                .Where(w => w.Status == WorkPlanStatus.Dispatching)
-                .Select(w => w.CoordinatorRunId)
+                .Where(w => w.Status == WorkPlanStatus.Dispatching
+                         || w.Status == WorkPlanStatus.AwaitingAssembly
+                         || w.Status == WorkPlanStatus.Assembling)
+                .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status))
                 .ToListAsync(ct).ConfigureAwait(false);
         }
 
         var reArmed = 0;
-        foreach (var coordinatorRunId in orphanRunIds)
+        foreach (var plan in candidates)
         {
             ct.ThrowIfCancellationRequested();
 
-            // Idempotency: a live loop already owns this run — leave it alone.
-            if (_dispatch.IsDispatchActive(coordinatorRunId))
-                continue;
-
             try
             {
-                if (await TryReArmAsync(coordinatorRunId, ct).ConfigureAwait(false))
-                    reArmed++;
+                switch (plan.Status)
+                {
+                    case WorkPlanStatus.Dispatching:
+                        if (!string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
+                            && _dispatch.IsDispatchActive(plan.CoordinatorRunId))
+                            continue;
+                        if (await TryReArmDispatchAsync(plan, ct).ConfigureAwait(false))
+                            reArmed++;
+                        break;
+
+                    case WorkPlanStatus.AwaitingAssembly:
+                        if (await TryReArmAssemblyAsync(plan, resetToAwaitingAssembly: false, ct).ConfigureAwait(false))
+                            reArmed++;
+                        break;
+
+                    case WorkPlanStatus.Assembling:
+                        if (await TryReArmAssemblyAsync(plan, resetToAwaitingAssembly: true, ct).ConfigureAwait(false))
+                            reArmed++;
+                        break;
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -90,40 +109,122 @@ public sealed class CoordinatorReconciler
             {
                 // Isolated: one bad run never stalls the sweep.
                 _logger.LogError(ex,
-                    "Coordinator reconciler: failed to re-arm orphaned coordinator {RunId}", coordinatorRunId);
+                    "Coordinator reconciler: failed to re-arm orphaned coordinator plan {PlanId} ({RunId})",
+                    plan.WorkPlanId, plan.CoordinatorRunId);
             }
         }
 
         if (reArmed > 0)
-            _logger.LogInformation("Coordinator reconciler: re-armed {Count} orphaned coordinator dispatch loop(s)", reArmed);
+            _logger.LogInformation("Coordinator reconciler: re-armed {Count} orphaned coordinator loop(s)", reArmed);
 
         return reArmed;
     }
 
-    private async Task<bool> TryReArmAsync(string coordinatorRunId, CancellationToken ct)
+    private async Task<bool> TryReArmDispatchAsync(PlanCandidate plan, CancellationToken ct)
     {
-        if (!RunId.TryParse(coordinatorRunId, out var runId))
+        var context = await TryBuildContextAsync(plan, ct).ConfigureAwait(false);
+        if (context is null)
             return false;
+
+        _logger.LogInformation(
+            "Coordinator reconciler: re-arming orphaned coordinator dispatch for run {RunId}",
+            context.CoordinatorRunId);
+        _dispatch.StartDispatch(context);
+        return true;
+    }
+
+    private async Task<bool> TryReArmAssemblyAsync(
+        PlanCandidate plan,
+        bool resetToAwaitingAssembly,
+        CancellationToken ct)
+    {
+        if (_assembly is null)
+        {
+            _logger.LogError(
+                "Coordinator reconciler: cannot re-arm assembly for corrupt/incomplete plan {PlanId} ({RunId}) because no assembly service is registered",
+                plan.WorkPlanId, plan.CoordinatorRunId);
+            return false;
+        }
+
+        var context = await TryBuildContextAsync(plan, ct).ConfigureAwait(false);
+        if (context is null)
+            return false;
+
+        if (resetToAwaitingAssembly)
+            await ResetAssemblyPlanAsync(plan.WorkPlanId, ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Coordinator reconciler: re-arming orphaned coordinator assembly for run {RunId} (status was {Status})",
+            context.CoordinatorRunId, plan.Status);
+        _assembly.StartAssembly(context);
+        return true;
+    }
+
+    private async Task<CoordinatorDispatchContext?> TryBuildContextAsync(PlanCandidate plan, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(plan.CoordinatorRunId))
+        {
+            await MarkPlanCorruptAsync(plan, "missing_coordinator_run_id", ct).ConfigureAwait(false);
+            return null;
+        }
+
+        if (!RunId.TryParse(plan.CoordinatorRunId, out var runId))
+        {
+            await MarkPlanCorruptAsync(plan, "invalid_coordinator_run_id", ct).ConfigureAwait(false);
+            return null;
+        }
 
         var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
         if (run is null)
-            return false;
+        {
+            await MarkPlanCorruptAsync(plan, "missing_coordinator_run", ct).ConfigureAwait(false);
+            return null;
+        }
 
         // Ensure the coordinator stream exists so the re-armed loop's recovery audit event + topology
         // snapshot land on a live entry (the prior process's entry may have been evicted on restart).
-        if (_streamStore.Get(coordinatorRunId) is null)
-            _streamStore.Create(coordinatorRunId, run.SubmittingUser);
+        if (_streamStore.Get(plan.CoordinatorRunId) is null)
+            _streamStore.Create(plan.CoordinatorRunId, run.SubmittingUser);
 
-        var context = new CoordinatorDispatchContext(
-            CoordinatorRunId: coordinatorRunId,
+        return new CoordinatorDispatchContext(
+            CoordinatorRunId: plan.CoordinatorRunId,
             RepositoryPath: run.RepositoryPath,
             OriginatingBranch: run.OriginatingBranch,
             SubmittingUser: run.SubmittingUser,
             ProjectId: run.ProjectId);
-
-        _logger.LogInformation(
-            "Coordinator reconciler: re-arming orphaned coordinator dispatch for run {RunId}", coordinatorRunId);
-        _dispatch.StartDispatch(context);
-        return true;
     }
+
+    private async Task ResetAssemblyPlanAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.WorkPlans
+            .Where(w => w.Id == workPlanId && w.Status == WorkPlanStatus.Assembling)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task MarkPlanCorruptAsync(PlanCandidate plan, string reason, CancellationToken ct)
+    {
+        _logger.LogError(
+            "Coordinator reconciler: corrupt work plan {PlanId} has unusable coordinator run id '{RunId}' ({Reason}); marking failed",
+            plan.WorkPlanId, plan.CoordinatorRunId, reason);
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.WorkPlans
+            .Where(w => w.Id == plan.WorkPlanId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.AssemblyFailed)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+    }
+
+    private sealed record PlanCandidate(int WorkPlanId, string? CoordinatorRunId, string Status);
 }

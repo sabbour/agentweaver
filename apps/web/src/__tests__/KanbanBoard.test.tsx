@@ -14,7 +14,9 @@ vi.mock('../api/apiClient', () => ({
     captureBacklogTask: vi.fn(),
     editBacklogTask: vi.fn(),
     deleteBacklogTask: vi.fn(),
+    archiveBacklogTask: vi.fn(),
     deleteRun: vi.fn(),
+    archiveRun: vi.fn(),
     moveTaskToReady: vi.fn(),
     moveTaskToBacklog: vi.fn(),
     reorderBacklogTask: vi.fn(),
@@ -185,7 +187,7 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
 
   it('archives a task card using the existing off-board removal action and refetches', async () => {
     getBoardMock().mockResolvedValue(makeBoard());
-    vi.mocked(apiClient.deleteBacklogTask).mockResolvedValue(undefined);
+    vi.mocked(apiClient.archiveBacklogTask).mockResolvedValue(undefined);
 
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
 
@@ -194,7 +196,7 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
     fireEvent.click(within(screen.getByTestId('task-card-t1')).getByLabelText('Archive task'));
 
     await waitFor(() =>
-      expect(vi.mocked(apiClient.deleteBacklogTask)).toHaveBeenCalledWith('proj-1', 't1'),
+      expect(vi.mocked(apiClient.archiveBacklogTask)).toHaveBeenCalledWith('proj-1', 't1'),
     );
     await waitFor(() =>
       expect(getBoardMock().mock.calls.length).toBeGreaterThan(callsBefore),

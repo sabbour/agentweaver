@@ -46,21 +46,17 @@ app.MapGet("/api/projects/{id}/memory", async (
     if (!string.IsNullOrWhiteSpace(type))
         query = query.Where(m => m.Type == type);
 
-    if (!string.IsNullOrWhiteSpace(tags))
-    {
-        var requestedTags = tags.Split(',')
-            .Select(t => t.Trim())
-            .Where(t => t.Length > 0)
-            .ToList();
-        query = query.Where(m => m.Tags != null && requestedTags.Any(tag => EF.Functions.Like(m.Tags, $"%,{tag},%")));
-    }
+    var requestedTags = !string.IsNullOrWhiteSpace(tags)
+        ? tags.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToList()
+        : [];
 
     var memories = (await query.ToListAsync(ct))
+        .Where(m => requestedTags.Count == 0 || (m.Tags is not null && requestedTags.Any(tag => m.Tags.Contains($",{tag},"))))
         .OrderByDescending(m => m.CreatedAt)
         .ToList();
     return Results.Ok(memories.Select(m => new
     {
-        m.Id, m.AgentName, m.Type, m.Importance, m.Content, m.Tags,
+        m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
         created_at = m.CreatedAt, updated_at = m.UpdatedAt,
     }));
 });
@@ -88,7 +84,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
         .ToList();
     return Results.Ok(memories.Select(m => new
     {
-        m.Id, m.AgentName, m.Type, m.Importance, m.Content, m.Tags,
+        m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
         created_at = m.CreatedAt, updated_at = m.UpdatedAt,
     }));
 });
@@ -122,14 +118,16 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         Importance = request.Importance ?? "medium",
         Content = request.Content!,
         Tags = normalizedTags,
+        SessionId = request.SessionId,
         CreatedAt = now,
         UpdatedAt = now,
     };
     memoryDb.AgentMemory.Add(memory);
     await memoryDb.SaveChangesAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Created($"/api/projects/{id}/agents/{name}/memory/{memory.Id}", new
     {
-        memory.Id, memory.AgentName, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
         created_at = memory.CreatedAt,
     });
 });
@@ -151,7 +149,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}", async (
     if (memory is null || memory.ProjectId != id || memory.AgentName != name) return Results.NotFound();
     return Results.Ok(new
     {
-        memory.Id, memory.AgentName, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
         created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
     });
 });
@@ -176,6 +174,7 @@ app.MapGet("/api/projects/{id}/sessions/current", async (
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        serialized_state = session.SerializedState,
         started_at = session.StartedAt, ended_at = session.EndedAt,
     });
 });
@@ -223,14 +222,17 @@ app.MapPost("/api/projects/{id}/sessions", async (
         FocusArea = request.FocusArea!,
         ActiveIssues = request.ActiveIssues,
         Summary = request.Summary,
+        SerializedState = request.SerializedState,
         StartedAt = now,
     };
     memoryDb.SessionContexts.Add(session);
     await memoryDb.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Created($"/api/projects/{id}/sessions/current", new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        serialized_state = session.SerializedState,
         started_at = session.StartedAt,
     });
 });
@@ -253,27 +255,20 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
         .OrderByDescending(s => s.StartedAt)
         .FirstOrDefault();
 
-    // Auto-create an open session if none exists so agents can always call update_session.
     if (session is null)
-    {
-        session = new SessionContext
-        {
-            ProjectId = id,
-            SessionId = Guid.NewGuid().ToString("D"),
-            FocusArea = request.FocusArea ?? request.Summary ?? "agent run",
-            StartedAt = DateTimeOffset.UtcNow,
-        };
-        memoryDb.SessionContexts.Add(session);
-    }
+        return Results.NotFound("No active session");
 
     if (!string.IsNullOrWhiteSpace(request.FocusArea)) session.FocusArea = request.FocusArea!;
     if (request.ActiveIssues is not null) session.ActiveIssues = request.ActiveIssues;
     if (request.Summary is not null) session.Summary = request.Summary;
+    if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        serialized_state = session.SerializedState,
         started_at = session.StartedAt, ended_at = session.EndedAt,
     });
 });
@@ -297,8 +292,34 @@ app.MapGet("/api/projects/{id}/sessions", async (
     return Results.Ok(sessions.Select(s => new
     {
         s.Id, s.SessionId, s.FocusArea, s.ActiveIssues, s.Summary,
+        serialized_state = s.SerializedState,
         started_at = s.StartedAt, ended_at = s.EndedAt,
     }));
+});
+
+// GET /api/projects/{id}/sessions/{sessionId}
+app.MapGet("/api/projects/{id}/sessions/{sessionId}", async (
+    string id,
+    string sessionId,
+    IProjectStore projectStore,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var session = await memoryDb.SessionContexts
+        .AsNoTracking()
+        .FirstOrDefaultAsync(s => s.ProjectId == id && s.SessionId == sessionId, ct);
+    if (session is null) return Results.NotFound();
+
+    return Results.Ok(new
+    {
+        session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        serialized_state = session.SerializedState,
+        started_at = session.StartedAt, ended_at = session.EndedAt,
+    });
 });
 
 // PATCH /api/projects/{id}/sessions/{sessionId}
@@ -315,17 +336,20 @@ app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, asy
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
     var session = await memoryDb.SessionContexts
-        .FirstOrDefaultAsync(s => s.ProjectId == id && s.SessionId == sessionId, ct);
+        .FirstOrDefaultAsync(s => s.ProjectId == id && s.SessionId == sessionId && s.EndedAt == null, ct);
     if (session is null) return Results.NotFound();
 
     if (!string.IsNullOrWhiteSpace(request.FocusArea)) session.FocusArea = request.FocusArea!;
     if (request.ActiveIssues is not null) session.ActiveIssues = request.ActiveIssues;
     if (request.Summary is not null) session.Summary = request.Summary;
+    if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
+        serialized_state = session.SerializedState,
         started_at = session.StartedAt, ended_at = session.EndedAt,
     });
 });
@@ -361,8 +385,19 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     var sessionDto = session is null ? null : new Agentweaver.Squad.Memory.SessionExportDto(
         session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary);
 
-    var exporter = new Agentweaver.Squad.Memory.SquadMemoryExporter(project.WorkingDirectory);
-    await exporter.ExportAsync(decisionDtos, inboxDtos, memoryDtos, sessionDto, ct);
+    try
+    {
+        var exporter = new Agentweaver.Squad.Memory.SquadMemoryExporter(project.WorkingDirectory);
+        await exporter.ExportAsync(decisionDtos, inboxDtos, memoryDtos, sessionDto, ct);
+    }
+    catch (OperationCanceledException)
+    {
+        throw;
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Failed to export project memory for {ProjectId}.", id);
+    }
     return Results.Ok(new { exported = true, decisions = decisions.Count, inbox = inbox.Count, memories = memories.Count });
 });
 
@@ -383,7 +418,7 @@ app.MapPost("/api/projects/{id}/memory/import", async (
     int newCount = 0;
     foreach (var p in parsed)
     {
-        var exists = await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.AgentName == p.AgentName && e.Slug == p.Slug, ct);
+        var exists = await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == p.Slug, ct);
         if (!exists)
         {
             var now = DateTimeOffset.UtcNow;
@@ -398,7 +433,52 @@ app.MapPost("/api/projects/{id}/memory/import", async (
         }
     }
     await memoryDb.SaveChangesAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Ok(new { imported = newCount });
 });
+    }
+}
+
+internal static class MemoryExportHelpers
+{
+    public static async Task TryExportAsync(
+        string projectId,
+        string projectWorkingDirectory,
+        MemoryDbContext memoryDb,
+        CancellationToken ct,
+        ILogger logger)
+    {
+        try
+        {
+            var decisions = await memoryDb.Decisions.Where(d => d.ProjectId == projectId).ToListAsync(ct);
+            var inbox = await memoryDb.DecisionInbox
+                .Where(e => e.ProjectId == projectId && e.Status == "pending").ToListAsync(ct);
+            var memories = await memoryDb.AgentMemory.Where(m => m.ProjectId == projectId).ToListAsync(ct);
+            var session = (await memoryDb.SessionContexts
+                .Where(s => s.ProjectId == projectId && s.EndedAt == null)
+                .ToListAsync(ct))
+                .OrderByDescending(s => s.StartedAt)
+                .FirstOrDefault();
+
+            var decisionDtos = decisions.Select(d => new Agentweaver.Squad.Memory.DecisionExportDto(
+                d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList();
+            var inboxDtos = inbox.Select(e => new Agentweaver.Squad.Memory.InboxExportDto(
+                e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale)).ToList();
+            var memoryDtos = memories.Select(m => new Agentweaver.Squad.Memory.MemoryExportDto(
+                m.AgentName, m.Type, m.Content, m.CreatedAt)).ToList();
+            var sessionDto = session is null ? null : new Agentweaver.Squad.Memory.SessionExportDto(
+                session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary);
+
+            var exporter = new Agentweaver.Squad.Memory.SquadMemoryExporter(projectWorkingDirectory);
+            await exporter.ExportAsync(decisionDtos, inboxDtos, memoryDtos, sessionDto, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to export project memory for {ProjectId}.", projectId);
+        }
     }
 }

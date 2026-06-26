@@ -5,7 +5,7 @@ WORKDIR /app
 COPY apps/web/package.json apps/web/package-lock.json* ./
 RUN npm ci
 COPY apps/web/ .
-RUN npm run build
+RUN unset VITE_API_URL VITE_API_KEY; npm run build
 
 # Stage 2: Build the ASP.NET Core static file host
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS dotnet-build
@@ -28,11 +28,30 @@ RUN groupadd --gid 1000 appgroup \
 COPY --from=dotnet-build --chown=appuser:appgroup /app/publish .
 COPY --from=web-build --chown=appuser:appgroup /app/dist ./wwwroot
 
+RUN cat > /app/docker-entrypoint.sh <<'EOF'
+#!/bin/sh
+set -eu
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+api_url="$(json_escape "${AGENTWEAVER_API_URL:-/api}")"
+api_key="$(json_escape "${AGENTWEAVER_API_KEY:-}")"
+cat > /app/wwwroot/env-config.js <<EOC
+window.__AGENTWEAVER_CONFIG__ = {
+  API_URL: "${api_url}",
+  API_KEY: "${api_key}"
+};
+EOC
+exec dotnet Agentweaver.Web.dll
+EOF
+RUN chmod 0755 /app/docker-entrypoint.sh && chown appuser:appgroup /app/docker-entrypoint.sh /app/wwwroot
+
 USER 1000
 
 EXPOSE 8080
 
 ENV ASPNETCORE_URLS=http://+:8080
 ENV ASPNETCORE_ENVIRONMENT=Production
+ENV AGENTWEAVER_API_URL=/api
 
-ENTRYPOINT ["dotnet", "Agentweaver.Web.dll"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

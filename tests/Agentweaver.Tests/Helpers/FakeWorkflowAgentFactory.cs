@@ -69,7 +69,8 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
         string? agentName,
         string? apiBaseUrl,
         string? apiKey,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? userId = null)
     {
         _workingDirectory = workingDirectory;
         _repositoryPath = repositoryPath;

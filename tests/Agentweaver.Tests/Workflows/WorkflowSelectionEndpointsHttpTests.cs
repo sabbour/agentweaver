@@ -73,6 +73,9 @@ public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<Projects
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         (await resp.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("default_workflow_id").GetString().Should().Be("default");
+
+        var list = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/workflows");
+        list.GetProperty("default_workflow_id").GetString().Should().Be("default");
     }
 
     [Fact]
@@ -135,12 +138,18 @@ public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<Projects
         body.GetProperty("task_id").GetString().Should().Be(taskId);
         body.GetProperty("workflow_override_id").GetString().Should().Be("default");
 
+        var persistedSet = await GetTaskFromBoardAsync(projectId, taskId);
+        persistedSet.GetProperty("workflow_override_id").GetString().Should().Be("default");
+
         var clear = await _client.PutAsJsonAsync(
             $"/api/projects/{projectId}/backlog/tasks/{taskId}/workflow-override",
             new { workflow_id = (string?)null });
         clear.StatusCode.Should().Be(HttpStatusCode.OK);
         (await clear.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("workflow_override_id").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var persistedClear = await GetTaskFromBoardAsync(projectId, taskId);
+        persistedClear.GetProperty("workflow_override_id").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
@@ -216,6 +225,17 @@ public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<Projects
             $"/api/projects/{projectId}/backlog/tasks", new { title });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "capturing a task must return 201");
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("task_id").GetString()!;
+    }
+
+    private async Task<JsonElement> GetTaskFromBoardAsync(string projectId, string taskId)
+    {
+        var board = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/board");
+        var cards = board.GetProperty("columns")
+            .EnumerateArray()
+            .SelectMany(c => c.GetProperty("cards").EnumerateArray())
+            .Where(c => c.GetProperty("kind").GetString() == "task")
+            .ToList();
+        return cards.Single(c => c.GetProperty("task_id").GetString() == taskId);
     }
 
     /// <summary>Writes a second, valid workflow (with the given id) into the project's workflows dir so

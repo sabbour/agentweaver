@@ -41,6 +41,7 @@ public sealed class RunWorkflowFactory
     private readonly IProjectStore? _projectStore;
     private readonly WorkflowRegistry? _workflowRegistry;
     private readonly ReviewPolicyRegistry? _reviewPolicyRegistry;
+    private readonly IBacklogTaskStore? _backlogTaskStore;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
     private readonly string? _apiBaseUrl;
@@ -84,7 +85,8 @@ public sealed class RunWorkflowFactory
         IServiceScopeFactory scopeFactory,
         IWorkflowAgentFactory agentFactory,
         IConfiguration configuration,
-        IRunEventStream? eventStream = null)
+        IRunEventStream? eventStream = null,
+        IBacklogTaskStore? backlogTaskStore = null)
         : this(
             agentRunner,
             copilotClientFactory,
@@ -104,7 +106,8 @@ public sealed class RunWorkflowFactory
             projectStore: null,
             workflowRegistry: null,
             reviewPolicyRegistry: null,
-            eventStream: eventStream)
+            eventStream: eventStream,
+            backlogTaskStore: backlogTaskStore)
     {
     }
 
@@ -127,7 +130,8 @@ public sealed class RunWorkflowFactory
         IProjectStore? projectStore,
         WorkflowRegistry? workflowRegistry,
         ReviewPolicyRegistry? reviewPolicyRegistry,
-        IRunEventStream? eventStream = null)
+        IRunEventStream? eventStream = null,
+        IBacklogTaskStore? backlogTaskStore = null)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
@@ -147,6 +151,7 @@ public sealed class RunWorkflowFactory
         _projectStore = projectStore;
         _workflowRegistry = workflowRegistry;
         _reviewPolicyRegistry = reviewPolicyRegistry;
+        _backlogTaskStore = backlogTaskStore;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -801,6 +806,7 @@ public sealed class RunWorkflowFactory
                 apiBaseUrl: _factory._apiBaseUrl,
                 apiKey: _factory._apiKey,
                 agentNodeCharter: node.Charter,
+                agentNodePrompt: node.Prompt,
                 name: $"agent-turn-{node.Id}",
                 logicalNodeId: node.Id,
                 displayLabel: node.Label);
@@ -830,7 +836,9 @@ public sealed class RunWorkflowFactory
                 displayLabel: node.Label,
                 createSubStream: _factory.CreateSubStreamWriter,
                 completeSubStream: _factory.CompleteSubStream,
-                agentFactory: _factory._agentFactory);
+                agentFactory: _factory._agentFactory,
+                reviewAgentId: node.Agent,
+                reviewAgentCharter: node.Charter);
             _peerReviewNodes[node.Id] = binding;
             return binding;
         }
@@ -1146,7 +1154,7 @@ public sealed class RunWorkflowFactory
     {
         var effectiveDefinition = isChild
             ? null
-            : await ResolveEffectiveDefinitionAsync(input.ProjectId, ct).ConfigureAwait(false);
+            : await ResolveEffectiveDefinitionAsync(input.ProjectId, runId, ct).ConfigureAwait(false);
         var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild, effectiveDefinition);
         // Capture the executorId -> render-metadata map so the watch loop can translate MAF executor
         // lifecycle events into workflow.step UI events for nodes without a dedicated self-emitter.
@@ -1176,7 +1184,7 @@ public sealed class RunWorkflowFactory
         var isChild = run.ParentRunId is not null;
         var effectiveDefinition = isChild
             ? null
-            : await ResolveEffectiveDefinitionAsync(run.ProjectId?.ToString(), ct).ConfigureAwait(false);
+            : await ResolveEffectiveDefinitionAsync(run.ProjectId?.ToString(), run.Id.ToString(), ct).ConfigureAwait(false);
         return BuildWorkflow(isChild, effectiveDefinition).Descriptor;
     }
 
@@ -1199,7 +1207,10 @@ public sealed class RunWorkflowFactory
     internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(bool isChild) =>
         BuildWorkflow(isChild).ExecutorMeta;
 
-    private async Task<WorkflowDefinition> ResolveEffectiveDefinitionAsync(string? projectId, CancellationToken ct)
+    private async Task<WorkflowDefinition> ResolveEffectiveDefinitionAsync(
+        string? projectId,
+        string? runId,
+        CancellationToken ct)
     {
         var fallback = Workflows.BuiltInWorkflows.Default.Definition!;
         if (_projectStore is null || _workflowRegistry is null || _reviewPolicyRegistry is null)
@@ -1212,11 +1223,13 @@ public sealed class RunWorkflowFactory
         if (project is null)
             return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
 
-        var workflowResult = _workflowRegistry.ResolveDefault(project);
+        var invocationKind = await ResolveInvocationKindAsync(runId, ct).ConfigureAwait(false);
+        var overrideId = await ResolveWorkflowOverrideIdAsync(runId, ct).ConfigureAwait(false);
+        var workflowResult = ResolveWorkflowForRun(project, overrideId, invocationKind);
         if (!workflowResult.IsValid || workflowResult.Definition is null)
             throw new ReviewPolicyCompositionException(
                 "workflow_resolution_failed",
-                $"Project '{project.Id}' default workflow could not be resolved: {workflowResult.Error ?? "unknown workflow error"}");
+                $"Project '{project.Id}' workflow could not be resolved: {workflowResult.Error ?? "unknown workflow error"}");
 
         var policyResult = _reviewPolicyRegistry.ResolveActive(project);
         if (!policyResult.IsValid || policyResult.Policy is null)
@@ -1236,6 +1249,64 @@ public sealed class RunWorkflowFactory
         }
     }
 
+    private async Task<WorkflowInvocationKind> ResolveInvocationKindAsync(string? runId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(runId) || !RunId.TryParse(runId, out var rid))
+            return WorkflowInvocationKind.Manual;
+
+        var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
+        return run?.Origin == RunOrigin.BacklogPickup
+            ? WorkflowInvocationKind.Heartbeat
+            : WorkflowInvocationKind.Manual;
+    }
+
+    private async Task<string?> ResolveWorkflowOverrideIdAsync(string? runId, CancellationToken ct)
+    {
+        if (_backlogTaskStore is null || string.IsNullOrWhiteSpace(runId) || !RunId.TryParse(runId, out var rid))
+            return null;
+
+        var task = await _backlogTaskStore.GetByRunIdAsync(rid, ct).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(task?.WorkflowOverrideId) ? null : task.WorkflowOverrideId;
+    }
+
+    private WorkflowLoadResult ResolveWorkflowForRun(
+        Project project,
+        string? overrideId,
+        WorkflowInvocationKind invocationKind)
+    {
+        var set = _workflowRegistry!.GetOrLoad(project);
+
+        if (!string.IsNullOrWhiteSpace(overrideId))
+        {
+            var overrideResult = set.FindById(overrideId);
+            if (overrideResult?.Definition is null)
+                return WorkflowLoadResult.Invalid(
+                    "workflow-override",
+                    $"Workflow override '{overrideId}' could not be resolved for project '{project.Id}'.");
+            if (!WorkflowTriggerEvaluator.IsEligible(overrideResult.Definition.Trigger, invocationKind))
+                return WorkflowLoadResult.Invalid(
+                    overrideResult.Source,
+                    $"Workflow override '{overrideResult.Definition.Id}' is not eligible for a {invocationKind} invocation.");
+            return overrideResult;
+        }
+
+        var configuredId = string.IsNullOrWhiteSpace(project.DefaultWorkflowId)
+            ? BuiltInWorkflows.DefaultWorkflowId
+            : project.DefaultWorkflowId!;
+        var configured = set.FindById(configuredId);
+        if (configured?.Definition is not null &&
+            WorkflowTriggerEvaluator.IsEligible(configured.Definition.Trigger, invocationKind))
+            return configured;
+
+        var eligible = set.Available
+            .FirstOrDefault(r => r.Definition is not null &&
+                                 WorkflowTriggerEvaluator.IsEligible(r.Definition.Trigger, invocationKind));
+        return eligible
+            ?? WorkflowLoadResult.Invalid(
+                "workflow-selection",
+                $"No valid workflow is eligible for a {invocationKind} invocation in project '{project.Id}'.");
+    }
+
     /// <summary>
     /// Resumes a workflow run from checkpoint. The pipeline shape (full vs trimmed child)
     /// is reselected from the persisted run's <c>ParentRunId</c> so a resumed child keeps
@@ -1250,7 +1321,7 @@ public sealed class RunWorkflowFactory
             isChild = run?.ParentRunId is not null;
             var effectiveDefinition = isChild
                 ? null
-                : await ResolveEffectiveDefinitionAsync(run?.ProjectId?.ToString(), ct).ConfigureAwait(false);
+                : await ResolveEffectiveDefinitionAsync(run?.ProjectId?.ToString(), checkpointInfo.SessionId, ct).ConfigureAwait(false);
             var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(isChild, effectiveDefinition);
             _runExecutorMeta[checkpointInfo.SessionId] = executorMetaForRun;
             return await InProcessExecution.ResumeStreamingAsync(

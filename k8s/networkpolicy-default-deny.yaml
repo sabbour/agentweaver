@@ -1,19 +1,5 @@
-# NetworkPolicy — default-deny ingress + targeted allow rules for Agentweaver.
-#
-# Three policies:
-#   1. Default-deny all ingress to the agentweaver namespace.
-#   2. Allow ingress to agentweaver-api only from the approuting-istio gateway data plane.
-#   3. Allow ingress to agentweaver-frontend only from the approuting-istio gateway data plane.
-#
-# The approuting-istio gateway add-on provisions its data plane in THIS namespace
-# (agentweaver), labelled `istio.io/gateway-name: agentweaver-gateway`. NetworkPolicy
-# allows ingress from exactly those pods, matching the reference project pattern
-# (hosted-copilot-sandbox k8s/aks/networkpolicy.yaml policy 4).
-#
-# Enforcement: AKS with Azure CNI Overlay + Cilium dataplane enforces NetworkPolicy
-# via Cilium (--network-dataplane cilium). Cilium replaces kube-proxy and Azure NPM.
+# NetworkPolicy — default-deny ingress/egress + targeted allow rules for Agentweaver.
 ---
-# 1) DEFAULT-DENY all ingress in the namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -22,17 +8,88 @@ metadata:
   labels:
     app.kubernetes.io/part-of: agentweaver
 spec:
-  podSelector: {}        # all pods in the namespace
+  podSelector: {}
   policyTypes:
     - Ingress
-  # no ingress rules => deny all ingress
 ---
-# 2) ALLOW ingress to the API pod on :8080 from the gateway data plane only.
-#
-# The approuting-istio gateway pods are co-located in this namespace and carry:
-#   istio.io/gateway-name: agentweaver-gateway
-# No namespaceSelector is needed because both the policy and gateway pods are
-# in the same namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress-apps
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - agentweaver-api
+          - agentweaver-mcp
+          - agentweaver-frontend
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-dns-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - agentweaver-api
+          - agentweaver-mcp
+          - agentweaver-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-internal-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - agentweaver-api
+          - agentweaver-mcp
+          - agentweaver-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: agentweaver
+      ports:
+        - protocol: TCP
+          port: 8080
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -48,11 +105,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        # PRIMARY: approuting-istio gateway data plane (same namespace)
         - podSelector:
             matchLabels:
               istio.io/gateway-name: agentweaver-gateway
-        # FALLBACK: managed Istio ingress namespace (some cluster/add-on variants)
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: aks-istio-ingress
@@ -60,7 +115,6 @@ spec:
         - protocol: TCP
           port: 8080
 ---
-# 3) ALLOW ingress to the frontend pod on :80 from the gateway data plane only.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -76,11 +130,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        # PRIMARY: approuting-istio gateway data plane (same namespace)
         - podSelector:
             matchLabels:
               istio.io/gateway-name: agentweaver-gateway
-        # FALLBACK: managed Istio ingress namespace
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: aks-istio-ingress

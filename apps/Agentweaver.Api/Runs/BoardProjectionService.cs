@@ -166,6 +166,7 @@ public sealed class BoardProjectionService
                 CapturedBy = t.CapturedBy,
                 CreatedAt = t.CreatedAt,
                 CommittedAt = t.CommittedAt,
+                WorkflowOverrideId = t.WorkflowOverrideId,
                 ArchivedAt = t.ArchivedAt,
             })
             .ToList();

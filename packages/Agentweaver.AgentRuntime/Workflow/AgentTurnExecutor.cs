@@ -33,6 +33,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly string? _agentNodeCharter;
+    private readonly string? _agentNodePrompt;
 
     public AgentTurnExecutor(
         IWorkflowTurnAgent agent,
@@ -42,6 +43,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         string? apiBaseUrl = null,
         string? apiKey = null,
         string? agentNodeCharter = null,
+        string? agentNodePrompt = null,
         string name = "agent-turn",
         string logicalNodeId = "agent",
         string displayLabel = "Agent")
@@ -56,6 +58,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
         _agentNodeCharter = string.IsNullOrWhiteSpace(agentNodeCharter) ? null : agentNodeCharter;
+        _agentNodePrompt = string.IsNullOrWhiteSpace(agentNodePrompt) ? null : agentNodePrompt;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -94,9 +97,13 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 input.AgentName,
                 _apiBaseUrl,
                 _apiKey,
-                ct).ConfigureAwait(false);
+                ct,
+                input.SubmittingUser).ConfigureAwait(false);
 
-            await _agent.RunTurnAsync(input.Task, input.IsRevision, ct).ConfigureAwait(false);
+            var task = input.IsRevision || _agentNodePrompt is null
+                ? input.Task
+                : _agentNodePrompt;
+            await _agent.RunTurnAsync(task, input.IsRevision, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsContentSafetyViolation(ex))
         {
@@ -155,4 +162,3 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             || ex.Message.Contains("content_filter", StringComparison.OrdinalIgnoreCase);
     }
 }
-

@@ -120,13 +120,28 @@ public sealed class RaiVerdictParserTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   \n\t ")]
-    [InlineData("I'm not sure how to rate this; the diff is empty.")]
-    public void EmptyOrUnparseable_FailsOpenToGreen(string? response)
+    public void EmptyOrUnparseable_FailsOpenToYellow(string? response)
     {
         RaiTurnExecutor.TryParseVerdict(response, out var verdict).Should().BeFalse(
             "an unparseable verdict must be reported as a miss so the caller can log a warning");
-        verdict.Should().Be(RaiVerdict.Green, "advisory safety checks fail open — they never block shipping");
+        verdict.Should().Be(RaiVerdict.Yellow, "advisory safety checks default to yellow — cautious but non-blocking");
 
-        RaiTurnExecutor.ParseVerdict(response).Should().Be(RaiVerdict.Green);
+        RaiTurnExecutor.ParseVerdict(response).Should().Be(RaiVerdict.Yellow);
+    }
+
+    [Fact]
+    public void NonEmptyUnparseable_ParseVerdictReturnsYellow_OutVerdictIsGreen()
+    {
+        // A non-empty response with no recognizable verdict token: TryParseVerdict returns false
+        // and the out parameter is Green (the default `best` value when no lines matched).
+        // ParseVerdict wraps this: when TryParseVerdict returns false it always returns Yellow.
+        const string response = "I'm not sure how to rate this; the diff is empty.";
+        RaiTurnExecutor.TryParseVerdict(response, out var verdict).Should().BeFalse(
+            "an unparseable verdict must be reported as a miss so the caller can log a warning");
+        verdict.Should().Be(RaiVerdict.Green,
+            "no verdict lines found: out parameter is the default 'best' value (Green)");
+
+        RaiTurnExecutor.ParseVerdict(response).Should().Be(RaiVerdict.Yellow,
+            "ParseVerdict applies the advisory Yellow default when TryParseVerdict returns false");
     }
 }

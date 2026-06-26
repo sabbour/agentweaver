@@ -18,10 +18,12 @@ public static class DiagnosticsEndpoints
         // before the user has signed in and without exposing any sensitive data.
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-        // /api/health: same reachability probe under the /api prefix for callers that already
-        // hold an API key (e.g. post-auth web requests, integration tests). Requires API key
-        // like all /api routes (ApiKeyAuthMiddleware).
+        // /api/health: same reachability probe under the /api prefix for gateway and
+        // Kubernetes readiness checks. ApiKeyAuthMiddleware explicitly allows this path.
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+
+        // Lightweight liveness probe: no database, GitHub, Key Vault, or workspace checks.
+        app.MapGet("/api/ping", () => Results.Ok(new { status = "ok" }));
 
         // FR-016: Global system diagnostics — real executed checks, no mocks.
         // Reachable from the MCP server at parity (FR-016a).

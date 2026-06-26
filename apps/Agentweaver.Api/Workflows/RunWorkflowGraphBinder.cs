@@ -131,15 +131,82 @@ internal static class RunWorkflowGraphBinder
     {
         ArgumentNullException.ThrowIfNull(definition);
 
+        var errors = GetBindabilityErrors(definition);
+        if (errors.Count > 0)
+            throw new WorkflowBindException(
+                "Workflow bindability validation failed: " + string.Join(" ", errors),
+                definition.Id);
+    }
+
+    public static IReadOnlyList<string> GetBindabilityErrors(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var errors = new List<string>();
+        var outgoingByNode = definition.Edges
+            .GroupBy(e => e.From, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
         foreach (var node in definition.Nodes)
-            RejectUnwiredKind(node, NodeClassifier.Classify(node));
+        {
+            var kind = NodeClassifier.Classify(node);
+            try
+            {
+                RejectUnwiredKind(node, kind);
+            }
+            catch (WorkflowBindException ex)
+            {
+                errors.Add(ex.Message);
+                continue;
+            }
+
+            if (node.Type != WorkflowNodeType.Terminal &&
+                (!outgoingByNode.TryGetValue(node.Id, out var outgoing) || outgoing.Count == 0))
+            {
+                errors.Add(
+                    $"Cannot bind node '{node.Id}' (type='{node.Type}'): non-terminal nodes must have at least one outgoing edge.");
+            }
+
+            if (node.Type == WorkflowNodeType.Check && NormalizeDeclaredGateKind(node.GateKind) is null)
+            {
+                var gate = string.IsNullOrWhiteSpace(node.GateKind) ? "(missing)" : node.GateKind;
+                errors.Add(
+                    $"Cannot bind check node '{node.Id}': gate_kind is required and must be one of rai, human-review, or rubberduck; got '{gate}'.");
+            }
+
+            if (node.Type == WorkflowNodeType.PeerReview && !HasVerdictRouting(definition, node))
+            {
+                errors.Add(
+                    $"Cannot bind peer_review node '{node.Id}': peer_review nodes must declare at least one verdict-routed outgoing edge (approved/request-changes/declined/pass/fail).");
+            }
+        }
 
         // Dangling edge endpoints fail closed exactly as they would during a full WireFull build.
         foreach (var edge in definition.Edges)
         {
-            _ = GetNode(definition, edge.From);
-            _ = GetNode(definition, edge.To);
+            WorkflowNode fromNode;
+            WorkflowNode toNode;
+            try
+            {
+                fromNode = GetNode(definition, edge.From);
+                toNode = GetNode(definition, edge.To);
+            }
+            catch (WorkflowBindException ex)
+            {
+                errors.Add(ex.Message);
+                continue;
+            }
+
+            if (!CanBindTransition(definition, edge, fromNode, toNode))
+            {
+                var fromKind = EffectiveKind(definition, fromNode);
+                var toKind = EffectiveKind(definition, toNode);
+                errors.Add(
+                    $"Cannot bind edge '{edge.From}'->'{edge.To}' (when='{edge.When}'): no executor wiring for a '{fromKind}'->'{toKind}' transition.");
+            }
         }
+
+        return errors;
     }
 
     /// <summary>Resolves the executor a definition's START node is entered at.</summary>
@@ -489,23 +556,74 @@ internal static class RunWorkflowGraphBinder
     }
 
     /// <summary>
-    /// The wiring kind a node behaves as. A <see cref="NodeKind.PeerReview"/> node is a real AI review
-    /// GATE only when it has verdict-routed outgoing edges (approved / request-changes / pass / fail /
-    /// declined); a peer-review node with a single unconditional outgoing edge is a plain producing turn
-    /// and wires identically to a <see cref="NodeKind.Agent"/> node. All other kinds pass through unchanged.
+    /// The wiring kind a node behaves as. A <see cref="NodeKind.PeerReview"/> node is always a real AI
+    /// review gate; definitions that omit verdict-routed outgoing edges are rejected by
+    /// <see cref="ValidateBindable"/> instead of being silently downgraded to agent turns.
     /// </summary>
     private static NodeKind EffectiveKind(WorkflowDefinition def, WorkflowNode node)
     {
         var kind = NodeClassifier.Classify(node);
-        if (kind != NodeKind.PeerReview)
-            return kind;
-        return HasVerdictRouting(def, node) ? NodeKind.PeerReview : NodeKind.Agent;
+        return kind;
     }
 
     /// <summary>True when the node has at least one outgoing edge whose verdict marks it a review gate.</summary>
     private static bool HasVerdictRouting(WorkflowDefinition def, WorkflowNode node) =>
         def.Edges.Any(e => string.Equals(e.From, node.Id, StringComparison.Ordinal)
             && e.When is not null && VerdictWhens.Contains(e.When));
+
+    private static string? NormalizeDeclaredGateKind(string? gateKind)
+    {
+        if (string.IsNullOrWhiteSpace(gateKind)) return null;
+        return gateKind.Trim().Replace('_', '-').Replace(' ', '-').ToLowerInvariant() switch
+        {
+            "rai" => "rai",
+            "review" or "human-review" => "human-review",
+            "rubberduck" or "rubber-duck" => "rubberduck",
+            _ => null,
+        };
+    }
+
+    private static bool CanBindTransition(
+        WorkflowDefinition definition,
+        WorkflowEdge edge,
+        WorkflowNode fromNode,
+        WorkflowNode toNode)
+    {
+        var fromKind = EffectiveKind(definition, fromNode);
+        var toKind = EffectiveKind(definition, toNode);
+        var when = edge.When;
+
+        return (fromKind, toKind, when) switch
+        {
+            (NodeKind.Agent, NodeKind.Rai, null) => true,
+            (NodeKind.Rai, NodeKind.Agent, "revise") => true,
+            (NodeKind.Rai, NodeKind.Terminal, "safety-failed") => true,
+            (NodeKind.Rai, NodeKind.Scribe, "no-changes") => true,
+            (NodeKind.Rai, NodeKind.HumanReview, "review") => true,
+            (NodeKind.HumanReview, NodeKind.Merge, "approved") => true,
+            (NodeKind.HumanReview, NodeKind.Agent, "request-changes") => true,
+            (NodeKind.HumanReview, NodeKind.Terminal, "declined") => true,
+            (NodeKind.Merge, NodeKind.Scribe, "merged") => true,
+            (NodeKind.Merge, NodeKind.HumanReview, "blocked") => true,
+            (NodeKind.Scribe, NodeKind.Terminal, null) => true,
+            (NodeKind.Agent, NodeKind.Agent, null) => true,
+            (NodeKind.Agent, NodeKind.PeerReview, null) => true,
+            (NodeKind.Agent, NodeKind.Scribe, null) => true,
+            (NodeKind.Agent, NodeKind.HumanReview, null) => true,
+            (NodeKind.Rai, NodeKind.Merge, "review") => true,
+            (NodeKind.Rai, NodeKind.Agent, "review") => true,
+            (NodeKind.Rai, NodeKind.PeerReview, "review") => true,
+            (NodeKind.PeerReview, NodeKind.Merge, "approved" or "pass") => true,
+            (NodeKind.PeerReview, NodeKind.Rai, "pass") => true,
+            (NodeKind.PeerReview, NodeKind.Agent, "request-changes" or "fail") => true,
+            (NodeKind.PeerReview, NodeKind.Terminal, "declined") => true,
+            (NodeKind.HumanReview, NodeKind.Agent, "approved") => true,
+            (NodeKind.HumanReview, NodeKind.Scribe, "approved") => true,
+            (NodeKind.Merge, NodeKind.PeerReview, "blocked") => true,
+            (NodeKind.Merge, NodeKind.Agent, "blocked") => true,
+            _ => false,
+        };
+    }
 
     private static ExecutorBinding ResolveRai(WorkflowNode node, RunWorkflowBindings b) =>
         b.PolicyGateBindings.TryGetValue(node.Id, out var binding) ? binding : b.RaiBinding;

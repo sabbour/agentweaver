@@ -22,18 +22,18 @@ namespace Agentweaver.Tests.Sandbox;
 /// over the real <c>YamlSandboxPolicyStore</c> writing each repository's <c>.agentweaver/settings.yml</c>
 /// — no mocks (Principle VII). The merge tests pin the preserve-vs-clear rule directly.
 /// </summary>
-public sealed class SandboxPolicyPreserveTests : IClassFixture<AgentweaverWebApplicationFactory>, IDisposable
+public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplicationFactory>, IDisposable
 {
-    private readonly AgentweaverWebApplicationFactory _factory;
+    private readonly ProjectsWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _repoPath;
 
-    public SandboxPolicyPreserveTests(AgentweaverWebApplicationFactory factory)
+    public SandboxPolicyPreserveTests(ProjectsWebApplicationFactory factory)
     {
         _factory = factory;
         _client = factory.CreateClient();
         _client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", AgentweaverWebApplicationFactory.TestApiKey);
+            new AuthenticationHeaderValue("Bearer", ProjectsWebApplicationFactory.TestApiKey);
         _repoPath = Path.Combine(Path.GetTempPath(), $"sandbox-preserve-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_repoPath);
     }
@@ -153,7 +153,7 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<AgentweaverWebApp
             shell_enabled = false,
             direct = false,
             network_enabled = false,
-            allowed_repository_roots = new[] { "/x" },
+            allowed_repository_roots = new[] { "x" },
             destructive_command_patterns = new[] { "shutdown" },
             require_approval_for_all_shell = false,
             redact_pii = false,
@@ -165,7 +165,7 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<AgentweaverWebApp
         body.GetProperty("shell_enabled").GetBoolean().Should().BeFalse();
         body.GetProperty("direct").GetBoolean().Should().BeFalse();
         body.GetProperty("network_enabled").GetBoolean().Should().BeFalse();
-        Roots(body, "allowed_repository_roots").Should().Equal("/x");
+        Roots(body, "allowed_repository_roots").Should().Equal("x");
         Roots(body, "destructive_command_patterns").Should().Equal("shutdown");
         body.GetProperty("require_approval_for_all_shell").GetBoolean().Should().BeFalse();
         body.GetProperty("redact_pii").GetBoolean().Should().BeFalse();
@@ -183,13 +183,22 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<AgentweaverWebApp
 
     private async Task SeedFullPolicyAsync()
     {
+        // Register the repo path as a project so the endpoint can authorize it.
+        var createResp = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"sandbox-test-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResp.StatusCode.Should().Be(HttpStatusCode.Created, "test project must be created before seeding policy");
+
         var resp = await _client.PutAsJsonAsync("/api/sandbox-policy", new
         {
             repository_path = _repoPath,
             shell_enabled = true,
             direct = true,
             network_enabled = true,
-            allowed_repository_roots = new[] { "/srv/shared", "/opt/libs" },
+            allowed_repository_roots = new[] { "srv/shared", "opt/libs" },
             destructive_command_patterns = new[] { "rm -rf", "git reset --hard" },
             require_approval_for_all_shell = true,
             redact_pii = true,
@@ -202,7 +211,7 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<AgentweaverWebApp
     {
         body.GetProperty("direct").GetBoolean().Should().BeTrue();
         body.GetProperty("network_enabled").GetBoolean().Should().BeTrue();
-        Roots(body, "allowed_repository_roots").Should().Equal("/srv/shared", "/opt/libs");
+        Roots(body, "allowed_repository_roots").Should().Equal("srv/shared", "opt/libs");
         Roots(body, "destructive_command_patterns").Should().Equal("rm -rf", "git reset --hard");
         body.GetProperty("require_approval_for_all_shell").GetBoolean().Should().BeTrue();
         body.GetProperty("redact_pii").GetBoolean().Should().BeTrue();

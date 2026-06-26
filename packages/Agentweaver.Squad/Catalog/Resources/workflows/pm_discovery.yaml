@@ -27,10 +27,11 @@ nodes:
     kind: live
 
   - id: review
-    type: peer_review
+    type: prompt
     label: Stakeholder Review
     role: review
     kind: live
+    prompt: Review the discovery synthesis from a stakeholder perspective and prepare it for approval.
 
   - id: review-gate
     type: check

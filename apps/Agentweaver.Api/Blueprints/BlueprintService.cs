@@ -171,43 +171,63 @@ public sealed class BlueprintService
     /// project's <c>.agentweaver/workflows/</c> directory, and the registry is synced so the workflow
     /// is immediately selectable by the coordinator (FR-063).
     /// </summary>
-    public async Task ApplyAsync(
+    public async Task<BlueprintValidationResult> ApplyAsync(
         string projectId,
         Blueprint blueprint,
         string? generatedWorkflowYaml = null,
         CancellationToken ct = default)
     {
-        // Materialize a generated (custom) workflow to the project workspace before applying so the
-        // coordinator can select it immediately (FR-063). We fetch the project early for the path.
+        var pid = ProjectId.Parse(projectId);
+        var projectBefore = await _projectStore.GetAsync(pid, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Project '{projectId}' was not found.");
+
+        IReadOnlySet<string>? extraKnownWorkflowIds = null;
+        WorkflowDefinition? generatedDefinition = null;
         if (!string.IsNullOrWhiteSpace(generatedWorkflowYaml))
         {
             var loadResult = WorkflowDefinitionLoader.Load(generatedWorkflowYaml, "generated");
             if (loadResult.IsValid && loadResult.Definition is not null)
             {
-                var pid2 = ProjectId.Parse(projectId);
-                var project2 = await _projectStore.GetAsync(pid2, ct).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException($"Project '{projectId}' was not found.");
-
-                var workflowsDir = Path.Combine(
-                    project2.WorkingDirectory,
-                    WorkflowRegistry.WorkflowsRelativePath);
-                Directory.CreateDirectory(workflowsDir);
-
-                var workflowFile = Path.Combine(workflowsDir, $"{loadResult.Definition.Id}.yaml");
-                await File.WriteAllTextAsync(workflowFile, generatedWorkflowYaml, ct).ConfigureAwait(false);
-                _workflowRegistry.Sync(project2);
-
-                _logger.LogInformation(
-                    "Materialized generated workflow '{WorkflowId}' to {WorkflowFile} for project {ProjectId}",
-                    loadResult.Definition.Id, workflowFile, projectId);
+                var wfIdError = ValidateWorkflowFileId(loadResult.Definition.Id);
+                if (wfIdError is not null)
+                    return new BlueprintValidationResult(false, [wfIdError]);
+                generatedDefinition = loadResult.Definition;
+                extraKnownWorkflowIds = new HashSet<string>([generatedDefinition.Id], StringComparer.Ordinal);
             }
             else
             {
-                _logger.LogWarning(
-                    "Generated workflow YAML failed to parse during ApplyAsync for project {ProjectId}: {Error}",
-                    projectId, loadResult.Error);
+                return new BlueprintValidationResult(false, [$"generated_workflow_yaml failed to parse: {loadResult.Error}"]);
             }
         }
+
+        var validation = Validate(blueprint, projectBefore, extraKnownWorkflowIds);
+        if (!validation.Valid)
+            return validation;
+
+        var charterErrors = ValidateBespokeCharterReferences(blueprint, projectBefore.WorkingDirectory);
+        if (charterErrors.Count > 0)
+            return new BlueprintValidationResult(false, charterErrors);
+
+        var fileSnapshot = FileSnapshot.Capture(projectBefore.WorkingDirectory);
+        string? generatedWorkflowFile = null;
+        SandboxPolicy? oldSandboxPolicy = null;
+        try
+        {
+            if (generatedDefinition is not null && !string.IsNullOrWhiteSpace(generatedWorkflowYaml))
+            {
+                var workflowsDir = Path.Combine(
+                    projectBefore.WorkingDirectory,
+                    WorkflowRegistry.WorkflowsRelativePath);
+                Directory.CreateDirectory(workflowsDir);
+
+                generatedWorkflowFile = Path.Combine(workflowsDir, $"{Path.GetFileName(generatedDefinition.Id)}.yaml");
+                await File.WriteAllTextAsync(generatedWorkflowFile, generatedWorkflowYaml, ct).ConfigureAwait(false);
+                _workflowRegistry.Sync(projectBefore);
+
+                _logger.LogInformation(
+                    "Materialized generated workflow '{WorkflowId}' to {WorkflowFile} for project {ProjectId}",
+                    generatedDefinition.Id, generatedWorkflowFile, projectId);
+            }
 
         var bespokeById = blueprint.BespokeRoles.Count == 0
             ? null
@@ -220,32 +240,18 @@ public sealed class BlueprintService
             .ConfirmProposalAsync(projectId, proposal.ProposalId, intent: "new", ct)
             .ConfigureAwait(false);
 
-        var pid = ProjectId.Parse(projectId);
         var now = DateTimeOffset.UtcNow;
-        // PARTIAL-APPLY RISK: if any of the following store operations fail, previously-applied steps
-        // are NOT automatically reverted. The casting proposal was already confirmed above; if a step
-        // below fails the roster will have been seeded but project settings may be partially updated.
-        // The endpoint wraps ApplyAsync in a try/catch that rolls back the entire project on failure.
         await _projectStore.UpdateDefaultWorkflowAsync(pid, blueprint.Workflow, now, ct).ConfigureAwait(false);
-        // Persist the blueprint's allowed workflow set so the WorkflowRegistry filters the project's
-        // available workflows to exactly what the blueprint declared. An empty set leaves the project
-        // unrestricted (all catalog workflows allowed), preserving backward compatibility.
         var allowedWorkflowIds = blueprint.Workflows.Count > 0
             ? blueprint.Workflows.ToList()
             : null;
-        // PARTIAL-APPLY RISK: allowed workflow set update; prior step (workflow) is not reverted on failure.
         await _projectStore.UpdateAllowedWorkflowIdsAsync(pid, allowedWorkflowIds, now, ct).ConfigureAwait(false);
-        // PARTIAL-APPLY RISK: review policy update; prior step (workflow) is not reverted on failure.
         await _projectStore.UpdateActiveReviewPolicyAsync(pid, blueprint.ReviewPolicy, now, ct).ConfigureAwait(false);
-        // PARTIAL-APPLY RISK: sandbox profile update; prior steps not reverted on failure.
         await _projectStore.UpdateSandboxProfileAsync(pid, blueprint.SandboxProfile, now, ct).ConfigureAwait(false);
         var project = await _projectStore.GetAsync(pid, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Project '{projectId}' was not found.");
-        // Refresh the registry cache with the freshly-persisted project so the allowed workflow set is
-        // applied immediately to subsequent registry reads (the cached set was built before the filter
-        // was known).
         _workflowRegistry.Sync(project);
-        // PARTIAL-APPLY RISK: sandbox policy file write; prior steps not reverted on failure.
+        oldSandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(project.WorkingDirectory, ct).ConfigureAwait(false);
         await _sandboxPolicyStore.SetPolicyAsync(
             CreateSandboxPolicy(blueprint.SandboxProfile, project.WorkingDirectory),
             ct).ConfigureAwait(false);
@@ -253,6 +259,24 @@ public sealed class BlueprintService
         _logger.LogInformation(
             "Applied blueprint '{BlueprintId}' to project {ProjectId}: {RoleCount} roles, workflow={Workflow}, review={Review}, sandbox={Sandbox}",
             blueprint.Id, projectId, blueprint.Roster.Count, blueprint.Workflow, blueprint.ReviewPolicy, blueprint.SandboxProfile);
+            return BlueprintValidationResult.Ok();
+        }
+        catch
+        {
+            fileSnapshot.Restore();
+            if (generatedWorkflowFile is not null && !fileSnapshot.Contains(generatedWorkflowFile))
+                TryDeleteFile(generatedWorkflowFile);
+
+            var rollbackAt = DateTimeOffset.UtcNow;
+            await _projectStore.UpdateDefaultWorkflowAsync(pid, projectBefore.DefaultWorkflowId, rollbackAt, CancellationToken.None).ConfigureAwait(false);
+            await _projectStore.UpdateAllowedWorkflowIdsAsync(pid, projectBefore.AllowedWorkflowIds, rollbackAt, CancellationToken.None).ConfigureAwait(false);
+            await _projectStore.UpdateActiveReviewPolicyAsync(pid, projectBefore.ActiveReviewPolicyName, rollbackAt, CancellationToken.None).ConfigureAwait(false);
+            await _projectStore.UpdateSandboxProfileAsync(pid, projectBefore.SandboxProfile, rollbackAt, CancellationToken.None).ConfigureAwait(false);
+            if (oldSandboxPolicy is not null)
+                await _sandboxPolicyStore.SetPolicyAsync(oldSandboxPolicy, CancellationToken.None).ConfigureAwait(false);
+            _workflowRegistry.Sync(projectBefore);
+            throw;
+        }
     }
 
     /// <summary>
@@ -263,6 +287,114 @@ public sealed class BlueprintService
     /// Fallback (FR-063): if the LLM returns no library match, <see cref="IWorkflowGenerator"/> is
     /// invoked to produce a custom workflow draft included in <see cref="BlueprintGenerationResult"/>.
     /// </summary>
+    private static string? ValidateWorkflowFileId(string workflowId)
+    {
+        var fileName = Path.GetFileName(workflowId);
+        if (!string.Equals(fileName, workflowId, StringComparison.Ordinal) ||
+            workflowId.Contains('.', StringComparison.Ordinal) ||
+            workflowId.Any(c => !(char.IsLetterOrDigit(c) || c is '-' or '_')))
+            return $"workflow id '{workflowId}' is not safe for use as a filename.";
+        return null;
+    }
+
+    private static IReadOnlyList<string> ValidateBespokeCharterReferences(Blueprint blueprint, string projectRoot)
+    {
+        var errors = new List<string>();
+        foreach (var role in blueprint.BespokeRoles)
+        {
+            var value = role.Charter.Trim();
+            string? path = null;
+            if (value.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+                path = value["file:".Length..].Trim();
+            else if (!value.Contains('\n') &&
+                     (value.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+                      value.Contains(Path.DirectorySeparatorChar) ||
+                      value.Contains(Path.AltDirectorySeparatorChar)))
+                path = value;
+
+            if (path is null) continue;
+            var fullPath = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(projectRoot, path));
+            if (!File.Exists(fullPath))
+                errors.Add($"bespoke role '{role.Id}' references missing charter file '{path}'.");
+        }
+        return errors;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { }
+    }
+
+    private sealed class FileSnapshot
+    {
+        private readonly string _root;
+        private readonly Dictionary<string, byte[]?> _files;
+        private readonly IReadOnlyList<string> _watchedDirectories;
+
+        private FileSnapshot(string root, Dictionary<string, byte[]?> files, IReadOnlyList<string> watchedDirectories)
+        {
+            _root = root;
+            _files = files;
+            _watchedDirectories = watchedDirectories;
+        }
+
+        public static FileSnapshot Capture(string root)
+        {
+            var files = new Dictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
+            CapturePath(root, ".squad", files);
+            CapturePath(root, ".agentweaver", files);
+            CapturePath(root, Path.Combine(".github", "agents"), files);
+            CaptureFile(root, ".gitattributes", files);
+            CaptureFile(root, ".gitignore", files);
+            return new FileSnapshot(root, files, [".squad", ".agentweaver", Path.Combine(".github", "agents")]);
+        }
+
+        public bool Contains(string path) =>
+            _files.ContainsKey(Path.GetRelativePath(_root, path));
+
+        public void Restore()
+        {
+            foreach (var relDir in _watchedDirectories)
+            {
+                var fullDir = Path.Combine(_root, relDir);
+                if (!Directory.Exists(fullDir)) continue;
+                foreach (var file in Directory.EnumerateFiles(fullDir, "*", SearchOption.AllDirectories))
+                {
+                    var rel = Path.GetRelativePath(_root, file);
+                    if (!_files.ContainsKey(rel))
+                        File.Delete(file);
+                }
+            }
+
+            foreach (var rel in _files.Keys)
+            {
+                var full = Path.Combine(_root, rel);
+                if (_files[rel] is null)
+                {
+                    if (File.Exists(full)) File.Delete(full);
+                    continue;
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                File.WriteAllBytes(full, _files[rel]!);
+            }
+        }
+
+        private static void CapturePath(string root, string relativePath, Dictionary<string, byte[]?> files)
+        {
+            var full = Path.Combine(root, relativePath);
+            if (!Directory.Exists(full)) return;
+            foreach (var file in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories))
+                files[Path.GetRelativePath(root, file)] = File.ReadAllBytes(file);
+        }
+
+        private static void CaptureFile(string root, string relativePath, Dictionary<string, byte[]?> files)
+        {
+            var full = Path.Combine(root, relativePath);
+            files[relativePath] = File.Exists(full) ? File.ReadAllBytes(full) : null;
+        }
+    }
+
     public async Task<BlueprintGenerationResult> GenerateAsync(string description, CancellationToken ct)
     {
         string raw;
@@ -286,6 +418,7 @@ public sealed class BlueprintService
         // delegate to IWorkflowGenerator to produce a bespoke workflow draft.
         WorkflowDefinition? generatedWorkflow = null;
         string? generatedWorkflowYaml = null;
+        var warnings = new List<string>(parsed.Warnings);
 
         // FR-063: the LLM signals "no library workflow fits" with an empty array. Treat an empty set,
         // an all-blank/"custom" set, or the legacy "default" sentinel as needing the fallback generator
@@ -316,7 +449,10 @@ public sealed class BlueprintService
                     blueprint.Roster,
                     [generatedWorkflow.Id],
                     blueprint.ReviewPolicy,
-                    blueprint.SandboxProfile);
+                    blueprint.SandboxProfile)
+                {
+                    BespokeRoles = blueprint.BespokeRoles,
+                };
 
                 _logger.LogInformation(
                     "Blueprint generation fallback produced workflow '{WorkflowId}' (corrected={Corrected})",
@@ -326,6 +462,7 @@ public sealed class BlueprintService
             {
                 _logger.LogWarning(ex, "Blueprint generation: IWorkflowGenerator fallback failed");
                 // Fall back gracefully: use the built-in default workflow instead.
+                warnings.Add("Workflow generation failed; the built-in default workflow was selected. Review the blueprint before applying.");
                 blueprint = new Blueprint(
                     blueprint.Id,
                     blueprint.Name,
@@ -333,7 +470,10 @@ public sealed class BlueprintService
                     blueprint.Roster,
                     [BuiltInWorkflows.DefaultWorkflowId],
                     blueprint.ReviewPolicy,
-                    blueprint.SandboxProfile);
+                    blueprint.SandboxProfile)
+                {
+                    BespokeRoles = blueprint.BespokeRoles,
+                };
             }
         }
 
@@ -352,6 +492,7 @@ public sealed class BlueprintService
         {
             GeneratedWorkflow = generatedWorkflow,
             GeneratedWorkflowYaml = generatedWorkflowYaml,
+            Warnings = warnings,
         };
     }
 

@@ -14,6 +14,8 @@ public sealed class SandboxOutputRedactor
         // Authorization / Bearer tokens
         new Regex(@"Bearer\s+[A-Za-z0-9\-._~+/]+=*",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
+        new Regex(@"Bearer\s+[A-Za-z0-9+/=._-]{20,}",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         // AWS access key IDs
         new Regex(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
         // GitHub personal access tokens (classic and fine-grained)
@@ -22,11 +24,16 @@ public sealed class SandboxOutputRedactor
         new Regex(@"\bghs_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
         new Regex(@"\bghx_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
         new Regex(@"\bgithub_pat_[A-Za-z0-9_]{82}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
-        // PEM private key headers
-        new Regex(@"-----BEGIN [A-Z ]+ PRIVATE KEY-----",
-            RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
+        // PEM private key blocks
+        new Regex(@"-----BEGIN .*PRIVATE KEY-----.*?-----END .*PRIVATE KEY-----",
+            RegexOptions.Compiled | RegexOptions.Singleline, TimeSpan.FromSeconds(2)),
         // Connection string password fragments
         new Regex(@"(?:password|passwd|pwd)\s*=\s*[^\s;&,""']+",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
+        new Regex(@"password=[^;]+",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
+        // Azure SAS token signature fragments
+        new Regex(@"sig=[^&\s]+",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         // Generic API key / secret assignments (key=value patterns)
         new Regex(@"(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token)\s*[=:]\s*[^\s;&,""']+",

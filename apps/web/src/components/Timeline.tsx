@@ -20,6 +20,13 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     paddingTop: tokens.spacingVerticalS,
   },
+  skipped: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusSmall,
+  },
 });
 
 interface TimelineProps {
@@ -28,9 +35,10 @@ interface TimelineProps {
   isLiveRun: boolean;
   runId?: string;
   runOutcome?: { achieved: boolean; reason: string };
+  skippedEventCount?: number;
 }
 
-export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun, runId, runOutcome }: TimelineProps) {
+export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun, runId, runOutcome, skippedEventCount = 0 }: TimelineProps) {
   const styles = useStyles();
 
   return (
@@ -41,6 +49,9 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
       aria-label="Run timeline"
       aria-live={isLiveRun ? 'polite' : undefined}
     >
+      {skippedEventCount > 0 && (
+        <Text className={styles.skipped}>{skippedEventCount} older events not shown.</Text>
+      )}
       {items.map((item, i) => {
         if (item.kind === 'turn-group') {
           return (

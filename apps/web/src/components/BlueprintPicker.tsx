@@ -25,7 +25,7 @@ import type { Blueprint } from '../api/types';
 export type BlueprintSelection =
   | { kind: 'none' }
   | { kind: 'predefined'; blueprint: Blueprint }
-  | { kind: 'generated'; blueprint: Blueprint };
+  | { kind: 'generated'; blueprint: Blueprint; generatedWorkflowYaml?: string | null };
 
 export const NO_BLUEPRINT: BlueprintSelection = { kind: 'none' };
 
@@ -116,7 +116,7 @@ export function BlueprintPicker({ active, value, onChange }: BlueprintPickerProp
   const [description, setDescription] = useState('');
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
-  const [generated, setGenerated] = useState<{ blueprint: Blueprint } | null>(null);
+  const [generated, setGenerated] = useState<{ blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null>(null);
 
   // Load the predefined blueprint catalog when the picker becomes active.
   useEffect(() => {
@@ -154,7 +154,7 @@ export function BlueprintPicker({ active, value, onChange }: BlueprintPickerProp
       return;
     }
     if (key === GENERATED_KEY) {
-      if (generated) onChange({ kind: 'generated', blueprint: generated.blueprint });
+      if (generated) onChange({ kind: 'generated', blueprint: generated.blueprint, generatedWorkflowYaml: generated.generatedWorkflowYaml });
       return;
     }
     const bp = blueprints.find((b) => b.id === key);
@@ -167,9 +167,9 @@ export function BlueprintPicker({ active, value, onChange }: BlueprintPickerProp
     setGenError(null);
     try {
       const res = await apiClient.generateBlueprint(description.trim());
-      setGenerated({ blueprint: res.blueprint });
+      setGenerated({ blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml });
       // Auto-apply the freshly generated blueprint.
-      onChange({ kind: 'generated', blueprint: res.blueprint });
+      onChange({ kind: 'generated', blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml });
     } catch (err) {
       setGenError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -282,11 +282,13 @@ export function BlueprintPicker({ active, value, onChange }: BlueprintPickerProp
 export function applyBlueprintToRequest<T extends {
   blueprint_id?: string;
   blueprint?: Blueprint;
+  generated_workflow_yaml?: string | null;
 }>(req: T, selection: BlueprintSelection): T {
   if (selection.kind === 'predefined') {
     req.blueprint_id = selection.blueprint.id;
   } else if (selection.kind === 'generated') {
     req.blueprint = selection.blueprint;
+    req.generated_workflow_yaml = selection.generatedWorkflowYaml ?? null;
   }
   return req;
 }

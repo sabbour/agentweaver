@@ -36,7 +36,6 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent, type EventType } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import type { TeamDto, GraphDescriptor, PortForwardSessionDto } from '../api/types';
-import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
@@ -346,7 +345,7 @@ export function WorkflowRunPage() {
     return () => { cancelled = true; };
   }, [projectId, runId]);
 
-  const { events: liveEvents, status: streamStatus, reconnect } = useRunStream(executionId ?? '', API_KEY, API_URL);
+  const { events: liveEvents, status: streamStatus, reconnect } = useRunStream(executionId ?? '');
 
   // FIX 2 — seed the execution timeline for a finished/parked run from the persisted
   // events endpoint. A terminal child has a closed SSE stream, so without this the graph
@@ -774,6 +773,7 @@ export function WorkflowRunPage() {
   };
 
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
+  const previewUrl = previewSession?.preview_url ?? previewSession?.previewUrl ?? null;
 
   return (
     <div className={styles.root}>
@@ -919,7 +919,7 @@ export function WorkflowRunPage() {
 
       {/* Sandbox preview port-forward dialog */}
       <Dialog open={previewDialogOpen} onOpenChange={(_, d) => { if (!d.open) setPreviewDialogOpen(false); }}>
-        <DialogSurface style={{ maxWidth: '480px' }}>
+        <DialogSurface style={{ maxWidth: previewUrl ? '900px' : '480px' }}>
           <DialogBody>
             <DialogTitle
               action={
@@ -937,7 +937,7 @@ export function WorkflowRunPage() {
               {!previewSession ? (
                 <>
                   <Text>
-                    Forward a port from the sandbox pod to your local machine.
+                    Preview traffic is proxied through the Agentweaver API server.
                     Enter the port your app is listening on inside the sandbox.
                   </Text>
                   <Field label="Target port (inside sandbox)" validationMessage={previewError} validationState={previewError ? 'error' : 'none'}>
@@ -952,10 +952,16 @@ export function WorkflowRunPage() {
               ) : (
                 <>
                   <Text>
-                    Port-forward active. Connect to{' '}
-                    <strong>localhost:{previewSession.local_port}</strong> to reach port{' '}
-                    {previewSession.target_port} on pod <code>{previewSession.pod_name}</code>.
+                    Preview active for port {previewSession.target_port} on pod <code>{previewSession.pod_name}</code>.
+                    {previewUrl ? ' The proxied preview is shown below.' : ' The API server did not return a proxied preview URL.'}
                   </Text>
+                  {previewUrl && (
+                    <iframe
+                      title="Sandbox preview"
+                      src={previewUrl}
+                      style={{ width: '100%', minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}
+                    />
+                  )}
                   <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
                     Session ID: {previewSession.session_id}
                   </Text>
@@ -965,6 +971,11 @@ export function WorkflowRunPage() {
             <DialogActions>
               {!previewSession ? (
                 <>
+                  {previewUrl && (
+                    <Button appearance="primary" icon={<OpenRegular />} onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}>
+                      Open preview
+                    </Button>
+                  )}
                   <Button
                     appearance="primary"
                     onClick={startPreview}

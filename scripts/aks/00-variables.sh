@@ -1,40 +1,32 @@
 #!/usr/bin/env bash
 # 00-variables.sh -- Shared environment variables for all Agentweaver AKS scripts.
-#
-# Source this file at the start of each script, or export the variables manually
-# before running any script in this directory:
-#
-#   source scripts/aks/00-variables.sh
-#
-# All values can be overridden by setting the corresponding environment variable
-# before sourcing this file, e.g.:
-#   export CLUSTER_NAME=my-cluster
-#   source scripts/aks/00-variables.sh
 
 # -- Azure resource parameters ------------------------------------------------
 RESOURCE_GROUP="${RESOURCE_GROUP:-agentweaver-rg}"
 CLUSTER_NAME="${CLUSTER_NAME:-agentweaver-aks}"
-# ACR names are globally unique and alphanumeric-only (5-50 chars).
 ACR_NAME="${ACR_NAME:-agentweaverregistry}"
 LOCATION="${LOCATION:-eastus}"
 
 # -- Key Vault + workload identity parameters ---------------------------------
-# Key Vault name must be globally unique (3-24 chars, alphanumeric and hyphens).
 KEYVAULT_NAME="${KEYVAULT_NAME:-agentweaver-kv}"
-# Azure AD tenant ID — fill in or export before sourcing:
-#   export TENANT_ID=$(az account show --query tenantId -o tsv)
 TENANT_ID="${TENANT_ID:-}"
-# Derived after running 15-setup-identity.sh; can be overridden manually:
-#   export IDENTITY_CLIENT_ID=$(az identity show --name agentweaver-api-identity \
-#     --resource-group $RESOURCE_GROUP --query clientId -o tsv)
 IDENTITY_CLIENT_ID="${IDENTITY_CLIENT_ID:-}"
 
 # -- Kubernetes parameters ----------------------------------------------------
 NAMESPACE="${NAMESPACE:-agentweaver}"
 
 # -- Image parameters ---------------------------------------------------------
-# Override IMAGE_TAG to deploy a specific image version.
-IMAGE_TAG="${IMAGE_TAG:-latest}"
+if [[ -z "${IMAGE_TAG:-}" ]]; then
+  if command -v git >/dev/null 2>&1; then
+    VARIABLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO_ROOT="$(cd "${VARIABLES_DIR}/../.." && pwd)"
+    IMAGE_TAG="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "${IMAGE_TAG:-}" ]]; then
+    echo "ERROR: IMAGE_TAG is not set and git rev-parse failed." >&2
+    return 1 2>/dev/null || exit 1
+  fi
+fi
 ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
 
 # -- Derived values (do not override) -----------------------------------------

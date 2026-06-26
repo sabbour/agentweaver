@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Badge, Button, Caption1, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { ArchiveRegular, ShieldExclamationRegular } from '@fluentui/react-icons';
+import { ArchiveRegular, WarningRegular } from '@fluentui/react-icons';
 import type { RunCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
@@ -104,7 +104,7 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
     setArchiving(true);
     setError(null);
     try {
-      await apiClient.deleteRun(card.run_id);
+      await apiClient.archiveRun(card.run_id);
       await onMutated?.();
     } catch (err) {
       setError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
@@ -136,7 +136,7 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
         <Text className={styles.task}>{card.task || '(coordinator run)'}</Text>
         <div className={styles.headerActions}>
           {card.has_pending_approval && (
-            <Badge appearance="tint" color="warning" icon={<ShieldExclamationRegular />} size="small">
+            <Badge appearance="tint" color="warning" icon={<WarningRegular />} size="small">
               Approval needed
             </Badge>
           )}

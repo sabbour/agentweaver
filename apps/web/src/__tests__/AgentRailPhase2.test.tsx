@@ -17,6 +17,7 @@ vi.mock('../api/apiClient', () => ({
     captureBacklogTask: vi.fn(),
     editBacklogTask: vi.fn(),
     deleteBacklogTask: vi.fn(),
+    archiveBacklogTask: vi.fn(),
     moveTaskToReady: vi.fn(),
     moveTaskToBacklog: vi.fn(),
     reorderBacklogTask: vi.fn(),

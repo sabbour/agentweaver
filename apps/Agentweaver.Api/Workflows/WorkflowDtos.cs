@@ -19,6 +19,7 @@ public sealed record WorkflowSummaryDto
     [JsonPropertyName("source")] public required string Source { get; init; }
     [JsonPropertyName("valid")] public required bool Valid { get; init; }
     [JsonPropertyName("error")] public string? Error { get; init; }
+    [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
     [JsonPropertyName("is_built_in")] public required bool IsBuiltIn { get; init; }
     [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
 }
@@ -80,6 +81,7 @@ public sealed record WorkflowDetailDto
     [JsonPropertyName("source")] public required string Source { get; init; }
     [JsonPropertyName("is_built_in")] public required bool IsBuiltIn { get; init; }
     [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
+    [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
     [JsonPropertyName("nodes")] public required IReadOnlyList<WorkflowNodeDto> Nodes { get; init; }
     [JsonPropertyName("edges")] public required IReadOnlyList<WorkflowEdgeDto> Edges { get; init; }
 }
@@ -195,6 +197,7 @@ public static class WorkflowDtoMapper
             Source = result.Source,
             Valid = result.IsValid,
             Error = result.Error,
+            Warnings = result.Warnings,
             IsBuiltIn = result.IsBuiltIn,
             IsDefault = def is not null && string.Equals(def.Id, effectiveDefaultId, StringComparison.Ordinal),
         };
@@ -295,6 +298,7 @@ public static class WorkflowDtoMapper
             Source = result.Source,
             IsBuiltIn = result.IsBuiltIn,
             IsDefault = string.Equals(def.Id, effectiveDefaultId, StringComparison.Ordinal),
+            Warnings = result.Warnings,
             Nodes = def.Nodes.Select(n => new WorkflowNodeDto
             {
                 Id = n.Id,

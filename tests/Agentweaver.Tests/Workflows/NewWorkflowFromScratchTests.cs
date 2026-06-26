@@ -36,12 +36,18 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
             label: Agent
             agent: lead
 
+          - id: scribe
+            type: scribe
+            label: Scribe
+
           - id: done
             type: terminal
             label: Done
 
         edges:
           - from: agent
+            to: scribe
+          - from: scribe
             to: done
         """;
 
@@ -67,8 +73,8 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
         result.Definition.Name.Should().Be("My Workflow");
         result.Definition.Trigger.Type.Should().Be(WorkflowTriggerType.Manual);
         result.Definition.Start.Should().Be("agent");
-        result.Definition.Nodes.Should().HaveCount(2);
-        result.Definition.Edges.Should().HaveCount(1);
+        result.Definition.Nodes.Should().HaveCount(3);
+        result.Definition.Edges.Should().HaveCount(2);
     }
 
     // ── Integration: PUT saves, registry reflects immediately, GET list returns the workflow ────

@@ -39,7 +39,7 @@ function makeProject(id: string, name: string): Project {
   };
 }
 
-const REPO: GitHubRepo = { full_name: 'octocat/hello-world', description: 'A sample repo' } as GitHubRepo;
+const REPO: GitHubRepo = { fullName: 'octocat/hello-world', defaultBranch: 'main', private: false, description: 'A sample repo' };
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (

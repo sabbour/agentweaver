@@ -13,14 +13,6 @@ namespace Agentweaver.Api.Runs;
 public sealed class CheckpointGcService : BackgroundService
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(30);
-    private static readonly RunStatus[] TerminalStatuses =
-    [
-        RunStatus.Merged,
-        RunStatus.Declined,
-        RunStatus.Failed,
-        RunStatus.Completed,
-        RunStatus.MergeFailed
-    ];
 
     private readonly SqliteRunStore _runStore;
     private readonly RunWorkflowFactory _factory;
@@ -86,5 +78,5 @@ public sealed class CheckpointGcService : BackgroundService
 
     private static bool IsTerminal(RunStatus status) =>
         status is RunStatus.Merged or RunStatus.Declined or RunStatus.Failed
-            or RunStatus.Completed or RunStatus.MergeFailed;
+            or RunStatus.Completed or RunStatus.MergeFailed or RunStatus.AssembleReady;
 }

@@ -31,8 +31,8 @@ public static class BacklogEndpoints
             if (string.IsNullOrWhiteSpace(request.Title))
                 return Results.BadRequest(new { error = "title is required." });
 
-            var project = await projectStore.GetAsync(pid, ct);
-            if (project is null) return Results.NotFound();
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
@@ -47,7 +47,15 @@ public static class BacklogEndpoints
                 : null;
             var capturedBy = login ?? caller.User;
 
+            var externalId = FirstNonEmpty(request.ExternalId, request.ClientRequestId);
             var existing = await backlogStore.ListByProjectAsync(pid, ct);
+            if (externalId is not null)
+            {
+                var existingTask = existing.FirstOrDefault(t =>
+                    string.Equals(t.SourceFilePath, externalId, StringComparison.Ordinal));
+                if (existingTask is not null)
+                    return Results.Ok(MapTask(existingTask));
+            }
             var orderKey = KeyForIndex(BucketKeys(existing, BacklogTaskState.Backlog), targetIndex: null, movingTaskId: null);
 
             var task = new BacklogTask
@@ -60,6 +68,7 @@ public static class BacklogEndpoints
                 OrderKey = orderKey,
                 CapturedBy = capturedBy,
                 CreatedAt = DateTimeOffset.UtcNow,
+                SourceFilePath = externalId,
             };
             await backlogStore.InsertAsync(task, ct);
             return Results.Created(
@@ -72,6 +81,7 @@ public static class BacklogEndpoints
             string projectId,
             string taskId,
             EditBacklogTaskRequest request,
+            IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             CancellationToken ct) =>
         {
@@ -79,6 +89,8 @@ public static class BacklogEndpoints
                 return Results.BadRequest(new { error = "Invalid id." });
             if (string.IsNullOrWhiteSpace(request.Title))
                 return Results.BadRequest(new { error = "title is required." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description;
             var updated = await backlogStore.UpdateContentAsync(pid, tid, request.Title!.Trim(), description, ct);
@@ -90,13 +102,17 @@ public static class BacklogEndpoints
 
         // DELETE /api/projects/{projectId}/backlog/tasks/{taskId} — delete (FR-005)
         app.MapDelete("/api/projects/{projectId}/backlog/tasks/{taskId}", async (
+            HttpContext httpContext,
             string projectId,
             string taskId,
+            IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var deleted = await backlogStore.TryDeleteAsync(pid, tid, ct);
             if (deleted) return Results.NoContent();
@@ -109,14 +125,18 @@ public static class BacklogEndpoints
 
         // POST /api/projects/{projectId}/backlog/tasks/{taskId}/ready — Backlog -> Ready (FR-006/010)
         app.MapPost("/api/projects/{projectId}/backlog/tasks/{taskId}/ready", async (
+            HttpContext httpContext,
             string projectId,
             string taskId,
             MoveBacklogTaskRequest? request,
+            IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
             if (task is null) return Results.NotFound();
@@ -142,6 +162,7 @@ public static class BacklogEndpoints
 
         // POST /api/projects/{projectId}/backlog/ready-all — bulk Backlog -> Ready (FR-006/010)
         app.MapPost("/api/projects/{projectId}/backlog/ready-all", async (
+            HttpContext httpContext,
             string projectId,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
@@ -150,8 +171,8 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var project = await projectStore.GetAsync(pid, ct);
-            if (project is null) return Results.NotFound();
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var moved = await backlogStore.MoveAllBacklogToReadyAsync(pid, DateTimeOffset.UtcNow, ct);
             return Results.Ok(new ReadyAllResponse { Moved = moved });
@@ -159,14 +180,18 @@ public static class BacklogEndpoints
 
         // POST /api/projects/{projectId}/backlog/tasks/{taskId}/backlog — Ready -> Backlog (FR-007/018)
         app.MapPost("/api/projects/{projectId}/backlog/tasks/{taskId}/backlog", async (
+            HttpContext httpContext,
             string projectId,
             string taskId,
             MoveBacklogTaskRequest? request,
+            IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
             if (task is null) return Results.NotFound();
@@ -198,14 +223,18 @@ public static class BacklogEndpoints
 
         // POST /api/projects/{projectId}/backlog/tasks/{taskId}/reorder — within-bucket reorder (FR-018a)
         app.MapPost("/api/projects/{projectId}/backlog/tasks/{taskId}/reorder", async (
+            HttpContext httpContext,
             string projectId,
             string taskId,
             ReorderBacklogTaskRequest request,
+            IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
             if (task is null) return Results.NotFound();
@@ -236,13 +265,17 @@ public static class BacklogEndpoints
 
         // POST /api/projects/{projectId}/backlog/tasks/{taskId}/archive — remove task card off-board.
         app.MapPost("/api/projects/{projectId}/backlog/tasks/{taskId}/archive", async (
+            HttpContext httpContext,
             string projectId,
             string taskId,
+            IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var archived = await backlogStore.TryArchiveAsync(pid, tid, DateTimeOffset.UtcNow, ct);
             if (!archived) return Results.NotFound();
@@ -253,6 +286,7 @@ public static class BacklogEndpoints
 
         // GET /api/projects/{projectId}/board — full board (FR-013..016a/019)
         app.MapGet("/api/projects/{projectId}/board", async (
+            HttpContext httpContext,
             string projectId,
             bool? include_terminal_history,
             IProjectStore projectStore,
@@ -262,8 +296,8 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var project = await projectStore.GetAsync(pid, ct);
-            if (project is null) return Results.NotFound();
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var board = await boardService.GetBoardAsync(pid, include_terminal_history ?? false, ct);
             return Results.Ok(board);
@@ -271,6 +305,7 @@ public static class BacklogEndpoints
 
         // GET /api/projects/{projectId}/workflow-stages — canonical run-buckets only
         app.MapGet("/api/projects/{projectId}/workflow-stages", async (
+            HttpContext httpContext,
             string projectId,
             IProjectStore projectStore,
             WorkflowStageProjector projector,
@@ -279,8 +314,8 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var project = await projectStore.GetAsync(pid, ct);
-            if (project is null) return Results.NotFound();
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             var stages = projector.GetStages();
 
@@ -293,6 +328,7 @@ public static class BacklogEndpoints
 
         // GET /api/projects/{projectId}/backlog/settings (FR-008a)
         app.MapGet("/api/projects/{projectId}/backlog/settings", async (
+            HttpContext httpContext,
             string projectId,
             IProjectStore projectStore,
             CancellationToken ct) =>
@@ -300,13 +336,14 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var project = await projectStore.GetAsync(pid, ct);
-            if (project is null) return Results.NotFound();
-            return Results.Ok(MapSettings(project));
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
+            return Results.Ok(MapSettings(auth.Project!));
         });
 
         // PUT /api/projects/{projectId}/backlog/settings (FR-008a)
         app.MapPut("/api/projects/{projectId}/backlog/settings", async (
+            HttpContext httpContext,
             string projectId,
             BacklogSettingsDto request,
             IProjectStore projectStore,
@@ -317,8 +354,8 @@ public static class BacklogEndpoints
             if (request.MaxReadyPerHeartbeat is < 1 or > 20)
                 return Results.BadRequest(new { error = "max_ready_per_heartbeat must be between 1 and 20." });
 
-            var project = await projectStore.GetAsync(pid, ct);
-            if (project is null) return Results.NotFound();
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
 
             await projectStore.UpdatePickupSettingsAsync(
                 pid, request.MaxReadyPerHeartbeat, request.PickupAutopilot, request.PickupAutoApproveTools,
@@ -374,7 +411,9 @@ public static class BacklogEndpoints
         CommittedAt = t.CommittedAt,
         ClaimedAt = t.ClaimedAt,
         RunId = t.RunId?.ToString(),
+        WorkflowOverrideId = t.WorkflowOverrideId,
         ArchivedAt = t.ArchivedAt,
+        ExternalId = t.SourceFilePath,
     };
 
     private static BacklogSettingsDto MapSettings(Project p) => new()
@@ -383,4 +422,25 @@ public static class BacklogEndpoints
         PickupAutopilot = p.PickupAutopilot,
         PickupAutoApproveTools = p.PickupAutoApproveTools,
     };
+
+    private static async Task<(IResult? Error, Project? Project)> AuthorizeProjectAsync(
+        HttpContext httpContext,
+        ProjectId projectId,
+        IProjectStore projectStore,
+        CancellationToken ct)
+    {
+        var project = await projectStore.GetAsync(projectId, ct);
+        if (project is null) return (Results.NotFound(), null);
+
+        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        if (!caller.Owns(project.Owner) &&
+            !string.Equals(caller.User, "admin", StringComparison.OrdinalIgnoreCase))
+            return (Results.StatusCode(StatusCodes.Status403Forbidden), null);
+
+        return (null, project);
+    }
+
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.Select(v => string.IsNullOrWhiteSpace(v) ? null : v.Trim())
+            .FirstOrDefault(v => v is not null);
 }

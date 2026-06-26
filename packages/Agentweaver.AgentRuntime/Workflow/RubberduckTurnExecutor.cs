@@ -38,6 +38,8 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
     private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
     private readonly Action<string>? _completeSubStream;
     private readonly IWorkflowAgentFactory? _agentFactory;
+    private readonly string _reviewAgentId;
+    private readonly string? _reviewAgentCharter;
 
     public RubberduckTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -53,7 +55,9 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
         string displayLabel = "Rubber-duck review",
         Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
         Action<string>? completeSubStream = null,
-        IWorkflowAgentFactory? agentFactory = null)
+        IWorkflowAgentFactory? agentFactory = null,
+        string? reviewAgentId = null,
+        string? reviewAgentCharter = null)
         : base(name)
     {
         LogicalNodeId = logicalNodeId;
@@ -70,6 +74,8 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
         _createSubStream = createSubStream;
         _completeSubStream = completeSubStream;
         _agentFactory = agentFactory;
+        _reviewAgentId = string.IsNullOrWhiteSpace(reviewAgentId) ? "rubberduck" : reviewAgentId.Trim();
+        _reviewAgentCharter = string.IsNullOrWhiteSpace(reviewAgentCharter) ? null : reviewAgentCharter;
     }
 
     public override async ValueTask<WorkflowReviewDecision> HandleAsync(
@@ -94,7 +100,10 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
             var reviewPath = !string.IsNullOrEmpty(input.WorktreePath)
                 ? input.WorktreePath
                 : input.RepositoryPath;
-            var charter = BuiltInCharterResolver.Resolve(reviewPath, "rubberduck") ?? FallbackCharter;
+            var charter = _reviewAgentCharter
+                ?? BuiltInCharterResolver.Resolve(reviewPath, _reviewAgentId)
+                ?? BuiltInCharterResolver.Resolve(reviewPath, "rubberduck")
+                ?? FallbackCharter;
 
             var task = $$"""
                 You are the Rubber-duck reviewer. Critique the diff below before it can merge.
@@ -130,7 +139,7 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                 systemPromptContext: charter,
                 streamWriter: subWriter,
                 projectId: null,
-                agentName: null,
+                agentName: _reviewAgentId,
                 apiBaseUrl: null,
                 apiKey: null,
                 ct).ConfigureAwait(false);

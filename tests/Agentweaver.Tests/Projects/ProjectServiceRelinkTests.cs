@@ -123,7 +123,7 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
 
         var origDir = NewDir();
         var project = await svc.CreateFromGitHubAsync(
-            "GH Project", "owner/my-repo", origDir, null, null, null, "user");
+            "GH Project", "https://github.com/owner/my-repo", origDir, null, null, null, "user");
 
         // Create a git repo pointing at a different remote
         var wrongDir = NewDir();

@@ -20,6 +20,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly IGitHubAccessTokenProvider _accessTokenProvider;
     private readonly ILogger<GitHubOrgAuthorizationMiddleware> _logger;
+    private readonly bool _bypassForTests;
 
     // Paths that bypass the org/team check entirely.
     private static readonly string[] ExemptPrefixes =
@@ -36,6 +37,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
         IGitHubTokenStore tokenStore,
         IGitHubTokenScopeProvider scopeProvider,
         IGitHubAccessTokenProvider accessTokenProvider,
+        IConfiguration configuration,
         ILogger<GitHubOrgAuthorizationMiddleware> logger)
     {
         _next = next;
@@ -44,6 +46,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
         _scopeProvider = scopeProvider;
         _accessTokenProvider = accessTokenProvider;
         _logger = logger;
+        _bypassForTests = configuration.GetValue<bool>("Testing:BypassGitHubOrgAuthorization");
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -51,6 +54,12 @@ public sealed class GitHubOrgAuthorizationMiddleware
         var path = context.Request.Path;
 
         if (IsExempt(path))
+        {
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
+        if (_bypassForTests)
         {
             await _next(context).ConfigureAwait(false);
             return;

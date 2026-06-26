@@ -8,8 +8,9 @@ public sealed class SessionContext
     public required string ProjectId { get; set; }
     public required string SessionId { get; set; }
     public required string FocusArea { get; set; }
-    public string? ActiveIssues { get; set; }        // comma-separated issue refs
+    public string? ActiveIssues { get; set; }        // JSON array
     public string? Summary { get; set; }
+    public string? SerializedState { get; set; }     // JSON from SerializeSessionAsync
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset? EndedAt { get; set; }
 }

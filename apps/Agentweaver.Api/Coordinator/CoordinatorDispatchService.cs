@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -166,6 +167,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 "Coordinator dispatch: no work plan for run {RunId}; nothing to dispatch", context.CoordinatorRunId);
             return;
         }
+        edges = await SerializeDeclaredOutputConflictsAsync(workPlanId.Value, subtasks, edges, ct)
+            .ConfigureAwait(false);
 
         var entry = _streamStore.Get(context.CoordinatorRunId);
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
@@ -253,6 +256,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 await ApplyStallFailureAsync(
                     context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
+                await PropagateBlockedDependentsAsync(
+                    context, workPlanId.Value, result.SubtaskId, "dependency_stalled", statusById, edges, seq, ct)
+                    .ConfigureAwait(false);
                 continue;
             }
 
@@ -288,7 +294,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             }
 
             await ApplyChildResultAsync(
-                context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
+                context, workPlanId.Value, result, statusById, edges, seq, ct).ConfigureAwait(false);
         }
 
         await FinalizeDispatchAsync(context, workPlanId.Value, statusById, edges, seq, ct).ConfigureAwait(false);
@@ -391,13 +397,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // (child_graph_ref appears) — re-emit the full shape-only snapshot.
         await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
 
+        var childTask = await ComposeChildTaskAsync(context, workPlanId, subtask, ct).ConfigureAwait(false);
+
         var childRun = new Run
         {
             Id = childRunId,
             RepositoryPath = context.RepositoryPath,
             OriginatingBranch = context.OriginatingBranch,
             ModelSource = ModelSource.GitHubCopilot,
-            Task = ComposeChildTask(subtask),
+            Task = childTask,
             SubmittingUser = context.SubmittingUser,
             Status = RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
@@ -414,9 +422,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // Autopilot. Seeded before the child run starts so its first tool call reads the inherited value.
         CascadeOptionsToChild(context.CoordinatorRunId, childRunId.ToString());
 
-        // Register the parent→child relationship so that tool approval policies granted on one
-        // child (scope Run/Tool) are visible to sibling children in the same coordinator run.
-        _approvalGate?.RegisterParentRun(childRunId.ToString(), context.CoordinatorRunId);
+        // Scope child approval-policy inheritance to this exact project/run/subtask so sibling
+        // children never inherit each other's run-scoped approvals.
+        _approvalGate?.RegisterParentRun(
+            childRunId.ToString(),
+            ApprovalScopeKey(context.ProjectId?.Value.ToString(), context.CoordinatorRunId, subtaskId));
 
         try
         {
@@ -458,6 +468,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         int workPlanId,
         ChildResult result,
         Dictionary<int, string> statusById,
+        IReadOnlyCollection<(int, int)> edges,
         SeqCounter seq,
         CancellationToken ct)
     {
@@ -473,6 +484,68 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         statusById[result.SubtaskId] = status;
         if (subtask is not null)
             EmitSubtask(context, workPlanId, subtask, eventType, seq.Next());
+
+        if (status is SubtaskStatus.Failed or SubtaskStatus.RaiFlagged)
+        {
+            var reason = status == SubtaskStatus.RaiFlagged ? "dependency_rai_flagged" : "dependency_failed";
+            await PropagateBlockedDependentsAsync(
+                context, workPlanId, result.SubtaskId, reason, statusById, edges, seq, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task PropagateBlockedDependentsAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int failedDependencyId,
+        string reason,
+        Dictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        var toFail = new Queue<int>(edges
+            .Where(e => e.DependsOnSubtaskId == failedDependencyId)
+            .Select(e => e.SubtaskId)
+            .Distinct()
+            .OrderBy(id => id));
+        var seen = new HashSet<int>();
+
+        while (toFail.Count > 0)
+        {
+            var dependentId = toFail.Dequeue();
+            if (!seen.Add(dependentId))
+                continue;
+            if (!statusById.TryGetValue(dependentId, out var status) || status != SubtaskStatus.Pending)
+                continue;
+
+            Subtask? updated = null;
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == dependentId, ct).ConfigureAwait(false);
+                if (row is not null && row.Status == SubtaskStatus.Pending)
+                {
+                    row.Status = SubtaskStatus.Failed;
+                    row.RecoveryGuidance =
+                        $"Skipped by coordinator: dependency subtask {failedDependencyId} ended with {reason}.";
+                    row.UpdatedAt = DateTimeOffset.UtcNow;
+                    await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                    db.Entry(row).State = EntityState.Detached;
+                    updated = row;
+                }
+            }
+
+            statusById[dependentId] = SubtaskStatus.Failed;
+            if (updated is not null)
+                EmitSubtask(context, workPlanId, updated, EventTypes.SubtaskFailed, seq.Next());
+
+            foreach (var next in edges
+                .Where(e => e.DependsOnSubtaskId == dependentId)
+                .Select(e => e.SubtaskId)
+                .Distinct()
+                .OrderBy(id => id))
+                toFail.Enqueue(next);
+        }
     }
 
     /// <summary>
@@ -657,6 +730,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
     {
         var lastSeq = 0;
+        object? lastPartialOutput = null;
 
         while (!ct.IsCancellationRequested)
         {
@@ -679,6 +753,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     receivedEvent = true;
 
                     BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
+                    if (IsPartialOutputEvent(evt))
+                        lastPartialOutput = evt.Payload;
 
                     if (TryMapTerminalEvent(evt, out var outcome))
                     {
@@ -697,6 +773,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) emitted no event " +
                     "within the stall TTL ({Timeout}); treating as stalled",
                     childRunId, subtaskId, _stallTimeout);
+                await PersistPartialOutputCheckpointAsync(
+                    childRunId, subtaskId, lastSeq, lastPartialOutput, "event_stream_stalled", ct)
+                    .ConfigureAwait(false);
                 return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled, DateTimeOffset.UtcNow);
             }
 
@@ -707,6 +786,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 // SubscribeAsync completed with no events (channel was closed without a terminal
                 // event) — fall back to the store for a definitive status.
+                await PersistPartialOutputCheckpointAsync(
+                    childRunId, subtaskId, lastSeq, lastPartialOutput, "event_stream_closed", ct)
+                    .ConfigureAwait(false);
                 var storeOutcome = await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false);
                 return new ChildResult(subtaskId, childRunId, storeOutcome ?? ChildOutcome.Failed);
             }
@@ -727,6 +809,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     {
         var entry = _streamStore.Get(childRunId);
         var lastSeq = 0;
+        object? lastPartialOutput = null;
 
         while (!ct.IsCancellationRequested)
         {
@@ -747,12 +830,17 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 lastSeq = evt.Sequence;
                 BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
+                if (IsPartialOutputEvent(evt))
+                    lastPartialOutput = evt.Payload;
                 if (TryMapTerminalEvent(evt, out var outcome))
                     return new ChildResult(subtaskId, childRunId, outcome);
             }
 
             if (snapshot.IsCompleted)
             {
+                await PersistPartialOutputCheckpointAsync(
+                    childRunId, subtaskId, lastSeq, lastPartialOutput, "stream_store_completed_without_terminal", ct)
+                    .ConfigureAwait(false);
                 var byStore = await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false);
                 return new ChildResult(subtaskId, childRunId, byStore ?? ChildOutcome.Failed);
             }
@@ -795,6 +883,53 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         return DateTimeOffset.UtcNow - lastActivity >= _stallTimeout ? lastActivity : null;
     }
+
+    private async Task PersistPartialOutputCheckpointAsync(
+        string childRunId,
+        int subtaskId,
+        int lastSequence,
+        object? partialOutput,
+        string reason,
+        CancellationToken ct)
+    {
+        if (partialOutput is null)
+            return;
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var nextSeq = ((await db.RunEvents
+                .Where(e => e.RunId == childRunId)
+                .MaxAsync(e => (int?)e.Sequence, ct).ConfigureAwait(false)) ?? 0) + 1;
+
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = childRunId,
+                Sequence = nextSeq,
+                EventType = "run.partial_output",
+                PayloadJson = JsonSerializer.Serialize(new
+                {
+                    subtaskId,
+                    lastSequence,
+                    reason,
+                    partialOutput,
+                    timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+                }),
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Coordinator observation: failed to persist partial output checkpoint for child {ChildRunId}",
+                childRunId);
+        }
+    }
+
+    private static bool IsPartialOutputEvent(RunEvent evt) =>
+        evt.Type is EventTypes.AgentMessage or EventTypes.AgentMessageDelta;
 
     /// <summary>
     /// Re-projects a child run's mid-run question (<see cref="EventTypes.AgentQuestionAsked"/>) or
@@ -852,6 +987,54 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     {
         if (_runOptions is null) return;
         _runOptions.Set(childRunId, _runOptions.Get(coordinatorRunId));
+    }
+
+    private async Task<List<(int, int)>> SerializeDeclaredOutputConflictsAsync(
+        int workPlanId,
+        IReadOnlyList<Subtask> subtasks,
+        List<(int, int)> edges,
+        CancellationToken ct)
+    {
+        var existing = edges.ToHashSet();
+        var additions = new List<(int SubtaskId, int DependsOnSubtaskId)>();
+        var byOutput = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var subtask in subtasks.OrderBy(s => s.Id))
+        {
+            foreach (var output in AssemblyPlanning.ExtractFileTokens(subtask.Scope))
+            {
+                if (!byOutput.TryGetValue(output, out var owner))
+                {
+                    byOutput[output] = subtask.Id;
+                    continue;
+                }
+
+                var edge = (subtask.Id, owner);
+                if (subtask.Id != owner && !existing.Contains(edge) && !additions.Contains(edge))
+                    additions.Add(edge);
+            }
+        }
+
+        if (additions.Count == 0)
+            return edges;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        foreach (var (subtaskId, dependsOnSubtaskId) in additions)
+        {
+            db.SubtaskDependencies.Add(new SubtaskDependency
+            {
+                SubtaskId = subtaskId,
+                DependsOnSubtaskId = dependsOnSubtaskId,
+            });
+            edges.Add((subtaskId, dependsOnSubtaskId));
+        }
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        _logger.LogWarning(
+            "Coordinator dispatch: serialized {Count} output-file conflict(s) in work plan {WorkPlanId}",
+            additions.Count, workPlanId);
+        return edges;
     }
 
     private static bool TryMapTerminalEvent(RunEvent evt, out ChildOutcome outcome)
@@ -1026,19 +1209,119 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             topologySeq));
     }
 
-    private static string ComposeChildTask(Subtask subtask)
+    private async Task<string> ComposeChildTaskAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        Subtask subtask,
+        CancellationToken ct)
     {
         var baseTask = string.IsNullOrWhiteSpace(subtask.Scope)
             ? subtask.Title
             : $"{subtask.Title}\n\n{subtask.Scope}";
 
-        // A re-dispatched subtask that was resumed by steering recovery carries guidance (the human's
-        // steering instruction + the failure context). Append it so the worker re-does the work
-        // against the latest state and addresses the feedback.
-        return string.IsNullOrWhiteSpace(subtask.RecoveryGuidance)
-            ? baseTask
-            : $"{baseTask}\n\n{subtask.RecoveryGuidance}";
+        if (!string.IsNullOrWhiteSpace(subtask.RecoveryGuidance))
+            baseTask = $"{baseTask}\n\n{subtask.RecoveryGuidance}";
+
+        var sb = new StringBuilder(baseTask);
+        sb.AppendLine();
+        sb.AppendLine();
+        sb.AppendLine("## Coordinator context");
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.Id == workPlanId, ct).ConfigureAwait(false);
+        if (plan is not null)
+        {
+            var outcome = await db.OutcomeSpecs.AsNoTracking()
+                .FirstOrDefaultAsync(o => o.Id == plan.OutcomeSpecId, ct).ConfigureAwait(false);
+            if (outcome is not null)
+            {
+                sb.AppendLine("### Parent outcome spec");
+                sb.AppendLine($"Desired outcome: {TrimForPrompt(outcome.DesiredOutcome, 1200)}");
+                sb.AppendLine($"Scope: {TrimForPrompt(outcome.Scope, 1200)}");
+                if (!string.IsNullOrWhiteSpace(outcome.Assumptions))
+                    sb.AppendLine($"Assumptions: {TrimForPrompt(outcome.Assumptions, 800)}");
+            }
+        }
+
+        var allSubtasks = await db.Subtasks.AsNoTracking()
+            .Where(s => s.WorkPlanId == workPlanId)
+            .OrderBy(s => s.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var ids = allSubtasks.Select(s => s.Id).ToHashSet();
+        var deps = await db.SubtaskDependencies.AsNoTracking()
+            .Where(d => ids.Contains(d.SubtaskId))
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var byId = allSubtasks.ToDictionary(s => s.Id);
+        var dependencyIds = deps
+            .Where(d => d.SubtaskId == subtask.Id)
+            .Select(d => d.DependsOnSubtaskId)
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList();
+        if (dependencyIds.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("### Dependencies already completed");
+            foreach (var depId in dependencyIds)
+            {
+                if (!byId.TryGetValue(depId, out var dep)) continue;
+                sb.Append("- Subtask ").Append(dep.Id).Append(": ").Append(dep.Title)
+                    .Append(" [").Append(dep.Status).Append(']');
+                var summary = await CompletionSummaryAsync(dep, ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(summary))
+                    sb.Append(" — ").Append(summary);
+                sb.AppendLine();
+            }
+        }
+
+        var completedSiblings = allSubtasks
+            .Where(s => s.Id != subtask.Id && s.Status is SubtaskStatus.AssembleReady or SubtaskStatus.Completed)
+            .OrderBy(s => s.Id)
+            .ToList();
+        if (completedSiblings.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("### Completed sibling outputs");
+            foreach (var sibling in completedSiblings)
+            {
+                sb.Append("- Subtask ").Append(sibling.Id).Append(": ").Append(sibling.Title);
+                var summary = await CompletionSummaryAsync(sibling, ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(summary))
+                    sb.Append(" — ").Append(summary);
+                sb.AppendLine();
+            }
+        }
+
+        return sb.ToString();
     }
+
+    private async Task<string?> CompletionSummaryAsync(Subtask subtask, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(subtask.ChildRunId)
+            || !RunId.TryParse(subtask.ChildRunId, out var childId))
+            return null;
+
+        var run = await _runStore.GetAsync(childId, ct).ConfigureAwait(false);
+        if (run is null) return null;
+        if (!string.IsNullOrWhiteSpace(run.Result))
+            return TrimForPrompt(run.Result, 700);
+        var files = AssemblyPlanning.ExtractTouchedFiles(run.Diff).Take(8).ToList();
+        if (files.Count > 0)
+            return "Touched files: " + string.Join(", ", files);
+        return run.Status.ToString();
+    }
+
+    private static string TrimForPrompt(string value, int maxChars)
+    {
+        var compact = value.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ').Trim();
+        return compact.Length <= maxChars ? compact : compact[..maxChars] + "…";
+    }
+
+    private static string ApprovalScopeKey(string? projectId, string coordinatorRunId, int subtaskId) =>
+        $"{projectId ?? "no-project"}:{coordinatorRunId}:subtask:{subtaskId}";
 
     /// <summary>
     /// Returns true when the candidate subtask conflicts with at least one of the currently in-flight
@@ -1122,6 +1405,12 @@ public static class WorkPlanStatus
 
     /// <summary>The reviewer declined the collective output (not request-changes). Terminal.</summary>
     public const string AssemblyDeclined = "assembly_declined";
+
+    /// <summary>Collective RAI flagged the aggregate diff; human override is required before merge.</summary>
+    public const string RaiBlocked = "rai_blocked";
+
+    /// <summary>Merge conflicts need explicit human resolution before the coordinator can proceed.</summary>
+    public const string NeedsResolution = "needs_resolution";
 }
 
 /// <summary>

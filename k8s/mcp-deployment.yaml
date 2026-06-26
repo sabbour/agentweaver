@@ -16,7 +16,11 @@ spec:
       labels:
         app: agentweaver-mcp
         app.kubernetes.io/part-of: agentweaver
+        azure.workload.identity/use: "true"
+      annotations:
+        secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
     spec:
+      serviceAccountName: agentweaver-api
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -25,6 +29,15 @@ spec:
         - name: mcp
           image: ${ACR_LOGIN_SERVER}/agentweaver-mcp:${IMAGE_TAG}
           imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              export AGENTWEAVER_API_KEY="$(cat /mnt/secrets-store/mcp-api-key)"
+              export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-auth-api-key)"
+              export Auth__User="$(cat /mnt/secrets-store/mcp-auth-user)"
+              exec dotnet Agentweaver.Mcp.dll
           ports:
             - name: http
               containerPort: 8080
@@ -32,28 +45,12 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
-            # URL of the in-cluster Agentweaver API.
             - name: AGENTWEAVER_API_URL
               value: http://agentweaver-api:8080
-            # API key used by the MCP server to authenticate with the Agentweaver API.
-            # Store in a Kubernetes Secret and reference here.
-            - name: AGENTWEAVER_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: agentweaver-mcp-secrets
-                  key: api-key
-            # Inbound bearer auth: Agentweaver API key accepted from external callers.
-            # Must match a key registered in the Agentweaver API (same Auth:ApiKey value).
-            - name: Auth__ApiKey
-              valueFrom:
-                secretKeyRef:
-                  name: agentweaver-mcp-secrets
-                  key: auth-api-key
-            - name: Auth__User
-              valueFrom:
-                secretKeyRef:
-                  name: agentweaver-mcp-secrets
-                  key: auth-user
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -81,3 +78,10 @@ spec:
             capabilities:
               drop:
                 - ALL
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentweaver-mcp-secrets

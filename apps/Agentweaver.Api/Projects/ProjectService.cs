@@ -76,7 +76,7 @@ public sealed class ProjectService
         }
         catch
         {
-            if (appCreatedDir) TryDeleteDirectory(workingDir);
+            TryDeleteDirectory(workingDir);
             throw;
         }
 
@@ -128,6 +128,7 @@ public sealed class ProjectService
         ValidateName(name);
         if (string.IsNullOrWhiteSpace(sourceRepository))
             throw new ArgumentException("Source repository must not be empty.", nameof(sourceRepository));
+        ValidateGitHubHttpsUrl(sourceRepository);
 
         var id = ProjectId.New();
         var workingDir = await _workspace.ResolveWorkingDirectoryAsync(id, requestedPath, ct)
@@ -163,12 +164,12 @@ public sealed class ProjectService
         }
         catch
         {
-            if (dirWasCreated) TryDeleteDirectory(workingDir);
+            TryDeleteDirectory(workingDir);
             throw;
         }
 
         // Materialize the default workflow into the cloned project (Feature 010). Best-effort and
-        // non-clobbering: TryMaterialize skips the write when .scaffolders/workflows/default.yaml
+        // non-clobbering: TryMaterialize skips the write when .agentweaver/workflows/default.yaml
         // already exists, so a repo that ships its own workflows is never overwritten. Never fails
         // creation; the loader regenerates the default from DefaultWorkflowTemplate at runtime.
         TryMaterializeDefaultWorkflow(workingDir);
@@ -335,6 +336,25 @@ public sealed class ProjectService
         return true;
     }
 
+    public async Task RollbackCreationAsync(
+        ProjectId id,
+        SqliteRunStore runStore,
+        RunWorkflowRegistry workflowRegistry,
+        CancellationToken ct = default)
+    {
+        var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
+        if (project is null) return;
+
+        try
+        {
+            await DeleteAsync(id, runStore, workflowRegistry, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            TryDeleteDirectory(project.WorkingDirectory);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Read helpers
     // -----------------------------------------------------------------------
@@ -380,6 +400,9 @@ public sealed class ProjectService
     private static ProjectProviderSettings BuildProviderSettings(
         string? defaultProvider, string? defaultModelCopilot, string? defaultModelFoundry)
     {
+        ValidateModelId(defaultModelCopilot, nameof(defaultModelCopilot));
+        ValidateModelId(defaultModelFoundry, nameof(defaultModelFoundry));
+
         var provider = string.IsNullOrWhiteSpace(defaultProvider)
             ? ModelSource.GitHubCopilot
             : ModelSourceExtensions.FromApiString(defaultProvider);
@@ -389,6 +412,28 @@ public sealed class ProjectService
             GitHubCopilotModel = string.IsNullOrWhiteSpace(defaultModelCopilot) ? null : defaultModelCopilot,
             MicrosoftFoundryModel = string.IsNullOrWhiteSpace(defaultModelFoundry) ? null : defaultModelFoundry
         };
+    }
+
+    private static void ValidateGitHubHttpsUrl(string sourceRepository)
+    {
+        if (!Uri.TryCreate(sourceRepository, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
+            !sourceRepository.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            throw new ArgumentException("source_repository must be an HTTPS GitHub URL starting with https://github.com/.", nameof(sourceRepository));
+        }
+    }
+
+    private static void ValidateModelId(string? modelId, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(modelId)) return;
+        var value = modelId.Trim();
+        if (!(value.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase) ||
+              value.StartsWith("claude-", StringComparison.OrdinalIgnoreCase) ||
+              value.StartsWith("o", StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException($"Model id '{modelId}' is not allowed.", paramName);
     }
 
     private void TryDeleteDirectory(string path)
@@ -406,7 +451,7 @@ public sealed class ProjectService
 
     /// <summary>
     /// Best-effort materialization of the default workflow into the project's working directory at
-    /// <c>.scaffolders/workflows/default.yaml</c> (Feature 010). Non-clobbering and never throws:
+    /// <c>.agentweaver/workflows/default.yaml</c> (Feature 010). Non-clobbering and never throws:
     /// project creation must not fail if this write fails, because the workflow loader regenerates the
     /// default from <see cref="DefaultWorkflowTemplate"/> at runtime.
     /// </summary>
@@ -425,7 +470,7 @@ public sealed class ProjectService
 
     /// <summary>
     /// Best-effort materialization of the default review policy into the project's working directory at
-    /// <c>.scaffolders/review-policies/default.yaml</c> (Feature 010, FR-032). Non-clobbering and never
+    /// <c>.agentweaver/review-policies/default.yaml</c> (Feature 010, FR-032). Non-clobbering and never
     /// throws: project creation must not fail if this write fails, because the review-policy registry
     /// regenerates the default from <see cref="ReviewPolicies.DefaultReviewPolicyTemplate"/> at runtime.
     /// </summary>

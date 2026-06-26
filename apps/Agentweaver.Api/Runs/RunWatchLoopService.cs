@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -26,6 +27,7 @@ public sealed class RunWatchLoopService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<RunWatchLoopService> _logger;
     private readonly CancellationToken _appStopping;
+    private readonly TimeSpan _watchLoopTimeout;
 
     public RunWatchLoopService(
         SqliteRunStore runStore,
@@ -35,6 +37,7 @@ public sealed class RunWatchLoopService
         RunWorkflowFactory factory,
         IWorktreeOperations worktreeOps,
         IHostApplicationLifetime lifetime,
+        IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
         ILogger<RunWatchLoopService> logger)
     {
@@ -47,6 +50,7 @@ public sealed class RunWatchLoopService
         _scopeFactory = scopeFactory;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+        _watchLoopTimeout = ResolveWatchLoopTimeout(configuration);
     }
 
     /// <summary>
@@ -63,6 +67,7 @@ public sealed class RunWatchLoopService
         _ = Task.Run(async () =>
         {
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
+            linkedCts.CancelAfter(_watchLoopTimeout);
             try
             {
                 await WatchAsync(runId, streamingRun, entry, ownerUser, linkedCts.Token).ConfigureAwait(false);
@@ -74,6 +79,13 @@ public sealed class RunWatchLoopService
             catch (OperationCanceledException) when (runCt.IsCancellationRequested && !_appStopping.IsCancellationRequested)
             {
                 _logger.LogInformation("Old workflow abandoned for run {RunId}", runId);
+            }
+            catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && !_appStopping.IsCancellationRequested)
+            {
+                _logger.LogWarning(
+                    "Watch loop timed out for run {RunId} after {Timeout}; transitioning to Failed",
+                    runId, _watchLoopTimeout);
+                await FailRunSafeAsync(runId, entry, "watch_loop_timeout").ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -145,6 +157,7 @@ public sealed class RunWatchLoopService
                         var isTerminal = await HandleTerminalOutputAsync(runId, woe, entry, ct).ConfigureAwait(false);
                         if (isTerminal)
                         {
+                            await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
                             _registry.Abandon(runId);
                             _factory.DeleteCheckpoints(runId);
                             _factory.ClearRunExecutorMeta(runId);
@@ -155,6 +168,21 @@ public sealed class RunWatchLoopService
                         break;
             }
         }
+
+        _logger.LogWarning(
+            "Workflow stream ended for run {RunId} without a terminal event; transitioning to Failed",
+            runId);
+        await FailRunSafeAsync(runId, entry, "watch_stream_completed_without_terminal_event").ConfigureAwait(false);
+    }
+
+    private static TimeSpan ResolveWatchLoopTimeout(IConfiguration configuration)
+    {
+        const string primaryKey = "Runs:WatchLoopTimeout";
+        const string fallbackKey = "RunWatchLoop:Timeout";
+        var configured = configuration[primaryKey] ?? configuration[fallbackKey];
+        return TimeSpan.TryParse(configured, out var timeout) && timeout > TimeSpan.Zero
+            ? timeout
+            : TimeSpan.FromHours(4);
     }
 
     /// <summary>
@@ -250,6 +278,19 @@ public sealed class RunWatchLoopService
                 return false;
             }
 
+            if (mergeOutput.Status == "completed")
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, mergeOutput.MergeResult ?? "completed", CancellationToken.None).ConfigureAwait(false);
+
+                entry.RecordNext(EventTypes.RunCompleted, new { result = mergeOutput.MergeResult ?? "completed" });
+
+                _streamStore.Complete(runId);
+                _ = _factory.PersistRunEventsAsync(runId);
+                _ = FirePostRunScribeAsync(runId);
+                return true;
+            }
+
             // merge_failed (conflict, lock failure, internal error)
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
@@ -260,6 +301,7 @@ public sealed class RunWatchLoopService
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
+            _ = FirePostRunScribeAsync(runId);
             return true;
         }
 
@@ -339,6 +381,7 @@ public sealed class RunWatchLoopService
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
+            _ = FirePostRunScribeAsync(runId);
             return true;
         }
 
@@ -356,13 +399,14 @@ public sealed class RunWatchLoopService
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
+            _ = FirePostRunScribeAsync(runId);
             return true;
         }
 
-        // Unknown output type — treat as non-terminal to avoid data loss.
-        _logger.LogWarning(
-            "Unrecognized WorkflowOutputEvent type for run {RunId}; treating as non-terminal", runId);
-        return false;
+        _logger.LogError(
+            "Unrecognized WorkflowOutputEvent type for run {RunId}; transitioning to Failed", runId);
+        await FailRunSafeAsync(runId, entry, "unknown_workflow_output").ConfigureAwait(false);
+        return true;
     }
 
     private async Task FirePostRunScribeAsync(string runId)
@@ -408,6 +452,8 @@ public sealed class RunWatchLoopService
             entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
+            _ = FirePostRunScribeAsync(runId);
+            await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -418,5 +464,34 @@ public sealed class RunWatchLoopService
             _registry.Abandon(runId);
             _factory.ClearRunExecutorMeta(runId);
         }
+    }
+
+    private Task StopPortForwardsSafeAsync(string runId)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            scope.ServiceProvider.GetService<IPodNameRegistry>()?.Unregister(runId);
+
+            var portForwardService = scope.ServiceProvider.GetService<PortForwardService>();
+            if (portForwardService is null)
+                return Task.CompletedTask;
+
+            foreach (var session in portForwardService.ListForRun(runId))
+            {
+                if (!portForwardService.Stop(runId, session.SessionId))
+                {
+                    _logger.LogWarning(
+                        "Port-forward session {SessionId} for run {RunId} could not be stopped",
+                        session.SessionId, runId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to stop port-forward sessions for run {RunId}", runId);
+        }
+
+        return Task.CompletedTask;
     }
 }

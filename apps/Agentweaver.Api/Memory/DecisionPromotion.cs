@@ -16,11 +16,15 @@ public static class DecisionPromotion
     public static readonly string[] CoordinatorReviewTypes = ["architectural", "scope"];
 
     /// <summary>
-    /// Marks a pending inbox <paramref name="entry"/> as merged and adds the corresponding active
-    /// <see cref="Decision"/> to <paramref name="db"/>. Does NOT save or open a transaction — the
-    /// caller owns persistence so it can batch and control transactional scope.
+    /// Marks a pending inbox <paramref name="entry"/> as merged, adds the corresponding active
+    /// <see cref="Decision"/> to <paramref name="db"/>, then persists the generated decision id
+    /// back to the inbox entry. Does NOT open a transaction — the caller owns transactional scope.
     /// </summary>
-    public static Decision PromoteEntry(MemoryDbContext db, DecisionInboxEntry entry, DateTimeOffset now)
+    public static async Task<Decision> PromoteEntry(
+        MemoryDbContext db,
+        DecisionInboxEntry entry,
+        DateTimeOffset now,
+        CancellationToken ct = default)
     {
         entry.Status = "merged";
         entry.UpdatedAt = now;
@@ -39,6 +43,9 @@ public static class DecisionPromotion
             UpdatedAt = now,
         };
         db.Decisions.Add(decision);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        entry.DecisionId = decision.Id;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
         return decision;
     }
 
@@ -67,9 +74,8 @@ public static class DecisionPromotion
 
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in pending)
-            PromoteEntry(db, entry, now);
+            await PromoteEntry(db, entry, now, ct).ConfigureAwait(false);
 
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return pending.Count;
     }

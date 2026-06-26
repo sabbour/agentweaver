@@ -370,9 +370,17 @@ app.MapGet("/api/runs/{id}/stream", async (
                 return;
             }
 
-        if (!isSubStream && (run is null || !caller.Owns(run.SubmittingUser)))
+        if (run is null)
         {
             httpContext.Response.StatusCode = 404;
+            return;
+        }
+
+        if (!caller.Owns(run.SubmittingUser))
+        {
+            httpContext.Response.StatusCode = isSubStream
+                ? StatusCodes.Status403Forbidden
+                : StatusCodes.Status404NotFound;
             return;
         }
 
@@ -1635,13 +1643,17 @@ app.MapPost("/api/runs/{id}/autopilot", async (
 });
 
 app.MapGet("/api/sandbox-policy", async (
+    HttpContext httpContext,
     string? repository_path,
     ISandboxPolicyStore policyStore,
+    IProjectStore projectStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(repository_path))
         return Results.BadRequest(new { error = "repository_path is required." });
+    var auth = await AuthorizeRepositoryPathAsync(httpContext, repository_path, projectStore, ct);
+    if (auth.Error is not null) return auth.Error;
 
     try
     {
@@ -1656,13 +1668,20 @@ app.MapGet("/api/sandbox-policy", async (
 });
 
 app.MapPut("/api/sandbox-policy", async (
+    HttpContext httpContext,
     SandboxPolicyUpdateRequest request,
     ISandboxPolicyStore policyStore,
+    IProjectStore projectStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.RepositoryPath))
         return Results.BadRequest(new { error = "repository_path is required." });
+    var auth = await AuthorizeRepositoryPathAsync(httpContext, request.RepositoryPath, projectStore, ct);
+    if (auth.Error is not null) return auth.Error;
+    var validationErrors = ValidateSandboxPolicyRequest(request);
+    if (validationErrors.Count > 0)
+        return Results.BadRequest(new { error = "invalid_sandbox_policy", details = validationErrors });
 
     try
     {
@@ -2215,6 +2234,58 @@ static void EnumerateGitTree(Tree tree, string prefix, List<WorkspaceNode> nodes
             nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = false, Status = null });
         }
     }
+}
+
+static async Task<(IResult? Error, Project? Project)> AuthorizeRepositoryPathAsync(
+    HttpContext httpContext,
+    string repositoryPath,
+    IProjectStore projectStore,
+    CancellationToken ct)
+{
+    string canonical;
+    try { canonical = Path.GetFullPath(repositoryPath); }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        return (Results.BadRequest(new { error = "Invalid repository_path." }), null);
+    }
+
+    var project = (await projectStore.ListAsync(ct).ConfigureAwait(false))
+        .FirstOrDefault(p => string.Equals(
+            Path.GetFullPath(p.WorkingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            canonical.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+
+    if (project is null) return (Results.NotFound(new { error = "repository_path is not a known project workspace." }), null);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (!caller.Owns(project.Owner) &&
+        !string.Equals(caller.User, "admin", StringComparison.OrdinalIgnoreCase))
+        return (Results.StatusCode(StatusCodes.Status403Forbidden), null);
+
+    return (null, project);
+}
+
+static IReadOnlyList<string> ValidateSandboxPolicyRequest(SandboxPolicyUpdateRequest request)
+{
+    var errors = new List<string>();
+    if (request.MaxOutputBytes is not null && (request.MaxOutputBytes <= 0 || request.MaxOutputBytes > 100 * 1024 * 1024))
+        errors.Add("max_output_bytes must be greater than 0 and at most 100MB.");
+    if (request.AllowedRepositoryRoots is { Count: > 20 })
+        errors.Add("allowed_repository_roots must contain at most 20 entries.");
+    if (request.AllowedRepositoryRoots is not null)
+    {
+        foreach (var root in request.AllowedRepositoryRoots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                errors.Add("allowed_repository_roots entries must not be empty.");
+                continue;
+            }
+            if (Path.IsPathRooted(root) || root.StartsWith("/", StringComparison.Ordinal) || root.StartsWith("\\", StringComparison.Ordinal))
+                errors.Add($"allowed_repository_roots entry '{root}' must be a relative path.");
+        }
+    }
+    return errors;
 }
 
 /// <summary>

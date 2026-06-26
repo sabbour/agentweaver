@@ -792,10 +792,12 @@ public sealed record UpdateDecisionRequest
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("content")] public string? Content { get; init; }
     [JsonPropertyName("rationale")] public string? Rationale { get; init; }
+    [JsonPropertyName("superseded_by_id")] public int? SupersededById { get; init; }
 }
 
 public sealed record RecordMemoryRequest
 {
+    [JsonPropertyName("session_id")] public string? SessionId { get; init; }
     [JsonPropertyName("type")] public string? Type { get; init; }
     [JsonPropertyName("importance")] public string? Importance { get; init; }
     [JsonPropertyName("content")] public string? Content { get; init; }
@@ -808,6 +810,7 @@ public sealed record StartSessionRequest
     [JsonPropertyName("focus_area")] public string? FocusArea { get; init; }
     [JsonPropertyName("active_issues")] public string? ActiveIssues { get; init; }
     [JsonPropertyName("summary")] public string? Summary { get; init; }
+    [JsonPropertyName("serialized_state")] public string? SerializedState { get; init; }
 }
 
 public sealed record UpdateSessionRequest
@@ -815,6 +818,7 @@ public sealed record UpdateSessionRequest
     [JsonPropertyName("focus_area")] public string? FocusArea { get; init; }
     [JsonPropertyName("active_issues")] public string? ActiveIssues { get; init; }
     [JsonPropertyName("summary")] public string? Summary { get; init; }
+    [JsonPropertyName("serialized_state")] public string? SerializedState { get; init; }
     [JsonPropertyName("end")] public bool? End { get; init; }
 }
 
@@ -1002,6 +1006,8 @@ public sealed record CaptureBacklogTaskRequest
 {
     [JsonPropertyName("title")] public string? Title { get; init; }
     [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("client_request_id")] public string? ClientRequestId { get; init; }
+    [JsonPropertyName("external_id")] public string? ExternalId { get; init; }
 }
 
 /// <summary>Request body for PATCH /api/projects/{projectId}/backlog/tasks/{taskId}.</summary>
@@ -1037,7 +1043,9 @@ public sealed record BacklogTaskDto
     [JsonPropertyName("committed_at")] public DateTimeOffset? CommittedAt { get; init; }
     [JsonPropertyName("claimed_at")] public DateTimeOffset? ClaimedAt { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("workflow_override_id")] public string? WorkflowOverrideId { get; init; }
     [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
+    [JsonPropertyName("external_id")] public string? ExternalId { get; init; }
 }
 
 /// <summary>Per-project pickup settings (FR-008a + unattended seeding).</summary>
@@ -1074,6 +1082,7 @@ public sealed record TaskCardDto
     [JsonPropertyName("captured_by")] public required string CapturedBy { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
     [JsonPropertyName("committed_at")] public DateTimeOffset? CommittedAt { get; init; }
+    [JsonPropertyName("workflow_override_id")] public string? WorkflowOverrideId { get; init; }
     [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
 }
 

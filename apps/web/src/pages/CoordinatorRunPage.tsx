@@ -48,7 +48,6 @@ import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse } from '../api/types';
-import { API_KEY, API_URL } from '../config';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
@@ -570,7 +569,7 @@ function SubtaskNode({ id, data }: NodeProps) {
 
   // Subscribe to the child run's live SSE events only while expanded; tear down on collapse.
   const childStreamRunId = expanded && d.childRunId ? (d.childRunId as string) : '';
-  const { events: childEvents } = useRunStream(childStreamRunId, API_KEY, API_URL);
+  const { events: childEvents } = useRunStream(childStreamRunId);
 
   // Map workflow.step events from the child run to executor states.
   const childStepStates = useMemo<Record<string, ExecutorState>>(() => {
@@ -1011,7 +1010,7 @@ export function CoordinatorRunPage() {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
 
-  const { events, status: streamStatus } = useRunStream(runId ?? '', API_KEY, API_URL);
+  const { events, status: streamStatus } = useRunStream(runId ?? '');
 
   // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
   const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();

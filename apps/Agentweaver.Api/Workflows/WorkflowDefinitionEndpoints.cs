@@ -102,7 +102,10 @@ public static class WorkflowDefinitionEndpoints
                 }
             }
 
-            var updated = await projectStore.GetAsync(project!.Id, ct);
+            var now = DateTimeOffset.UtcNow;
+            await projectStore.UpdateDefaultWorkflowAsync(project!.Id, workflowId, now, ct);
+
+            var updated = await projectStore.GetAsync(project.Id, ct);
             if (updated is null) return Results.NotFound();
             return Results.Ok(BuildListResponse(updated, registry.GetOrLoad(updated)));
         });
@@ -128,8 +131,20 @@ public static class WorkflowDefinitionEndpoints
                 return Results.BadRequest(new { error = "Invalid task id." });
 
             var workflowId = Normalize(request.WorkflowId);
-            if (workflowId is not null && registry.Get(project!, workflowId)?.Definition is null)
-                return Results.BadRequest(new { error = "unknown_workflow_id" });
+            if (workflowId is not null)
+            {
+                var candidate = registry.Get(project!, workflowId)?.Definition;
+                if (candidate is null)
+                    return Results.BadRequest(new { error = "unknown_workflow_id" });
+
+                var validationErrors = RunWorkflowGraphBinder.GetBindabilityErrors(candidate);
+                if (validationErrors.Count > 0)
+                    return Results.BadRequest(new
+                    {
+                        error = "workflow_not_bindable",
+                        validation_errors = validationErrors,
+                    });
+            }
 
             var task = await backlogStore.GetAsync(project!.Id, tid, ct);
             if (task is null) return Results.NotFound();
@@ -220,7 +235,6 @@ public static class WorkflowDefinitionEndpoints
             {
                 var preDeserializer = new YamlDotNet.Serialization.DeserializerBuilder()
                     .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
-                    .IgnoreUnmatchedProperties()
                     .Build();
                 preDeserializer.Deserialize<object>(request.Yaml);
             }
@@ -233,7 +247,12 @@ public static class WorkflowDefinitionEndpoints
             // Step 2: Full load + structural validation via the real loader.
             var loadResult = WorkflowDefinitionLoader.Load(request.Yaml, workflowId);
             if (!loadResult.IsValid || loadResult.Definition is null)
-                return Results.BadRequest(new { error = loadResult.Error ?? "Workflow validation failed.", line = errorLine });
+                return Results.BadRequest(new
+                {
+                    error = loadResult.Error ?? "Workflow validation failed.",
+                    line = errorLine,
+                    warnings = loadResult.Warnings,
+                });
 
             var definition = loadResult.Definition;
 

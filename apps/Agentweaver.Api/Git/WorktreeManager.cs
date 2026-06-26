@@ -1,8 +1,12 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using LibGit2Sharp;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 
@@ -19,6 +23,7 @@ public sealed class WorktreeManager
     private readonly string _basePath;
     private readonly Signature _signature;
     private readonly ILogger<WorktreeManager> _logger;
+    private readonly IServiceScopeFactory? _scopeFactory;
 
     // Short-lived cache for committed diff results (5 s TTL).
     // Committed changes only vary when the agent pushes a new commit, so caching
@@ -29,9 +34,13 @@ public sealed class WorktreeManager
 
     private static readonly TimeSpan CommittedCacheTtl = TimeSpan.FromSeconds(5);
 
-    public WorktreeManager(IConfiguration configuration, ILogger<WorktreeManager> logger)
+    public WorktreeManager(
+        IConfiguration configuration,
+        ILogger<WorktreeManager> logger,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _logger = logger;
+        _scopeFactory = scopeFactory;
         var configuredBase = configuration["Worktrees:BasePath"];
         _basePath = string.IsNullOrWhiteSpace(configuredBase)
             ? Path.Combine(AppPaths.DataDirectory, "worktrees")
@@ -89,7 +98,10 @@ public sealed class WorktreeManager
     {
         using var repo = new Repository(worktreePath);
 
-        Commands.Stage(repo, "*");
+        Commands.Unstage(repo, "*");
+        var pathsToStage = ResolveStagingPaths(repo, worktreePath, runId);
+        foreach (var path in pathsToStage)
+            Commands.Stage(repo, path);
 
         // Check whether staging produced any actual changes vs HEAD. Creating an empty commit when
         // the agent wrote nothing causes the child branch to diverge from the origin with a
@@ -108,6 +120,132 @@ public sealed class WorktreeManager
             signature);
 
         return commit.Tree.Sha;
+    }
+
+    private IReadOnlyList<string> ResolveStagingPaths(Repository repo, string worktreePath, RunId runId)
+    {
+        var status = repo.RetrieveStatus(new StatusOptions
+        {
+            IncludeUntracked = true,
+            IncludeIgnored = false,
+            RecurseUntrackedDirs = true,
+            RecurseIgnoredDirs = false,
+        });
+
+        var changed = status
+            .Where(e => e.State != 0 && (e.State & FileStatus.Ignored) == 0)
+            .Select(e => NormalizePathSeparators(e.FilePath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (changed.Count == 0)
+            return [];
+
+        var subtaskScope = TryLoadSubtaskScope(runId);
+        if (string.IsNullOrWhiteSpace(subtaskScope))
+            return changed;
+
+        var declaredOutputs = ExtractDeclaredPaths(subtaskScope);
+        if (declaredOutputs.Count > 0)
+        {
+            var selected = changed
+                .Where(path => declaredOutputs.Any(output => PathMatchesDeclaration(path, output)))
+                .ToList();
+            if (selected.Count == 0)
+                _logger.LogWarning(
+                    "Run {RunId} declared output file(s) but none matched changed files; no files will be committed",
+                    runId);
+            return selected;
+        }
+
+        var workingDir = ExtractDeclaredWorkingDirectory(subtaskScope);
+        var newOrModified = status
+            .Where(e => IsNewOrModified(e.State))
+            .Select(e => NormalizePathSeparators(e.FilePath))
+            .Where(path => string.IsNullOrEmpty(workingDir) || IsUnderDirectory(path, workingDir))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return newOrModified;
+    }
+
+    private string? TryLoadSubtaskScope(RunId runId)
+    {
+        if (_scopeFactory is null)
+            return null;
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var runStore = scope.ServiceProvider.GetRequiredService<SqliteRunStore>();
+            var run = runStore.GetAsync(runId, CancellationToken.None).GetAwaiter().GetResult();
+            if (run?.SubtaskId is null || !int.TryParse(run.SubtaskId, out var subtaskId))
+                return null;
+
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            return db.Subtasks.AsNoTracking()
+                .Where(s => s.Id == subtaskId)
+                .Select(s => s.Scope)
+                .FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not resolve declared output files for run {RunId}; falling back to changed files",
+                runId);
+            return null;
+        }
+    }
+
+    private static readonly Regex PathLikeToken = new(
+        @"(?<![\w./\\-])(?:[\w.+\-]+[/\\])+[\w.+\-]+|(?<![\w./\\-])[\w.+\-]+\.[A-Za-z0-9]{1,8}",
+        RegexOptions.Compiled);
+
+    private static IReadOnlyList<string> ExtractDeclaredPaths(string scope)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (Match match in PathLikeToken.Matches(scope))
+        {
+            var path = NormalizePathSeparators(match.Value).Trim('/');
+            if (path.Length == 0 || path.Split('/').Any(seg => seg == "..") || Path.IsPathRooted(path))
+                continue;
+            if (seen.Add(path))
+                result.Add(path);
+        }
+        return result;
+    }
+
+    private static string? ExtractDeclaredWorkingDirectory(string scope)
+    {
+        var match = Regex.Match(scope,
+            @"(?i)(?:working\s+directory|workdir|directory)\s*[:=]\s*([A-Za-z0-9_.+\-/\\]+)");
+        if (!match.Success)
+            return null;
+        var path = NormalizePathSeparators(match.Groups[1].Value).Trim('/');
+        if (path.Length == 0 || path.Split('/').Any(seg => seg == "..") || Path.IsPathRooted(path))
+            return null;
+        return path;
+    }
+
+    private static bool PathMatchesDeclaration(string changedPath, string declaredPath) =>
+        string.Equals(changedPath, declaredPath, StringComparison.OrdinalIgnoreCase)
+        || changedPath.StartsWith(declaredPath.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUnderDirectory(string changedPath, string directory) =>
+        string.Equals(changedPath, directory, StringComparison.OrdinalIgnoreCase)
+        || changedPath.StartsWith(directory.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsNewOrModified(FileStatus state)
+    {
+        const FileStatus mask =
+            FileStatus.NewInIndex
+            | FileStatus.ModifiedInIndex
+            | FileStatus.RenamedInIndex
+            | FileStatus.TypeChangeInIndex
+            | FileStatus.NewInWorkdir
+            | FileStatus.ModifiedInWorkdir
+            | FileStatus.RenamedInWorkdir
+            | FileStatus.TypeChangeInWorkdir;
+        return (state & mask) != 0;
     }
 
     public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch)

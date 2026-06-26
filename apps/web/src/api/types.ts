@@ -201,6 +201,7 @@ export interface GenerateBlueprintRequest {
 
 export interface GenerateBlueprintResponse {
   blueprint: Blueprint;
+  generated_workflow_yaml?: string | null;
 }
 
 export interface CreateProjectRequest {
@@ -213,6 +214,7 @@ export interface CreateProjectRequest {
   default_model_microsoft_foundry?: string;
   blueprint_id?: string;
   blueprint?: Blueprint;
+  generated_workflow_yaml?: string | null;
 }
 
 export interface UpdateProjectProviderSettingsRequest {
@@ -389,10 +391,10 @@ export interface GitHubAuthStatusResponse {
 }
 
 export interface GitHubRepo {
-  full_name: string | null;
+  fullName: string | null;
   description?: string | null;
   private: boolean;
-  default_branch: string;
+  defaultBranch: string;
 }
 
 // --- Casting / Team types ---
@@ -1154,4 +1156,6 @@ export interface PortForwardSessionDto {
   target_port: number;
   pod_name: string;
   started_at: string;
+  preview_url?: string | null;
+  previewUrl?: string | null;
 }

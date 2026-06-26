@@ -7,6 +7,7 @@ public sealed class AgentMemory
     [Key] public int Id { get; set; }
     public required string ProjectId { get; set; }
     public required string AgentName { get; set; }
+    public string? SessionId { get; set; }
     public required string Type { get; set; }        // core_context | learning | pattern | update
     public required string Importance { get; set; }  // high | medium | low
     public required string Content { get; set; }

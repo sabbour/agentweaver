@@ -62,11 +62,11 @@ public sealed class DiagnosticsEndpointTests : IClassFixture<ProjectsWebApplicat
     }
 
     [Fact]
-    public async Task ApiHealth_WithoutApiKey_Returns401()
+    public async Task ApiHealth_WithoutApiKey_Returns200()
     {
         using var anon = _factory.CreateClient();
         var response = await anon.GetAsync("/api/health");
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // -------------------------------------------------------------------------
@@ -310,7 +310,7 @@ public sealed class DiagnosticsEndpointTests : IClassFixture<ProjectsWebApplicat
     [Fact]
     public async Task ProjectDiagnostics_ActiveWorkflowCheck_PassesWhenNoScaffoldersDir()
     {
-        // A project with no .scaffolders/workflows/ should still pass via built-in fallback.
+        // A project with no .agentweaver/workflows/ should still pass via built-in fallback.
         var workDir = _factory.NewWorkingDirectory();
         var create = await _client.PostAsJsonAsync("/api/projects", new
         {

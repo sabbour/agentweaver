@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FluentAssertions;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
@@ -95,26 +96,26 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         await stream.AppendAsync(runId, new RunEvent(1, "a", new { }));
         await stream.AppendAsync(runId, new RunEvent(2, "b", new { }));
 
-        var received = new List<int>();
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var received = new ConcurrentQueue<int>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var consume = Task.Run(async () =>
         {
             await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
             {
-                received.Add(evt.Sequence);
+                received.Enqueue(evt.Sequence);
                 if (evt.Type == EventTypes.RunCompleted) break;
             }
         });
 
-        // Give the subscriber time to replay 1,2 and start tailing, then append live events.
-        await Task.Delay(200);
+        await WaitUntilAsync(() => received.Count >= 2, TimeSpan.FromSeconds(5),
+            "subscriber should replay existing events before live appends");
         await stream.AppendAsync(runId, new RunEvent(3, "c", new { }));
         await stream.AppendAsync(runId, new RunEvent(4, EventTypes.RunCompleted, new { }));
 
         await consume;
 
-        received.Should().Equal(1, 2, 3, 4);
+        received.ToArray().Should().Equal(1, 2, 3, 4);
     }
 
     [Fact]
@@ -124,20 +125,21 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         var stream = new SqliteRunEventStream(_config);
         await stream.AppendAsync(runId, new RunEvent(1, "a", new { }));
 
-        var received = new List<int>();
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var received = new ConcurrentQueue<int>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var consume = Task.Run(async () =>
         {
             await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
-                received.Add(evt.Sequence);
+                received.Enqueue(evt.Sequence);
         });
 
-        await Task.Delay(200);
+        await WaitUntilAsync(() => received.Count >= 1, TimeSpan.FromSeconds(5),
+            "subscriber should replay the initial event before completion");
         await stream.AppendAsync(runId, new RunEvent(2, "b", new { }));
         await stream.CompleteAsync(runId);
 
         await consume; // Should complete (not hang) once the channel is closed.
-        received.Should().Equal(1, 2);
+        received.ToArray().Should().Equal(1, 2);
     }
 
     [Fact]
@@ -159,5 +161,27 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort; pooled handles may linger */ }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout, string because)
+    {
+        if (condition())
+            return;
+
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(25));
+        while (!condition())
+        {
+            try
+            {
+                await timer.WaitForNextTickAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        condition().Should().BeTrue(because);
     }
 }

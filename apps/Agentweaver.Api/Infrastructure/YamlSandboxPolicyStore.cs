@@ -13,6 +13,13 @@ namespace Agentweaver.Api.Infrastructure;
 /// </summary>
 public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
 {
+    private readonly IProjectStore _projectStore;
+
+    public YamlSandboxPolicyStore(IProjectStore projectStore)
+    {
+        _projectStore = projectStore;
+    }
+
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
@@ -35,8 +42,10 @@ public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
         try
         {
             var yaml = File.ReadAllText(filePath);
-            var root = Deserializer.Deserialize<AgentweaverSettingsDto>(yaml) ?? new();
-            var dto = root.Sandbox ?? new();
+            var root = Deserializer.Deserialize<Dictionary<string, object?>>(yaml) ?? new(StringComparer.OrdinalIgnoreCase);
+            SandboxPolicyYamlDto dto = new();
+            if (TryGetValue(root, "sandbox", out var sandboxNode) && sandboxNode is not null)
+                dto = Deserializer.Deserialize<SandboxPolicyYamlDto>(Serializer.Serialize(sandboxNode)) ?? new();
             return Task.FromResult(dto.ToDomain(repositoryPath));
         }
         catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException)
@@ -46,44 +55,66 @@ public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
         }
     }
 
-    public Task SetPolicyAsync(SandboxPolicy policy, CancellationToken ct = default)
+    public async Task SetPolicyAsync(SandboxPolicy policy, CancellationToken ct = default)
     {
+        if (!await IsKnownProjectWorkspaceAsync(policy.RepositoryPath, ct).ConfigureAwait(false))
+            throw new InvalidOperationException("Sandbox repository_path must be a known project workspace.");
+
         var filePath = SettingsFilePath(policy.RepositoryPath);
         var dir = Path.GetDirectoryName(filePath)!;
         Directory.CreateDirectory(dir);
 
         // Preserve existing sections; only update the sandbox section.
-        AgentweaverSettingsDto root = new();
+        Dictionary<string, object?> root = new(StringComparer.OrdinalIgnoreCase);
         if (File.Exists(filePath))
         {
             try
             {
                 var existing = File.ReadAllText(filePath);
-                root = Deserializer.Deserialize<AgentweaverSettingsDto>(existing) ?? new();
+                root = Deserializer.Deserialize<Dictionary<string, object?>>(existing) ?? new(StringComparer.OrdinalIgnoreCase);
             }
             catch (YamlDotNet.Core.YamlException) { /* overwrite malformed file */ }
         }
 
-        root.Sandbox = SandboxPolicyYamlDto.FromDomain(policy);
+        root["sandbox"] = SandboxPolicyYamlDto.FromDomain(policy);
         var yaml = Serializer.Serialize(root);
-        File.WriteAllText(filePath, yaml);
-        return Task.CompletedTask;
+        var tmp = filePath + ".tmp";
+        File.WriteAllText(tmp, yaml);
+        File.Move(tmp, filePath, overwrite: true);
     }
-}
 
-/// <summary>
-/// Root DTO for <c>.agentweaver/settings.yml</c>.
-/// Each top-level key is a settings group. Adding a new group here does not
-/// affect unrelated groups — existing sections are preserved on write.
-/// </summary>
-internal sealed class AgentweaverSettingsDto
-{
-    /// <summary>Sandbox execution policy.</summary>
-    public SandboxPolicyYamlDto? Sandbox { get; set; }
+    private async Task<bool> IsKnownProjectWorkspaceAsync(string repositoryPath, CancellationToken ct)
+    {
+        string canonical;
+        try { canonical = NormalizePath(repositoryPath); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
 
-    // Future groups:
-    // public ReviewSettingsDto? Review { get; set; }
-    // public AgentSettingsDto? Agents { get; set; }
+        var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
+        return projects.Any(p => string.Equals(
+            NormalizePath(p.WorkingDirectory),
+            canonical,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+    }
+
+    private static string NormalizePath(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static bool TryGetValue(Dictionary<string, object?> map, string key, out object? value)
+    {
+        foreach (var kvp in map)
+        {
+            if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = kvp.Value;
+                return true;
+            }
+        }
+        value = null;
+        return false;
+    }
 }
 
 /// <summary>YAML DTO for the sandbox section — snake_case via UnderscoredNamingConvention.</summary>

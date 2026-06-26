@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -6,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -21,6 +24,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     private readonly TestSqliteDb _db;
     private readonly string _checkpointsPath;
     private readonly string _worktreePath;
+    private SqliteConnection? _memoryConn;
+    private ServiceProvider? _memoryServiceProvider;
 
     public WorkflowRestartServiceTests()
     {
@@ -34,6 +39,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _db.DisposeAsync();
+        _memoryServiceProvider?.Dispose();
+        _memoryConn?.Dispose();
         try { Directory.Delete(_checkpointsPath, recursive: true); } catch { }
         try { Directory.Delete(_worktreePath, recursive: true); } catch { }
     }
@@ -289,10 +296,20 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             })
             .Build();
 
+        // Set up an in-memory SQLite-backed MemoryDbContext for the scope factory.
+        _memoryServiceProvider?.Dispose();
+        _memoryConn?.Dispose();
+        _memoryConn = new SqliteConnection("DataSource=:memory:");
+        _memoryConn.Open();
+        var memServices = new ServiceCollection();
+        memServices.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        _memoryServiceProvider = memServices.BuildServiceProvider();
+        using (var scope = _memoryServiceProvider.CreateScope())
+            scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
+        var scopeFactory = _memoryServiceProvider.GetRequiredService<IServiceScopeFactory>();
+
         var registry = new RunWorkflowRegistry();
         var pendingStore = new PendingRequestStore();
-        var scopeFactory = new ServiceCollection().BuildServiceProvider()
-            .GetRequiredService<IServiceScopeFactory>();
         var copilotClientFactory = new Agentweaver.AgentRuntime.Providers.GitHubCopilotClientFactory(
             config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
         var agentFactory = new Agentweaver.AgentRuntime.Workflow.WorkflowAgentFactory(
@@ -330,6 +347,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             factory,
             worktreeOps,
             new TestHostApplicationLifetime(),
+            config,
             scopeFactory,
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
@@ -341,6 +359,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             factory,
             worktreeOps,
             watchLoop,
+            scopeFactory,
             loggerFactory.CreateLogger<WorkflowRestartService>());
     }
 

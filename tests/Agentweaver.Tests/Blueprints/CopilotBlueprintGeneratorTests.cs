@@ -24,15 +24,15 @@ public sealed class CopilotBlueprintGeneratorTests
         await generator.GenerateRawAsync("I want to create a project to handle job searches", CancellationToken.None);
 
         runner.LastTask.Should().NotBeNullOrWhiteSpace();
-        runner.LastTask.Should().Contain("Agentweaver OPERATING blueprint");
-        runner.LastTask.Should().Contain("Agentweaver itself is the operational platform");
-        runner.LastTask.Should().Contain("Do NOT interpret the request as a request to design or build a software product");
+        runner.LastTask.Should().Contain("Agentweaver PROJECT BLUEPRINT");
+        runner.LastTask.Should().Contain("The user is using Agentweaver to OPERATE a process");
+        runner.LastTask.Should().Contain("Do NOT interpret the description as a request to BUILD SOFTWARE");
         runner.LastTask.Should().Contain("handle job searches");
-        runner.LastTask.Should().Contain("Agentweaver to operate the job-search process");
-        runner.LastTask.Should().Contain("research/sourcing, triage");
-        runner.LastTask.Should().Contain("Do not invent");
-        runner.LastTask.Should().Contain("introduce any role");
-        runner.LastTask.Should().Contain("Every id MUST be one of the catalog ids above");
+        runner.LastTask.Should().Contain("OPERATE the travel-planning / job-search process");
+        runner.LastTask.Should().Contain("research, writing/drafting");
+        runner.LastTask.Should().Contain("Available catalog roles");
+        runner.LastTask.Should().Contain("bespoke_roles");
+        runner.LastTask.Should().Contain("Available workflows");
     }
 
     private sealed class CapturingAgentRunner : IAgentRunner

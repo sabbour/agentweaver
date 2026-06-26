@@ -15,7 +15,13 @@ public sealed class KubernetesSandboxOptions
 {
     public string Namespace { get; init; } = "agentweaver";
     public string TemplateRef { get; init; } = "agentweaver-sandbox";
+    /// <summary>Path where the shared workspace PVC is mounted inside API and sandbox pods.</summary>
+    public string WorkspaceMountPath { get; init; } = "/workspace";
+    /// <summary>SandboxClaim TTL. Command timeouts are capped below this so controller GC cannot interrupt exec.</summary>
     public int TimeoutSeconds { get; init; } = 600;
+    /// <summary>Cluster service CIDR that must be excluded by sandbox egress policy.</summary>
+    public string? ServiceCidr { get; init; }
+    public IReadOnlyList<string> SandboxEgressCidrExclusions { get; init; } = [];
 }
 
 /// <summary>
@@ -71,29 +77,58 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
             : command.AgentweaverRunId.Replace("-", "")[..Math.Min(16, command.AgentweaverRunId.Replace("-", "").Length)];
         var claimName = $"run-{claimBase}";
 
-        var timeoutMs = command.TimeoutMs > 0
+        var requestedTimeoutMs = command.TimeoutMs > 0
             ? command.TimeoutMs
             : _options.TimeoutSeconds * 1000;
+        var maxCommandTimeoutMs = Math.Max(1000, (_options.TimeoutSeconds * 1000) - 30_000);
+        var timeoutMs = Math.Min(requestedTimeoutMs, maxCommandTimeoutMs);
+        if (timeoutMs < requestedTimeoutMs)
+        {
+            _logger.LogWarning(
+                "KubernetesSandboxExecutor: command timeout clamped from {RequestedMs}ms to {TimeoutMs}ms so it stays below SandboxClaim TTL ({TtlSeconds}s)",
+                requestedTimeoutMs, timeoutMs, _options.TimeoutSeconds);
+        }
+
+        string podWorkingDirectory;
+        try
+        {
+            podWorkingDirectory = ResolvePodWorkingDirectory(command.WorkingDirectory);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "KubernetesSandboxExecutor: invalid workspace path {WorkingDirectory}; configured mount is {WorkspaceMountPath}",
+                command.WorkingDirectory, _options.WorkspaceMountPath);
+            return new SandboxExecResult(1, "", ex.Message, false, false);
+        }
+
+        _logger.LogInformation(
+            "KubernetesSandboxExecutor: using workspace path {WorkspacePath} for claim {Claim} (requested {RequestedWorkingDirectory})",
+            podWorkingDirectory, claimName, command.WorkingDirectory);
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         linked.CancelAfter(timeoutMs);
         var token = linked.Token;
+        var claimCreated = false;
 
         try
         {
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: creating SandboxClaim {Claim}", claimName);
             await CreateClaimAsync(claimName, token);
+            claimCreated = true;
 
             var podName = await WaitForBoundAsync(claimName, token);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: claim {Claim} bound to pod {Pod}", claimName, podName);
 
             // Register pod name so PortForwardService can locate it by Agentweaver run ID.
+            // Run-scoped mappings are cleared by run lifecycle cleanup, not per command, so
+            // preview tunnels can remain available for the whole run while the claim TTL is valid.
             if (!string.IsNullOrEmpty(command.AgentweaverRunId))
                 _podRegistry?.Register(command.AgentweaverRunId, podName);
 
-            return await ExecInPodAsync(podName, command, token);
+            return await ExecInPodAsync(podName, command, podWorkingDirectory, token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -103,9 +138,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
         }
         finally
         {
-            await DeleteClaimAsync(claimName);
-            if (!string.IsNullOrEmpty(command.AgentweaverRunId))
-                _podRegistry?.Unregister(command.AgentweaverRunId);
+            if (claimCreated && string.IsNullOrEmpty(command.AgentweaverRunId))
+                await DeleteClaimAsync(claimName);
+            else if (claimCreated)
+                _logger.LogDebug(
+                    "KubernetesSandboxExecutor: retaining SandboxClaim {Claim} for run {RunId} preview until run cleanup or TTL",
+                    claimName, command.AgentweaverRunId);
         }
     }
 
@@ -126,6 +164,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
 
     private Task CreateClaimAsync(string claimName, CancellationToken ct)
     {
+        // The cluster service CIDR must be present in SandboxEgressCidrExclusions so
+        // sandbox NetworkPolicy does not accidentally allow in-cluster service egress.
         var manifest = new
         {
             apiVersion = $"{ApiGroup}/{ApiVersion}",
@@ -205,11 +245,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
     // ── Command execution ─────────────────────────────────────────────────────────
 
     private async Task<SandboxExecResult> ExecInPodAsync(
-        string podName, SandboxCommand command, CancellationToken ct)
+        string podName, SandboxCommand command, string podWorkingDirectory, CancellationToken ct)
     {
         const int maxOutputBytes = 4 * 1024 * 1024;
 
-        var shellScript = BuildShellScript(command);
+        var shellScript = BuildShellScript(command, podWorkingDirectory);
 
         var ws = await _client.WebSocketNamespacedPodExecAsync(
             podName, _options.Namespace,
@@ -308,7 +348,37 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
         }
     }
 
-    private static string BuildShellScript(SandboxCommand command)
+    private string ResolvePodWorkingDirectory(string requestedWorkingDirectory)
+    {
+        var mountPath = NormalizeUnixPath(_options.WorkspaceMountPath, forceAbsolute: true);
+        if (string.IsNullOrWhiteSpace(requestedWorkingDirectory))
+            return mountPath;
+
+        var requested = NormalizeUnixPath(requestedWorkingDirectory, forceAbsolute: false);
+        if (IsSameOrChildPath(requested, mountPath))
+            return requested;
+
+        throw new InvalidOperationException(
+            $"Kubernetes sandbox working directory '{requestedWorkingDirectory}' is not under mounted workspace '{mountPath}'. " +
+            "Configure Workspace:PersistentVolume:MountRoot/Workspace:Path to match the workspace PVC mount used by sandbox pods.");
+    }
+
+    private static bool IsSameOrChildPath(string path, string root) =>
+        string.Equals(path, root, StringComparison.Ordinal)
+        || (root == "/" && path.StartsWith("/", StringComparison.Ordinal))
+        || path.StartsWith(root + "/", StringComparison.Ordinal);
+
+    private static string NormalizeUnixPath(string path, bool forceAbsolute)
+    {
+        var normalized = path.Trim().Replace('\\', '/');
+        while (normalized.Contains("//", StringComparison.Ordinal))
+            normalized = normalized.Replace("//", "/", StringComparison.Ordinal);
+        if (forceAbsolute && !normalized.StartsWith("/", StringComparison.Ordinal))
+            normalized = "/" + normalized;
+        return normalized.Length > 1 ? normalized.TrimEnd('/') : normalized;
+    }
+
+    private static string BuildShellScript(SandboxCommand command, string podWorkingDirectory)
     {
         var sb = new StringBuilder();
 
@@ -318,8 +388,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
                 sb.AppendLine($"export {key}={ShellSingleQuote(value)}");
         }
 
-        if (!string.IsNullOrWhiteSpace(command.WorkingDirectory))
-            sb.AppendLine($"cd {ShellSingleQuote(command.WorkingDirectory)}");
+        sb.AppendLine($"cd {ShellSingleQuote(podWorkingDirectory)}");
 
         sb.Append(command.CommandLine);
         return sb.ToString();

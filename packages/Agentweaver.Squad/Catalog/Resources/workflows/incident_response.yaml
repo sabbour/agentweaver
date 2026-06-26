@@ -27,10 +27,11 @@ nodes:
     kind: live
 
   - id: verify
-    type: peer_review
+    type: prompt
     label: Verify
     role: review
     kind: live
+    prompt: Verify the mitigation and summarize whether the incident response is ready for human review.
 
   - id: review-gate
     type: check

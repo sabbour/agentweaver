@@ -151,7 +151,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
             new UpdateProjectProviderSettingsRequest
             {
                 DefaultProvider           = "microsoft-foundry",
-                DefaultModelMicrosoftFoundry = "my-foundry-model",
+                DefaultModelMicrosoftFoundry = "gpt-4o",
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -159,7 +159,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var getResp = await _client.GetAsync($"/api/projects/{id}");
         var result  = await getResp.Content.ReadFromJsonAsync<ProjectResponse>();
         result!.DefaultProvider.Should().Be("microsoft-foundry");
-        result.DefaultModelMicrosoftFoundry.Should().Be("my-foundry-model");
+        result.DefaultModelMicrosoftFoundry.Should().Be("gpt-4o");
     }
 
     // =========================================================================

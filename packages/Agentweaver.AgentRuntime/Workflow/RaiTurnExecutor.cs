@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
@@ -47,6 +48,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
     private readonly Action<string>? _completeSubStream;
     private readonly IWorkflowAgentFactory? _agentFactory;
     private readonly string _subStreamSuffix;
+    private readonly bool _failClosedOnError;
 
     public RaiTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -63,7 +65,8 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         IWorkflowAgentFactory? agentFactory = null,
         string logicalNodeId = "rai",
         string displayLabel = "Rai",
-        string subStreamSuffix = "rai")
+        string subStreamSuffix = "rai",
+        IConfiguration? configuration = null)
         : base(name)
     {
         LogicalNodeId = logicalNodeId;
@@ -81,6 +84,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         _completeSubStream = completeSubStream;
         _agentFactory = agentFactory;
         _subStreamSuffix = subStreamSuffix;
+        _failClosedOnError = configuration?.GetValue<bool>("Rai:FailClosedOnError") ?? false;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -101,6 +105,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         var subWriter = _createSubStream?.Invoke(subRunId, _subStreamSuffix);
 
         IWorkflowTurnAgent? agent = null;
+        var terminalStepEmitted = false;
         try
         {
             var reviewPath = !string.IsNullOrEmpty(input.WorktreePath)
@@ -157,11 +162,17 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
 
             if (!TryParseVerdict(response, out var verdict))
             {
-                // Fail-open: an unparseable verdict must never block shipping, but it must be
-                // observable so a genuine miss can be diagnosed.
+                verdict = DefaultVerdictOnRaiFailure(_failClosedOnError);
                 _logger.LogWarning(
-                    "Rai verdict could not be parsed for run {RunId} — defaulting to GREEN (fail-open). Raw response (truncated): {Raw}",
-                    input.RunId, Truncate(response));
+                    "Rai verdict could not be parsed for run {RunId} — defaulting to {Verdict}. Raw response (truncated): {Raw}",
+                    input.RunId, verdict, Truncate(response));
+                writer?.TryWrite(new RunEvent(0, "run.rai_error", new
+                {
+                    runId = input.RunId,
+                    reason = "unparseable_verdict",
+                    failClosed = _failClosedOnError,
+                    verdict = ToLabel(verdict),
+                }));
             }
 
             if (verdict == RaiVerdict.Red)
@@ -187,9 +198,27 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         }
         catch (Exception ex)
         {
+            var verdict = DefaultVerdictOnRaiFailure(_failClosedOnError);
             _logger.LogWarning(ex,
-                "Rai RAI review failed for run {RunId} — workflow proceeds normally", input.RunId);
-            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
+                "Rai RAI review failed for run {RunId} — defaulting to {Verdict}", input.RunId, verdict);
+            writer?.TryWrite(new RunEvent(0, "run.rai_error", new
+            {
+                runId = input.RunId,
+                reason = "exception",
+                failClosed = _failClosedOnError,
+                verdict = ToLabel(verdict),
+                message = ex.Message,
+            }));
+            subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = ToLabel(verdict), runId = input.RunId }));
+            if (verdict == RaiVerdict.Red)
+            {
+                WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
+                return input with { ContentSafetyFlagged = true };
+            }
+
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "completed", DisplayLabel,
+                message: "RAI review failed; proceeding with advisory warning.");
+            terminalStepEmitted = true;
         }
         finally
         {
@@ -198,7 +227,8 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             _completeSubStream?.Invoke(subRunId);
         }
 
-        WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "completed", DisplayLabel);
+        if (!terminalStepEmitted)
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "completed", DisplayLabel);
         return input;
     }
 
@@ -237,12 +267,12 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
     /// <returns>
     /// <c>true</c> when an explicit verdict line/emoji was found (<paramref name="verdict"/> holds
     /// it). <c>false</c> when no verdict could be parsed — <paramref name="verdict"/> is then set to
-    /// <see cref="RaiVerdict.Green"/> (fail-open: an unparseable advisory check must not block
-    /// shipping) and the caller should log the miss.
+    /// <see cref="RaiVerdict.Yellow"/> so callers do not accidentally treat unparseable output as an
+    /// explicit GREEN.
     /// </returns>
     internal static bool TryParseVerdict(string? response, out RaiVerdict verdict)
     {
-        verdict = RaiVerdict.Green;
+        verdict = RaiVerdict.Yellow;
         if (string.IsNullOrWhiteSpace(response))
             return false;
 
@@ -262,9 +292,9 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         return found;
     }
 
-    /// <summary>Convenience wrapper that applies the fail-open default (GREEN) when unparseable.</summary>
+    /// <summary>Convenience wrapper that applies the advisory default (YELLOW) when unparseable.</summary>
     internal static RaiVerdict ParseVerdict(string? response) =>
-        TryParseVerdict(response, out var verdict) ? verdict : RaiVerdict.Green;
+        TryParseVerdict(response, out var verdict) ? verdict : RaiVerdict.Yellow;
 
     private static bool TryParseVerdictLine(string rawLine, out RaiVerdict verdict)
     {
@@ -290,9 +320,12 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             }
         }
 
-        verdict = RaiVerdict.Green;
+        verdict = RaiVerdict.Yellow;
         return false;
     }
+
+    private static RaiVerdict DefaultVerdictOnRaiFailure(bool failClosedOnError) =>
+        failClosedOnError ? RaiVerdict.Red : RaiVerdict.Yellow;
 
     /// <summary>
     /// Strips leading whitespace and common bullet / markdown markers ("- ", "* ", "**", "#", "&gt;")

@@ -2,11 +2,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# Copy project files and restore
 COPY ["apps/Agentweaver.Api/Agentweaver.Api.csproj", "apps/Agentweaver.Api/"]
 COPY ["packages/", "packages/"]
 
-# Copy all source files needed for the build
 COPY apps/Agentweaver.Api/ apps/Agentweaver.Api/
 COPY packages/ packages/
 
@@ -16,21 +14,37 @@ RUN dotnet publish "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --no-restore \
     --output /app/publish
 
+RUN dotnet tool install --global dotnet-ef --version 9.0.7
+ENV PATH="${PATH}:/root/.dotnet/tools"
+RUN dotnet ef migrations bundle \
+    --project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
+    --startup-project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
+    --context MemoryDbContext \
+    --configuration Release \
+    --runtime linux-x64 \
+    --self-contained \
+    --output /app/publish/efbundle
+
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+ARG KUBECTL_VERSION=v1.33.1
 WORKDIR /app
 
-# Install libgit2 dependencies for LibGit2Sharp
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
     libgit2-1.7 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user (UID 1000)
+RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && echo "$(curl -fsSL https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/kubectl \
+    && kubectl version --client=true
+
 RUN groupadd --gid 1000 appgroup \
     && useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
 
-# Create data directory and set ownership
-RUN mkdir -p /data && chown appuser:appgroup /data
+RUN mkdir -p /data /app/logs && chown -R appuser:appgroup /data /app
 
 COPY --from=build --chown=appuser:appgroup /app/publish .
 

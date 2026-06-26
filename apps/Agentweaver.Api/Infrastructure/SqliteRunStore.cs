@@ -8,8 +8,13 @@ namespace Agentweaver.Api.Infrastructure;
 public sealed class SqliteRunStore
 {
     private readonly SqliteDb _db;
+    private readonly ILogger<SqliteRunStore>? _logger;
 
-    public SqliteRunStore(SqliteDb db) => _db = db;
+    public SqliteRunStore(SqliteDb db, ILogger<SqliteRunStore>? logger = null)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     public async Task InsertAsync(Run run, CancellationToken ct = default)
     {
@@ -80,7 +85,7 @@ public sealed class SqliteRunStore
 
     public async Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default)
     {
-        await ExecuteNonQueryAsync(
+        var rows = await ExecuteNonQueryAsync(
             "UPDATE runs SET status = $status, ended_at = $endedAt WHERE run_id = $runId;",
             cmd =>
             {
@@ -88,11 +93,12 @@ public sealed class SqliteRunStore
                 cmd.Parameters.AddWithValue("$endedAt", NullableTs(endedAt));
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, $"update status to {status.ToApiString()}");
     }
 
     public async Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default)
     {
-        await ExecuteNonQueryAsync(
+        var rows = await ExecuteNonQueryAsync(
             "UPDATE runs SET status = $status, ended_at = $endedAt, result = $result WHERE run_id = $runId;",
             cmd =>
             {
@@ -101,6 +107,7 @@ public sealed class SqliteRunStore
                 cmd.Parameters.AddWithValue("$result", result);
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, $"update result to {status.ToApiString()}");
     }
 
     /// <summary>
@@ -113,12 +120,13 @@ public sealed class SqliteRunStore
         DateTimeOffset? now = null)
     {
         var ts = now ?? DateTimeOffset.UtcNow;
-        await ExecuteNonQueryAsync(
+        var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
                SET tree_hash = $treeHash, diff = $diff, step_count = $stepCount,
                    status = $status, review_ready_at = $now
-             WHERE run_id = $runId;
+             WHERE run_id = $runId
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """,
             cmd =>
             {
@@ -129,6 +137,7 @@ public sealed class SqliteRunStore
                 cmd.Parameters.AddWithValue("$now", Ts(ts));
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "mark review ready");
     }
 
     /// <summary>
@@ -318,13 +327,14 @@ public sealed class SqliteRunStore
     /// </summary>
     public async Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default)
     {
-        await ExecuteNonQueryAsync(
+        var rows = await ExecuteNonQueryAsync(
             "UPDATE runs SET tree_hash = $treeHash WHERE run_id = $runId AND status = 'committing';",
             cmd =>
             {
                 cmd.Parameters.AddWithValue("$treeHash", newTreeHash);
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
     /// <summary>
@@ -350,7 +360,7 @@ public sealed class SqliteRunStore
                    worktree_branch = $worktreeBranch, diff = $diff,
                    step_count = $stepCount, ended_at = $endedAt
              WHERE run_id = $runId
-               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready');
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """;
         command.Parameters.AddWithValue("$treeHash", treeHash);
         command.Parameters.AddWithValue("$worktreeBranch", worktreeBranch);
@@ -372,13 +382,14 @@ public sealed class SqliteRunStore
             UPDATE runs
                SET status = $toStatus, ended_at = $endedAt, result = $result
              WHERE run_id = $runId
-               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed');
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """;
         command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
         command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
         command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, $"set terminal status to {toStatus.ToApiString()}");
         return rows > 0;
     }
 
@@ -390,7 +401,7 @@ public sealed class SqliteRunStore
     public async Task UpdateToInProgressAsync(
         RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default)
     {
-        await ExecuteNonQueryAsync(
+        var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
                SET status = 'in_progress', worktree_path = $worktreePath,
@@ -404,6 +415,7 @@ public sealed class SqliteRunStore
                 cmd.Parameters.AddWithValue("$startedAt", startedAt.ToString("O"));
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "transition to in_progress");
     }
 
     public async Task DeleteAsync(RunId runId, CancellationToken ct = default)
@@ -472,13 +484,19 @@ public sealed class SqliteRunStore
         return await reader.ReadAsync(ct).ConfigureAwait(false) ? Map(reader) : null;
     }
 
-    private async Task ExecuteNonQueryAsync(string sql, Action<SqliteCommand> bind, CancellationToken ct = default)
+    private async Task<int> ExecuteNonQueryAsync(string sql, Action<SqliteCommand> bind, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         bind(command);
-        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    private void WarnIfNoRows(int rows, RunId runId, string operation)
+    {
+        if (rows == 0)
+            _logger?.LogWarning("Run transition no-op while attempting to {Operation} for run {RunId}", operation, runId);
     }
 
     /// <summary>

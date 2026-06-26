@@ -20,12 +20,39 @@ public sealed record WorkflowLoadResult
     /// <summary>A specific, actionable message when invalid; null when valid.</summary>
     public string? Error { get; init; }
 
+    /// <summary>Non-fatal validation warnings callers can surface. Invalid results may also carry warnings.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
     /// <summary>True for the built-in shipped default workflow (FR-005 fallback).</summary>
     public bool IsBuiltIn { get; init; }
 
-    public static WorkflowLoadResult Valid(string source, WorkflowDefinition definition, bool isBuiltIn = false) =>
-        new() { Source = source, IsValid = true, Definition = definition, IsBuiltIn = isBuiltIn };
+    public static WorkflowLoadResult Valid(
+        string source,
+        WorkflowDefinition definition,
+        bool isBuiltIn = false,
+        IReadOnlyList<string>? warnings = null) =>
+        new()
+        {
+            Source = source,
+            IsValid = true,
+            Definition = definition,
+            IsBuiltIn = isBuiltIn,
+            Warnings = warnings ?? [],
+        };
 
-    public static WorkflowLoadResult Invalid(string source, string error) =>
-        new() { Source = source, IsValid = false, Error = error };
+    public static WorkflowLoadResult Invalid(
+        string source,
+        string error,
+        WorkflowDefinition? definition = null,
+        bool isBuiltIn = false,
+        IReadOnlyList<string>? warnings = null) =>
+        new()
+        {
+            Source = source,
+            IsValid = false,
+            Definition = definition,
+            Error = error,
+            IsBuiltIn = isBuiltIn,
+            Warnings = warnings ?? [],
+        };
 }

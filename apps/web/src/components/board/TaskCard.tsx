@@ -156,7 +156,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
     setBusy(true);
     setError(null);
     try {
-      await apiClient.deleteBacklogTask(projectId, card.task_id);
+      await apiClient.archiveBacklogTask(projectId, card.task_id);
       await onMutated();
     } catch (e) {
       reportError(e);

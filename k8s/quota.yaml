@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: agentweaver-quota
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  hard:
+    pods: "25"
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    persistentvolumeclaims: "4"
+    requests.storage: 80Gi
+    count/sandboxclaims.extensions.agents.x-k8s.io: "20"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: agentweaver-default-limits
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      default:
+        cpu: "1"
+        memory: 512Mi
+      max:
+        cpu: "4"
+        memory: 4Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentweaver-api-pdb
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: agentweaver-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentweaver-mcp-pdb
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: agentweaver-mcp
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentweaver-frontend-pdb
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: agentweaver-frontend

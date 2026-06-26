@@ -1,6 +1,7 @@
 # Agent Evaluation Workflow (Feature 015 US3)
-# AI agent evaluation pipeline: setup → fan_out parallel runs → fan_in collect → safety gate → report → scribe.
-# Uses fan_out/fan_in for parallel evaluation runs and a dedicated safety gate before the report.
+# AI agent evaluation pipeline: setup → evaluation runs → collect → safety gate → report → scribe.
+# Runtime bindability does not support fan_out/fan_in executors yet, so the catalog models those stages
+# as ordinary agent nodes. Parallelism can be reintroduced once fan_out/fan_in have runtime bindings.
 
 id: agent-evaluation
 name: Agent Evaluation
@@ -21,17 +22,16 @@ nodes:
     kind: live
 
   - id: eval-run
-    type: fan_out
+    type: prompt
     label: Evaluation Runs
     role: agent
     kind: live
 
   - id: eval-collect
-    type: fan_in
+    type: prompt
     label: Collect Results
     role: agent
     kind: live
-    target: eval-run
 
   - id: safety-gate
     type: check

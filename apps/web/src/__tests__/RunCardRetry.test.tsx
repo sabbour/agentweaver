@@ -10,6 +10,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     retryRun: vi.fn(),
     deleteRun: vi.fn(),
+    archiveRun: vi.fn(),
   },
 }));
 
@@ -142,7 +143,7 @@ describe('RunCard — card navigation', () => {
   describe('RunCard — archive action', () => {
     it('archives the run without triggering card navigation and calls onMutated', async () => {
       const onMutated = vi.fn();
-      vi.mocked(apiClient.deleteRun).mockResolvedValue(undefined);
+      vi.mocked(apiClient.archiveRun).mockResolvedValue(undefined);
 
       render(
         <Wrapper>
@@ -153,7 +154,7 @@ describe('RunCard — card navigation', () => {
       fireEvent.click(screen.getByLabelText('Archive run'));
 
       await waitFor(() =>
-        expect(vi.mocked(apiClient.deleteRun)).toHaveBeenCalledWith('run-123'),
+        expect(vi.mocked(apiClient.archiveRun)).toHaveBeenCalledWith('run-123'),
       );
       await waitFor(() => expect(onMutated).toHaveBeenCalled());
       expect(mockNavigate).not.toHaveBeenCalled();

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -60,6 +61,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
+    private readonly TimeSpan _reviewTimeout;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
 
@@ -72,7 +74,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IServiceScopeFactory scopeFactory,
         IServiceProvider serviceProvider,
         IHostApplicationLifetime lifetime,
-        ILogger<CoordinatorAssemblyService> logger)
+        ILogger<CoordinatorAssemblyService> logger,
+        IConfiguration? configuration = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -83,6 +86,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _serviceProvider = serviceProvider;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+        var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
+        _reviewTimeout = TimeSpan.FromMinutes(Math.Max(1.0, reviewTimeoutMinutes));
     }
 
     /// <summary>The integration branch name (D1) derived from the coordinator run id.</summary>
@@ -324,7 +329,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (integration.Outcome == IntegrationBranchOutcome.Conflict)
         {
             // D2 — merging child branches into the integration branch conflicted: STOP, no merge.
-            await BlockAsync(context, workPlanId, edges, "integration_conflict", new
+            await NeedsResolutionAsync(context, workPlanId, edges, "integration_conflict", new
             {
                 workPlanId,
                 reason = "integration_conflict",
@@ -352,6 +357,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             raiSafetyFlagged = rai.SafetyFlagged,
         });
 
+        if (rai.SafetyFlagged)
+        {
+            await RaiBlockAsync(context, workPlanId, edges, integrationBranch, ct).ConfigureAwait(false);
+            return;
+        }
+
         // ── ONE human review gate (D5) ───────────────────────────────────────────────────────────
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.InReview, AssemblyStage.Review, ct).ConfigureAwait(false);
@@ -370,6 +381,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         AssemblyReviewDecision decision;
         try
         {
+            var completed = await Task.WhenAny(decisionTask, Task.Delay(_reviewTimeout)).ConfigureAwait(false);
+            if (completed != decisionTask)
+            {
+                await ReviewTimeoutAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+                return;
+            }
+
             decision = await decisionTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -439,6 +457,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (merge.Outcome != CollectiveMergeOutcome.Merged)
         {
             var mergeReason = merge.Reason ?? merge.Outcome.ToString().ToLowerInvariant();
+            if (merge.Outcome == CollectiveMergeOutcome.Conflict || (merge.ConflictingFiles?.Count ?? 0) > 0)
+            {
+                await NeedsResolutionAsync(context, workPlanId, edges, mergeReason, new
+                {
+                    workPlanId,
+                    reason = mergeReason,
+                    conflictingFiles = merge.ConflictingFiles,
+                    integrationBranch,
+                }, ct).ConfigureAwait(false);
+                return;
+            }
+
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeFailed, new
             {
                 workPlanId,
@@ -470,6 +500,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeStarted, new { workPlanId });
 
+        var scribeSucceeded = true;
         try
         {
             await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
@@ -484,11 +515,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         catch (Exception ex)
         {
             // Scribe is best-effort; a failure must not fail the (already merged) assembly.
+            scribeSucceeded = false;
             _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
                 context.CoordinatorRunId);
+            Emit(context.CoordinatorRunId, "run.scribe_failed", new
+            {
+                workPlanId,
+                reason = ex.Message,
+            });
         }
 
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+        if (scribeSucceeded)
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
 
         // ── Coordinator decision promotion ───────────────────────────────────────────────────────
         // The per-run Scribe auto-merges only learning/pattern/update entries; architectural and
@@ -531,14 +569,33 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         try
         {
+            if (!RunId.TryParse(context.CoordinatorRunId, out var parsedRunId))
+                return;
+            var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (run is null)
+                return;
+
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var promoted = await DecisionPromotion
-                .PromotePendingCoordinatorDecisionsAsync(db, projectId, ct)
-                .ConfigureAwait(false);
+            await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+            var pending = (await db.DecisionInbox
+                .Where(e => e.ProjectId == projectId
+                         && e.Status == "pending"
+                         && e.AgentName == "coordinator")
+                .ToListAsync(ct).ConfigureAwait(false))
+                .Where(e => e.CreatedAt >= run.StartedAt
+                         && DecisionPromotion.CoordinatorReviewTypes.Contains(e.Type))
+                .ToList();
+
+            var now = DateTimeOffset.UtcNow;
+            foreach (var entry in pending)
+                await DecisionPromotion.PromoteEntry(db, entry, now, ct).ConfigureAwait(false);
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+
+            var promoted = pending.Count;
             if (promoted > 0)
                 _logger.LogInformation(
-                    "Coordinator promoted {Count} architectural/scope decision(s) for run {RunId}",
+                    "Coordinator promoted {Count} run-scoped architectural/scope decision(s) for run {RunId}",
                     promoted, context.CoordinatorRunId);
         }
         catch (Exception ex)
@@ -615,6 +672,75 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             context.CoordinatorRunId, RunStatus.Failed, $"assembly_blocked: {reason}", ct).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogWarning("Collective assembly blocked for run {RunId}: {Reason}", context.CoordinatorRunId, reason);
+    }
+
+    private async Task RaiBlockAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        string integrationBranch,
+        CancellationToken ct)
+    {
+        var payload = new
+        {
+            workPlanId,
+            reason = "rai_blocked",
+            integrationBranch,
+            requiresHumanOverride = true,
+        };
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.RaiBlocked, null, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, "run.rai_blocked", payload);
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.RaiBlocked, edges, ct)
+            .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Failed, "rai_blocked", ct).ConfigureAwait(false);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
+        _logger.LogWarning("Collective assembly RAI-blocked run {RunId}", context.CoordinatorRunId);
+    }
+
+    private async Task ReviewTimeoutAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.AssemblyFailed, null, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, "run.review_timeout", new
+        {
+            workPlanId,
+            timeoutSeconds = (int)_reviewTimeout.TotalSeconds,
+        });
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyFailed, edges, ct)
+            .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Failed, "review_timeout", ct).ConfigureAwait(false);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
+        _logger.LogWarning("Collective assembly review timed out for run {RunId}", context.CoordinatorRunId);
+    }
+
+    private async Task NeedsResolutionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        string reason,
+        object payload,
+        CancellationToken ct)
+    {
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.NeedsResolution, null, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.MergeConflicted, payload);
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.NeedsResolution, edges, ct)
+            .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.MergeFailed, $"needs_resolution: {reason}", ct).ConfigureAwait(false);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
+        _logger.LogWarning("Collective assembly needs resolution for run {RunId}: {Reason}",
+            context.CoordinatorRunId, reason);
     }
 
     /// <summary>

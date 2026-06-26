@@ -286,7 +286,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SeedCoordinatorRunAsync(coordinatorRunId);
         await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         _streamStore.Create(coordinatorRunId, "alice");
-        _pipeline.MergeOverride = CollectiveMergeResult.Conflict(new[] { "src/x.txt" }, "merge_conflict");
+        _pipeline.MergeOverride = CollectiveMergeResult.Failed("merge_error");
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
@@ -420,7 +420,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         db.DecisionInbox.Add(new DecisionInboxEntry
         {
             ProjectId = projectId,
-            AgentName = "morpheus",
+            AgentName = "coordinator",
             Slug = slug,
             Type = type,
             Title = title,

@@ -8,8 +8,13 @@ namespace Agentweaver.Api.Infrastructure;
 public sealed class SqliteProjectStore : IProjectStore
 {
     private readonly SqliteDb _db;
+    private readonly ILogger<SqliteProjectStore>? _logger;
 
-    public SqliteProjectStore(SqliteDb db) => _db = db;
+    public SqliteProjectStore(SqliteDb db, ILogger<SqliteProjectStore>? logger = null)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     public async Task InsertAsync(Project project, CancellationToken ct = default)
     {
@@ -275,7 +280,7 @@ public sealed class SqliteProjectStore : IProjectStore
           FROM projects
         """;
 
-    private static Project Map(SqliteDataReader r)
+    private Project Map(SqliteDataReader r)
     {
         var originKind = ProjectOrigin.KindFromApiString(r.GetString(2));
         var origin = originKind == ProjectOriginKind.FromGitHub
@@ -307,7 +312,7 @@ public sealed class SqliteProjectStore : IProjectStore
             SandboxProfile         = r.IsDBNull(18) ? null : r.GetString(18),
             SourceBlueprintId      = r.IsDBNull(19) ? null : r.GetString(19),
             SourceBlueprintType    = r.IsDBNull(20) ? null : r.GetString(20),
-            AllowedWorkflowIds     = r.IsDBNull(21) ? null : DeserializeWorkflowIds(r.GetString(21)),
+            AllowedWorkflowIds     = r.IsDBNull(21) ? null : DeserializeWorkflowIds(r.GetString(21), r.GetString(0)),
         };
     }
 
@@ -332,9 +337,8 @@ public sealed class SqliteProjectStore : IProjectStore
     private static string? SerializeWorkflowIds(IReadOnlyList<string>? ids) =>
         ids is null || ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
 
-    /// <summary>Deserializes a JSON array string of workflow ids. Returns null for blank/invalid
-    /// payloads so callers fall back to "all workflows allowed".</summary>
-    private static IReadOnlyList<string>? DeserializeWorkflowIds(string? json)
+    /// <summary>Deserializes a JSON array string of workflow ids. Blank payloads retain "all workflows allowed".</summary>
+    private IReadOnlyList<string>? DeserializeWorkflowIds(string? json, string projectId)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
         try
@@ -342,9 +346,10 @@ public sealed class SqliteProjectStore : IProjectStore
             var ids = JsonSerializer.Deserialize<List<string>>(json);
             return ids is { Count: > 0 } ? ids : null;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            _logger?.LogWarning(ex, "Invalid allowed_workflow_ids JSON for project {ProjectId}", projectId);
+            throw new InvalidDataException($"Invalid allowed_workflow_ids JSON for project {projectId}.", ex);
         }
     }
 }

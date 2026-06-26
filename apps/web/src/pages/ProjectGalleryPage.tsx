@@ -271,7 +271,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
   };
 
   const filteredRepos = repos.filter(r =>
-    r.full_name?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false
+    r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false
   );
 
   return (
@@ -304,9 +304,9 @@ function CreateFromGitHubDialog({ onCreated, dataDir }: { onCreated: (p: Project
                   disabled={reposLoading}
                 >
                   {filteredRepos.map((repo) => (
-                    <Option key={repo.full_name ?? ''} value={repo.full_name ?? ''} text={repo.full_name ?? ''}>
+                    <Option key={repo.fullName ?? ''} value={repo.fullName ?? ''} text={repo.fullName ?? ''}>
                       <div>
-                        <Text weight="semibold">{repo.full_name ?? '(unnamed)'}</Text>
+                        <Text weight="semibold">{repo.fullName ?? '(unnamed)'}</Text>
                         {repo.description && (
                           <Text size={200} style={{ display: 'block', color: 'inherit', opacity: 0.7 }}>
                             {repo.description}

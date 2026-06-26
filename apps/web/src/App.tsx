@@ -27,6 +27,7 @@ import { WorkspacePage } from './pages/WorkspacePage';
 import { OverviewPage } from './pages/OverviewPage';
 import { AppShell } from './components/shell/AppShell';
 import { apiClient } from './api/apiClient';
+import { bindSessionLogin, captureSessionAuthFromUrl, clearSessionAuth, getSessionLogin, getSessionToken } from './config';
 
 function Shell() {
   return (
@@ -75,15 +76,28 @@ function AuthGate() {
 
   useEffect(() => {
     let cancelled = false;
+    captureSessionAuthFromUrl();
     apiClient.getGitHubAuthStatus()
       .then((res) => {
-        if (!cancelled) {
-          setSignedIn(res.status === 'signed_in');
-          setAuthChecked(true);
+        if (cancelled) return;
+        if (res.status === 'signed_in') {
+          const storedLogin = getSessionLogin();
+          if (getSessionToken() && storedLogin && res.login && storedLogin !== res.login) {
+            clearSessionAuth();
+            setSignedIn(false);
+          } else {
+            bindSessionLogin(res.login);
+            setSignedIn(true);
+          }
+        } else {
+          clearSessionAuth();
+          setSignedIn(false);
         }
+        setAuthChecked(true);
       })
       .catch(() => {
         if (!cancelled) {
+          clearSessionAuth();
           setSignedIn(false);
           setAuthChecked(true);
         }

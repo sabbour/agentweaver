@@ -177,12 +177,13 @@ public sealed class SubtaskFrontierTests
     }
 
     [Fact]
-    public void DanglingDependency_TreatedAsSatisfied()
+    public void DanglingDependency_ThrowsOnCorruptPlan()
     {
-        // Edge references a subtask id (99) not in the plan — must not deadlock the frontier.
+        // Edge references a subtask id (99) not in the plan — corrupt work plan, must throw.
         var edges = Edges((1, 99));
         var status = new Dictionary<int, string> { [1] = SubtaskStatus.Pending };
 
-        SubtaskFrontier.ReadyPending(status, edges).Should().Equal(1);
+        var act = () => SubtaskFrontier.ReadyPending(status, edges);
+        act.Should().Throw<InvalidOperationException>();
     }
 }

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
+using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
 
@@ -35,13 +36,28 @@ public sealed class SqliteRunEventStream : IRunEventStream
         EventTypes.RunCompleted,
         EventTypes.RunFailed,
         EventTypes.RunCancelled,
+        EventTypes.MergeCompleted,
+        EventTypes.MergeFailed,
+        EventTypes.ReviewDeclined,
+        EventTypes.RunAssembleReady,
+    };
+
+    private static readonly IReadOnlyDictionary<string, Type> PayloadTypes = new Dictionary<string, Type>(StringComparer.Ordinal)
+    {
+        [EventTypes.WorkflowGraph] = typeof(GraphDescriptor),
+        [EventTypes.CoordinatorGraph] = typeof(GraphDescriptor),
     };
 
     private readonly string _connectionString;
     private readonly ConcurrentDictionary<string, Channel<RunEvent>> _channels = new();
+    private readonly ConcurrentDictionary<string, byte> _completedRuns = new();
+    private readonly object _channelsGate = new();
+    private readonly ILogger<SqliteRunEventStream>? _logger;
 
-    public SqliteRunEventStream(IConfiguration configuration)
+    public SqliteRunEventStream(IConfiguration configuration, ILogger<SqliteRunEventStream>? logger = null)
     {
+        _logger = logger;
+
         // The RunEvents table lives in memory.db (EF Core MemoryDbContext), a separate file from
         // the main agentweaver.db. Resolve the same path Program.cs uses to register the context.
         var basePath = configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
@@ -62,6 +78,12 @@ public sealed class SqliteRunEventStream : IRunEventStream
     /// <inheritdoc />
     public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
+        if (_completedRuns.ContainsKey(runId))
+        {
+            _logger?.LogWarning("Discarding event {EventType} for completed run {RunId}", evt.Type, runId);
+            return ValueTask.CompletedTask;
+        }
+
         // Layer 1: synchronous, durable write-through BEFORE the channel publish so the event is
         // crash-safe before any live subscriber observes it. Honors a pre-assigned sequence when
         // present (idempotent via the unique (RunId, Sequence) index), otherwise assigns MAX+1.
@@ -70,8 +92,19 @@ public sealed class SqliteRunEventStream : IRunEventStream
         // Layer 2: publish to the live channel. TryWrite never blocks; if the bounded channel is
         // full (slow/absent consumer) the live copy is dropped — it stays durable in SQLite.
         var stamped = evt.Sequence == sequence ? evt : new RunEvent(sequence, evt.Type, evt.Payload);
-        var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
-        channel.Writer.TryWrite(stamped);
+        lock (_channelsGate)
+        {
+            if (_completedRuns.ContainsKey(runId))
+            {
+                _logger?.LogWarning(
+                    "Run {RunId} completed while appending event {EventType}; durable event {Sequence} will not resurrect live channel",
+                    runId, evt.Type, sequence);
+                return ValueTask.CompletedTask;
+            }
+
+            var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
+            channel.Writer.TryWrite(stamped);
+        }
 
         return ValueTask.CompletedTask;
     }
@@ -83,7 +116,13 @@ public sealed class SqliteRunEventStream : IRunEventStream
         // 1. Get or create the channel BEFORE reading from the DB. Any append that lands after this
         //    point publishes to the channel; anything before is caught by the replay below — so the
         //    replay/tail hand-off has no gap.
-        var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
+        Channel<RunEvent>? channel;
+        lock (_channelsGate)
+        {
+            channel = _completedRuns.ContainsKey(runId)
+                ? null
+                : _channels.GetOrAdd(runId, _ => CreateChannel());
+        }
 
         // 2. Replay persisted events from the cursor.
         var lastReplayed = fromSequence;
@@ -94,6 +133,9 @@ public sealed class SqliteRunEventStream : IRunEventStream
             if (TerminalTypes.Contains(evt.Type))
                 yield break; // Completed run: replay history, then terminate cleanly.
         }
+
+        if (channel is null)
+            yield break;
 
         // 3. Tail the live channel, skipping anything already delivered during replay. ReadAllAsync
         //    completes when the channel is completed via CompleteAsync (or ct is cancelled).
@@ -111,8 +153,12 @@ public sealed class SqliteRunEventStream : IRunEventStream
     /// <inheritdoc />
     public ValueTask CompleteAsync(string runId, CancellationToken ct = default)
     {
-        if (_channels.TryRemove(runId, out var channel))
-            channel.Writer.TryComplete();
+        lock (_channelsGate)
+        {
+            _completedRuns[runId] = 0;
+            if (_channels.TryRemove(runId, out var channel))
+                channel.Writer.TryComplete();
+        }
         return ValueTask.CompletedTask;
     }
 
@@ -169,21 +215,15 @@ public sealed class SqliteRunEventStream : IRunEventStream
             cmd.CommandText = """
                 INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
                 SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
-                FROM "RunEvents" WHERE "RunId" = $runId;
+                FROM "RunEvents" WHERE "RunId" = $runId
+                RETURNING "Sequence";
                 """;
             cmd.Parameters.AddWithValue("$runId", runId);
             cmd.Parameters.AddWithValue("$type", evt.Type);
             cmd.Parameters.AddWithValue("$payload", payloadJson);
             cmd.Parameters.AddWithValue("$createdAt", createdAt);
-            cmd.ExecuteNonQuery();
-        }
-
-        using (var read = connection.CreateCommand())
-        {
-            read.CommandText = "SELECT MAX(\"Sequence\") FROM \"RunEvents\" WHERE \"RunId\" = $runId;";
-            read.Parameters.AddWithValue("$runId", runId);
-            var result = read.ExecuteScalar();
-            return result is long l ? (int)l : 1;
+            var result = cmd.ExecuteScalar();
+            return Convert.ToInt32(result, CultureInfo.InvariantCulture);
         }
     }
 
@@ -212,12 +252,26 @@ public sealed class SqliteRunEventStream : IRunEventStream
             var sequence = reader.GetInt32(0);
             var type = reader.GetString(1);
             var payloadJson = reader.GetString(2);
-            object payload;
-            try { payload = JsonSerializer.Deserialize<JsonElement>(payloadJson); }
-            catch { payload = new { }; }
+            var payload = DeserializePayload(runId, sequence, type, payloadJson);
             events.Add(new RunEvent(sequence, type, payload));
         }
 
         return events;
+    }
+
+    private object DeserializePayload(string runId, int sequence, string type, string payloadJson)
+    {
+        try
+        {
+            if (PayloadTypes.TryGetValue(type, out var payloadType))
+                return JsonSerializer.Deserialize(payloadJson, payloadType) ?? new { };
+
+            return JsonSerializer.Deserialize<JsonElement>(payloadJson);
+        }
+        catch (JsonException ex)
+        {
+            _logger?.LogError(ex, "Corrupt RunEvents payload for run {RunId} sequence {Sequence}", runId, sequence);
+            return new { error = "corrupt_payload", runId, sequence };
+        }
     }
 }

@@ -42,6 +42,9 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SessionId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Tags")
                         .HasColumnType("TEXT");
 
@@ -89,6 +92,9 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("SupersededById")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Tags")
                         .HasColumnType("TEXT");
 
@@ -104,6 +110,8 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("SupersededById");
 
                     b.HasIndex("ProjectId", "AgentName");
 
@@ -128,6 +136,9 @@ namespace Agentweaver.Api.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("DecisionId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTimeOffset?>("MergedAt")
                         .HasColumnType("TEXT");
@@ -160,10 +171,12 @@ namespace Agentweaver.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectId", "Status");
+                    b.HasIndex("DecisionId");
 
-                    b.HasIndex("ProjectId", "AgentName", "Slug")
+                    b.HasIndex("ProjectId", "Slug")
                         .IsUnique();
+
+                    b.HasIndex("ProjectId", "Status");
 
                     b.ToTable("DecisionInbox");
                 });
@@ -239,6 +252,9 @@ namespace Agentweaver.Api.Migrations
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SerializedState")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("SessionId")
@@ -472,6 +488,20 @@ namespace Agentweaver.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("RunEvents");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.Decision", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.Decision", null)
+                        .WithMany()
+                        .HasForeignKey("SupersededById");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.DecisionInboxEntry", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.Decision", null)
+                        .WithMany()
+                        .HasForeignKey("DecisionId");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.Subtask", b =>

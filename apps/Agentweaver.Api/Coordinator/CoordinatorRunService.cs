@@ -235,9 +235,22 @@ public sealed class CoordinatorRunService
             run.ModelId);
 
         var runCts = new CancellationTokenSource();
-        var streamingRun = await _factory.StartAsync(input, runId, runCts.Token).ConfigureAwait(false);
-        var runCt = _registry.Register(runId, streamingRun, runCts);
-        StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
+        var ctsRegistered = false;
+        try
+        {
+            var streamingRun = await _factory.StartAsync(input, runId, runCts.Token).ConfigureAwait(false);
+            var runCt = _registry.Register(runId, streamingRun, runCts);
+            ctsRegistered = true;
+            StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
+        }
+        catch
+        {
+            if (ctsRegistered)
+                _registry.Abandon(runId);
+            else
+                runCts.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -692,32 +705,45 @@ public sealed class CoordinatorRunService
         }
 
         var runCts = new CancellationTokenSource();
-        var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
-        var runCt = _registry.Register(runId, streamingRun, runCts);
-
-        // Repopulate the pending confirmation request so the confirm/revise endpoints find a live gate.
-        var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);
-        if (status == Microsoft.Agents.AI.Workflows.RunStatus.PendingRequests)
+        var ctsRegistered = false;
+        try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(5));
-            try
+            var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
+            var runCt = _registry.Register(runId, streamingRun, runCts);
+            ctsRegistered = true;
+
+            // Repopulate the pending confirmation request so the confirm/revise endpoints find a live gate.
+            var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);
+            if (status == Microsoft.Agents.AI.Workflows.RunStatus.PendingRequests)
             {
-                await foreach (var evt in streamingRun.WatchStreamAsync(cts.Token).ConfigureAwait(false))
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(5));
+                try
                 {
-                    if (evt is RequestInfoEvent rie)
+                    await foreach (var evt in streamingRun.WatchStreamAsync(cts.Token).ConfigureAwait(false))
                     {
-                        if (_pendingStore.Get(runId) is null)
-                            _pendingStore.Set(runId, rie.Request, run.SubmittingUser);
-                        break;
+                        if (evt is RequestInfoEvent rie)
+                        {
+                            if (_pendingStore.Get(runId) is null)
+                                _pendingStore.Set(runId, rie.Request, run.SubmittingUser);
+                            break;
+                        }
                     }
                 }
+                catch (OperationCanceledException) { /* timeout is acceptable */ }
             }
-            catch (OperationCanceledException) { /* timeout is acceptable */ }
-        }
 
-        StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
-        _logger.LogInformation("Recovered coordinator run {RunId} at the spec confirmation gate", run.Id);
+            StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
+            _logger.LogInformation("Recovered coordinator run {RunId} at the spec confirmation gate", run.Id);
+        }
+        catch
+        {
+            if (ctsRegistered)
+                _registry.Abandon(runId);
+            else
+                runCts.Dispose();
+            throw;
+        }
     }
 
     /// <summary>

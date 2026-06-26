@@ -15,8 +15,18 @@ public sealed record BlueprintDto
     [JsonPropertyName("description")] public string? Description { get; init; }
     [JsonPropertyName("roster")] public IReadOnlyList<string>? Roster { get; init; }
     [JsonPropertyName("workflow")] public string? Workflow { get; init; }
+    [JsonPropertyName("workflows")] public IReadOnlyList<string>? Workflows { get; init; }
     [JsonPropertyName("review_policy")] public string? ReviewPolicy { get; init; }
     [JsonPropertyName("sandbox_profile")] public string? SandboxProfile { get; init; }
+    [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
+    [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
+}
+
+public sealed record BespokeRoleDto
+{
+    [JsonPropertyName("id")] public string? Id { get; init; }
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("charter")] public string? Charter { get; init; }
 }
 
 // ── Responses ────────────────────────────────────────────────────────────────
@@ -31,6 +41,8 @@ public sealed record ListBlueprintsResponse
 public sealed record GenerateBlueprintResponse
 {
     [JsonPropertyName("blueprint")] public required BlueprintDto Blueprint { get; init; }
+    [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
+    [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>Response for POST /api/blueprints/validate.</summary>

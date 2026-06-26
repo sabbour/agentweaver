@@ -46,10 +46,11 @@ nodes:
       - review
 
   - id: code-review
-    type: peer_review
+    type: prompt
     label: Code Review
     role: review
     kind: live
+    prompt: Review the implementation for correctness, maintainability, and readiness for human approval.
 
   - id: review-gate
     type: check

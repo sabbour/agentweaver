@@ -158,6 +158,7 @@ public sealed record WorkflowDefinition
     public required string Id { get; init; }
     public required string Name { get; init; }
     public string? Description { get; init; }
+    public string? Version { get; init; }
     public required WorkflowTrigger Trigger { get; init; }
 
     /// <summary>The id of the entry node where execution begins.</summary>

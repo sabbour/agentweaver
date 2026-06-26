@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
 import { AgentweaverApiClient } from './client';
+import { API_URL, getSessionToken } from '../config';
 
 export type PollStatus = 'polling' | 'done' | 'error';
 
@@ -12,6 +13,18 @@ interface PollState {
 
 const TERMINAL = new Set(['completed', 'failed', 'merged', 'declined', 'merge_failed']);
 const POLL_INTERVAL_MS = 2000;
+const TERMINAL_EVENT_TYPES = new Set([
+  'run.completed',
+  'run.failed',
+  'merge.completed',
+  'merge.failed',
+  'coordinator.assembly_completed',
+  'coordinator.assembly_failed',
+  'coordinator.assembly_declined',
+]);
+const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+const MAX_CONSECUTIVE_FAILURES = 5;
+const DEFAULT_EVENT_BUFFER_LIMIT = 1000;
 
 // review.requested is intentionally excluded: multiple review gates occur in
 // a revision cycle, so the second review.requested must not be deduplicated away.
@@ -21,7 +34,7 @@ const SINGLETON_EVENT_TYPES: ReadonlySet<string> = new Set([
   'merge.completed', 'merge.failed',
 ]);
 
-export function useRunPoll(runId: string, apiKey: string, baseUrl: string): PollState {
+export function useRunPoll(runId: string, baseUrl: string = API_URL): PollState {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [status, setStatus] = useState<PollStatus>('polling');
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +42,7 @@ export function useRunPoll(runId: string, apiKey: string, baseUrl: string): Poll
 
   useEffect(() => {
     stopRef.current = false;
-    const client = new AgentweaverApiClient(baseUrl, apiKey);
+    const client = new AgentweaverApiClient(baseUrl);
 
     const poll = async () => {
       while (!stopRef.current) {
@@ -51,7 +64,7 @@ export function useRunPoll(runId: string, apiKey: string, baseUrl: string): Poll
 
     void poll();
     return () => { stopRef.current = true; };
-  }, [runId, apiKey, baseUrl]);
+  }, [runId, baseUrl]);
 
   return { run, status, error };
 }
@@ -141,17 +154,20 @@ export type StreamStatus = 'connecting' | 'streaming' | 'done' | 'error';
 
 interface StreamState {
   events: RunStreamEvent[];
+  droppedEventCount: number;
   status: StreamStatus;
   error: string | null;
   reconnect: () => void;
 }
 
-export function useRunStream(runId: string, apiKey: string, baseUrl: string): StreamState {
+export function useRunStream(runId: string, baseUrl: string = API_URL, maxEvents = DEFAULT_EVENT_BUFFER_LIMIT): StreamState {
   const [events, setEvents] = useState<RunStreamEvent[]>([]);
+  const [droppedEventCount, setDroppedEventCount] = useState(0);
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const [error, setError] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
   const lastSeqRef = useRef(0);
+  const terminalRef = useRef(false);
   const prevRunIdRef = useRef<string>(runId);
 
   const reconnect = useCallback(() => {
@@ -162,97 +178,124 @@ export function useRunStream(runId: string, apiKey: string, baseUrl: string): St
     const controller = new AbortController();
     const { signal } = controller;
 
-    // On a genuine run change, clear accumulated events and reset the sequence
-    // cursor so the new stream starts from the beginning. On a reconnect of the
-    // same run (reconnectKey changed), keep existing events and the last known
-    // sequence so the server resumes from where the previous stream ended.
     if (prevRunIdRef.current !== runId) {
       prevRunIdRef.current = runId;
       lastSeqRef.current = 0;
+      terminalRef.current = false;
       setEvents([]);
+      setDroppedEventCount(0);
     }
 
-    // Don't attempt to connect if runId is not yet resolved.
     if (!runId) return;
 
     setStatus('connecting'); // eslint-disable-line react-hooks/set-state-in-effect
     setError(null);
 
-    const connect = async () => {
-      const url = `${baseUrl.replace(/\/+$/, '')}/api/runs/${encodeURIComponent(runId)}/stream`;
-      try {
-        const headers: Record<string, string> = {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: 'text/event-stream',
-        };
-        if (lastSeqRef.current > 0) headers['Last-Event-ID'] = String(lastSeqRef.current);
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-        const response = await fetch(url, { headers, signal });
-        if (!response.ok) throw new Error(`status ${response.status}`);
-        if (!response.body) throw new Error('no body');
-
-        setStatus('streaming');
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (!signal.aborted) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          let sep = buffer.indexOf('\n\n');
-          while (sep !== -1) {
-            const frame = buffer.slice(0, sep);
-            buffer = buffer.slice(sep + 2);
-
-            let evtId = '';
-            let evtType = '';
-            let evtData = '';
-            for (const line of frame.split('\n')) {
-              if (line.startsWith('id:')) evtId = line.slice(3).trim();
-              else if (line.startsWith('event:')) evtType = line.slice(6).trim();
-              else if (line.startsWith('data:')) evtData += line.slice(5);
-            }
-
-            if (evtType === 'done') {
-              setStatus('done');
-              return;
-            }
-            if (evtType === 'error') {
-              setStatus('error');
-              setError('Stream error from server');
-              return;
-            }
-
-            const seq = evtId ? parseInt(evtId, 10) : 0;
-            if (seq > 0) lastSeqRef.current = seq;
-
-            if (evtType && evtData) {
-              let payload: Record<string, unknown> = {};
-              try { payload = JSON.parse(evtData); } catch { /* ignore bad JSON */ }
-              const streamEvt: RunStreamEvent = { sequence: seq, type: evtType as EventType, payload };
-              setEvents((prev) => {
-                if (seq > 0 && prev.some((e) => e.sequence === seq)) return prev;
-                if (seq === 0 && SINGLETON_EVENT_TYPES.has(evtType) && prev.some((e) => e.type === evtType)) return prev;
-                return [...prev, streamEvt];
-              });
-            }
-
-            sep = buffer.indexOf('\n\n');
-          }
+    const appendEvent = (streamEvt: RunStreamEvent) => {
+      setEvents((prev) => {
+        if (streamEvt.sequence === 0 && SINGLETON_EVENT_TYPES.has(streamEvt.type) && prev.some((e) => e.type === streamEvt.type)) {
+          return prev;
         }
-        if (!signal.aborted) setStatus('done');
-      } catch (err) {
-        if (signal.aborted) return;
-        setStatus('error');
-        setError(err instanceof Error ? err.message : String(err));
+        const next = [...prev, streamEvt];
+        if (next.length <= maxEvents) return next;
+        const overflow = next.length - maxEvents;
+        setDroppedEventCount((count) => count + overflow);
+        return next.slice(overflow);
+      });
+    };
+
+    const connectOnce = async (): Promise<boolean> => {
+      const url = `${baseUrl.replace(/\/+$/, '')}/api/runs/${encodeURIComponent(runId)}/stream`;
+      const token = getSessionToken();
+      const headers: Record<string, string> = { Accept: 'text/event-stream' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (lastSeqRef.current > 0) headers['Last-Event-ID'] = String(lastSeqRef.current);
+
+      const response = await fetch(url, { headers, signal, credentials: 'include' });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      if (!response.body) throw new Error('no body');
+
+      setStatus('streaming');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let sep = buffer.indexOf('\n\n');
+        while (sep !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+
+          let evtId = '';
+          let evtType = '';
+          let evtData = '';
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('id:')) evtId = line.slice(3).trim();
+            else if (line.startsWith('event:')) evtType = line.slice(6).trim();
+            else if (line.startsWith('data:')) evtData += line.slice(5);
+          }
+
+          if (evtType === 'done') {
+            terminalRef.current = true;
+            setStatus('done');
+            return true;
+          }
+          if (evtType === 'error') throw new Error('Stream error from server');
+
+          const seq = evtId ? parseInt(evtId, 10) : 0;
+          if (seq > 0 && seq <= lastSeqRef.current) {
+            sep = buffer.indexOf('\n\n');
+            continue;
+          }
+
+          if (evtType && evtData) {
+            let payload: Record<string, unknown> = {};
+            try { payload = JSON.parse(evtData); } catch { /* ignore bad JSON */ }
+            const streamEvt: RunStreamEvent = { sequence: seq, type: evtType as EventType, payload };
+            appendEvent(streamEvt);
+            if (seq > 0) lastSeqRef.current = seq;
+            if (TERMINAL_EVENT_TYPES.has(evtType)) terminalRef.current = true;
+          }
+
+          sep = buffer.indexOf('\n\n');
+        }
+      }
+
+      return terminalRef.current;
+    };
+
+    const connect = async () => {
+      let consecutiveFailures = 0;
+      while (!signal.aborted && !terminalRef.current) {
+        try {
+          const finished = await connectOnce();
+          if (signal.aborted || finished || terminalRef.current) return;
+          throw new Error('Stream closed');
+        } catch (err) {
+          if (signal.aborted || terminalRef.current) return;
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            setStatus('error');
+            setError(err instanceof Error ? err.message : String(err));
+            return;
+          }
+          const delay = RECONNECT_DELAYS_MS[Math.min(consecutiveFailures - 1, RECONNECT_DELAYS_MS.length - 1)];
+          setStatus('connecting');
+          setError(`Stream disconnected; reconnecting in ${delay / 1000}s.`);
+          await sleep(delay);
+        }
       }
     };
 
     void connect();
     return () => { controller.abort(); };
-  }, [runId, apiKey, baseUrl, reconnectKey]);
+  }, [runId, baseUrl, reconnectKey, maxEvents]);
 
-  return { events, status, error, reconnect };
+  return { events, droppedEventCount, status, error, reconnect };
 }

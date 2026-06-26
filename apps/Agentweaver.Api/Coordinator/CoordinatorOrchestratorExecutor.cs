@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -42,6 +43,8 @@ namespace Agentweaver.Api.Coordinator;
 public sealed class CoordinatorOrchestratorExecutor
 {
     private const string CoordinatorAgentName = "Coordinator";
+    private const int DecompositionModelLimitTokens = 120_000;
+    private const double DecompositionPromptBudgetRatio = 0.80;
     private const string CoordinatorMetaToolsRuntimeNote =
         """
 
@@ -188,6 +191,7 @@ public sealed class CoordinatorOrchestratorExecutor
             var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
             var registry = scope.ServiceProvider.GetRequiredService<WorkflowRegistry>();
             var selector = scope.ServiceProvider.GetRequiredService<IWorkflowSelector>();
+            var backlogStore = scope.ServiceProvider.GetRequiredService<IBacklogTaskStore>();
 
             if (!Guid.TryParse(input.ProjectId, out var projectGuid)) return null;
             var project = await projectStore.GetAsync(new ProjectId(projectGuid), ct).ConfigureAwait(false);
@@ -209,6 +213,25 @@ public sealed class CoordinatorOrchestratorExecutor
             // heartbeat pickup never selects a manual-only workflow. When NO workflow's trigger
             // matches, fall back to the project default rather than picking a mismatched workflow.
             var invocationKind = await ResolveInvocationKindAsync(scope, input.RunId, ct).ConfigureAwait(false);
+            var overrideId = await ResolveWorkflowOverrideIdAsync(backlogStore, input.RunId, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(overrideId))
+            {
+                var overrideResult = availableResults.FirstOrDefault(r =>
+                    string.Equals(r.Definition!.Id, overrideId, StringComparison.OrdinalIgnoreCase));
+                if (overrideResult?.Definition is not null &&
+                    WorkflowTriggerEvaluator.IsEligible(overrideResult.Definition.Trigger, invocationKind))
+                {
+                    _logger.LogInformation(
+                        "Coordinator workflow selection for run {RunId}: using backlog task workflow override '{WorkflowId}'.",
+                        input.RunId, overrideResult.Definition.Id);
+                    return overrideResult.Definition;
+                }
+
+                _logger.LogWarning(
+                    "Coordinator workflow selection for run {RunId}: workflow override '{WorkflowId}' was unavailable or trigger-ineligible for {Invocation}; falling back to eligible selection.",
+                    input.RunId, overrideId, invocationKind);
+            }
+
             var eligibleResults = availableResults
                 .Where(r => WorkflowTriggerEvaluator.IsEligible(r.Definition!.Trigger, invocationKind))
                 .ToList();
@@ -219,6 +242,7 @@ public sealed class CoordinatorOrchestratorExecutor
                     input.RunId, invocationKind);
                 return defaultDef;
             }
+
             availableResults = eligibleResults;
 
             var available = availableResults.Select(r => r.Definition!).ToList();
@@ -234,9 +258,9 @@ public sealed class CoordinatorOrchestratorExecutor
             var context = new WorkflowSelectionContext(input.ProjectId, spec.Goal, roles, available, customWorkflowIds);
 
             // An explicit user override in the latest human message always wins.
-            if (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var overrideId))
+            if (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var requestedOverrideId))
             {
-                var overridden = available.FirstOrDefault(d => string.Equals(d.Id, overrideId, StringComparison.Ordinal));
+                var overridden = available.FirstOrDefault(d => string.Equals(d.Id, requestedOverrideId, StringComparison.OrdinalIgnoreCase));
                 if (overridden is not null)
                 {
                     EmitWorkflowSelectedEvent(input.RunId, overridden,
@@ -258,6 +282,16 @@ public sealed class CoordinatorOrchestratorExecutor
                 input.RunId, defaultDef?.Id ?? "(unresolved)");
             return defaultDef;
         }
+    }
+
+    private static async Task<string?> ResolveWorkflowOverrideIdAsync(
+        IBacklogTaskStore backlogStore,
+        string runId,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(runId, out var rid)) return null;
+        var task = await backlogStore.GetByRunIdAsync(rid, ct).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(task?.WorkflowOverrideId) ? null : task.WorkflowOverrideId;
     }
 
     /// <summary>
@@ -342,10 +376,10 @@ public sealed class CoordinatorOrchestratorExecutor
         var byId = subtasks.ToDictionary(s => s.Id);
         bool Satisfied(int dependsOnId) =>
             !byId.TryGetValue(dependsOnId, out var dep)
-            || dep.Status is "assemble_ready" or "completed";
+            || SubtaskStatus.Satisfies(dep.Status);
 
         return subtasks
-            .Where(s => s.Status == "pending"
+            .Where(s => s.Status == SubtaskStatus.Pending
                         && edges.Where(e => e.SubtaskId == s.Id).All(e => Satisfied(e.DependsOnSubtaskId)))
             .ToList();
     }
@@ -373,6 +407,8 @@ public sealed class CoordinatorOrchestratorExecutor
             // node summary, never the full YAML. Empty when no workflow resolved (single-workflow or
             // failed selection) so the prompt degrades gracefully.
             var workflowHint = BuildWorkflowHint(selectedWorkflow);
+            var coordinatorContext = await BuildCoordinatorSystemContextAsync(input.ProjectId, input.RunId, ct)
+                .ConfigureAwait(false);
 
             // SECURITY: the spec fields originate from an untrusted human goal. Fence them and
             // instruct the agent to treat the fenced content strictly as data (same defense as the
@@ -438,6 +474,8 @@ public sealed class CoordinatorOrchestratorExecutor
                   files plus its own output file in its scope.
                 """;
 
+            charter = ApplyDecompositionPromptBudget(input.RunId, charter, coordinatorContext, task);
+
             agent = new CopilotAIAgent(
                 _copilotClientFactory,
                 _scopeProvider,
@@ -471,7 +509,14 @@ public sealed class CoordinatorOrchestratorExecutor
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
             var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
 
-            return ParseDecomposition(response);
+            var parsed = ParseDecomposition(response, input.RunId);
+            if (parsed is null)
+            {
+                _logger.LogWarning(
+                    "Coordinator decomposition returned invalid JSON for run {RunId}; full model response follows:\n{Response}",
+                    input.RunId, response ?? "(null)");
+            }
+            return parsed;
         }
         catch (Exception ex)
         {
@@ -488,7 +533,7 @@ public sealed class CoordinatorOrchestratorExecutor
     }
 
     /// <summary>Tolerant extraction of the first balanced JSON array from the model response.</summary>
-    private static List<SubtaskDraft>? ParseDecomposition(string? response)
+    private List<SubtaskDraft>? ParseDecomposition(string? response, string runId)
     {
         if (string.IsNullOrWhiteSpace(response)) return null;
 
@@ -496,22 +541,55 @@ public sealed class CoordinatorOrchestratorExecutor
         var end = response.LastIndexOf(']');
         if (start < 0 || end <= start) return null;
 
+        var json = response[start..(end + 1)];
+        if (TryParseDecompositionArray(json, runId, repaired: false, out var parsed))
+            return parsed;
+
+        var repairedJson = RepairJsonArray(json);
+        if (!string.Equals(repairedJson, json, StringComparison.Ordinal)
+            && TryParseDecompositionArray(repairedJson, runId, repaired: true, out parsed))
+            return parsed;
+
+        return null;
+    }
+
+    private bool TryParseDecompositionArray(
+        string json,
+        string runId,
+        bool repaired,
+        out List<SubtaskDraft>? drafts)
+    {
+        drafts = null;
         try
         {
-            using var doc = JsonDocument.Parse(response[start..(end + 1)]);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return false;
 
-            var result = new List<SubtaskDraft>();
+            var valid = new List<(int OriginalIndex, SubtaskDraft Draft)>();
+            var originalIndex = 0;
             foreach (var el in doc.RootElement.EnumerateArray())
             {
-                if (el.ValueKind != JsonValueKind.Object) continue;
+                originalIndex++;
+                if (el.ValueKind != JsonValueKind.Object)
+                {
+                    _logger.LogWarning(
+                        "Coordinator decomposition skipped item {Index} for run {RunId}: expected JSON object but found {Kind}",
+                        originalIndex, runId, el.ValueKind);
+                    continue;
+                }
 
                 string? Read(string name) =>
                     el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
                 var title = Read("title");
                 var scope = Read("scope");
-                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(scope)) continue;
+                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(scope))
+                {
+                    _logger.LogWarning(
+                        "Coordinator decomposition skipped item {Index} for run {RunId}: missing required title/scope fields",
+                        originalIndex, runId);
+                    continue;
+                }
 
                 var dependsOn = new List<int>();
                 if (el.TryGetProperty("depends_on", out var deps) && deps.ValueKind == JsonValueKind.Array)
@@ -523,7 +601,7 @@ public sealed class CoordinatorOrchestratorExecutor
                     }
                 }
 
-                result.Add(new SubtaskDraft(
+                valid.Add((originalIndex, new SubtaskDraft(
                     title!.Trim(),
                     scope!.Trim(),
                     NormalizeRole(Read("role")),
@@ -531,16 +609,45 @@ public sealed class CoordinatorOrchestratorExecutor
                     NormalizePhase(Read("phase")),
                     NormalizeIsolation(Read("isolation")),
                     dependsOn,
-                    NormalizeCharter(Read("charter"))));
+                    NormalizeCharter(Read("charter")))));
             }
 
-            return result.Count == 0 ? null : result;
+            if (valid.Count == 0) return false;
+
+            // Rebase depends_on from original 1-based JSON positions to the compacted valid-item list.
+            var originalToCompacted = valid
+                .Select((item, newIndex) => (item.OriginalIndex, RebasedIndex: newIndex + 1))
+                .ToDictionary(x => x.OriginalIndex, x => x.RebasedIndex);
+            var result = new List<SubtaskDraft>(valid.Count);
+            for (var newIndex = 0; newIndex < valid.Count; newIndex++)
+            {
+                var item = valid[newIndex];
+                var rebasedDeps = item.Draft.DependsOn
+                    .Select(raw => originalToCompacted.TryGetValue(raw, out var rebased) ? rebased : 0)
+                    .Where(rebased => rebased > 0 && rebased != newIndex + 1)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToList();
+                result.Add(item.Draft with { DependsOn = rebasedDeps });
+            }
+
+            if (repaired)
+                _logger.LogWarning("Coordinator decomposition JSON for run {RunId} parsed after trailing-comma repair", runId);
+
+            drafts = result;
+            return true;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            _logger.LogWarning(ex,
+                "Coordinator decomposition JSON parse failed for run {RunId}{RepairSuffix}",
+                runId, repaired ? " after repair" : "");
+            return false;
         }
     }
+
+    private static string RepairJsonArray(string json) =>
+        Regex.Replace(json, @",\s*(\]|\})", "$1");
 
     /// <summary>
     /// Deterministic, never-failing decomposition used when the model is unavailable or returns
@@ -767,6 +874,101 @@ public sealed class CoordinatorOrchestratorExecutor
             "Use this as guidance for the SHAPE of the decomposition (which roles act, in what order); "
             + "do not copy node ids verbatim and still PREFER concrete roster role ids below.");
         return sb.ToString();
+    }
+
+    private async Task<string?> BuildCoordinatorSystemContextAsync(
+        string projectId, string runId, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var decisions = (await db.Decisions
+                .Where(d => d.ProjectId == projectId
+                         && d.Status == "active"
+                         && (d.Type == "architectural" || d.Type == "scope"))
+                .ToListAsync(ct).ConfigureAwait(false))
+                .OrderBy(d => d.CreatedAt)
+                .ToList();
+
+            var compiler = scope.ServiceProvider.GetService<MemoryContextCompiler>();
+            var memorySummary = compiler is null
+                ? null
+                : await compiler.CompileAsync(projectId, CoordinatorAgentName, ct).ConfigureAwait(false);
+
+            if (decisions.Count == 0 && string.IsNullOrWhiteSpace(memorySummary))
+                return null;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("Current architectural decisions:");
+            if (decisions.Count == 0)
+            {
+                sb.AppendLine("- (none recorded)");
+            }
+            else
+            {
+                foreach (var d in decisions)
+                {
+                    sb.Append("- ").Append(d.Title).Append(" [").Append(d.Type).Append("]: ")
+                        .AppendLine(CompactForPrompt(d.Content, 900));
+                    if (!string.IsNullOrWhiteSpace(d.Rationale))
+                        sb.Append("  Rationale: ").AppendLine(CompactForPrompt(d.Rationale, 300));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(memorySummary))
+            {
+                sb.AppendLine();
+                sb.AppendLine("Current session memory summary:");
+                sb.AppendLine(memorySummary.Trim());
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Coordinator decomposition: failed to load memory/decision context for run {RunId}", runId);
+            return null;
+        }
+    }
+
+    private string ApplyDecompositionPromptBudget(
+        string runId,
+        string baseCharter,
+        string? contextSection,
+        string taskPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(contextSection))
+            return baseCharter;
+
+        var fullCharter = baseCharter + "\n\n" + contextSection.Trim();
+        var estimatedTokens = EstimateTokens(fullCharter) + EstimateTokens(taskPrompt);
+        var budgetTokens = (int)(DecompositionModelLimitTokens * DecompositionPromptBudgetRatio);
+        if (estimatedTokens <= budgetTokens)
+            return fullCharter;
+
+        var budgetChars = Math.Max(0, (budgetTokens * 4) - baseCharter.Length - taskPrompt.Length - 64);
+        _logger.LogWarning(
+            "Coordinator decomposition prompt for run {RunId} estimated at {Tokens} tokens, over budget {Budget}; truncating memory/decisions context",
+            runId, estimatedTokens, budgetTokens);
+
+        if (budgetChars <= 0)
+            return baseCharter + "\n\nCurrent architectural decisions:\n- (omitted: prompt context window budget exceeded)";
+
+        var truncated = contextSection.Length <= budgetChars
+            ? contextSection
+            : contextSection[..budgetChars] + "\n\n[Context truncated to fit the decomposition model window.]";
+        return baseCharter + "\n\n" + truncated.Trim();
+    }
+
+    private static int EstimateTokens(string text) =>
+        (int)Math.Ceiling((text?.Length ?? 0) / 4.0);
+
+    private static string CompactForPrompt(string text, int maxChars)
+    {
+        var compact = Regex.Replace(text, @"\s+", " ").Trim();
+        return compact.Length <= maxChars ? compact : compact[..maxChars] + "…";
     }
 
     // -----------------------------------------------------------------------

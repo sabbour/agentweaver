@@ -54,7 +54,9 @@ public sealed class ApiKeyAuthMiddleware
         IGitHubTokenStore tokenStore,
         IGitHubTokenScopeProvider scopeProvider)
     {
-        if (!context.Request.Path.StartsWithSegments("/api"))
+        if (!context.Request.Path.StartsWithSegments("/api")
+            || context.Request.Path.Equals("/api/ping", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Path.Equals("/api/health", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context).ConfigureAwait(false);
             return;

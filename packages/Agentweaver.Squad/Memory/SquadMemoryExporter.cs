@@ -35,6 +35,7 @@ public sealed class SquadMemoryExporter
         CancellationToken ct = default)
     {
         ExportSquadDecisions(decisions, inboxEntries);
+        Directory.CreateDirectory(Resolve(".agentweaver/context"));
         ExportAgentHistories(memories);
         ExportNowMd(currentSession);
         ExportBoundariesMd(decisions);
@@ -61,6 +62,13 @@ public sealed class SquadMemoryExporter
         }
         WriteAllText(".squad/decisions.md", sb.ToString());
 
+        var inboxDir = Resolve(".squad/decisions/inbox");
+        if (Directory.Exists(inboxDir))
+        {
+            foreach (var staleFile in Directory.GetFiles(inboxDir, "*.md"))
+                File.Delete(staleFile);
+        }
+
         foreach (var e in inboxEntries)
         {
             var content = $"---\nagent: {e.AgentName}\nslug: {e.Slug}\ntype: {e.Type}\ntitle: {e.Title}\n---\n\n{e.Content}";
@@ -74,10 +82,16 @@ public sealed class SquadMemoryExporter
     {
         foreach (var group in memories.GroupBy(m => m.AgentName))
         {
+            var historyEntries = group
+                .Where(m => m.Type == "learning" || m.Type == "update")
+                .OrderBy(m => m.CreatedAt)
+                .ToList();
+            if (historyEntries.Count == 0) continue;
+
             var sb = new StringBuilder();
             sb.AppendLine($"# {group.Key} History");
             sb.AppendLine();
-            foreach (var m in group.Where(m => m.Type != "core_context").OrderBy(m => m.CreatedAt))
+            foreach (var m in historyEntries)
             {
                 sb.AppendLine($"### [{m.Type}] {m.CreatedAt:yyyy-MM-dd}");
                 sb.AppendLine(m.Content);
@@ -100,8 +114,13 @@ public sealed class SquadMemoryExporter
 
     private void ExportBoundariesMd(IReadOnlyList<DecisionExportDto> decisions)
     {
+        var boundariesPath = Resolve(".agentweaver/context/boundaries.md");
         var architectural = decisions.Where(d => d.Type == "architectural" || d.Type == "scope").ToList();
-        if (architectural.Count == 0) return;
+        if (architectural.Count == 0)
+        {
+            if (File.Exists(boundariesPath)) File.Delete(boundariesPath);
+            return;
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine("# Project Boundaries");
@@ -118,13 +137,18 @@ public sealed class SquadMemoryExporter
                 sb.AppendLine($"\n> **Why:** {d.Rationale}");
             sb.AppendLine("\n---\n");
         }
-        WriteAllText(".squad/identity/boundaries.md", sb.ToString());
+        WriteAllText(".agentweaver/context/boundaries.md", sb.ToString());
     }
 
     private void ExportPatternsMd(IReadOnlyList<MemoryExportDto> memories)
     {
+        var patternsPath = Resolve(".agentweaver/context/patterns.md");
         var patterns = memories.Where(m => m.Type == "pattern").ToList();
-        if (patterns.Count == 0) return;
+        if (patterns.Count == 0)
+        {
+            if (File.Exists(patternsPath)) File.Delete(patternsPath);
+            return;
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine("# Shared Patterns");
@@ -135,6 +159,6 @@ public sealed class SquadMemoryExporter
             sb.AppendLine(p.Content);
             sb.AppendLine();
         }
-        WriteAllText(".squad/identity/patterns.md", sb.ToString());
+        WriteAllText(".agentweaver/context/patterns.md", sb.ToString());
     }
 }

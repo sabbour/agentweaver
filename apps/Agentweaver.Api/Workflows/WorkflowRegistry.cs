@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -19,7 +20,7 @@ public sealed record ProjectWorkflowSet
 
     public WorkflowLoadResult? FindById(string id) =>
         Results.FirstOrDefault(r => r.IsValid && r.Definition is not null &&
-                                    string.Equals(r.Definition.Id, id, StringComparison.Ordinal));
+                                    string.Equals(r.Definition.Id, id, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -35,12 +36,17 @@ public sealed class WorkflowRegistry
 
     private readonly ConcurrentDictionary<ProjectId, ProjectWorkflowSet> _cache = new();
     private readonly CatalogReader? _catalog;
+    private readonly ILogger<WorkflowRegistry>? _logger;
 
     /// <summary>Parameterless constructor for tests and back-compat; no catalog library workflows loaded.</summary>
     public WorkflowRegistry() { }
 
     /// <summary>Production constructor: catalog library workflows are loaded alongside the built-in default.</summary>
-    public WorkflowRegistry(CatalogReader catalog) { _catalog = catalog; }
+    public WorkflowRegistry(CatalogReader catalog, ILogger<WorkflowRegistry>? logger = null)
+    {
+        _catalog = catalog;
+        _logger = logger;
+    }
 
     /// <summary>Returns the cached set for the project, loading it once on first access (FR-006).</summary>
     public ProjectWorkflowSet GetOrLoad(Project project) =>
@@ -51,6 +57,14 @@ public sealed class WorkflowRegistry
     public ProjectWorkflowSet Sync(Project project)
     {
         var set = Build(project);
+        if (set.Results.Any(r => !r.IsValid))
+        {
+            _logger?.LogError(
+                "Workflow sync for project {ProjectId} found validation errors; keeping previous registry cache.",
+                project.Id);
+            return set;
+        }
+
         _cache[project.Id] = set;
         return set;
     }
@@ -80,7 +94,11 @@ public sealed class WorkflowRegistry
     private ProjectWorkflowSet Build(Project project)
     {
         var results = new List<WorkflowLoadResult>();
-        var idToIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var idToIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var reservedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            BuiltInWorkflows.DefaultWorkflowId,
+        };
 
         // The built-in default is always available so a project always has at least one workflow
         // (FR-005). A project-authored file with the same id replaces it (project customization).
@@ -93,7 +111,13 @@ public sealed class WorkflowRegistry
         if (_catalog is not null)
         {
             foreach (var (yaml, source) in _catalog.LoadAllWorkflowYamls())
-                AddResult(WorkflowDefinitionLoader.Load(yaml, source, isBuiltIn: true), results, idToIndex);
+            {
+                var catalogResult = ValidateBindable(
+                    WorkflowDefinitionLoader.Load(yaml, source, isBuiltIn: true));
+                if (catalogResult.Definition is not null)
+                    reservedIds.Add(catalogResult.Definition.Id);
+                AddResult(catalogResult, results, idToIndex, _logger);
+            }
         }
 
         var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows");
@@ -115,7 +139,21 @@ public sealed class WorkflowRegistry
                 result = WorkflowLoadResult.Invalid(source, $"{source}: could not read file — {ex.Message}");
             }
 
-            AddResult(result, results, idToIndex);
+            result = ValidateBindable(result);
+            if (result.Definition is not null && reservedIds.Contains(result.Definition.Id))
+            {
+                var message =
+                    $"{result.Source}: workflow id '{result.Definition.Id}' is reserved by a built-in/catalog workflow and cannot be overridden by a project file.";
+                _logger?.LogError("{Message}", message);
+                results.Add(WorkflowLoadResult.Invalid(
+                    result.Source,
+                    message,
+                    result.Definition,
+                    warnings: result.Warnings));
+                continue;
+            }
+
+            AddResult(result, results, idToIndex, _logger);
         }
 
         return new ProjectWorkflowSet { Results = FilterByAllowedSet(results, project) };
@@ -134,7 +172,7 @@ public sealed class WorkflowRegistry
         var allowed = project.AllowedWorkflowIds;
         if (allowed is null || allowed.Count == 0) return results;
 
-        var allowedSet = new HashSet<string>(allowed, StringComparer.Ordinal)
+        var allowedSet = new HashSet<string>(allowed, StringComparer.OrdinalIgnoreCase)
         {
             BuiltInWorkflows.DefaultWorkflowId,
         };
@@ -147,7 +185,8 @@ public sealed class WorkflowRegistry
     private static void AddResult(
         WorkflowLoadResult result,
         List<WorkflowLoadResult> results,
-        Dictionary<string, int> idToIndex)
+        Dictionary<string, int> idToIndex,
+        ILogger<WorkflowRegistry>? logger)
     {
         if (!result.IsValid || result.Definition is null)
         {
@@ -158,10 +197,27 @@ public sealed class WorkflowRegistry
         var id = result.Definition.Id;
         if (idToIndex.TryGetValue(id, out var existingIndex))
         {
-            if (results[existingIndex].IsBuiltIn)
+            if (results[existingIndex].IsBuiltIn && result.IsBuiltIn)
             {
-                // Project file / later catalog entry overrides the built-in / earlier catalog entry.
-                results[existingIndex] = result;
+                // Catalog collision rule: higher semantic version wins; when versions tie or cannot be
+                // parsed, the source loaded first wins. This makes embedded resource collisions stable.
+                var comparison = CompareVersions(result.Definition.Version, results[existingIndex].Definition?.Version);
+                if (comparison > 0)
+                {
+                    logger?.LogInformation(
+                        "Workflow catalog id collision for {WorkflowId}: source {NewSource} version {NewVersion} replaces {OldSource} version {OldVersion}.",
+                        id, result.Source, result.Definition.Version, results[existingIndex].Source,
+                        results[existingIndex].Definition?.Version);
+                    results[existingIndex] = result;
+                }
+                else
+                {
+                    results.Add(WorkflowLoadResult.Invalid(
+                        result.Source,
+                        $"{result.Source}: duplicate catalog workflow id '{id}' ignored; '{results[existingIndex].Source}' wins by catalog collision rule.",
+                        result.Definition,
+                        isBuiltIn: true));
+                }
             }
             else
             {
@@ -175,6 +231,44 @@ public sealed class WorkflowRegistry
 
         idToIndex[id] = results.Count;
         results.Add(result);
+    }
+
+    private static WorkflowLoadResult ValidateBindable(WorkflowLoadResult result)
+    {
+        if (!result.IsValid || result.Definition is null) return result;
+
+        var errors = RunWorkflowGraphBinder.GetBindabilityErrors(result.Definition);
+        if (errors.Count == 0) return result;
+
+        return WorkflowLoadResult.Invalid(
+            result.Source,
+            $"{result.Source}: workflow cannot be bound to the runtime graph: {string.Join(" ", errors)}",
+            result.Definition,
+            result.IsBuiltIn,
+            result.Warnings);
+    }
+
+    private static int CompareVersions(string? left, string? right)
+    {
+        var l = ParseVersion(left);
+        var r = ParseVersion(right);
+        for (var i = 0; i < Math.Max(l.Length, r.Length); i++)
+        {
+            var lv = i < l.Length ? l[i] : 0;
+            var rv = i < r.Length ? r[i] : 0;
+            var cmp = lv.CompareTo(rv);
+            if (cmp != 0) return cmp;
+        }
+
+        return 0;
+    }
+
+    private static int[] ParseVersion(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return [0];
+        return value.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part => int.TryParse(part, out var versionPart) ? versionPart : 0)
+            .ToArray();
     }
 
     /// <summary>

@@ -41,7 +41,13 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             logger.LogInformation(
                 "SandboxExecutorRouter: selecting local executor (backend={Backend}, inCluster={InCluster})",
                 backendOverride ?? "(none)", isInCluster);
-            return SandboxExecutorFactory.Create(logger);
+            var localExecutor = SandboxExecutorFactory.Create(logger);
+            if (!localExecutor.IsRealIsolation)
+            {
+                logger.LogWarning(
+                    "⚠️ PassthroughExecutor selected — agent commands run directly on the host. Not for production use.");
+            }
+            return localExecutor;
         }
 
         try
@@ -52,13 +58,21 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             {
                 Namespace = _config["Sandbox:Kubernetes:Namespace"] ?? "agentweaver",
                 TemplateRef = _config["Sandbox:Kubernetes:TemplateRef"] ?? "agentweaver-sandbox",
+                WorkspaceMountPath = _config["Sandbox:Kubernetes:WorkspaceMountPath"]
+                    ?? _config["Workspace:PersistentVolume:MountRoot"]
+                    ?? _config["Workspace:Path"]
+                    ?? "/workspace",
                 TimeoutSeconds = int.TryParse(
                     _config["Sandbox:Kubernetes:TimeoutSeconds"], out int t) ? t : 600,
+                ServiceCidr = _config["Sandbox:Kubernetes:ServiceCidr"]
+                    ?? _config["Sandbox:Kubernetes:ClusterServiceCidr"],
+                SandboxEgressCidrExclusions = ReadSandboxEgressCidrExclusions(),
             };
             var k8sLogger = _loggerFactory.CreateLogger<KubernetesSandboxExecutor>();
+            WarnIfServiceCidrNotExcluded(sandboxOptions, logger);
             logger.LogInformation(
-                "SandboxExecutorRouter: selecting KubernetesSandboxExecutor (namespace={Namespace})",
-                sandboxOptions.Namespace);
+                "SandboxExecutorRouter: selecting KubernetesSandboxExecutor (namespace={Namespace}, workspaceMountPath={WorkspaceMountPath})",
+                sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
             return new KubernetesSandboxExecutor(k8sClient, sandboxOptions, k8sLogger, _podRegistry);
         }
         catch (Exception ex)
@@ -66,6 +80,28 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             throw new InvalidOperationException(
                 "SandboxExecutorRouter: in-cluster Kubernetes executor initialization failed. " +
                 "Fail-closed: will not fall back to a local executor.", ex);
+        }
+    }
+
+    private IReadOnlyList<string> ReadSandboxEgressCidrExclusions() =>
+        _config.GetSection("Sandbox:Kubernetes:SandboxEgressCidrExclusions").Get<string[]>()
+        ?? _config.GetSection("SandboxEgressCidrExclusions").Get<string[]>()
+        ?? [];
+
+    private static void WarnIfServiceCidrNotExcluded(
+        KubernetesSandboxOptions options,
+        ILogger<SandboxExecutorRouter> logger)
+    {
+        if (string.IsNullOrWhiteSpace(options.ServiceCidr))
+            return;
+
+        var excluded = options.SandboxEgressCidrExclusions.Any(cidr =>
+            string.Equals(cidr.Trim(), options.ServiceCidr.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (!excluded)
+        {
+            logger.LogWarning(
+                "Sandbox egress configuration warning: cluster service CIDR {ServiceCidr} is not listed in SandboxEgressCidrExclusions. Add it to keep sandbox egress from reaching in-cluster services.",
+                options.ServiceCidr);
         }
     }
 }

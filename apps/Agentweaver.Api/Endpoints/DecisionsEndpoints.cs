@@ -44,21 +44,31 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
     if (string.IsNullOrWhiteSpace(request.AgentName) || string.IsNullOrWhiteSpace(request.Slug)
-        || string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Title)
-        || string.IsNullOrWhiteSpace(request.Content))
-        return Results.BadRequest(new { error = "agent_name, slug, type, title, and content are required." });
+        || string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Content))
+        return Results.BadRequest(new { error = "agent_name, slug, type, and content are required." });
 
     var exists = await memoryDb.DecisionInbox
-        .FirstOrDefaultAsync(e => e.ProjectId == id && e.AgentName == request.AgentName && e.Slug == request.Slug && e.Status == "pending", ct);
+        .FirstOrDefaultAsync(e => e.ProjectId == id && e.Slug == request.Slug, ct);
     if (exists is not null)
     {
+        if (exists.Status != "pending")
+            return Results.Conflict(new { error = "Entry has already been merged or rejected." });
+
+        exists.AgentName = request.AgentName!;
         exists.Type = request.Type!;
-        exists.Title = request.Title!;
+        exists.Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : request.Slug!;
         exists.Content = request.Content!;
         exists.Rationale = request.Rationale;
         exists.UpdatedAt = DateTimeOffset.UtcNow;
         await memoryDb.SaveChangesAsync(ct);
-        return Results.Ok(new { exists.Id, exists.Slug, exists.Status });
+        await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+        return Results.Ok(new
+        {
+            exists.Id, exists.AgentName, exists.Slug, exists.Type, exists.Title, exists.Content,
+            exists.Rationale, exists.Status,
+            decision_id = exists.DecisionId, merged_at = exists.MergedAt,
+            created_at = exists.CreatedAt, updated_at = exists.UpdatedAt,
+        });
     }
 
     var now = DateTimeOffset.UtcNow;
@@ -68,7 +78,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
         AgentName = request.AgentName!,
         Slug = request.Slug!,
         Type = request.Type!,
-        Title = request.Title!,
+        Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : request.Slug!,
         Content = request.Content!,
         Rationale = request.Rationale,
         Status = "pending",
@@ -77,12 +87,22 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     };
     memoryDb.DecisionInbox.Add(entry);
     await memoryDb.SaveChangesAsync(ct);
-    return Results.Created($"/api/projects/{id}/decisions/inbox/{entry.Id}", new { entry.Id, entry.Slug, entry.Status });
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    return Results.Created($"/api/projects/{id}/decisions/inbox/{entry.Id}", new
+    {
+        entry.Id, entry.AgentName, entry.Slug, entry.Type, entry.Title, entry.Content,
+        entry.Rationale, entry.Status,
+        decision_id = entry.DecisionId, merged_at = entry.MergedAt,
+        created_at = entry.CreatedAt, updated_at = entry.UpdatedAt,
+    });
 });
 
 // GET /api/projects/{id}/decisions/inbox
 app.MapGet("/api/projects/{id}/decisions/inbox", async (
     string id,
+    string? status,
+    string? type,
+    string? agent,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -91,14 +111,19 @@ app.MapGet("/api/projects/{id}/decisions/inbox", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    var statusFilter = status ?? "pending";
     var entries = (await memoryDb.DecisionInbox
         .Where(e => e.ProjectId == id)
+        .Where(e => e.Status == statusFilter)
+        .Where(e => type == null || e.Type == type)
+        .Where(e => agent == null || e.AgentName == agent)
         .ToListAsync(ct))
         .OrderByDescending(e => e.CreatedAt)
         .ToList();
     return Results.Ok(entries.Select(e => new
     {
         e.Id, e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale, e.Status,
+        decision_id = e.DecisionId, merged_at = e.MergedAt,
         created_at = e.CreatedAt, updated_at = e.UpdatedAt,
     }));
 });
@@ -122,14 +147,17 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     if (entry is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    if (entry.Type == "architectural" || entry.Type == "scope")
-        return Results.BadRequest(new { error = "Coordinator-reserved decisions must be promoted by the coordinator agent." });
-
     var now = DateTimeOffset.UtcNow;
-    var decision = DecisionPromotion.PromoteEntry(memoryDb, entry, now);
-    await memoryDb.SaveChangesAsync(ct);
+    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, ct);
     await tx.CommitAsync(ct);
-    return Results.Ok(new { entry.Id, entry.Status, decisionId = decision.Id });
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
+    {
+        id = entry.Id,
+        entry.Status,
+        decisionId = decision.Id,
+        mergedAt = entry.MergedAt,
+    });
 });
 
 // POST /api/projects/{id}/decisions/inbox/{entryId}/promote (alias for /merge)
@@ -151,14 +179,17 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
     if (entry is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    if (entry.Type == "architectural" || entry.Type == "scope")
-        return Results.BadRequest(new { error = "Coordinator-reserved decisions must be promoted by the coordinator agent." });
-
     var now = DateTimeOffset.UtcNow;
-    var decision = DecisionPromotion.PromoteEntry(memoryDb, entry, now);
-    await memoryDb.SaveChangesAsync(ct);
+    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, ct);
     await tx.CommitAsync(ct);
-    return Results.Ok(new { entry.Id, entry.Status, decisionId = decision.Id });
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    return Results.Ok(new
+    {
+        id = entry.Id,
+        entry.Status,
+        decisionId = decision.Id,
+        mergedAt = entry.MergedAt,
+    });
 });
 
 // POST /api/projects/{id}/decisions/inbox/{entryId}/reject
@@ -184,6 +215,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
     entry.UpdatedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Ok(new { entry.Id, entry.Status });
 });
 
@@ -201,9 +233,10 @@ app.MapGet("/api/projects/{id}/decisions", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    var statusFilter = status ?? "active";
     var decisions = (await memoryDb.Decisions
         .Where(d => d.ProjectId == id)
-        .Where(d => status == null || d.Status == status)
+        .Where(d => d.Status == statusFilter)
         .Where(d => type == null || d.Type == type)
         .Where(d => agent == null || d.AgentName == agent)
         .ToListAsync(ct))
@@ -212,6 +245,7 @@ app.MapGet("/api/projects/{id}/decisions", async (
     return Results.Ok(decisions.Select(d => new
     {
         d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
+        superseded_by_id = d.SupersededById,
         created_at = d.CreatedAt, updated_at = d.UpdatedAt,
     }));
 });
@@ -234,6 +268,7 @@ app.MapGet("/api/projects/{id}/decisions/{decisionId}", async (
     {
         decision.Id, decision.AgentName, decision.Type, decision.Status,
         decision.Title, decision.Content, decision.Rationale, decision.Tags,
+        superseded_by_id = decision.SupersededById,
         created_at = decision.CreatedAt, updated_at = decision.UpdatedAt,
     });
 });
@@ -274,6 +309,7 @@ app.MapPost("/api/projects/{id}/decisions", async (
     };
     memoryDb.Decisions.Add(decision);
     await memoryDb.SaveChangesAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
     {
         decision.Id, decision.AgentName, decision.Type, decision.Status,
@@ -299,14 +335,27 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
     if (decision is null || decision.ProjectId != id) return Results.NotFound();
 
-    if (!string.IsNullOrWhiteSpace(request.Status)) decision.Status = request.Status!;
     if (!string.IsNullOrWhiteSpace(request.Content)) decision.Content = request.Content!;
     if (request.Rationale is not null) decision.Rationale = request.Rationale;
+    if (!string.IsNullOrWhiteSpace(request.Status))
+    {
+        decision.Status = request.Status!;
+    }
+    if (request.SupersededById is not null)
+    {
+        var supersedingDecision = await memoryDb.Decisions
+            .FirstOrDefaultAsync(d => d.Id == request.SupersededById.Value && d.ProjectId == id, ct);
+        if (supersedingDecision is null) return Results.NotFound();
+        decision.SupersededById = request.SupersededById.Value;
+        decision.Status = "superseded";
+    }
     decision.UpdatedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Ok(new
     {
         decision.Id, decision.Status, decision.Content, decision.Rationale,
+        superseded_by_id = decision.SupersededById,
         updated_at = decision.UpdatedAt,
     });
 });

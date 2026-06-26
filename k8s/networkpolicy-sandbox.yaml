@@ -1,19 +1,5 @@
 # NetworkPolicy for Agentweaver sandbox pods (label: app: agentweaver-sandbox).
-#
-# Two policies:
-#   1. Default-deny all ingress to sandbox pods.
-#   2. Egress allow-list: DNS to kube-dns + pod-CIDR exclusion for internal isolation.
-#
-# External (internet) egress is controlled by the companion CiliumNetworkPolicy
-# (cilium-network-policy-sandbox.yaml) using toFQDNs rules. That policy requires
-# the cluster to be provisioned with --network-dataplane cilium --enable-acns.
-#
-# The API executes commands in the sandbox via Kubernetes pod-exec (WebSocket API
-# through the kube-apiserver), so sandbox pods do not need to initiate connections to
-# the API pod. The egress allow-list keeps exfiltration risk low.
 ---
-# 1) DEFAULT-DENY all ingress to sandbox pods.
-#    Empty ingress rule set = deny all inbound. The API uses pod-exec, not HTTP.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -27,14 +13,7 @@ spec:
       app: agentweaver-sandbox
   policyTypes:
     - Ingress
-  # no ingress rules => deny all ingress
 ---
-# 2) EGRESS allow-list for sandbox pods.
-#    Allow DNS to kube-dns (needed by Cilium DNS proxy and kube-dns itself).
-#    External HTTPS egress is delegated to cilium-network-policy-sandbox.yaml
-#    (toFQDNs rules) — that CiliumNetworkPolicy must also be applied.
-#    Pod-CIDR traffic is implicitly blocked because no ipBlock or podSelector
-#    rule here permits it; the Cilium policy also does not allow in-cluster IPs.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -49,7 +28,6 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # (a) DNS — CoreDNS in kube-system. Required for FQDN resolution by Cilium proxy.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -62,17 +40,10 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # (b) HTTPS (port 443) — restricted to non-cluster traffic.
-    #     FQDN allowlist is enforced by cilium-network-policy-sandbox.yaml.
-    #     Pod CIDR (10.244.0.0/16) is excluded so sandbox pods cannot reach
-    #     the API pod or other in-cluster services over HTTPS.
-    #     OPERATOR: replace except CIDR with your cluster's pod CIDR if different
-    #     (az aks show --query networkProfile.podCidr).
+    # GitHub API public range. Service/pod CIDRs are not included in this allowlist.
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 10.244.0.0/16
+            cidr: 140.82.112.0/20
       ports:
         - protocol: TCP
           port: 443

@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using System.Text.RegularExpressions;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
@@ -131,9 +132,20 @@ app.MapPost("/api/projects", async (
         {
             try
             {
-                await blueprintService.ApplyAsync(
+                var applyResult = await blueprintService.ApplyAsync(
                     project.Id.ToString(), blueprintToApply,
                     request.GeneratedWorkflowYaml, ct);
+                if (!applyResult.Valid)
+                {
+                    await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
+                    return Results.BadRequest(new { error = "invalid_blueprint", details = applyResult.Errors });
+                }
+
+                // Record blueprint provenance inside the creation transaction boundary so a provenance
+                // write failure rolls back the project and all generated files.
+                var pid = ProjectId.Parse(project.Id.ToString());
+                await projectStore.UpdateSourceBlueprintAsync(
+                    pid, blueprintSourceId, blueprintSourceType, DateTimeOffset.UtcNow, ct);
             }
             catch (Exception blueprintEx)
             {
@@ -143,7 +155,7 @@ app.MapPost("/api/projects", async (
                     project.Id);
                 try
                 {
-                    await projectService.DeleteAsync(project.Id, runStore, workflowRegistry, ct);
+                    await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
                 }
                 catch (Exception rollbackEx)
                 {
@@ -152,11 +164,6 @@ app.MapPost("/api/projects", async (
                 }
                 throw;
             }
-
-            // Record blueprint provenance
-            var pid = ProjectId.Parse(project.Id.ToString());
-            await projectStore.UpdateSourceBlueprintAsync(
-                pid, blueprintSourceId, blueprintSourceType, DateTimeOffset.UtcNow, ct);
 
             // Re-read so the response reflects the workflow/review/sandbox defaults the blueprint set.
             var view = await projectService.GetViewAsync(project.Id, ct);
@@ -193,15 +200,19 @@ app.MapGet("/api/server/info", () => Results.Ok(new
 
 // GET /api/projects — list all projects
 app.MapGet("/api/projects", async (
+    HttpContext httpContext,
     ProjectService projectService,
     CancellationToken ct) =>
 {
     var views = await projectService.ListViewsAsync(ct);
-    return Results.Ok(views.Select(v => MapProject(v.Project, v.Available)));
+    return Results.Ok(views
+        .Where(v => IsProjectOwner(httpContext, v.Project))
+        .Select(v => MapProject(v.Project, v.Available)));
 });
 
 // GET /api/projects/{id} — get a single project
 app.MapGet("/api/projects/{id}", async (
+    HttpContext httpContext,
     string id,
     ProjectService projectService,
     CancellationToken ct) =>
@@ -210,11 +221,14 @@ app.MapGet("/api/projects/{id}", async (
         return Results.BadRequest(new { error = "Invalid project id." });
 
     var view = await projectService.GetViewAsync(projectId, ct);
-    return view is null ? Results.NotFound() : Results.Ok(MapProject(view.Project, view.Available));
+    if (view is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    return Results.Ok(MapProject(view.Project, view.Available));
 });
 
 // PATCH /api/projects/{id} — rename
 app.MapMethods("/api/projects/{id}", ["PATCH"], async (
+    HttpContext httpContext,
     string id,
     UpdateProjectNameRequest request,
     ProjectService projectService,
@@ -226,6 +240,10 @@ app.MapMethods("/api/projects/{id}", ["PATCH"], async (
     if (string.IsNullOrWhiteSpace(request.Name))
         return Results.BadRequest(new { error = "name is required." });
 
+    var view = await projectService.GetViewAsync(projectId, ct);
+    if (view is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
     bool updated;
     try { updated = await projectService.RenameAsync(projectId, request.Name!, ct); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
@@ -234,6 +252,7 @@ app.MapMethods("/api/projects/{id}", ["PATCH"], async (
 
 // PUT /api/projects/{id}/provider-settings — update provider defaults
 app.MapPut("/api/projects/{id}/provider-settings", async (
+    HttpContext httpContext,
     string id,
     UpdateProjectProviderSettingsRequest request,
     ProjectService projectService,
@@ -241,6 +260,14 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
+
+    var view = await projectService.GetViewAsync(projectId, ct);
+    if (view is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    if (!IsAllowedModelId(request.DefaultModelGitHubCopilot) ||
+        !IsAllowedModelId(request.DefaultModelMicrosoftFoundry))
+        return Results.BadRequest(new { error = "model_id is not allowed." });
 
     bool updated;
     try
@@ -255,6 +282,7 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
 
 // POST /api/projects/{id}/relink — relink to moved directory
 app.MapPost("/api/projects/{id}/relink", async (
+    HttpContext httpContext,
     string id,
     RelinkProjectRequest request,
     ProjectService projectService,
@@ -265,6 +293,10 @@ app.MapPost("/api/projects/{id}/relink", async (
 
     if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
         return Results.BadRequest(new { error = "working_directory is required." });
+
+    var view = await projectService.GetViewAsync(projectId, ct);
+    if (view is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     bool updated;
     try { updated = await projectService.RelinkAsync(projectId, request.WorkingDirectory!, ct); }
@@ -290,6 +322,10 @@ app.MapDelete("/api/projects/{id}", async (
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
 
+    var deleteView = await projectService.GetViewAsync(projectId, ct);
+    if (deleteView is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, deleteView.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
     bool deleted;
     try
     {
@@ -305,17 +341,23 @@ app.MapDelete("/api/projects/{id}", async (
 
 // GET /api/projects/{id}/runs — list runs for a project
 app.MapGet("/api/projects/{id}/runs", async (
+    HttpContext httpContext,
     string id,
     string? agent,
     bool? terminal_only,
     bool? include_children,
     int? limit,
+    IProjectStore projectStore,
     SqliteRunStore runStore,
     CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     var runs = await runStore.GetRunsByProjectAsync(projectId, includeChildren: include_children ?? false, ct: ct);
     if (!string.IsNullOrWhiteSpace(agent))
@@ -361,14 +403,20 @@ static bool IsTerminalHistoryStatus(RunStatus status) =>
 
 // GET /api/projects/{id}/runs/{workflowRunId} — get a single workflow run by its workflow_run_id
 app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
+    HttpContext httpContext,
     string id,
     string workflowRunId,
+    IProjectStore projectStore,
     SqliteRunStore runStore,
     CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     var run = await runStore.GetByWorkflowRunIdAsync(workflowRunId, ct);
     if (run is null) return Results.NotFound();
@@ -421,11 +469,18 @@ app.MapPost("/api/projects/{id}/runs", async (
     if (string.IsNullOrWhiteSpace(request.Task))
         return Results.BadRequest(new { error = "task is required." });
 
+    if (!string.IsNullOrWhiteSpace(request.AgentName) && !AgentNameSlugRegex.IsMatch(request.AgentName))
+        return Results.BadRequest(new { error = "agent_name must be a lowercase slug containing only a-z, 0-9, and '-'." });
+
+    if (!IsAllowedModelId(request.ModelId))
+        return Results.BadRequest(new { error = "model_id is not allowed." });
+
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
     // Load project
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     // Reject if project is being deleted
     if (project.State == ProjectState.Deleting)
@@ -466,6 +521,15 @@ app.MapPost("/api/projects/{id}/runs", async (
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai" }
             .Contains(request.AgentName))
         return Results.BadRequest(new { error = $"'{request.AgentName}' is a built-in system agent and cannot be run directly." });
+
+    if (!string.IsNullOrWhiteSpace(request.AgentName))
+    {
+        var team = new SquadReader(project.WorkingDirectory).ReadTeam();
+        var member = team?.Members.FirstOrDefault(m =>
+            string.Equals(m.Name, request.AgentName, StringComparison.OrdinalIgnoreCase));
+        if (member is null || member.Status != CastMemberStatus.Active)
+            return Results.BadRequest(new { error = $"agent_name '{request.AgentName}' is not an active team member." });
+    }
 
     // Load agent charter if agent_name provided
     string? agentCharter = null;
@@ -577,6 +641,9 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
 
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (!IsAllowedModelId(request.ModelId))
+        return Results.BadRequest(new { error = "model_id is not allowed." });
 
     if (project.State == ProjectState.Deleting)
         return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
@@ -629,5 +696,16 @@ static ProjectResponse MapProject(Project p, bool available) => new()
     SourceBlueprintType = p.SourceBlueprintType,
     AllowedWorkflowIds = p.AllowedWorkflowIds,
 };
+
+private static readonly Regex AgentNameSlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
+private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    return caller.Owns(project.Owner) || string.Equals(caller.User, "admin", StringComparison.OrdinalIgnoreCase);
 }
 
+private static bool IsAllowedModelId(string? modelId) =>
+    string.IsNullOrWhiteSpace(modelId) || AllowedModelRegex.IsMatch(modelId.Trim());
+}

@@ -117,7 +117,9 @@ public sealed class WorkflowSelector : IWorkflowSelector
                 WasAutoSelected: true);
         }
 
-        var selected = available.FirstOrDefault(w => string.Equals(w.Id, selectedId, StringComparison.Ordinal));
+        var normalizedSelectedId = selectedId.Trim().ToLowerInvariant();
+        var selected = available.FirstOrDefault(w =>
+            string.Equals(w.Id.Trim().ToLowerInvariant(), normalizedSelectedId, StringComparison.Ordinal));
         if (selected is null)
         {
             _logger.LogWarning(
@@ -144,7 +146,7 @@ public sealed class WorkflowSelector : IWorkflowSelector
         var match = OverridePattern.Match(message);
         if (!match.Success) return false;
 
-        workflowId = match.Groups["id"].Value;
+        workflowId = match.Groups["id"].Value.Trim().ToLowerInvariant();
         return true;
     }
 

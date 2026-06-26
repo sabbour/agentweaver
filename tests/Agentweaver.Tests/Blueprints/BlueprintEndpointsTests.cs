@@ -38,19 +38,21 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
-    public async Task GetBlueprints_ReturnsFourPredefined_WithCatalogRosters()
+    public async Task GetBlueprints_ReturnsSixPredefined_WithCatalogRosters()
     {
         var response = await _client.GetAsync("/api/blueprints");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         var blueprints = body.GetProperty("blueprints").EnumerateArray().ToList();
-        blueprints.Should().HaveCount(4);
+        blueprints.Should().HaveCount(6);
 
         var ids = blueprints.Select(b => b.GetProperty("id").GetString()).ToList();
         ids.Should().Contain(new[]
         {
             "blueprint-content-authoring",
+            "blueprint-platform-sre",
+            "blueprint-ai-agent-engineering",
             "blueprint-product-management",
             "blueprint-software-development",
             "blueprint-pm-and-software-development",
@@ -281,7 +283,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
               "name": "Generated Bad Team",
               "description": "Rosters a non-catalog role.",
               "roster": ["backend-engineer", "{{unknownRoleId}}"],
-              "workflow": "default",
+              "workflows": ["software-delivery"],
               "review_policy": "default",
               "sandbox_profile": "default"
             }
@@ -307,7 +309,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
               "name": "Generated Data Team",
               "description": "A small data team.",
               "roster": ["backend-engineer", "docs-writer"],
-              "workflow": "default",
+              "workflows": ["software-delivery"],
               "review_policy": "default",
               "sandbox_profile": "restricted"
             }
@@ -318,7 +320,14 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var roster = body.GetProperty("blueprint").GetProperty("roster").EnumerateArray()
+        var blueprint = body.GetProperty("blueprint");
+        blueprint.GetProperty("id").GetString().Should().Be("blueprint-generated-data");
+        blueprint.GetProperty("name").GetString().Should().Be("Generated Data Team");
+        blueprint.GetProperty("description").GetString().Should().Be("A small data team.");
+        blueprint.GetProperty("workflow").GetString().Should().Be("software-delivery");
+        blueprint.GetProperty("review_policy").GetString().Should().Be("default");
+        blueprint.GetProperty("sandbox_profile").GetString().Should().Be("restricted");
+        var roster = blueprint.GetProperty("roster").EnumerateArray()
             .Select(r => r.GetString()).ToList();
         roster.Should().Contain(new[] { "backend-engineer", "docs-writer" });
         body.TryGetProperty("new_roles", out _).Should().BeFalse();

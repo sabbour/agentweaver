@@ -38,6 +38,11 @@ public static class SandboxEndpoints
             {
                 session = await portForwardService.StartAsync(runId, request.TargetPort, ct);
             }
+            catch (PortForwardLimitExceededException ex)
+            {
+                logger.LogWarning(ex, "PortForward session limit exceeded for run {RunId}", runId);
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status429TooManyRequests);
+            }
             catch (InvalidOperationException ex)
             {
                 logger.LogWarning(ex, "PortForward start failed for run {RunId}", runId);

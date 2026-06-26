@@ -45,6 +45,7 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
                 ["Worktrees:BasePath"]                    = _worktreesPath,
                 ["Checkpoints:Path"]                      = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
+                ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Auth:ApiKey"]                           = OwnerApiKey,
                 ["Auth:User"]                             = OwnerUser,
                 ["Auth:Keys:0:Token"]                     = OtherApiKey,

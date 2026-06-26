@@ -77,6 +77,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     protected string? _agentName;
     protected string? _apiBaseUrl;
     protected string? _apiKey;
+    protected string? _userId;
 
     /// <summary>The run-event channel writer for the current run (null when no stream attached).</summary>
     public ChannelWriter<RunEvent>? StreamWriter { get; private set; }
@@ -89,6 +90,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private ISandboxExecutor? _activeExecutor;
     private SandboxPolicy? _sandboxPolicy;
     private IReadOnlyList<string> _registeredToolNames = [];
+    private GitHubTokenScope? _tokenScope;
+    private SessionConfig? _sessionConfig;
 
     // --- Per-run run-event emission state (reset in SetupAsync) ---
     private StringBuilder _sb = new();
@@ -153,7 +156,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? agentName,
         string? apiBaseUrl,
         string? apiKey,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? userId = null)
     {
         _workingDirectory = workingDirectory;
         _repositoryPath = repositoryPath;
@@ -165,6 +169,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _agentName = agentName;
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
+        _userId = string.IsNullOrWhiteSpace(userId) ? null : userId;
 
         // Reset per-run emission state so a reused instance never leaks events across runs.
         _sb = new StringBuilder();
@@ -193,7 +198,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = _scopeProvider.Resolve(userId: null);
+        var scope = ResolveTokenScope(_userId);
+        _tokenScope = scope;
         _client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
         await _client.StartAsync(ct).ConfigureAwait(false);
 
@@ -251,6 +257,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             },
             Model = modelId,
         };
+        _sessionConfig = sessionConfig;
 
         _inner = _client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
 
@@ -334,7 +341,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         if (_inner is null)
         {
-            var scope = _scopeProvider.Resolve(userId: null);
+            var scope = ResolveTokenScope(_userId);
+            _tokenScope = scope;
             _client ??= await _factory.CreateClientAsync(scope, _modelId, cancellationToken).ConfigureAwait(false);
             await _client.StartAsync(cancellationToken).ConfigureAwait(false);
             _inner = _client.AsAIAgent(
@@ -342,6 +350,19 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ownsClient: false, id: null, name: null, description: null);
         }
         return await _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
+    }
+
+    private GitHubTokenScope ResolveTokenScope(string? userId)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            _logger.LogWarning(
+                "No submitting user was available for run {RunId}; falling back to installation GitHub Copilot credentials.",
+                _runId);
+            return _scopeProvider.Resolve(userId: null);
+        }
+
+        return _scopeProvider.Resolve(userId);
     }
 
     /// <summary>
@@ -384,60 +405,35 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             });
         }
 
-        try
+        var rateLimitRetryAttempt = 0;
+        var unauthorizedRetried = false;
+        while (true)
         {
-            await foreach (var chunk in _inner.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
+            try
             {
-                if (chunk is null) continue;
-
-                var messageId = chunk.MessageId;
-
-                // Incremental token text surfaces as TextContent (AssistantMessageDeltaEvent).
-                var deltaText = chunk.Text;
-                if (!string.IsNullOrEmpty(deltaText))
-                {
-                    EmitDelta(deltaText, messageId);
-                    if (messageId is not null) _streamedMessageIds.Add(messageId);
-                }
-
-                // The final, authoritative message arrives as a non-text AIContent whose
-                // RawRepresentation is the SDK AssistantMessageEvent. Surface its content when
-                // no token deltas were streamed for this message, so text is never lost (and is
-                // not double-counted when deltas already covered it).
-                var finalContent = ExtractFinalMessageContent(chunk);
-                if (!string.IsNullOrEmpty(finalContent))
-                {
-                    var alreadyStreamed = messageId is not null
-                        ? _streamedMessageIds.Contains(messageId)
-                        : _anyDeltaEmittedForNullId;
-
-                    if (!alreadyStreamed)
-                    {
-                        EmitDelta(finalContent, messageId);
-                        if (messageId is not null) _streamedMessageIds.Add(messageId);
-                    }
-                    else if (messageId is null)
-                    {
-                        _logger.LogWarning("Final message with null messageId skipped — delta text was already emitted");
-                    }
-                }
-
-                if (string.IsNullOrEmpty(deltaText) && string.IsNullOrEmpty(finalContent))
-                    _logger.LogTrace("RunStreamingAsync non-text chunk — messageId={MessageId}", messageId);
-
-                // The SDK tool-execution lifecycle arrives inline as content raw representations.
-                if (chunk.Contents is not null)
-                {
-                    foreach (var c in chunk.Contents)
-                        TranslateToolLifecycle(c.RawRepresentation);
-                }
+                session = await EnsureFreshClientForAiCallAsync(session, ct).ConfigureAwait(false);
+                await StreamTurnOnceAsync(task, session, ct).ConfigureAwait(false);
+                break;
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "RunStreamingAsync threw for workingDirectory={WorkingDirectory}", _workingDirectory);
-            Emit("run.failed", new { message = "The agent encountered an internal error." });
-            throw;
+            catch (Exception ex) when (GitHubCopilotClientFactory.IsUnauthorized(ex) && !unauthorizedRetried)
+            {
+                unauthorizedRetried = true;
+                _logger.LogWarning(ex, "GitHub Copilot streaming call returned 401 for run {RunId}; refreshing token and retrying once", _runId);
+                session = await RecreateInnerAgentSessionAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (GitHubCopilotClientFactory.IsRateLimited(ex)
+                                       && GitHubCopilotClientFactory.GetRateLimitRetryDelay(rateLimitRetryAttempt + 1) is { } delay)
+            {
+                rateLimitRetryAttempt++;
+                _factory.LogAiRetry(ex, rateLimitRetryAttempt, delay, "HTTP 429/rate limit");
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "RunStreamingAsync threw for workingDirectory={WorkingDirectory}", _workingDirectory);
+                Emit("run.failed", new { message = "The agent encountered an internal error." });
+                throw;
+            }
         }
 
         // Guaranteed flush: if the sandbox denied any tool call this turn, ensure run.degraded
@@ -461,6 +457,87 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             _deltaCount, result.Length);
 
         return result;
+    }
+
+    private async Task StreamTurnOnceAsync(string task, AgentSession session, CancellationToken ct)
+    {
+        if (_inner is null)
+            throw new InvalidOperationException("SetupAsync must be called before ExecuteStreamingLoopAsync.");
+
+        await foreach (var chunk in _inner.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
+        {
+            if (chunk is null) continue;
+
+            var messageId = chunk.MessageId;
+
+            // Incremental token text surfaces as TextContent (AssistantMessageDeltaEvent).
+            var deltaText = chunk.Text;
+            if (!string.IsNullOrEmpty(deltaText))
+            {
+                EmitDelta(deltaText, messageId);
+                if (messageId is not null) _streamedMessageIds.Add(messageId);
+            }
+
+            // The final, authoritative message arrives as a non-text AIContent whose
+            // RawRepresentation is the SDK AssistantMessageEvent. Surface its content when
+            // no token deltas were streamed for this message, so text is never lost (and is
+            // not double-counted when deltas already covered it).
+            var finalContent = ExtractFinalMessageContent(chunk);
+            if (!string.IsNullOrEmpty(finalContent))
+            {
+                var alreadyStreamed = messageId is not null
+                    ? _streamedMessageIds.Contains(messageId)
+                    : _anyDeltaEmittedForNullId;
+
+                if (!alreadyStreamed)
+                {
+                    EmitDelta(finalContent, messageId);
+                    if (messageId is not null) _streamedMessageIds.Add(messageId);
+                }
+                else if (messageId is null)
+                {
+                    _logger.LogWarning("Final message with null messageId skipped — delta text was already emitted");
+                }
+            }
+
+            if (string.IsNullOrEmpty(deltaText) && string.IsNullOrEmpty(finalContent))
+                _logger.LogTrace("RunStreamingAsync non-text chunk — messageId={MessageId}", messageId);
+
+            // The SDK tool-execution lifecycle arrives inline as content raw representations.
+            if (chunk.Contents is not null)
+            {
+                foreach (var c in chunk.Contents)
+                    TranslateToolLifecycle(c.RawRepresentation);
+            }
+        }
+    }
+
+    private async Task<AgentSession> EnsureFreshClientForAiCallAsync(AgentSession session, CancellationToken ct)
+    {
+        if (_tokenScope is null)
+            return session;
+
+        if (!await _factory.ShouldRefreshBeforeAiCallAsync(_tokenScope, ct).ConfigureAwait(false))
+            return session;
+
+        _logger.LogInformation("GitHub Copilot token is expired or near expiry for run {RunId}; refreshing before streaming call", _runId);
+        return await RecreateInnerAgentSessionAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<AgentSession> RecreateInnerAgentSessionAsync(CancellationToken ct)
+    {
+        if (_tokenScope is null)
+            throw new InvalidOperationException("GitHub token scope is unavailable; SetupAsync must be called first.");
+        if (_sessionConfig is null)
+            throw new InvalidOperationException("SessionConfig is unavailable; SetupAsync must be called first.");
+
+        if (_client is not null)
+            await _client.DisposeAsync().ConfigureAwait(false);
+
+        _client = await _factory.CreateClientAsync(_tokenScope, _modelId, ct).ConfigureAwait(false);
+        await _client.StartAsync(ct).ConfigureAwait(false);
+        _inner = _client.AsAIAgent(_sessionConfig, ownsClient: false, id: null, name: null, description: null);
+        return await _inner.CreateSessionAsync(ct).ConfigureAwait(false);
     }
 
     // ----- Thread-safe run-event emission -----

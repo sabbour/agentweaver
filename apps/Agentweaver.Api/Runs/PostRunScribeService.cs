@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Memory;
@@ -32,17 +33,25 @@ public sealed class PostRunScribeService(
         try
         {
             var now = DateTimeOffset.UtcNow;
+            await using var tx = await memoryDb.Database
+                .BeginTransactionAsync(IsolationLevel.Serializable, ct)
+                .ConfigureAwait(false);
 
             // Step 1: Auto-merge low-risk inbox entries created during this run.
-            // EF Core/SQLite cannot translate DateTimeOffset comparisons or array.Contains in WHERE;
-            // pull all pending entries for this project+agent into memory, then filter in C#.
-            var allPending = await memoryDb.DecisionInbox
+            // Keep the project/agent/status/type filters in SQL. DateTimeOffset comparison stays in
+            // memory because EF Core's SQLite provider cannot translate it reliably.
+            var relevantPending = await memoryDb.DecisionInbox
                 .Where(e => e.ProjectId == projectId
                          && e.AgentName == agentName
-                         && e.Status == "pending")
+                         && e.Status == "pending"
+                         && (e.Type == "learning"
+                             || e.Type == "pattern"
+                             || e.Type == "update"
+                             || e.Type == "architectural"
+                             || e.Type == "scope"))
                 .ToListAsync(ct).ConfigureAwait(false);
 
-            var runCandidates = allPending
+            var runCandidates = relevantPending
                 .Where(e => e.CreatedAt >= runStarted)
                 .ToList();
 
@@ -50,9 +59,11 @@ public sealed class PostRunScribeService(
                 .Where(e => AutoMergeTypes.Contains(e.Type))
                 .ToList();
 
+            var mergedEntries = new List<(Decision Decision, DecisionInboxEntry Entry)>();
+
             foreach (var entry in toMerge)
             {
-                memoryDb.Decisions.Add(new Decision
+                var decision = new Decision
                 {
                     ProjectId = projectId,
                     AgentName = entry.AgentName,
@@ -63,10 +74,23 @@ public sealed class PostRunScribeService(
                     Rationale = entry.Rationale,
                     CreatedAt = now,
                     UpdatedAt = now,
-                });
+                };
+
+                memoryDb.Decisions.Add(decision);
+                mergedEntries.Add((decision, entry));
                 entry.Status = "merged";
                 entry.MergedAt = now;
                 entry.UpdatedAt = now;
+            }
+
+            if (mergedEntries.Count > 0)
+            {
+                await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+
+                foreach (var (decision, entry) in mergedEntries)
+                {
+                    entry.DecisionId = decision.Id;
+                }
             }
 
             // Step 2: Count architectural/scope entries needing coordinator review.
@@ -91,6 +115,7 @@ public sealed class PostRunScribeService(
             }
 
             await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+            await tx.CommitAsync(ct).ConfigureAwait(false);
 
             logger.LogInformation(
                 "PostRunScribe: run {RunId} — auto-merged {Merged}, {Review} pending coordinator review",

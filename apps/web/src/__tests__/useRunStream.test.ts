@@ -15,7 +15,7 @@ describe('useRunStream — AbortController lifecycle', () => {
     const abortSpy = vi.spyOn(AbortController.prototype, 'abort');
 
     const { result } = renderHook(() =>
-      useRunStream('run-1', 'test-key', 'http://localhost'),
+      useRunStream('run-1', 'http://localhost'),
     );
 
     // Trigger reconnect — React will run effect cleanup (controller.abort())

@@ -41,6 +41,7 @@ public sealed class WorkflowWebApplicationFactory : WebApplicationFactory<Progra
                 ["Worktrees:BasePath"] = _worktreesPath,
                 ["Checkpoints:Path"] = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
+                ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
                 ["Git:Author:Name"] = "TestAgent",

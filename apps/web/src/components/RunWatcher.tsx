@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Badge, Divider, makeStyles, tokens } from '@fluentui/react-components';
 import { useRunStream } from '../api/sse';
-import { API_KEY, API_URL } from '../config';
 import type { ReviewResponse } from '../api/types';
 import { deriveRunStatusFromEvents } from '../timeline/deriveRunStatus';
 import { RunHeader } from './RunHeader';
@@ -41,7 +40,7 @@ interface RunWatcherProps { runId: string; style?: React.CSSProperties; onReview
 
 export function RunWatcher({ runId, style, onReviewAction }: RunWatcherProps) {
   const styles = useStyles();
-  const { events, status, error, reconnect } = useRunStream(runId, API_KEY, API_URL);
+  const { events, droppedEventCount, status, error, reconnect } = useRunStream(runId);
   const { items, runOutcome } = useTimelineItems(events, runId);
   const isLiveRun = status === 'connecting' || status === 'streaming';
 
@@ -107,7 +106,7 @@ export function RunWatcher({ runId, style, onReviewAction }: RunWatcherProps) {
 
   const centerContent = (
     <div className={styles.centerContent}>
-      <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} runId={runId} runOutcome={runOutcome} />
+      <Timeline items={items} streamStatus={status} isLiveRun={isLiveRun} runId={runId} runOutcome={runOutcome} skippedEventCount={droppedEventCount} />
       {resolvedReview && (
         <div className={styles.reviewSection}>
           <Divider />

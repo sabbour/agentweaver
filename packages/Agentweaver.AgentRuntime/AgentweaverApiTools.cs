@@ -235,7 +235,11 @@ internal static class AgentweaverApiTools
             async (
                 [Description("Run ID to inspect")] string run_id,
                 CancellationToken ct = default) =>
-                    await GetJsonAsync(http, $"api/runs/{run_id}", ct).ConfigureAwait(false),
+            {
+                var scopeError = await ValidateRunInCurrentProjectAsync(http, projectId, run_id, ct).ConfigureAwait(false);
+                if (scopeError is not null) return scopeError;
+                return await GetJsonAsync(http, $"api/runs/{run_id}", ct).ConfigureAwait(false);
+            },
             "run_status",
             "MCP-equivalent Agentweaver run_status. Returns a run's current state as JSON.");
 
@@ -243,7 +247,11 @@ internal static class AgentweaverApiTools
             async (
                 [Description("Run ID whose changed files should be listed")] string run_id,
                 CancellationToken ct = default) =>
-                    await GetJsonAsync(http, $"api/runs/{run_id}/files", ct).ConfigureAwait(false),
+            {
+                var scopeError = await ValidateRunInCurrentProjectAsync(http, projectId, run_id, ct).ConfigureAwait(false);
+                if (scopeError is not null) return scopeError;
+                return await GetJsonAsync(http, $"api/runs/{run_id}/files", ct).ConfigureAwait(false);
+            },
             "run_show_artifacts",
             "MCP-equivalent Agentweaver run_show_artifacts. Lists files changed by a run as JSON.");
 
@@ -251,7 +259,11 @@ internal static class AgentweaverApiTools
             async (
                 [Description("Coordinator run ID")] string run_id,
                 CancellationToken ct = default) =>
-                    await GetJsonAsync(http, $"api/runs/{run_id}/work-plan", ct).ConfigureAwait(false),
+            {
+                var scopeError = await ValidateRunInCurrentProjectAsync(http, projectId, run_id, ct).ConfigureAwait(false);
+                if (scopeError is not null) return scopeError;
+                return await GetJsonAsync(http, $"api/runs/{run_id}/work-plan", ct).ConfigureAwait(false);
+            },
             "coordinator_work_plan_get",
             "MCP-equivalent Agentweaver coordinator_work_plan_get. Returns the coordinator work plan as JSON.");
 
@@ -259,7 +271,11 @@ internal static class AgentweaverApiTools
             async (
                 [Description("Coordinator run ID")] string run_id,
                 CancellationToken ct = default) =>
-                    await GetJsonAsync(http, $"api/runs/{run_id}/children", ct).ConfigureAwait(false),
+            {
+                var scopeError = await ValidateRunInCurrentProjectAsync(http, projectId, run_id, ct).ConfigureAwait(false);
+                if (scopeError is not null) return scopeError;
+                return await GetJsonAsync(http, $"api/runs/{run_id}/children", ct).ConfigureAwait(false);
+            },
             "coordinator_children_get",
             "MCP-equivalent Agentweaver coordinator_children_get. Lists coordinator child runs as JSON.");
 
@@ -268,6 +284,8 @@ internal static class AgentweaverApiTools
                 [Description("Coordinator run ID")] string run_id,
                 CancellationToken ct = default) =>
             {
+                var scopeError = await ValidateRunInCurrentProjectAsync(http, projectId, run_id, ct).ConfigureAwait(false);
+                if (scopeError is not null) return scopeError;
                 var workPlan = await GetJsonElementAsync(http, $"api/runs/{run_id}/work-plan", ct).ConfigureAwait(false);
                 var children = await GetJsonElementAsync(http, $"api/runs/{run_id}/children", ct).ConfigureAwait(false);
                 return JsonSerializer.Serialize(new
@@ -295,6 +313,41 @@ internal static class AgentweaverApiTools
             throw new InvalidOperationException(
                 "Coordinator Agentweaver meta tools are scoped to the current project and cannot target another project.");
     }
+
+    private const string RunProjectMismatchError = "Run does not belong to current project.";
+
+    private static async Task<string?> ValidateRunInCurrentProjectAsync(
+        HttpClient http,
+        string currentProjectId,
+        string runId,
+        CancellationToken ct)
+    {
+        _ = await GetJsonElementAsync(http, $"api/runs/{Uri.EscapeDataString(runId)}", ct).ConfigureAwait(false);
+
+        var projectRuns = await GetJsonElementAsync(
+            http,
+            $"api/projects/{Uri.EscapeDataString(currentProjectId)}/runs?include_children=true",
+            ct).ConfigureAwait(false);
+
+        if (projectRuns.ValueKind != JsonValueKind.Array)
+            return RunProjectMismatchError;
+
+        foreach (var run in projectRuns.EnumerateArray())
+        {
+            if (JsonStringEquals(run, "execution_id", runId) ||
+                JsonStringEquals(run, "run_id", runId) ||
+                JsonStringEquals(run, "workflow_run_id", runId))
+                return null;
+        }
+
+        return RunProjectMismatchError;
+    }
+
+    private static bool JsonStringEquals(JsonElement element, string propertyName, string expected) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+        && string.Equals(property.GetString(), expected, StringComparison.Ordinal);
 
     private static async Task<string> GetJsonAsync(HttpClient http, string path, CancellationToken ct)
     {

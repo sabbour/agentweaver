@@ -42,6 +42,7 @@ public static class BlueprintEndpoints
             {
                 Blueprint = BlueprintDto.FromModel(result.Blueprint!),
                 GeneratedWorkflowYaml = result.GeneratedWorkflowYaml,
+                Warnings = result.Warnings,
             });
         });
 

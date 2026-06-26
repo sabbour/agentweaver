@@ -112,7 +112,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         var dir        = NewDir();
 
         var act = async () =>
-            await service.CreateFromGitHubAsync("Proj", "owner/repo", dir, null, null, null, "user");
+            await service.CreateFromGitHubAsync("Proj", "https://github.com/owner/repo", dir, null, null, null, "user");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*GitHub sign-in is required*");
@@ -135,11 +135,11 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         var dir     = NewDir();
 
         var project = await service.CreateFromGitHubAsync(
-            "GitHub Project", "owner/repo", dir, null, null, null, "test-user");
+            "GitHub Project", "https://github.com/owner/repo", dir, null, null, null, "test-user");
 
         project.Should().NotBeNull();
         project.Origin.Kind.Should().Be(ProjectOriginKind.FromGitHub);
-        project.Origin.SourceRepository.Should().Be("owner/repo");
+        project.Origin.SourceRepository.Should().Be("https://github.com/owner/repo");
         Directory.Exists(project.WorkingDirectory).Should().BeTrue();
     }
 

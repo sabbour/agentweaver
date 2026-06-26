@@ -36,11 +36,16 @@ public sealed class WorkflowGeneratorTests
           - id: agent
             type: prompt
             label: Agent
+          - id: scribe
+            type: scribe
+            label: Scribe
           - id: done
             type: terminal
             label: Done
         edges:
           - from: agent
+            to: scribe
+          - from: scribe
             to: done
         """;
 
@@ -68,7 +73,7 @@ public sealed class WorkflowGeneratorTests
 
         result.WasCorrected.Should().BeFalse();
         result.Workflow.Id.Should().Be("generated-flow");
-        result.Workflow.Nodes.Should().HaveCount(2);
+        result.Workflow.Nodes.Should().HaveCount(3);
         result.GeneratedYaml.Should().Contain("id: generated-flow");
         runner.CallCount.Should().Be(1);
     }
@@ -128,11 +133,16 @@ public sealed class WorkflowGeneratorTests
               - id: agent
                 type: prompt
                 label: Agent
+              - id: scribe
+                type: scribe
+                label: Scribe
               - id: done
                 type: terminal
                 label: Done
             edges:
               - from: agent
+                to: scribe
+              - from: scribe
                 to: done
             """;
         var runner = new ScriptedAgentRunner(noId);
@@ -178,6 +188,12 @@ public sealed class WorkflowGeneratorTests
         body.GetProperty("yaml").GetString().Should().Contain("id: generated-flow");
         body.GetProperty("workflowId").GetString().Should().Be("generated-flow");
         body.GetProperty("wasCorrected").GetBoolean().Should().BeFalse();
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.CallCount.Should().Be(1);
+        generator.LastRequest.Should().NotBeNull();
+        generator.LastRequest!.Description.Should().Be("A manual review-and-merge workflow.");
     }
 
     [Fact]
@@ -199,6 +215,8 @@ public sealed class WorkflowGeneratorTests
             $"/api/projects/{projectId}/workflows/generate", new { description = "" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("description");
     }
 
     /// <summary>Scripted <see cref="IAgentRunner"/>: returns a queued response per call so the
@@ -225,8 +243,13 @@ public sealed class WorkflowGeneratorTests
     /// HTTP/auth/serialization path is exercised without the model.</summary>
     private sealed class StubWorkflowGenerator : IWorkflowGenerator
     {
+        public int CallCount { get; private set; }
+        public WorkflowGenerationRequest? LastRequest { get; private set; }
+
         public Task<WorkflowGenerationResult> GenerateAsync(WorkflowGenerationRequest request, CancellationToken ct = default)
         {
+            CallCount++;
+            LastRequest = request;
             var loaded = WorkflowDefinitionLoader.Load(ValidWorkflowYaml, "stub");
             return Task.FromResult(new WorkflowGenerationResult(loaded.Definition!, ValidWorkflowYaml, WasCorrected: false));
         }
@@ -282,6 +305,7 @@ public sealed class WorkflowGeneratorTests
                     ["Worktrees:BasePath"] = _worktreesPath,
                     ["Checkpoints:Path"] = _checkpointsPath,
                     ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
+                    ["Testing:BypassGitHubOrgAuthorization"] = "true",
                     ["Auth:ApiKey"] = TestApiKey,
                     ["Auth:User"] = TestUser,
                     ["Auth:GitHub:ClientId"] = "test-github-client-id",
@@ -308,7 +332,7 @@ public sealed class WorkflowGeneratorTests
                 services.AddSingleton<Agentweaver.Api.Git.ProjectGitInitializer, NoOpProjectGitInitializer>();
 
                 Remove<IWorkflowGenerator>(services);
-                services.AddScoped<IWorkflowGenerator, StubWorkflowGenerator>();
+                services.AddSingleton<IWorkflowGenerator, StubWorkflowGenerator>();
             });
         }
 

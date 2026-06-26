@@ -29,6 +29,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          env:
+            - name: AGENTWEAVER_API_URL
+              value: /api
+            - name: AGENTWEAVER_API_KEY
+              value: ""
           resources:
             requests:
               cpu: 100m

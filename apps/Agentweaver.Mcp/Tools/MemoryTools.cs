@@ -20,14 +20,14 @@ public sealed class MemoryTools(AgentweaverApiClient api)
 
     // ── Decision Inbox ──────────────────────────────────────────────────────
 
-    [McpServerTool(Name = "inbox_submit"), Description("Submit a decision or learning to the agent inbox.")]
+    [McpServerTool(Name = "decision_inbox_submit"), Description("Submit a decision or learning to the agent inbox.")]
     public async Task<string> InboxSubmitAsync(
         [Description("Project ID")] string project_id,
         [Description("Agent name submitting the entry")] string agent_name,
         [Description("Unique slug for idempotency (e.g. 'prefer-async-over-sync')")] string slug,
         [Description("Type: learning | pattern | update | architectural | scope | process | technical")] string type,
-        [Description("Short title")] string title,
         [Description("Full content")] string content,
+        [Description("Short title (defaults to slug)")] string? title = null,
         [Description("Optional rationale")] string? rationale = null,
         CancellationToken ct = default)
     {
@@ -37,7 +37,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
-    [McpServerTool(Name = "inbox_list"), Description("List inbox entries for a project.")]
+    [McpServerTool(Name = "decision_inbox_list"), Description("List inbox entries for a project.")]
     public async Task<string> InboxListAsync(
         [Description("Project ID")] string project_id,
         [Description("Filter by agent name")] string? agent = null,
@@ -50,7 +50,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
-    [McpServerTool(Name = "inbox_merge"), Description("Merge a pending inbox entry into team decisions.")]
+    [McpServerTool(Name = "decision_inbox_merge"), Description("Merge a pending inbox entry into team decisions.")]
     public async Task<string> InboxMergeAsync(
         [Description("Project ID")] string project_id,
         [Description("Inbox entry ID")] string entry_id,
@@ -60,7 +60,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
-    [McpServerTool(Name = "inbox_reject"), Description("Reject a pending inbox entry.")]
+    [McpServerTool(Name = "decision_inbox_reject"), Description("Reject a pending inbox entry.")]
     public async Task<string> InboxRejectAsync(
         [Description("Project ID")] string project_id,
         [Description("Inbox entry ID")] string entry_id,
@@ -88,6 +88,23 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
+    [McpServerTool(Name = "squad_decide"), Description("Submit a team decision to the decision inbox from a squad agent.")]
+    public async Task<string> SquadDecideAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Agent name")] string agent_name,
+        [Description("Unique slug for idempotency (e.g. 'prefer-async-over-sync')")] string slug,
+        [Description("Type: learning | pattern | update | architectural | scope | process | technical")] string type,
+        [Description("Full content")] string content,
+        [Description("Short title (defaults to slug)")] string? title = null,
+        [Description("Optional rationale")] string? rationale = null,
+        CancellationToken ct = default)
+    {
+        var result = await api.PostAsync<object>(
+            $"api/projects/{project_id}/decisions/inbox",
+            new { agent_name, slug, type, title, content, rationale }, ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
     [McpServerTool(Name = "decision_list"), Description("List team decisions for a project.")]
     public async Task<string> DecisionListAsync(
         [Description("Project ID")] string project_id,
@@ -100,24 +117,25 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
-    [McpServerTool(Name = "decision_update"), Description("Update a decision's status or content.")]
+    [McpServerTool(Name = "decision_update"), Description("Update a decision's status, content, or rationale.")]
     public async Task<string> DecisionUpdateAsync(
         [Description("Project ID")] string project_id,
         [Description("Decision ID")] string decision_id,
         [Description("New status: active | superseded | archived")] string? status = null,
         [Description("New content")] string? content = null,
-        [Description("ID of the superseding decision")] string? superseded_by_id = null,
+        [Description("New rationale")] string? rationale = null,
+        [Description("Decision ID that supersedes this one")] int? superseded_by_id = null,
         CancellationToken ct = default)
     {
         var result = await api.PutAsync<object>(
             $"api/projects/{project_id}/decisions/{decision_id}",
-            new { status, content, superseded_by_id }, ct);
+            new { status, content, rationale, superseded_by_id }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
     // ── Agent Memory ─────────────────────────────────────────────────────────
 
-    [McpServerTool(Name = "memory_add"), Description("Add a memory entry for an agent.")]
+    [McpServerTool(Name = "memory_record"), Description("Add a memory entry for an agent.")]
     public async Task<string> MemoryAddAsync(
         [Description("Project ID")] string project_id,
         [Description("Agent name")] string agent_name,
@@ -125,11 +143,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Content")] string content,
         [Description("Importance: low | medium | high")] string importance = "medium",
         [Description("Comma-separated tags")] string? tags = null,
+        [Description("Related session ID")] string? session_id = null,
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
             $"api/projects/{project_id}/agents/{Uri.EscapeDataString(agent_name)}/memory",
-            new { type, content, importance, tags }, ct);
+            new { session_id, type, content, importance, tags }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -178,11 +197,13 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Unique session ID")] string session_id,
         [Description("Current focus area")] string focus_area,
         [Description("Active issues (optional)")] string? active_issues = null,
+        [Description("Initial session summary")] string? summary = null,
+        [Description("Serialized session state")] string? serialized_state = null,
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
             $"api/projects/{project_id}/sessions",
-            new { session_id, focus_area, active_issues }, ct);
+            new { session_id, focus_area, active_issues, summary, serialized_state }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -201,13 +222,14 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("New focus area")] string? focus_area = null,
         [Description("Active issues")] string? active_issues = null,
         [Description("Append to session summary")] string? summary = null,
+        [Description("Serialized session state")] string? serialized_state = null,
         [Description("Set true to end the session")] bool end = false,
         CancellationToken ct = default)
     {
-        await api.PutAsync(
+        var result = await api.PutAsync<object>(
             $"api/projects/{project_id}/sessions/current",
-            new { focus_area, active_issues, summary, end }, ct);
-        return "updated";
+            new { focus_area, active_issues, summary, serialized_state, end }, ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
     }
 
     // ── Export / Import ───────────────────────────────────────────────────────

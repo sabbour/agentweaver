@@ -43,6 +43,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         [Description("Project origin: 'blank' (default) or 'github'")] string? origin,
         [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id,
         [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint,
+        [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml,
         CancellationToken ct)
     {
         try
@@ -55,6 +56,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
             if (origin is not null) bodyNode["origin"] = origin;
             if (blueprint_id is not null) bodyNode["blueprint_id"] = blueprint_id;
             if (blueprint.HasValue) bodyNode["blueprint"] = JsonNode.Parse(blueprint.Value.GetRawText());
+            if (!string.IsNullOrWhiteSpace(generated_workflow_yaml)) bodyNode["generated_workflow_yaml"] = generated_workflow_yaml;
 
             var result = await api.PostAsync<JsonElement>("/api/projects", bodyNode, ct);
             return JsonSerializer.Serialize(result, JsonOpts);

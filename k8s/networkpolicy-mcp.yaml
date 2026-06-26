@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-mcp
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              istio.io/gateway-name: agentweaver-gateway
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-ingress
+      ports:
+        - protocol: TCP
+          port: 8080

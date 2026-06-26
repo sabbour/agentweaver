@@ -16,7 +16,7 @@ import {
   TaskListSquareLtrRegular,
 } from '@fluentui/react-icons';
 import type { RunStreamEvent } from '../api/sse';
-import { API_KEY, API_URL } from '../config';
+import { apiClient } from '../api/apiClient';
 
 const useStyles = makeStyles({
   card: {
@@ -111,14 +111,6 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
     boxShadow: tokens.shadow8,
-    // pulse the border to draw attention — only rendered while unresolved
-    animationName: {
-      '0%, 100%': { borderColor: tokens.colorStatusDangerBorder1 },
-      '50%': { borderColor: `color-mix(in srgb, ${tokens.colorStatusDangerBorder1} 40%, transparent)` },
-    },
-    animationDuration: '2s',
-    animationTimingFunction: 'ease-in-out',
-    animationIterationCount: 'infinite',
   },
   approvalHeading: {
     display: 'flex',
@@ -170,14 +162,6 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalXS,
     overflow: 'hidden',
     boxShadow: tokens.shadow8,
-    // pulse the border to draw attention — only rendered while unresolved
-    animationName: {
-      '0%, 100%': { borderColor: tokens.colorStatusWarningBorder1 },
-      '50%': { borderColor: `color-mix(in srgb, ${tokens.colorStatusWarningBorder1} 40%, transparent)` },
-    },
-    animationDuration: '2s',
-    animationTimingFunction: 'ease-in-out',
-    animationIterationCount: 'infinite',
   },
   approvalHeaderRedesign: {
     display: 'flex',
@@ -581,28 +565,18 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
     isResolved ? (resolvedScopeProp ?? 'once') : null,
   );
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const handleAllow = async (scope: 'once' | 'run' | 'always' | 'tool') => {
     if (!runId || resolvedScope !== null || busy) return;
     setBusy(true);
-    const baseUrl = API_URL.replace(/\/+$/, '');
+    setActionError(null);
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/tool-approvals`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ request_id: requestId, scope }),
-      });
-      if (!response.ok) {
-        console.error('Tool approval request failed:', response.status);
-        return;
-      }
+      await apiClient.approveTool(runId, requestId, scope);
       setResolvedScope(scope);
-    } catch {
-      // ignore network errors — user can retry
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -611,23 +585,12 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
   const handleDeny = async () => {
     if (!runId || resolvedScope !== null || busy) return;
     setBusy(true);
-    const baseUrl = API_URL.replace(/\/+$/, '');
+    setActionError(null);
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/tool-denials`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ request_id: requestId }),
-      });
-      if (!response.ok) {
-        console.error('Tool denial request failed:', response.status);
-        return;
-      }
+      await apiClient.denyTool(runId, requestId);
       setResolvedScope('deny');
-    } catch {
-      // ignore network errors — user can retry
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -753,6 +716,11 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
         </div>
 
         <Text className={styles.approvalRequestIdRedesign}>ID: {displayId}</Text>
+        {actionError && (
+          <Text size={200} style={{ color: tokens.colorStatusDangerForeground1 }}>
+            Approval failed: {actionError}
+          </Text>
+        )}
       </div>
     </div>
   );
@@ -773,27 +741,17 @@ function ShellApprovalCard({ styles, requestId, commandHash, command, runId, isR
     isResolved ? (resolvedOutcomeProp ?? 'approved') : null,
   );
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleApprove = async () => {
     if (!runId || resolvedOutcome !== null || busy) return;
     setBusy(true);
-    const baseUrl = API_URL.replace(/\/+$/, '');
+    setActionError(null);
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/shell-approvals`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ command_hash: commandHash }),
-      });
-      if (!response.ok) {
-        console.error('Shell approval request failed:', response.status);
-        return;
-      }
+      await apiClient.approveShell(runId, commandHash);
       setResolvedOutcome('approved');
-    } catch {
-      // ignore network errors
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -802,23 +760,12 @@ function ShellApprovalCard({ styles, requestId, commandHash, command, runId, isR
   const handleDeny = async () => {
     if (!runId || resolvedOutcome !== null || busy) return;
     setBusy(true);
-    const baseUrl = API_URL.replace(/\/+$/, '');
+    setActionError(null);
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/shell-denials`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ command_hash: commandHash }),
-      });
-      if (!response.ok) {
-        console.error('Shell denial request failed:', response.status);
-        return;
-      }
+      await apiClient.denyShell(runId, commandHash);
       setResolvedOutcome('denied');
-    } catch {
-      // ignore network errors
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -869,6 +816,11 @@ function ShellApprovalCard({ styles, requestId, commandHash, command, runId, isR
           Deny
         </Button>
       </div>
+      {actionError && (
+        <Text size={200} style={{ color: tokens.colorStatusDangerForeground1 }}>
+          Approval failed: {actionError}
+        </Text>
+      )}
     </div>
   );
 }
@@ -1131,4 +1083,3 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     </div>
   );
 });
-

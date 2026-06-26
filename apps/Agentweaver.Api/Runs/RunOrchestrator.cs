@@ -4,6 +4,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Domain;
+using Microsoft.Data.Sqlite;
 using System.Text;
 
 namespace Agentweaver.Api.Runs;
@@ -96,33 +97,53 @@ public sealed class RunOrchestrator
             AgentCharter = agentCharter,
         };
 
-        await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
-        var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+        var launchCompleted = false;
+        try
+        {
+            await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+            var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
-        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
 
-        var input = new AgentTurnInput(
-            run.Id.ToString(),
-            taskWithHarvest,
-            worktreeInfo.WorktreePath,
-            worktreeInfo.BranchName,
-            run.RepositoryPath,
-            run.OriginatingBranch,
-            run.ModelSource.ToApiString(),
-            run.ModelId,
-            run.SubmittingUser,
-            systemPromptContext,
-            run.ProjectId?.ToString(),
-            run.AgentName,
-            run.StartedAt);
+            var input = new AgentTurnInput(
+                run.Id.ToString(),
+                taskWithHarvest,
+                worktreeInfo.WorktreePath,
+                worktreeInfo.BranchName,
+                run.RepositoryPath,
+                run.OriginatingBranch,
+                run.ModelSource.ToApiString(),
+                run.ModelId,
+                run.SubmittingUser,
+                systemPromptContext,
+                run.ProjectId?.ToString(),
+                run.AgentName,
+                started.StartedAt);
 
-        // Create the per-run CTS before starting the workflow so the same token reaches both
-        // the agent execution and the registry's Abandon path. Using CancellationToken.None as
-        // the base avoids cancellation when the HTTP request ends.
-        var runCts = new CancellationTokenSource();
-        var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token).ConfigureAwait(false);
-        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+            // Create the per-run CTS before starting the workflow so the same token reaches both
+            // the agent execution and the registry's Abandon path. Using CancellationToken.None as
+            // the base avoids cancellation when the HTTP request ends.
+            var runCts = new CancellationTokenSource();
+            var ctsRegistered = false;
+            try
+            {
+                var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token).ConfigureAwait(false);
+                var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
+                ctsRegistered = true;
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                launchCompleted = true;
+            }
+            catch
+            {
+                CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
+                throw;
+            }
+        }
+        finally
+        {
+            if (!launchCompleted)
+                CleanupWorktreeSafe(run.RepositoryPath, worktreeInfo, run.Id);
+        }
     }
 
     /// <summary>
@@ -186,9 +207,19 @@ public sealed class RunOrchestrator
             started.StartedAt);
 
         var runCts = new CancellationTokenSource();
-        var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
-        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+        var ctsRegistered = false;
+        try
+        {
+            var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
+            var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
+            ctsRegistered = true;
+            _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+        }
+        catch
+        {
+            CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
+            throw;
+        }
     }
 
     /// <summary>
@@ -209,35 +240,77 @@ public sealed class RunOrchestrator
             throw;
         }
 
-        await _runStore.UpdateToInProgressAsync(
-            run.Id, worktreeInfo.WorktreePath, worktreeInfo.BranchName, DateTimeOffset.UtcNow, ct)
-            .ConfigureAwait(false);
+        var launchCompleted = false;
+        try
+        {
+            var startedAt = DateTimeOffset.UtcNow;
+            await _runStore.UpdateToInProgressAsync(
+                run.Id, worktreeInfo.WorktreePath, worktreeInfo.BranchName, startedAt, ct)
+                .ConfigureAwait(false);
 
-        var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+            var claimed = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
+            if (claimed is null
+                || claimed.Status != RunStatus.InProgress
+                || !string.Equals(claimed.WorktreePath, worktreeInfo.WorktreePath, StringComparison.Ordinal)
+                || !string.Equals(claimed.WorktreeBranch, worktreeInfo.BranchName, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Reserved run {RunId} was not claimed by this launcher; aborting duplicate launch",
+                    run.Id);
+                return;
+            }
 
-        var (taskWithHarvest2, systemPromptContext2) = await BuildContextAsync(run, ct);
+            var started = run with
+            {
+                Status = RunStatus.InProgress,
+                StartedAt = startedAt,
+                WorktreePath = worktreeInfo.WorktreePath,
+                WorktreeBranch = worktreeInfo.BranchName,
+                AgentCharter = !string.IsNullOrEmpty(run.AgentCharter) ? run.AgentCharter : ResolveAgentCharter(run),
+            };
 
-        var input = new AgentTurnInput(
-            run.Id.ToString(),
-            taskWithHarvest2,
-            worktreeInfo.WorktreePath,
-            worktreeInfo.BranchName,
-            run.RepositoryPath,
-            run.OriginatingBranch,
-            run.ModelSource.ToApiString(),
-            run.ModelId,
-            run.SubmittingUser,
-            systemPromptContext2,
-            run.ProjectId?.ToString(),
-            run.AgentName,
-            run.StartedAt);
+            var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
-        // Create the per-run CTS before starting the workflow so the same token reaches both
-        // the agent execution and the registry's Abandon path.
-        var runCts = new CancellationTokenSource();
-        var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token).ConfigureAwait(false);
-        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+            var (taskWithHarvest2, systemPromptContext2) = await BuildContextAsync(started, ct);
+
+            var input = new AgentTurnInput(
+                run.Id.ToString(),
+                taskWithHarvest2,
+                worktreeInfo.WorktreePath,
+                worktreeInfo.BranchName,
+                run.RepositoryPath,
+                run.OriginatingBranch,
+                run.ModelSource.ToApiString(),
+                run.ModelId,
+                run.SubmittingUser,
+                systemPromptContext2,
+                run.ProjectId?.ToString(),
+                run.AgentName,
+                started.StartedAt);
+
+            // Create the per-run CTS before starting the workflow so the same token reaches both
+            // the agent execution and the registry's Abandon path.
+            var runCts = new CancellationTokenSource();
+            var ctsRegistered = false;
+            try
+            {
+                var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token).ConfigureAwait(false);
+                var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
+                ctsRegistered = true;
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                launchCompleted = true;
+            }
+            catch
+            {
+                CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
+                throw;
+            }
+        }
+        finally
+        {
+            if (!launchCompleted)
+                CleanupWorktreeSafe(run.RepositoryPath, worktreeInfo, run.Id);
+        }
     }
 
     /// <summary>
@@ -285,9 +358,27 @@ public sealed class RunOrchestrator
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.
         var runCts = new CancellationTokenSource();
-        var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild).ConfigureAwait(false);
-        var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-        _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+        var ctsRegistered = false;
+        try
+        {
+            var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild).ConfigureAwait(false);
+            var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
+            ctsRegistered = true;
+            _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+        }
+        catch
+        {
+            CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
+            throw;
+        }
+    }
+
+    private void CleanupFailedLaunchCts(string runId, bool ctsRegistered, CancellationTokenSource runCts)
+    {
+        if (ctsRegistered)
+            _registry.Abandon(runId);
+        else
+            runCts.Dispose();
     }
 
     private async Task<Microsoft.Agents.AI.Workflows.StreamingRun> StartWorkflowOrFailAsync(
@@ -316,6 +407,7 @@ public sealed class RunOrchestrator
                     code = ex.Code,
                     detail = ex.Message,
                 });
+                _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
             {
@@ -323,6 +415,29 @@ public sealed class RunOrchestrator
             }
 
             throw new RunSubmissionValidationException($"Policy hook failed: {ex.Message}", ex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Workflow start failed for run {RunId}; transitioning to failed", runId);
+            var detail = RedactFailureReason(ex);
+            try
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
+                    .ConfigureAwait(false);
+                entry.RecordNext(EventTypes.RunFailed, new
+                {
+                    reason = "workflow_start_failed",
+                    detail,
+                });
+                _ = FirePostRunScribeAsync(runId.ToString());
+            }
+            finally
+            {
+                _streamStore.Complete(runId.ToString());
+            }
+
+            throw;
         }
     }
 
@@ -501,24 +616,24 @@ public sealed class RunOrchestrator
         {
             var now = DateTimeOffset.UtcNow;
 
-            // The run row may not exist yet (worktree creation threw before InsertAsync) or may already
-            // be InProgress (a later failure). Update-if-present, otherwise insert a fresh FAILED row.
-            var existing = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
-            if (existing is not null)
+            // Insert the FAILED row first; if another launcher already inserted the row, atomically
+            // fall back to the terminal CAS update. This avoids a racy SELECT-then-INSERT window.
+            var failedRow = run with
+            {
+                Status = RunStatus.Failed,
+                StartedAt = run.StartedAt == default ? now : run.StartedAt,
+                EndedAt = now,
+                Result = reason,
+            };
+
+            try
+            {
+                await _runStore.InsertAsync(failedRow, ct).ConfigureAwait(false);
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
             {
                 await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, now, reason, ct)
                     .ConfigureAwait(false);
-            }
-            else
-            {
-                var failedRow = run with
-                {
-                    Status = RunStatus.Failed,
-                    StartedAt = run.StartedAt == default ? now : run.StartedAt,
-                    EndedAt = now,
-                    Result = reason,
-                };
-                await _runStore.InsertAsync(failedRow, ct).ConfigureAwait(false);
             }
 
             // Ensure a stream entry exists so the RunFailed event has somewhere to land, then record it
@@ -526,6 +641,7 @@ public sealed class RunOrchestrator
             var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
             entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
+            _ = FirePostRunScribeAsync(runId);
 
             await PersistFailedRunEventsAsync(runId, entry, ct).ConfigureAwait(false);
         }
@@ -569,6 +685,23 @@ public sealed class RunOrchestrator
         catch
         {
             return error.GetType().Name;
+        }
+    }
+
+    private async Task FirePostRunScribeAsync(string runId)
+    {
+        try
+        {
+            var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+            if (run is null) return;
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
+            await service.RunAsync(run).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PostRunScribe fire-and-forget failed for run {RunId}", runId);
         }
     }
 
@@ -680,6 +813,18 @@ public sealed class RunOrchestrator
         finally
         {
             _orchestrationWorktreeLock.Release();
+        }
+    }
+
+    private void CleanupWorktreeSafe(string repositoryPath, WorktreeInfo worktreeInfo, RunId runId)
+    {
+        try
+        {
+            _worktreeManager.RemoveWorktree(repositoryPath, worktreeInfo.WorktreePath, worktreeInfo.BranchName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to clean up worktree for aborted run {RunId}", runId);
         }
     }
 }

@@ -49,6 +49,8 @@ public sealed class CoordinatorPickupService
         var goal = string.IsNullOrWhiteSpace(task.Description)
             ? task.Title
             : $"{task.Title}\n\n{task.Description}";
+        if (!string.IsNullOrWhiteSpace(task.WorkflowOverrideId))
+            goal = $"use {task.WorkflowOverrideId.Trim()}\n\n{goal}";
 
         // The coordinator provider is fixed to GitHub Copilot (Constitution Principle II). The model
         // id is resolved the same way the project coordinator-run endpoint does: the project default.
@@ -104,9 +106,16 @@ public sealed class CoordinatorPickupService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Pickup: coordinator start failed for run {RunId}", runId);
-            await _runStore.TrySetTerminalStatusAsync(
-                runId, RunStatus.Failed, DateTimeOffset.UtcNow, "coordinator_start_failed", CancellationToken.None)
+            var terminalized = await _runStore.TrySetTerminalStatusAsync(
+                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, "coordinator_start_failed", CancellationToken.None)
                 .ConfigureAwait(false);
+            if (!terminalized)
+            {
+                _logger.LogWarning(
+                    "Pickup: failed to terminalize coordinator run {RunId} after activation failure; claimed task {TaskId} may be tied to a non-terminal run",
+                    runId, task.Id);
+            }
+
             // Task stays Claimed -> Failed coordinator run shown in the terminal column. No silent re-queue (FR-012).
         }
     }

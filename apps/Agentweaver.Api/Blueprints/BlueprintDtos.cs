@@ -93,6 +93,7 @@ public sealed record GenerateBlueprintResponse
     /// creation so the workflow is materialized to the project workspace on apply.
     /// </summary>
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
+    [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 public sealed record ValidateBlueprintRequest

@@ -14,10 +14,11 @@ start: review
 
 nodes:
   - id: review
-    type: peer_review
+    type: prompt
     label: Review
     role: review
     kind: live
+    prompt: Review the submitted code or approach and produce concise, actionable feedback.
 
   - id: feedback
     type: prompt

@@ -141,6 +141,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         var subWriter = _createSubStream?.Invoke(subRunId, "scribe");
 
         IWorkflowTurnAgent? agent = null;
+        var scribeFailed = false;
         try
         {
             var isCoordinator = string.Equals(input.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase);
@@ -155,7 +156,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                   + "                   Leave architectural and scope entries for the Coordinator to promote.";
 
             var task = $$"""
-                You are Scribe. A project run has just completed.
+                You are Scribe. A project run has reached terminal state: {{input.TerminalStatus ?? "completed"}}.
 
                 Run: {{input.RunId}}
                 Project: {{input.ProjectId}}
@@ -166,7 +167,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
 
                 1. Call list_inbox(forAgent: "{{input.AgentName}}") to see pending entries.
                 {{reviewStep}}
-                3. Call update_session(summary: one sentence describing what {{input.AgentName}} accomplished).
+                3. Call update_session(summary: one sentence describing the run terminal state ({{input.TerminalStatus ?? "completed"}}) and what {{input.AgentName}} accomplished or attempted).
                 4. Call export_memory() to write the updated memory state to .squad/.
 
                 Be systematic and concise. Do not write code or read project files.
@@ -202,9 +203,15 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         }
         catch (Exception ex)
         {
+            scribeFailed = true;
             _logger.LogWarning(ex,
                 "Scribe agent turn failed for run {RunId} — workflow proceeds normally", input.RunId);
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "failed", "Scribe pass");
+            writer?.TryWrite(new RunEvent(0, "run.scribe_failed", new
+            {
+                reason = ex.Message,
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            }));
         }
         finally
         {
@@ -212,6 +219,9 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 await agent.DisposeAsync().ConfigureAwait(false);
             _completeSubStream?.Invoke(subRunId);
         }
+
+        if (scribeFailed)
+            return input with { TerminalStatus = "scribe_failed", MergeResult = "scribe_failed" };
 
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "completed", "Scribe pass");
         return input;

@@ -47,6 +47,8 @@ public static class SubtaskFrontier
         IReadOnlyDictionary<int, string> statusById,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges)
     {
+        ValidateEdges(statusById, edges);
+
         var ready = new List<int>();
         foreach (var (id, status) in statusById)
         {
@@ -76,14 +78,30 @@ public static class SubtaskFrontier
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         int inFlightCount)
     {
+        ValidateEdges(statusById, edges);
+
         if (inFlightCount > 0)
             return false;
         return ReadyPending(statusById, edges).Count == 0;
     }
 
+    private static void ValidateEdges(
+        IReadOnlyDictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges)
+    {
+        foreach (var (subtaskId, dependsOnId) in edges)
+        {
+            if (!statusById.ContainsKey(subtaskId))
+                throw new InvalidOperationException(
+                    $"Corrupt work plan dependency: subtask {subtaskId} is not part of the plan.");
+
+            if (!statusById.ContainsKey(dependsOnId))
+                throw new InvalidOperationException(
+                    $"Corrupt work plan dependency: subtask {subtaskId} depends on missing subtask {dependsOnId}.");
+        }
+    }
+
     private static bool DependencySatisfied(
         IReadOnlyDictionary<int, string> statusById, int dependsOnId) =>
-        // A dependency that is not part of this plan (dangling id) is treated as satisfied so a
-        // bad edge never deadlocks the frontier.
-        !statusById.TryGetValue(dependsOnId, out var depStatus) || SubtaskStatus.Satisfies(depStatus);
+        SubtaskStatus.Satisfies(statusById[dependsOnId]);
 }

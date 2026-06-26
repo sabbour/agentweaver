@@ -1,15 +1,3 @@
-# CiliumNetworkPolicy for sandbox pods — FQDN-based egress allowlist.
-#
-# Replaces the broad 0.0.0.0/0 TCP 443/80 rules in networkpolicy-sandbox.yaml with
-# per-domain allow rules enforced by Cilium's DNS proxy. Requires the cluster to be
-# provisioned with --network-dataplane cilium --enable-acns (already done).
-#
-# Selector: pods labeled app: agentweaver-sandbox (same as the companion NetworkPolicy).
-#
-# The standard NetworkPolicy (networkpolicy-sandbox.yaml) is still applied alongside
-# this CiliumNetworkPolicy. Both must allow traffic for it to be permitted:
-#   - NetworkPolicy handles ingress deny-all and pod-CIDR internal rules.
-#   - This CiliumNetworkPolicy handles FQDN-scoped external egress.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -22,10 +10,6 @@ spec:
     matchLabels:
       app: agentweaver-sandbox
   egress:
-    # (a) DNS — required by Cilium DNS proxy for FQDN resolution.
-    #     Permit both UDP and TCP 53 to CoreDNS in kube-system.
-    #     The matchPattern "*" rule allows Cilium to intercept all DNS queries
-    #     and build the IP→FQDN mapping used for toFQDNs enforcement.
     - toEndpoints:
         - matchLabels:
             "k8s:io.kubernetes.pod.namespace": kube-system
@@ -39,48 +23,24 @@ spec:
           rules:
             dns:
               - matchPattern: "*"
-
-    # (b) GitHub — git clone/push/fetch and GitHub API calls.
     - toFQDNs:
         - matchName: "api.github.com"
-        - matchName: "github.com"
-        - matchPattern: "*.github.com"
       toPorts:
         - ports:
             - port: "443"
               protocol: TCP
-
-    # (c) npm — Node.js package registry.
     - toFQDNs:
         - matchName: "registry.npmjs.org"
+        - matchPattern: "*.npmjs.org"
       toPorts:
         - ports:
             - port: "443"
               protocol: TCP
-
-    # (d) PyPI — Python package index and its CDN.
     - toFQDNs:
-        - matchName: "pypi.org"
-        - matchPattern: "*.pypi.org"
-      toPorts:
-        - ports:
-            - port: "443"
-              protocol: TCP
-
-    # (e) Microsoft package feed + NuGet — dotnet restore sources.
-    - toFQDNs:
-        - matchName: "packages.microsoft.com"
-        - matchName: "nuget.org"
-        - matchPattern: "*.nuget.org"
-      toPorts:
-        - ports:
-            - port: "443"
-              protocol: TCP
-
-    # (f) OpenAI — AI model API access from within sandbox workloads.
-    - toFQDNs:
-        - matchName: "api.openai.com"
-        - matchPattern: "*.openai.com"
+        - matchPattern: "*.services.ai.azure.com"
+        - matchPattern: "*.openai.azure.com"
+        - matchPattern: "*.cognitiveservices.azure.com"
+        - matchPattern: "*.models.ai.azure.com"
       toPorts:
         - ports:
             - port: "443"

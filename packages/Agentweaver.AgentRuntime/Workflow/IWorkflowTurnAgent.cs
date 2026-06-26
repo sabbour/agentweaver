@@ -31,7 +31,8 @@ public interface IWorkflowTurnAgent : IAsyncDisposable
         string? agentName,
         string? apiBaseUrl,
         string? apiKey,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? userId = null);
 
     /// <summary>
     /// Runs a single agent turn. When <paramref name="isRevision"/> is true the agent resumes

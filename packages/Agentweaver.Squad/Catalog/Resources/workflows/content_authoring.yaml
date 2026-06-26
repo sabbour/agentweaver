@@ -28,10 +28,11 @@ nodes:
     kind: live
 
   - id: edit
-    type: peer_review
+    type: prompt
     label: Editorial Review
     role: review
     kind: live
+    prompt: Review the drafted content editorially and prepare it for the RAI safety check.
 
   - id: rai-check
     type: check
@@ -46,10 +47,11 @@ nodes:
       - review
 
   - id: publish
-    type: merge
+    type: prompt
     label: Publish
-    role: merge
-    kind: action
+    role: agent
+    kind: live
+    prompt: Publish or package the approved content without invoking code merge semantics.
 
   - id: scribe
     type: scribe
@@ -76,7 +78,7 @@ edges:
   - from: draft
     to: edit
 
-  # Editorial review flows unconditionally to RAI gate.
+  # Editorial review flows to the RAI gate.
   - from: edit
     to: rai-check
 
@@ -97,14 +99,8 @@ edges:
     to: publish
     when: review
 
-  # Publish (content delivery) outcomes.
   - from: publish
     to: scribe
-    when: merged
-
-  - from: publish
-    to: edit
-    when: blocked
 
   - from: scribe
     to: done

@@ -1,4 +1,5 @@
 import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto } from './types';
+import { getSessionToken } from '../config';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -55,11 +56,18 @@ export class RetriableReviewError extends Error {
 
 export class AgentweaverApiClient {
   private readonly baseUrl: string;
-  private readonly apiKey: string;
+  private readonly sessionTokenProvider: () => string | null;
 
-  constructor(baseUrl: string, apiKey: string) {
+  constructor(baseUrl: string, sessionTokenProvider: (() => string | null) | string = getSessionToken) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.apiKey = apiKey;
+    this.sessionTokenProvider = typeof sessionTokenProvider === 'function'
+      ? sessionTokenProvider
+      : () => sessionTokenProvider || null;
+  }
+
+  private authHeaders(): Record<string, string> {
+    const token = this.sessionTokenProvider();
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   submitRun(req: SubmitRunRequest): Promise<SubmitRunResponse> {
@@ -216,6 +224,10 @@ export class AgentweaverApiClient {
     return this.request<void>('DELETE', `/api/runs/${encodeURIComponent(runId)}`);
   }
 
+  archiveRun(runId: string): Promise<void> {
+    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/archive`, {});
+  }
+
   // GitHub auth
   getServerInfo(): Promise<ServerInfo> {
     return this.request<ServerInfo>('GET', '/api/server/info');
@@ -312,12 +324,41 @@ export class AgentweaverApiClient {
     return this.request<import('./types').DecisionInboxEntryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox`);
   }
 
+  mergeDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
+    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/merge`, {});
+  }
+
+  promoteDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
+    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/promote`, {});
+  }
+
+  rejectDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
+    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/reject`, {});
+  }
+
   getAgentMemory(projectId: string, agentName: string): Promise<import('./types').AgentMemoryDto[]> {
     return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`);
   }
 
   getProjectMemory(projectId: string): Promise<import('./types').AgentMemoryDto[]> {
     return this.request<import('./types').AgentMemoryDto[]>('GET', `/api/projects/${encodeURIComponent(projectId)}/memory`);
+  }
+
+  createAgentMemory(
+    projectId: string,
+    agentName: string,
+    body: { type: string; content: string; importance?: string; tags?: string },
+  ): Promise<import('./types').AgentMemoryDto> {
+    return this.request<import('./types').AgentMemoryDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`, body);
+  }
+
+  updateAgentMemory(
+    projectId: string,
+    agentName: string,
+    memoryId: string,
+    body: { type?: string; content?: string; importance?: string; tags?: string },
+  ): Promise<import('./types').AgentMemoryDto> {
+    return this.request<import('./types').AgentMemoryDto>('PUT', `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}`, body);
   }
 
   // Sync
@@ -415,6 +456,22 @@ export class AgentweaverApiClient {
     return this.request<AutopilotResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/autopilot`, { enabled });
   }
 
+  approveTool(runId: string, requestId: string, scope: 'once' | 'run' | 'always' | 'tool'): Promise<void> {
+    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/tool-approvals`, { request_id: requestId, scope });
+  }
+
+  denyTool(runId: string, requestId: string): Promise<void> {
+    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/tool-denials`, { request_id: requestId });
+  }
+
+  approveShell(runId: string, commandHash: string): Promise<void> {
+    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/shell-approvals`, { command_hash: commandHash });
+  }
+
+  denyShell(runId: string, commandHash: string): Promise<void> {
+    return this.request<void>('POST', `/api/runs/${encodeURIComponent(runId)}/shell-denials`, { command_hash: commandHash });
+  }
+
   // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller
   // can fall back to the hardcoded executor graph until the backend endpoint ships.
   async getRunGraph(runId: string): Promise<GraphDescriptor | null> {
@@ -449,6 +506,10 @@ export class AgentweaverApiClient {
     return this.request<void>('DELETE', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
   }
 
+  archiveBacklogTask(projectId: string, taskId: string): Promise<void> {
+    return this.request<void>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/archive`, {});
+  }
+
   moveTaskToReady(projectId: string, taskId: string, targetIndex?: number): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('POST', `/api/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/ready`, { target_index: targetIndex ?? null });
   }
@@ -476,12 +537,12 @@ export class AgentweaverApiClient {
   async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {
     const body: ReviewRequest = { approved };
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.apiKey}`,
+      ...this.authHeaders(),
       'Content-Type': 'application/json',
     };
     const response = await fetch(
       `${this.baseUrl}/api/runs/${encodeURIComponent(runId)}/review`,
-      { method: 'POST', headers, body: JSON.stringify(body) },
+      { method: 'POST', headers, credentials: 'include', body: JSON.stringify(body) },
     );
     const text = await response.text();
     if (response.status === 409) {
@@ -503,15 +564,15 @@ export class AgentweaverApiClient {
   // ("Agentweaver API") endpoint. Returns true when the API responds, false on a
   // network error. Reachability is "the API answered", so any HTTP response counts.
   async checkHealth(): Promise<boolean> {
-    const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}` };
+    const headers = this.authHeaders();
     try {
-      const res = await fetch(`${this.baseUrl}/api/health`, { method: 'GET', headers });
+      const res = await fetch(`${this.baseUrl}/api/health`, { method: 'GET', headers, credentials: 'include' });
       if (res.status !== 404) return res.ok;
     } catch {
       // /api/health unreachable; fall through to the root probe.
     }
     try {
-      const res = await fetch(`${this.baseUrl}/`, { method: 'GET', headers });
+      const res = await fetch(`${this.baseUrl}/`, { method: 'GET', headers, credentials: 'include' });
       return res.ok;
     } catch {
       return false;
@@ -643,7 +704,7 @@ export class AgentweaverApiClient {
 
   // Sandbox port-forward (017-preview): tunnel a sandbox pod port to the API server.
   startPortForward(runId: string, targetPort: number): Promise<PortForwardSessionDto> {
-    return this.request<PortForwardSessionDto>('POST', `/api/runs/${encodeURIComponent(runId)}/sandbox/port-forward`, { target_port: targetPort });
+    return this.request<PortForwardSessionDto>('POST', `/api/runs/${encodeURIComponent(runId)}/sandbox/port-forward`, { targetPort });
   }
 
   stopPortForward(runId: string, sessionId: string): Promise<{ session_id: string; stopped: boolean }> {
@@ -656,13 +717,14 @@ export class AgentweaverApiClient {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.apiKey}`,
+      ...this.authHeaders(),
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
     const response = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers,
+      credentials: 'include',
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
 

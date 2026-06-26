@@ -25,7 +25,7 @@ public sealed class BlueprintTools(AgentweaverApiClient api)
 
     [McpServerTool(Name = "validate_blueprint"), Description("Validate a blueprint object against the schema and role constraints. Returns valid:true with an empty errors array on success, or valid:false with a list of validation errors.")]
     public async Task<string> ValidateBlueprintAsync(
-        [Description("Blueprint object to validate (JSON object with id, name, description, roster, workflow, review_policy, sandbox_profile)")] JsonElement blueprint,
+        [Description("Blueprint object to validate (JSON object with id, name, description, roster, workflow or workflows, bespoke_roles, generated_workflow_yaml, review_policy, sandbox_profile)")] JsonElement blueprint,
         CancellationToken ct)
     {
         try

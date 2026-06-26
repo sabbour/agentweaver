@@ -10,6 +10,7 @@ vi.mock('../api/apiClient', () => ({
     setTaskWorkflowOverride: vi.fn(),
     editBacklogTask: vi.fn(),
     deleteBacklogTask: vi.fn(),
+    archiveBacklogTask: vi.fn(),
   },
 }));
 

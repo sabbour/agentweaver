@@ -22,6 +22,8 @@ spec:
         app.kubernetes.io/part-of: agentweaver
         # Required by the Azure Workload Identity webhook to inject the OIDC token volume.
         azure.workload.identity/use: "true"
+      annotations:
+        secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
     spec:
       serviceAccountName: agentweaver-api
       securityContext:
@@ -29,10 +31,49 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+      initContainers:
+        - name: migrate-memory-db
+          image: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}
+          imagePullPolicy: Always
+          command:
+            - /app/efbundle
+            - --verbose
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: Database__Path
+              value: /data/agentweaver.db
+            - name: TMPDIR
+              value: /tmp
+            - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
+              value: /tmp/.net
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: api
           image: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}
           imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
+              export Mcp__ApiKey="${Auth__ApiKey}"
+              export GitHub__ClientId="$(cat /mnt/secrets-store/github-client-id)"
+              export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
+              export Auth__GitHub__ClientId="${GitHub__ClientId}"
+              export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
+              exec dotnet Agentweaver.Api.dll
           ports:
             - name: http
               containerPort: 8080
@@ -44,25 +85,45 @@ spec:
               value: /data/agentweaver.db
             - name: Workspace__Path
               value: /workspace
+            - name: Workspace__Provider
+              value: persistent-volume
+            - name: Workspace__PersistentVolume__MountRoot
+              value: /workspace
+            - name: Sandbox__Backend
+              value: kubernetes
+            - name: Sandbox__Kubernetes__Namespace
+              value: agentweaver
+            - name: Sandbox__Kubernetes__TemplateRef
+              value: agentweaver-sandbox
+            - name: Auth__User
+              value: agentweaver-mcp
             - name: Auth__GitHub__AllowedOrg
               value: microsoft
-            # GitHub Copilot token — sourced from Key Vault via the CSI driver.
-            # SecretProviderClass syncs the KV secret into the agentweaver-secrets
-            # Kubernetes Secret; the CSI volume mount below triggers that sync.
-            - name: Providers__GitHubCopilot__GitHubToken
-              valueFrom:
-                secretKeyRef:
-                  name: agentweaver-secrets
-                  key: github-copilot-token
+            - name: Auth__GitHub__CallbackUrl
+              value: https://${HOST}/auth/github/callback
+            - name: Auth__GitHub__FrontendUrl
+              value: https://${HOST}/
+            - name: OTEL_SERVICE_NAME
+              value: agentweaver-api
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=agentweaver,deployment.environment=production
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4317
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: grpc
+            - name: TMPDIR
+              value: /tmp
           volumeMounts:
             - name: data
               mountPath: /data
             - name: workspace
               mountPath: /workspace
-            # CSI mount triggers the SecretProviderClass to sync the Key Vault secret
-            # into the agentweaver-secrets Kubernetes Secret used by the env var above.
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /app/logs
             - name: secrets-store
-              mountPath: /mnt/secrets
+              mountPath: /mnt/secrets-store
               readOnly: true
           resources:
             requests:
@@ -73,24 +134,27 @@ spec:
               memory: 2Gi
           livenessProbe:
             httpGet:
-              path: /health
+              path: /api/ping
               port: 8080
-            initialDelaySeconds: 30
+            initialDelaySeconds: 15
             periodSeconds: 15
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /api/health
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+        # TODO(a7-aks-013): production preview sessions require a dedicated preview proxy
+        # service/gateway in front of sandbox pod port-forwards; the API image includes kubectl
+        # only for creating pod-level port-forward sessions.
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -98,6 +162,10 @@ spec:
         - name: workspace
           persistentVolumeClaim:
             claimName: agentweaver-workspace
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
         - name: secrets-store
           csi:
             driver: secrets-store.csi.k8s.io

@@ -1,0 +1,45 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentweaver-api-sandbox
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+rules:
+  - apiGroups:
+      - extensions.agents.x-k8s.io
+    resources:
+      - sandboxclaims
+    verbs:
+      - get
+      - create
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - create
+  - apiGroups:
+      - ""
+    resources:
+      - pods/exec
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentweaver-api-sandbox
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+subjects:
+  - kind: ServiceAccount
+    name: agentweaver-api
+    namespace: agentweaver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentweaver-api-sandbox

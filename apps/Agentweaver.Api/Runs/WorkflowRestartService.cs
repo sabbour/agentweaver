@@ -1,11 +1,15 @@
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 
 using RunStatus = Agentweaver.Domain.RunStatus;
 using WfRunStatus = Microsoft.Agents.AI.Workflows.RunStatus;
+using DomainRun = Agentweaver.Domain.Run;
 
 namespace Agentweaver.Api.Runs;
 
@@ -23,6 +27,7 @@ public sealed class WorkflowRestartService
     private readonly RunWorkflowFactory _factory;
     private readonly IWorktreeOperations _worktreeOps;
     private readonly RunWatchLoopService _watchLoop;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WorkflowRestartService> _logger;
 
     public WorkflowRestartService(
@@ -33,6 +38,7 @@ public sealed class WorkflowRestartService
         RunWorkflowFactory factory,
         IWorktreeOperations worktreeOps,
         RunWatchLoopService watchLoop,
+        IServiceScopeFactory scopeFactory,
         ILogger<WorkflowRestartService> logger)
     {
         _runStore = runStore;
@@ -42,6 +48,7 @@ public sealed class WorkflowRestartService
         _factory = factory;
         _worktreeOps = worktreeOps;
         _watchLoop = watchLoop;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -65,7 +72,8 @@ public sealed class WorkflowRestartService
             }
 
             _logger.LogWarning("Failing stranded InProgress run {RunId}", run.Id);
-            await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+            await FailRecoveredRunAsync(run, "stranded_in_progress", entry: null, cleanupWorktree: true, ct: ct)
+                .ConfigureAwait(false);
         }
 
         // 2. Revert Committing -> AwaitingReview (commit was started but did not complete).
@@ -109,8 +117,8 @@ public sealed class WorkflowRestartService
                     _logger.LogWarning(
                         "Auto-expiring stale no-checkpoint AwaitingReview run {RunId} (age={Age:g}); failing run",
                         run.Id, DateTimeOffset.UtcNow - run.StartedAt);
-                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                    _streamStore.Complete(runIdStr);
+                    await FailRecoveredRunAsync(run, "stale_no_checkpoint", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
@@ -123,8 +131,8 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "Worktree missing for recovered AwaitingReview run {RunId} at {Path}; failing run",
                         run.Id, run.WorktreePath);
-                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                    _streamStore.Complete(runIdStr);
+                    await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
@@ -133,8 +141,8 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "WorktreeBranch missing for recovered AwaitingReview run {RunId}; failing run",
                         run.Id);
-                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                    _streamStore.Complete(runIdStr);
+                    await FailRecoveredRunAsync(run, "recovered_worktree_branch_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
@@ -143,8 +151,8 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "TreeHash missing for recovered AwaitingReview run {RunId}; failing run",
                         run.Id);
-                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                    _streamStore.Complete(runIdStr);
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
@@ -155,15 +163,17 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "Worktree tree hash mismatch for recovered run {RunId}: expected={Expected} actual={Actual}; failing run",
                         run.Id, run.TreeHash, currentNoCheckpointHash);
-                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                    _streamStore.Complete(runIdStr);
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
                 // All prerequisites satisfied — emit synthetic review.requested so SSE clients
                 // unblock. The /review endpoint handles runs without a live workflow via
                 // ExecuteDirectReviewAsync, so approve/decline still works for these.
-                entry.RecordNext(EventTypes.ReviewRequested, new { tree_hash = run.TreeHash, recovered = true });
+                await RecordRecoveryEventAsync(
+                    runIdStr, entry, EventTypes.ReviewRequested, new { tree_hash = run.TreeHash, recovered = true },
+                    CancellationToken.None).ConfigureAwait(false);
                 _logger.LogInformation(
                     "Recovered AwaitingReview run {RunId} without checkpoint; emitted synthetic review.requested for SSE clients.",
                     run.Id);
@@ -174,8 +184,8 @@ public sealed class WorkflowRestartService
             if (run.WorktreePath is null || !_worktreeOps.WorktreeExists(run.WorktreePath))
             {
                 _logger.LogError("Worktree missing for run {RunId} at {Path}; failing run", run.Id, run.WorktreePath);
-                await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                _streamStore.Complete(runIdStr);
+                await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    .ConfigureAwait(false);
                 continue;
             }
 
@@ -187,8 +197,8 @@ public sealed class WorkflowRestartService
                 {
                     _logger.LogError("Worktree tree hash mismatch for run {RunId}: expected={Expected} actual={Actual}; failing run",
                         run.Id, run.TreeHash, currentTreeHash);
-                    await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                    _streamStore.Complete(runIdStr);
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        .ConfigureAwait(false);
                     continue;
                 }
             }
@@ -198,41 +208,119 @@ public sealed class WorkflowRestartService
                 // Create the per-run CTS before resuming so the same token reaches both
                 // the agent execution and the registry's Abandon path.
                 var runCts = new CancellationTokenSource();
-                var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
-                var runCt = _registry.Register(runIdStr, streamingRun, runCts);
-
-                // Re-populate PendingRequestStore from the resumed run's status.
-                var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);
-                if (status == WfRunStatus.PendingRequests)
+                var ctsRegistered = false;
+                try
                 {
-                    // The workflow is paused at the request port. We need to extract the
-                    // pending request. Watch the stream briefly for a RequestInfoEvent.
-                    // The resumed run should immediately emit it.
-                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    cts.CancelAfter(TimeSpan.FromSeconds(5));
-                    try
-                    {
-                        await foreach (var evt in streamingRun.WatchStreamAsync(cts.Token))
-                        {
-                            if (evt is RequestInfoEvent rie)
-                            {
-                                _pendingStore.Set(runIdStr, rie.Request, run.SubmittingUser);
-                                break;
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException) { /* timeout is acceptable */ }
-                }
+                    var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
+                    var runCt = _registry.Register(runIdStr, streamingRun, runCts);
+                    ctsRegistered = true;
 
-                // Start the supervised watch loop.
-                _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser, runCt);
+                    // Start the supervised watch loop.
+                    _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser, runCt);
+                }
+                catch
+                {
+                    if (ctsRegistered)
+                        _registry.Abandon(runIdStr);
+                    else
+                        runCts.Dispose();
+                    throw;
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to resume workflow for run {RunId}; failing run", run.Id);
-                await _runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                _streamStore.Complete(runIdStr);
+                await FailRecoveredRunAsync(run, "workflow_resume_failed", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    .ConfigureAwait(false);
             }
+        }
+    }
+
+    private async Task FailRecoveredRunAsync(
+        DomainRun run,
+        string reason,
+        RunStreamEntry? entry,
+        bool cleanupWorktree,
+        CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+        var changed = await _runStore.TrySetTerminalStatusAsync(
+            run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, reason, ct).ConfigureAwait(false);
+        if (!changed)
+        {
+            _logger.LogWarning(
+                "Recovery failure transition skipped for run {RunId}; status already terminal or changed concurrently",
+                run.Id);
+            return;
+        }
+
+        entry ??= _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
+        await RecordRecoveryEventAsync(runId, entry, EventTypes.RunFailed, new { reason }, ct)
+            .ConfigureAwait(false);
+        _streamStore.Complete(runId);
+        _ = FirePostRunScribeAsync(runId);
+
+        if (cleanupWorktree)
+            CleanupWorktreeSafe(run);
+    }
+
+    private async Task RecordRecoveryEventAsync(
+        string runId,
+        RunStreamEntry entry,
+        string eventType,
+        object payload,
+        CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var maxSequence = await db.RunEvents
+            .Where(e => e.RunId == runId)
+            .Select(e => (int?)e.Sequence)
+            .MaxAsync(ct)
+            .ConfigureAwait(false) ?? 0;
+        var sequence = maxSequence + 1;
+
+        entry.Record(new RunEvent(sequence, eventType, payload));
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = sequence,
+            EventType = eventType,
+            PayloadJson = JsonSerializer.Serialize(payload),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    private void CleanupWorktreeSafe(DomainRun run)
+    {
+        if (string.IsNullOrEmpty(run.WorktreePath) || string.IsNullOrEmpty(run.WorktreeBranch))
+            return;
+
+        try
+        {
+            _worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to clean up stranded worktree for run {RunId}", run.Id);
+        }
+    }
+
+    private async Task FirePostRunScribeAsync(string runId)
+    {
+        try
+        {
+            var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+            if (run is null) return;
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
+            await service.RunAsync(run).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PostRunScribe fire-and-forget failed for run {RunId}", runId);
         }
     }
 }

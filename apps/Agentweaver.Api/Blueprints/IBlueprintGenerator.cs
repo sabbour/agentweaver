@@ -32,6 +32,8 @@ public sealed record BlueprintGenerationResult(
     /// <summary>The raw YAML for <see cref="GeneratedWorkflow"/>; written verbatim to the project
     /// workspace so the runtime loader can validate and cache it.</summary>
     public string? GeneratedWorkflowYaml { get; init; }
+
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>
@@ -48,16 +50,15 @@ public static class BlueprintGenerationParser
         if (string.IsNullOrWhiteSpace(rawResponse))
             return new BlueprintGenerationResult(null, ["The model returned an empty response."]);
 
-        var start = rawResponse.IndexOf('{');
-        var end = rawResponse.LastIndexOf('}');
-        if (start < 0 || end <= start)
+        var json = ExtractFirstJsonObject(rawResponse);
+        if (json is null)
             return new BlueprintGenerationResult(null, ["The model response did not contain a JSON object."]);
 
         JsonElement root;
         JsonDocument doc;
         try
         {
-            doc = JsonDocument.Parse(rawResponse[start..(end + 1)]);
+            doc = JsonDocument.Parse(json);
             root = doc.RootElement;
         }
         catch (JsonException ex)
@@ -122,5 +123,49 @@ public static class BlueprintGenerationParser
             }
             return list;
         }
+    }
+
+    private static string? ExtractFirstJsonObject(string text)
+    {
+        for (var start = 0; start < text.Length; start++)
+        {
+            if (text[start] != '{') continue;
+
+            var depth = 0;
+            var inString = false;
+            var escaping = false;
+            for (var i = start; i < text.Length; i++)
+            {
+                var ch = text[i];
+                if (inString)
+                {
+                    if (escaping) { escaping = false; continue; }
+                    if (ch == '\\') { escaping = true; continue; }
+                    if (ch == '"') inString = false;
+                    continue;
+                }
+
+                if (ch == '"') { inString = true; continue; }
+                if (ch == '{') depth++;
+                else if (ch == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        var candidate = text[start..(i + 1)];
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(candidate);
+                            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                                return candidate;
+                        }
+                        catch (JsonException) { }
+                        break;
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 }

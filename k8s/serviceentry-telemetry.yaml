@@ -1,0 +1,47 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: agentweaver-app-egress-fqdn-allowlist
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - agentweaver-api
+          - agentweaver-mcp
+          - agentweaver-frontend
+  egress:
+    - toEntities:
+        - kube-apiserver
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: "api.github.com"
+        - matchName: "github.com"
+        - matchPattern: "*.github.com"
+        - matchPattern: "*.services.ai.azure.com"
+        - matchPattern: "*.openai.azure.com"
+        - matchPattern: "*.cognitiveservices.azure.com"
+        - matchPattern: "*.models.ai.azure.com"
+        - matchName: "otel-collector.observability.svc.cluster.local"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+            - port: "4317"
+              protocol: TCP

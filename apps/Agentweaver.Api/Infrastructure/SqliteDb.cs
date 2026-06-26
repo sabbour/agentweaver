@@ -128,13 +128,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN archived_at TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN archived_at TEXT;", ct);
 
-        await TryAlterAsync(connection, "DROP INDEX IF EXISTS idx_backlog_tasks_orderkey_unique;", ct);
-        await TryAlterAsync(connection,
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_orderkey_unique
-                ON backlog_tasks (project_id, state, order_key)
-                WHERE state IN ('backlog','ready') AND archived_at IS NULL;
-            """, ct);
+        await RecreateBacklogOrderKeyIndexAsync(connection, ct).ConfigureAwait(false);
 
         // Shared orchestration worktree for multi-agent coordinator runs (sandbox-cross-worktree-access).
         // One shared worktree per orchestration: all child runs share the coordinator's worktree path
@@ -171,6 +165,22 @@ public sealed class SqliteDb
         {
             // Column already exists — ignore.
         }
+    }
+
+    private static async Task RecreateBacklogOrderKeyIndexAsync(SqliteConnection connection, CancellationToken ct)
+    {
+        await using var tx = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
+        cmd.Transaction = (SqliteTransaction)tx;
+        cmd.CommandText =
+            """
+            DROP INDEX IF EXISTS idx_backlog_tasks_orderkey_unique;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_orderkey_unique
+                ON backlog_tasks (project_id, state, order_key)
+                WHERE state IN ('backlog','ready') AND archived_at IS NULL;
+            """;
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
     }
 
     private const string SchemaSql = """

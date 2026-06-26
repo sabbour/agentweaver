@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# 15-setup-identity.sh -- Create managed identity, Key Vault, and workload identity
-#                         federation for the agentweaver-api pod.
-#
-# Run from the repo root after 10-create-cluster.sh:
-#   bash scripts/aks/15-setup-identity.sh
-#
-# Prerequisites: az login, source scripts/aks/00-variables.sh
+# 15-setup-identity.sh -- Create managed identity, Key Vault, workload identity, and secrets.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/00-variables.sh"
+
+missing=()
+[[ -z "${MCP_API_KEY:-}" ]] && missing+=("MCP_API_KEY")
+[[ -z "${MCP_AUTH_API_KEY:-}" ]] && missing+=("MCP_AUTH_API_KEY")
+[[ -z "${MCP_AUTH_USER:-}" ]] && missing+=("MCP_AUTH_USER")
+[[ -z "${GITHUB_CLIENT_ID:-}" ]] && missing+=("GITHUB_CLIENT_ID")
+[[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && missing+=("GITHUB_CLIENT_SECRET")
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "ERROR: refusing to write placeholder Key Vault secrets. Set these variables:" >&2
+  for v in "${missing[@]}"; do echo "  ${v}" >&2; done
+  exit 1
+fi
 
 echo ""
 echo "=== Step 1: Create user-assigned managed identity ==="
@@ -44,14 +50,12 @@ KEYVAULT_ID=$(az keyvault show --name "${KEYVAULT_NAME}" --query id -o tsv)
 echo "  Key Vault ID: ${KEYVAULT_ID}"
 
 echo ""
-echo "=== Step 3: Store GitHub Copilot token ==="
-# Replace <placeholder> with the actual token before running, or pass via env:
-#   export GITHUB_COPILOT_TOKEN=ghp_...
-#   bash scripts/aks/15-setup-identity.sh
-az keyvault secret set \
-  --vault-name "${KEYVAULT_NAME}" \
-  --name github-copilot-token \
-  --value "${GITHUB_COPILOT_TOKEN:-<placeholder>}"
+echo "=== Step 3: Store required secrets in Key Vault ==="
+az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name mcp-api-key --value "${MCP_API_KEY}" --output none
+az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name mcp-auth-api-key --value "${MCP_AUTH_API_KEY}" --output none
+az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name mcp-auth-user --value "${MCP_AUTH_USER}" --output none
+az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-id --value "${GITHUB_CLIENT_ID}" --output none
+az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-secret --value "${GITHUB_CLIENT_SECRET}" --output none
 
 echo ""
 echo "=== Step 4: Grant 'Key Vault Secrets User' role to managed identity ==="
@@ -87,11 +91,13 @@ az identity federated-credential create \
   --audience api://AzureADTokenExchange
 
 echo ""
-echo "=== Step 7: Install Secrets Store CSI driver add-on ==="
+echo "=== Step 7: Install Secrets Store CSI driver add-on with rotation ==="
 az aks enable-addons \
   --name "${CLUSTER_NAME}" \
   --resource-group "${RESOURCE_GROUP}" \
-  --addons azure-keyvault-secrets-provider
+  --addons azure-keyvault-secrets-provider \
+  --enable-secret-rotation \
+  --rotation-poll-interval 2m
 
 echo ""
 echo "=== Summary ==="
@@ -100,9 +106,4 @@ echo "  KEYVAULT_NAME=${KEYVAULT_NAME}"
 echo "  TENANT_ID=${TENANT_ID}"
 echo ""
 echo "Apply k8s manifests with these values substituted:"
-echo "  IDENTITY_CLIENT_ID=${IDENTITY_CLIENT_ID} \\"
-echo "  KEYVAULT_NAME=${KEYVAULT_NAME} \\"
-echo "  TENANT_ID=${TENANT_ID} \\"
-echo "  envsubst < k8s/serviceaccount-api.yaml | kubectl apply -f -"
-echo "  envsubst < k8s/secret-provider-class.yaml | kubectl apply -f -"
-echo "  envsubst < k8s/api-deployment.yaml | kubectl apply -f -"
+echo "  IDENTITY_CLIENT_ID=${IDENTITY_CLIENT_ID} KEYVAULT_NAME=${KEYVAULT_NAME} TENANT_ID=${TENANT_ID} bash scripts/aks/30-deploy.sh"

@@ -1,16 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
+  Button,
+  Field,
+  Input,
+  MessageBar,
+  MessageBarBody,
   Spinner,
   Tab,
   TabList,
   Text,
   Badge,
+  Textarea,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import type { SelectTabData } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import type { DecisionDto, AgentMemoryDto, DecisionInboxEntryDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 
@@ -109,7 +116,29 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
   },
+  actions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalXS,
+  },
+  form: {
+    display: 'grid',
+    gap: tokens.spacingVerticalS,
+    marginBottom: tokens.spacingVerticalL,
+    maxWidth: '720px',
+  },
+  inlineFields: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
 });
+
+function formatApiError(err: unknown): string {
+  if (err instanceof ApiError) return `API error ${err.status}: ${err.body || 'Request failed'}`;
+  return err instanceof Error ? err.message : String(err);
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -124,30 +153,117 @@ export function MemoriesPage() {
   const [inbox,       setInbox]       = useState<DecisionInboxEntryDto[] | null>(null);
   const [memory,      setMemory]      = useState<AgentMemoryDto[] | null>(null);
   const [loading,     setLoading]     = useState(false);
+  const [loadError,   setLoadError]   = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [newAgentName, setNewAgentName] = useState('Coordinator');
+  const [newType, setNewType] = useState('learning');
+  const [newContent, setNewContent] = useState('');
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
+  const [editType, setEditType] = useState('');
+  const [editContent, setEditContent] = useState('');
 
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
+    setLoadError(null);
 
     if (selectedTab === 'decisions') {
-      if (decisions !== null) { setLoading(false); return; }
+      if (decisions !== null && inbox !== null) { setLoading(false); return; }
       Promise.all([
-        apiClient.getDecisions(projectId).catch(() => [] as DecisionDto[]),
-        apiClient.getDecisionsInbox(projectId).catch(() => [] as DecisionInboxEntryDto[]),
+        apiClient.getDecisions(projectId),
+        apiClient.getDecisionsInbox(projectId),
       ])
         .then(([d, i]) => { setDecisions(d); setInbox(i); })
+        .catch((err: unknown) => { setDecisions([]); setInbox([]); setLoadError(formatApiError(err)); })
         .finally(() => setLoading(false));
     } else {
       if (memory !== null) { setLoading(false); return; }
       apiClient.getProjectMemory(projectId)
         .then(m => setMemory(m))
-        .catch(() => setMemory([]))
+        .catch((err: unknown) => { setMemory([]); setLoadError(formatApiError(err)); })
         .finally(() => setLoading(false));
     }
-  }, [projectId, selectedTab, decisions, memory]);
+  }, [projectId, selectedTab, decisions, inbox, memory, reloadKey]);
+
+  const retryLoad = () => {
+    if (selectedTab === 'decisions') {
+      setDecisions(null);
+      setInbox(null);
+    } else {
+      setMemory(null);
+    }
+    setLoadError(null);
+    setReloadKey((key) => key + 1);
+  };
+
+  const refreshDecisions = () => {
+    setDecisions(null);
+    setInbox(null);
+    setReloadKey((key) => key + 1);
+  };
+
+  const refreshMemory = () => {
+    setMemory(null);
+    setReloadKey((key) => key + 1);
+  };
+
+  const runInboxAction = async (entryId: string, action: 'merge' | 'promote' | 'reject') => {
+    if (!projectId || busyAction) return;
+    setBusyAction(`${action}:${entryId}`);
+    setMutationError(null);
+    try {
+      if (action === 'merge') await apiClient.mergeDecisionInboxEntry(projectId, entryId);
+      else if (action === 'promote') await apiClient.promoteDecisionInboxEntry(projectId, entryId);
+      else await apiClient.rejectDecisionInboxEntry(projectId, entryId);
+      refreshDecisions();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const createMemory = async () => {
+    if (!projectId || !newAgentName.trim() || !newType.trim() || !newContent.trim()) return;
+    setBusyAction('create-memory');
+    setMutationError(null);
+    try {
+      await apiClient.createAgentMemory(projectId, newAgentName.trim(), { type: newType.trim(), content: newContent.trim() });
+      setNewContent('');
+      refreshMemory();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const beginEditMemory = (entry: AgentMemoryDto) => {
+    setEditingMemoryId(entry.id);
+    setEditType(entry.type);
+    setEditContent(entry.content);
+  };
+
+  const updateMemory = async (entry: AgentMemoryDto) => {
+    if (!projectId || !editType.trim() || !editContent.trim()) return;
+    setBusyAction(`update-memory:${entry.id}`);
+    setMutationError(null);
+    try {
+      await apiClient.updateAgentMemory(projectId, entry.agent_name, entry.id, { type: editType.trim(), content: editContent.trim() });
+      setEditingMemoryId(null);
+      refreshMemory();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   const pending = (inbox ?? []).filter(e => e.status === 'pending');
   const hasActiveDecisions = decisions !== null && decisions.length > 0;
+  const busy = busyAction !== null;
 
   return (
     <div className={styles.root}>
@@ -176,8 +292,19 @@ export function MemoriesPage() {
 
       <div className={styles.tabContent}>
         {loading && <Spinner size="small" label="Loading…" />}
+        {loadError && (
+          <MessageBar intent="error">
+            <MessageBarBody>{loadError}</MessageBarBody>
+            <Button size="small" onClick={retryLoad}>Retry</Button>
+          </MessageBar>
+        )}
+        {mutationError && (
+          <MessageBar intent="error">
+            <MessageBarBody>{mutationError}</MessageBarBody>
+          </MessageBar>
+        )}
 
-        {!loading && selectedTab === 'decisions' && (
+        {!loading && !loadError && selectedTab === 'decisions' && (
           !hasActiveDecisions && pending.length === 0
             ? <Text className={styles.empty}>No decisions recorded yet.</Text>
             : (
@@ -205,8 +332,7 @@ export function MemoriesPage() {
                   <section className={styles.proposedSection} aria-label="Proposed decisions awaiting Coordinator">
                     <span className={styles.proposedHeading}>Proposed — awaiting Coordinator</span>
                     <Text className={styles.proposedCaption}>
-                      The built-in Coordinator agent promotes these proposals into active Team Memory
-                      on its own. No action is needed from you.
+                      Review pending proposals and merge, promote, or reject them.
                     </Text>
                     {pending.map(e => (
                       <div key={e.id} className={styles.proposedItem}>
@@ -221,6 +347,11 @@ export function MemoriesPage() {
                         {e.rationale && (
                           <span className={styles.itemRationale}>Rationale: {e.rationale}</span>
                         )}
+                        <div className={styles.actions}>
+                          <Button size="small" appearance="primary" disabled={busy} onClick={() => void runInboxAction(e.id, 'merge')}>Merge</Button>
+                          <Button size="small" disabled={busy} onClick={() => void runInboxAction(e.id, 'promote')}>Promote</Button>
+                          <Button size="small" appearance="outline" disabled={busy} onClick={() => void runInboxAction(e.id, 'reject')}>Reject</Button>
+                        </div>
                       </div>
                     ))}
                   </section>
@@ -229,30 +360,68 @@ export function MemoriesPage() {
             )
         )}
 
-        {!loading && selectedTab === 'memory' && (
-          memory === null || memory.length === 0
-            ? <Text className={styles.empty}>No agent memory recorded yet.</Text>
-            : (
-              <div className={styles.itemList}>
-                {memory.map(m => (
-                  <div key={m.id} className={styles.item}>
-                    <div className={styles.itemHeader}>
-                      <Badge appearance="outline">{m.agent_name}</Badge>
-                      <Badge appearance="tint" color={
-                        m.importance === 'high' ? 'danger' :
-                        m.importance === 'medium' ? 'warning' : 'subtle'
-                      }>{m.importance}</Badge>
-                      <Badge appearance="outline">{m.type}</Badge>
-                      <span className={styles.itemMeta}>{new Date(m.created_at).toLocaleString()}</span>
-                    </div>
-                    <span className={styles.itemContent}>{m.content}</span>
-                  </div>
-                ))}
+        {!loading && !loadError && selectedTab === 'memory' && (
+          <>
+            <section className={styles.form} aria-label="Create memory entry">
+              <Text weight="semibold">Create memory entry</Text>
+              <div className={styles.inlineFields}>
+                <Field label="Agent name" required>
+                  <Input value={newAgentName} onChange={(_, data) => setNewAgentName(data.value)} disabled={busy} />
+                </Field>
+                <Field label="Type" required>
+                  <Input value={newType} onChange={(_, data) => setNewType(data.value)} disabled={busy} />
+                </Field>
               </div>
-            )
+              <Field label="Content" required>
+                <Textarea value={newContent} onChange={(_, data) => setNewContent(data.value)} disabled={busy} rows={4} />
+              </Field>
+              <Button appearance="primary" disabled={busy || !newAgentName.trim() || !newType.trim() || !newContent.trim()} onClick={() => void createMemory()}>
+                Create memory
+              </Button>
+            </section>
+            {memory === null || memory.length === 0
+              ? <Text className={styles.empty}>No agent memory recorded yet.</Text>
+              : (
+                <div className={styles.itemList}>
+                  {memory.map(m => (
+                    <div key={m.id} className={styles.item}>
+                      <div className={styles.itemHeader}>
+                        <Badge appearance="outline">{m.agent_name}</Badge>
+                        <Badge appearance="tint" color={
+                          m.importance === 'high' ? 'danger' :
+                          m.importance === 'medium' ? 'warning' : 'subtle'
+                        }>{m.importance}</Badge>
+                        <Badge appearance="outline">{m.type}</Badge>
+                        <span className={styles.itemMeta}>{new Date(m.created_at).toLocaleString()}</span>
+                      </div>
+                      {editingMemoryId === m.id ? (
+                        <div className={styles.form}>
+                          <Field label="Type" required>
+                            <Input value={editType} onChange={(_, data) => setEditType(data.value)} disabled={busy} />
+                          </Field>
+                          <Field label="Content" required>
+                            <Textarea value={editContent} onChange={(_, data) => setEditContent(data.value)} disabled={busy} rows={4} />
+                          </Field>
+                          <div className={styles.actions}>
+                            <Button size="small" appearance="primary" disabled={busy || !editType.trim() || !editContent.trim()} onClick={() => void updateMemory(m)}>Save</Button>
+                            <Button size="small" disabled={busy} onClick={() => setEditingMemoryId(null)}>Cancel</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <span className={styles.itemContent}>{m.content}</span>
+                          <div className={styles.actions}>
+                            <Button size="small" disabled={busy} onClick={() => beginEditMemory(m)}>Update</Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+          </>
         )}
       </div>
     </div>
   );
 }
-

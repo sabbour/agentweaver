@@ -15,7 +15,6 @@ public static class WorkflowDefinitionLoader
 {
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
-        .IgnoreUnmatchedProperties()
         .Build();
 
     /// <summary>Parses+validates a YAML document. Always returns a result (never throws).</summary>
@@ -28,23 +27,32 @@ public static class WorkflowDefinitionLoader
         }
         catch (YamlException ex)
         {
-            return WorkflowLoadResult.Invalid(source, $"{source}: malformed YAML — {ex.Message}");
+            var message = $"{source}: malformed YAML — {ex.Message}";
+            var parseWarnings = IsUnmatchedPropertyError(ex) ? new[] { message } : Array.Empty<string>();
+            return WorkflowLoadResult.Invalid(source, message, warnings: parseWarnings);
         }
 
         if (dto is null)
             return WorkflowLoadResult.Invalid(source, $"{source}: empty or null workflow document.");
 
-        if (!TryMapAndValidate(dto, source, isBuiltIn, out var definition, out var error))
+        if (!TryMapAndValidate(dto, source, isBuiltIn, out var definition, out var error, out var loadWarnings))
             return WorkflowLoadResult.Invalid(source, error!);
 
-        return WorkflowLoadResult.Valid(source, definition!, isBuiltIn);
+        return WorkflowLoadResult.Valid(source, definition!, isBuiltIn, loadWarnings);
     }
 
     private static bool TryMapAndValidate(
-        WorkflowYamlDto dto, string source, bool isBuiltIn, out WorkflowDefinition? definition, out string? error)
+        WorkflowYamlDto dto,
+        string source,
+        bool isBuiltIn,
+        out WorkflowDefinition? definition,
+        out string? error,
+        out IReadOnlyList<string> warnings)
     {
         definition = null;
         error = null;
+        var collectedWarnings = new List<string>();
+        warnings = collectedWarnings;
 
         if (string.IsNullOrWhiteSpace(dto.Id))
             return Fail(source, "missing required field 'id'.", out error);
@@ -97,7 +105,9 @@ public static class WorkflowDefinitionLoader
                 Charter = string.IsNullOrWhiteSpace(n.Charter) ? null : n.Charter,
                 Target = n.Target,
                 Steps = n.Steps is null ? [] : [.. n.Steps],
-                Branches = n.Branches is null ? [] : [.. n.Branches],
+                Branches = n.Branches is null ? [] : [.. n.Branches
+                    .Where(b => !string.IsNullOrWhiteSpace(b))
+                    .Select(b => b.Trim().ToLowerInvariant())],
             });
         }
 
@@ -120,7 +130,12 @@ public static class WorkflowDefinitionLoader
                 if (!nodeIds.Contains(e.To))
                     return Fail(source, $"edge references unknown target node '{e.To}'.", out error);
 
-                edges.Add(new WorkflowEdge { From = e.From, To = e.To, When = string.IsNullOrWhiteSpace(e.When) ? null : e.When });
+                edges.Add(new WorkflowEdge
+                {
+                    From = e.From,
+                    To = e.To,
+                    When = string.IsNullOrWhiteSpace(e.When) ? null : e.When.Trim().ToLowerInvariant(),
+                });
             }
         }
 
@@ -151,6 +166,10 @@ public static class WorkflowDefinitionLoader
                     break;
 
                 case WorkflowNodeType.PeerReview:
+                    if (!string.IsNullOrWhiteSpace(node.Target))
+                        collectedWarnings.Add(
+                            $"{source}: peer_review node '{node.Id}' declares target '{node.Target}', but the runtime currently ignores peer_review.target.");
+                    goto case WorkflowNodeType.FanIn;
                 case WorkflowNodeType.FanIn:
                     if (node.Target is not null && !nodeIds.Contains(node.Target))
                         return Fail(source, $"node '{node.Id}' references unknown target '{node.Target}'.", out error);
@@ -183,6 +202,7 @@ public static class WorkflowDefinitionLoader
             Id = dto.Id!,
             Name = dto.Name!,
             Description = dto.Description,
+            Version = string.IsNullOrWhiteSpace(dto.Version) ? null : dto.Version.Trim(),
             Trigger = new WorkflowTrigger { Type = triggerType, Event = eventType },
             Start = dto.Start!,
             Nodes = nodes,
@@ -191,6 +211,10 @@ public static class WorkflowDefinitionLoader
         };
         return true;
     }
+
+    private static bool IsUnmatchedPropertyError(YamlException ex) =>
+        ex.Message.Contains("not found on type", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("unmatched", StringComparison.OrdinalIgnoreCase);
 
     private static bool Fail(string source, string message, out string? error)
     {
@@ -251,6 +275,7 @@ internal sealed class WorkflowYamlDto
     public string? Id { get; set; }
     public string? Name { get; set; }
     public string? Description { get; set; }
+    public string? Version { get; set; }
     public TriggerYamlDto? Trigger { get; set; }
     public string? Start { get; set; }
     public List<NodeYamlDto>? Nodes { get; set; }

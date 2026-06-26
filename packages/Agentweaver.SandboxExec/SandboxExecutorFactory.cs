@@ -65,8 +65,10 @@ public static class SandboxExecutorFactory
         logger.LogWarning(
             "SandboxExecutorFactory: falling back to PassthroughExecutor. Reason: {Reason}",
             reason);
+        logger.LogWarning(
+            "⚠️ PassthroughExecutor selected — agent commands run directly on the host. Not for production use.");
 
-        return new PassthroughExecutor(reason);
+        return new PassthroughExecutor(reason, logger);
     }
 
     /// <summary>
