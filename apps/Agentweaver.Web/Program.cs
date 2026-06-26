@@ -17,6 +17,25 @@ app.UseStaticFiles(new StaticFileOptions
     }
 });
 
-app.MapFallbackToFile("index.html");
+// Serve VitePress docs at /docs/ with directory browsing (index.html auto-resolve)
+app.UseFileServer(new FileServerOptions
+{
+    RequestPath = "/docs",
+    EnableDefaultFiles = true,
+    EnableDirectoryBrowsing = false
+});
+
+// SPA fallback — only for non-/docs paths
+app.MapFallback(context =>
+{
+    if (context.Request.Path.StartsWithSegments("/docs"))
+    {
+        context.Response.StatusCode = 404;
+        return Task.CompletedTask;
+    }
+    context.Response.ContentType = "text/html";
+    return context.Response.SendFileAsync(
+        app.Environment.WebRootFileProvider.GetFileInfo("index.html"));
+});
 
 app.Run();
