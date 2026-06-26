@@ -8,7 +8,12 @@ metadata:
   labels:
     app.kubernetes.io/part-of: agentweaver
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: agentweaver
+    matchExpressions:
+      - key: gateway.networking.k8s.io/gateway-name
+        operator: DoesNotExist
   policyTypes:
     - Ingress
 ---
@@ -107,7 +112,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              istio.io/gateway-name: agentweaver-gateway
+              gateway.networking.k8s.io/gateway-name: agentweaver-gateway
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: aks-istio-ingress
@@ -132,7 +137,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              istio.io/gateway-name: agentweaver-gateway
+              gateway.networking.k8s.io/gateway-name: agentweaver-gateway
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: aks-istio-ingress

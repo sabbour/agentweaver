@@ -32,7 +32,7 @@ spec:
         certificateRefs:
           # Managed cert Secret produced by DefaultDomainCertificate (same namespace).
           - kind: Secret
-            name: cert
+            name: agentweaver-tls
       allowedRoutes:
         namespaces:
           from: Same

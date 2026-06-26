@@ -9,5 +9,3 @@ spec:
   sandboxTemplateRef:
     name: agentweaver-sandbox
   replicas: 3
-  maxReplicas: 5
-  updateStrategy: OnReplenish

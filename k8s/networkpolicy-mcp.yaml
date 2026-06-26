@@ -15,7 +15,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              istio.io/gateway-name: agentweaver-gateway
+              gateway.networking.k8s.io/gateway-name: agentweaver-gateway
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: aks-istio-ingress
