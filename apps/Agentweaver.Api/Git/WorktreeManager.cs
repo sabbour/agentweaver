@@ -58,6 +58,53 @@ public sealed class WorktreeManager
 
     public static string BranchNameFor(RunId runId) => $"agentweaver/{runId}";
 
+    /// <summary>
+    /// Idempotent worktree provisioner. Returns immediately if the physical directory already
+    /// exists (normal first-run case). When the directory is missing — e.g. after a pod restart
+    /// wiped ephemeral storage while the git branch and DB row persist on the PVC — prunes any
+    /// stale git admin entry for the run branch (a stale entry blocks <c>git worktree add</c>
+    /// with "already checked out") and then recreates the worktree from the existing branch.
+    /// </summary>
+    /// <remarks>
+    /// This is the correct entry point for the orchestration shared-worktree re-provisioning
+    /// path. <see cref="AddWorktree"/> should only be called for genuinely new worktrees;
+    /// <see cref="EnsureWorktree"/> is safe to call any number of times.
+    /// </remarks>
+    public WorktreeInfo EnsureWorktree(string repositoryPath, string originatingBranch, RunId runId)
+    {
+        var worktreePath = Path.Combine(_basePath, runId.ToString());
+        var branchName = BranchNameFor(runId);
+
+        // Happy path: directory exists — valid worktree, nothing to do.
+        if (Directory.Exists(worktreePath))
+            return new WorktreeInfo { WorktreePath = worktreePath, BranchName = branchName };
+
+        // Physical directory missing (pod restart wiped ephemeral storage). Any git admin entry
+        // at .git/worktrees/<runId> is now stale and will cause `git worktree add` to fail with
+        // "already checked out at <missing path>". Prune it before recreating.
+        _logger.LogWarning(
+            "Orchestration worktree directory missing at '{WorktreePath}' (runId={RunId}); " +
+            "pruning stale git admin entry and recreating from branch '{BranchName}'",
+            worktreePath, runId, branchName);
+
+        // Use PruneWorktreeByName (looks up the admin entry directly by the worktree's NAME)
+        // rather than PruneWorktreesCheckedOutOnBranch (which must open each worktree's
+        // repository to inspect its HEAD and fails when the physical directory is missing).
+        PruneWorktreeByName(repositoryPath, runId.ToString());
+
+        // WorktreeCollection.Add(committishOrBranchSpec, name, ...) calls git_worktree_add
+        // which always creates a NEW branch named `name` (= runId.ToString()) as a side-effect,
+        // then does Commands.Checkout to switch the worktree to committishOrBranchSpec.
+        // The runId-named branch is a throw-away: all commits go to agentweaver/<runId>.
+        // On re-create after pod restart this orphaned branch still exists and git_worktree_add
+        // fails with NameConflictException. Delete it before calling AddWorktree.
+        DeleteOrphanedWorktreeBranch(repositoryPath, runId.ToString());
+
+        // AddWorktree skips branch creation when agentweaver/<runId> already exists (recovery: always).
+        // The recreated worktree checks out the existing branch, preserving all prior committed work.
+        return AddWorktree(repositoryPath, originatingBranch, runId);
+    }
+
     public WorktreeInfo AddWorktree(string repositoryPath, string originatingBranch, RunId runId)
     {
         Repository repo;
@@ -371,6 +418,101 @@ public sealed class WorktreeManager
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
         return IntegrationBranchResult.Success(integrationBranch, integrationCommit.Tree.Sha, patch.Content);
+    }
+
+    /// <summary>
+    /// Prunes the linked-worktree admin entry with the given <paramref name="worktreeName"/>
+    /// (the label stored in <c>.git/worktrees/&lt;worktreeName&gt;/</c>) without requiring the
+    /// physical worktree directory to exist. This is the correct variant to call during restart
+    /// recovery, where the physical directory has been wiped from ephemeral storage but the
+    /// git admin entry persists on the PVC — <see cref="PruneWorktreesCheckedOutOnBranch"/> cannot
+    /// be used in that scenario because it must open the worktree's repository to inspect its HEAD.
+    /// When LibGit2Sharp's Lookup rejects the entry (because git_worktree_validate fails for a
+    /// stale entry whose physical directory is gone), falls back to direct filesystem deletion of
+    /// the <c>.git/worktrees/&lt;name&gt;/</c> admin directory — which is exactly what
+    /// <c>git worktree prune</c> does internally. Best-effort: logs and returns on failure.
+    /// </summary>
+    private void PruneWorktreeByName(string repositoryPath, string worktreeName)
+    {
+        // First try LibGit2Sharp's built-in prune path (works when the worktree entry is "valid"
+        // per git_worktree_validate — i.e. the physical directory still exists).
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            var wt = repo.Worktrees[worktreeName];
+            if (wt is not null)
+            {
+                _logger.LogWarning(
+                    "Pruning stale git admin entry for worktree '{WorktreeName}' (via LibGit2Sharp)",
+                    worktreeName);
+                repo.Worktrees.Prune(wt, true);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "LibGit2Sharp prune failed for worktree '{WorktreeName}'; falling back to direct deletion",
+                worktreeName);
+        }
+
+        // Fallback: directly delete the admin directory. This mirrors what `git worktree prune`
+        // does — it removes .git/worktrees/<name>/ for any worktree whose physical path is gone.
+        // LibGit2Sharp's Lookup returns null for stale entries because git_worktree_validate()
+        // checks both the admin dir and the physical path, so the API path above is unavailable
+        // when the pod-restart wipe is exactly what we need to clean up.
+        var adminDir = Path.Combine(repositoryPath, ".git", "worktrees", worktreeName);
+        if (Directory.Exists(adminDir))
+        {
+            try
+            {
+                Directory.Delete(adminDir, recursive: true);
+                _logger.LogWarning(
+                    "Deleted stale worktree admin directory '{AdminDir}' (direct fallback)",
+                    adminDir);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to delete stale worktree admin directory '{AdminDir}'",
+                    adminDir);
+            }
+        }
+        else
+        {
+            _logger.LogDebug(
+                "No stale git admin entry found for worktree '{WorktreeName}'; nothing to prune",
+                worktreeName);
+        }
+    }
+
+    /// <summary>
+    /// Removes the orphaned branch <c>refs/heads/<paramref name="branchName"/></c> that
+    /// <c>git_worktree_add</c> creates as a side-effect when a worktree is provisioned via
+    /// <see cref="WorktreeCollection.Add(string, string, string, bool)"/>. The branch is a
+    /// throw-away: all commits go to the run's real branch (<c>agentweaver/&lt;runId&gt;</c>).
+    /// Without removing it, re-creating the worktree after a pod restart fails with
+    /// <see cref="LibGit2Sharp.NameConflictException"/> because <c>git_worktree_add</c> tries to
+    /// create the same branch again. Best-effort — logs and returns on failure.
+    /// </summary>
+    private void DeleteOrphanedWorktreeBranch(string repositoryPath, string branchName)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            var branch = repo.Branches[branchName];
+            if (branch is null) return;
+            repo.Branches.Remove(branch);
+            _logger.LogDebug(
+                "Removed orphaned throw-away worktree branch '{BranchName}'", branchName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to remove orphaned worktree branch '{BranchName}'; " +
+                "git worktree add may still fail with a NameConflictException",
+                branchName);
+        }
     }
 
     /// <summary>

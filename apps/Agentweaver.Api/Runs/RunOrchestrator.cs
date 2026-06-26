@@ -764,11 +764,11 @@ public sealed class RunOrchestrator
             var coordinator = await _runStore.GetAsync(coordId, ct).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(coordinator?.WorktreePath) && !string.IsNullOrEmpty(coordinator.WorktreeBranch))
             {
-                return new WorktreeInfo
-                {
-                    WorktreePath = coordinator.WorktreePath,
-                    BranchName = coordinator.WorktreeBranch,
-                };
+                // Use EnsureWorktree: after a pod restart the physical directory may be gone
+                // (ephemeral storage wiped) even though the path is stored in the DB.
+                // EnsureWorktree is a no-op when the directory already exists; if missing it
+                // prunes the stale git admin entry and recreates the worktree from the persisted branch.
+                return _worktreeManager.EnsureWorktree(repositoryPath, originatingBranch, coordId);
             }
         }
 
@@ -782,11 +782,8 @@ public sealed class RunOrchestrator
                 var coordinator = await _runStore.GetAsync(coordId2, ct).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(coordinator?.WorktreePath) && !string.IsNullOrEmpty(coordinator.WorktreeBranch))
                 {
-                    return new WorktreeInfo
-                    {
-                        WorktreePath = coordinator.WorktreePath,
-                        BranchName = coordinator.WorktreeBranch,
-                    };
+                    // Same idempotent ensure as the fast path above.
+                    return _worktreeManager.EnsureWorktree(repositoryPath, originatingBranch, coordId2);
                 }
 
                 // Create the shared orchestration worktree keyed to the coordinator run id.
