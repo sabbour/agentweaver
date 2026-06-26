@@ -204,6 +204,84 @@ public sealed class AgentweaverApiToolsTests
         result.Should().Contain("list_inbox failed:");
         result.Should().Contain("404");
     }
+
+    // =========================================================================
+    // list_decisions — present for non-Coordinator agent
+    // =========================================================================
+    [Fact]
+    public void ListDecisions_IsAvailableToNonCoordinatorAgent()
+    {
+        var http = new HttpClient(new FakeHttpHandler(HttpStatusCode.OK, "[]"))
+            { BaseAddress = new Uri("http://localhost/") };
+        // "tank" is a non-Coordinator agent — list_decisions must still be in the tool set.
+        var tools = AgentweaverApiTools.Build(ProjectId, "tank", "http://localhost", null, http);
+        tools.Select(t => t.Name).Should().Contain("list_decisions",
+            because: "list_decisions is before the Coordinator-only gate so all agents see it");
+    }
+
+    [Fact]
+    public async Task ListDecisions_On200_ReturnsJson()
+    {
+        const string payload = """[{"id":1,"agentName":"link","type":"architectural","title":"Use SQLite","content":"Chose SQLite for local dev.","status":"active"}]""";
+        var handler = new FakeHttpHandler(HttpStatusCode.OK, payload);
+        var tool = GetTool("list_decisions", handler);
+
+        var result = await InvokeAsync(tool, new());
+
+        result.Should().Contain("SQLite", because: "2xx should return the raw JSON body");
+    }
+
+    [Fact]
+    public async Task ListDecisions_OnNon2xx_ReturnsErrorStringWithoutThrowing()
+    {
+        var handler = new FakeHttpHandler(HttpStatusCode.ServiceUnavailable, """{"error":"DB locked"}""");
+        var tool = GetTool("list_decisions", handler);
+
+        var act = async () => await InvokeAsync(tool, new());
+        await act.Should().NotThrowAsync();
+
+        var result = await InvokeAsync(tool, new());
+        result.Should().Contain("503");
+        result.Should().NotBeEmpty();
+    }
+
+    // =========================================================================
+    // get_memory — present for non-Coordinator agent
+    // =========================================================================
+    [Fact]
+    public void GetMemory_IsAvailableToNonCoordinatorAgent()
+    {
+        var http = new HttpClient(new FakeHttpHandler(HttpStatusCode.OK, "[]"))
+            { BaseAddress = new Uri("http://localhost/") };
+        var tools = AgentweaverApiTools.Build(ProjectId, "trinity", "http://localhost", null, http);
+        tools.Select(t => t.Name).Should().Contain("get_memory",
+            because: "get_memory is before the Coordinator-only gate so all agents see it");
+    }
+
+    [Fact]
+    public async Task GetMemory_AllAgents_On200_ReturnsJson()
+    {
+        const string payload = """[{"id":1,"agentName":"smith","type":"learning","content":"Azure Files statx quirk"}]""";
+        var handler = new FakeHttpHandler(HttpStatusCode.OK, payload);
+        var tool = GetTool("get_memory", handler);
+
+        var result = await InvokeAsync(tool, new());
+
+        result.Should().Contain("statx", because: "2xx should return the raw JSON body");
+    }
+
+    [Fact]
+    public async Task GetMemory_OnNon2xx_ReturnsErrorStringWithoutThrowing()
+    {
+        var handler = new FakeHttpHandler(HttpStatusCode.InternalServerError, """{"error":"DB error"}""");
+        var tool = GetTool("get_memory", handler);
+
+        var act = async () => await InvokeAsync(tool, new());
+        await act.Should().NotThrowAsync();
+
+        var result = await InvokeAsync(tool, new());
+        result.Should().Contain("500");
+    }
 }
 
 /// <summary>Fake HttpMessageHandler returning a fixed status code and body for every request.</summary>

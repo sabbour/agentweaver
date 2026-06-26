@@ -41,5 +41,13 @@ internal static class AgentBasePrompt
         ask_question(question) to bubble the question or permission request up to the
         coordinator (which may answer on your behalf when Autopilot is on) or the user, then
         continue once you receive the answer.
+
+        TEAM COORDINATION — READ BEFORE YOU DECIDE, WRITE WHEN YOU DECIDE
+        Before committing to any notable cross-cutting implementation choice (API shape, tech
+        selection, file layout, integration pattern), call list_decisions, get_memory, and
+        list_inbox to check what peers have already decided or are proposing. This prevents
+        conflicting choices from landing in parallel runs.
+        When you make a significant cross-cutting decision of your own, call submit_decision
+        so other agents can see it before they make dependent choices.
         """;
 }

@@ -22,6 +22,8 @@ internal static class AgentweaverApiTools
         "update_session",
         "submit_inbox_entry",
         "list_inbox",
+        "list_decisions",
+        "get_memory",
         "merge_inbox_entry",
         "export_memory",
         "project_get",
@@ -185,6 +187,54 @@ internal static class AgentweaverApiTools
             "export_memory",
             "Export all project decisions, inbox entries, memories, and session context to .squad/ " +
             "and .agentweaver/context/. Call this as the final step of the Scribe pass.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Filter by decision type: architectural | scope | process | pattern | technical (optional — omit for all types)")] string? type = null,
+                [Description("Filter by status: active | superseded | archived (optional — defaults to active)")] string? status = null,
+                CancellationToken ct = default) =>
+            {
+                var qs = new List<string>();
+                qs.Add($"status={Uri.EscapeDataString(!string.IsNullOrWhiteSpace(status) ? status : "active")}");
+                if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
+                return await GetJsonAsync(http,
+                    $"api/projects/{projectId}/decisions?{string.Join("&", qs)}", ct).ConfigureAwait(false);
+            },
+            "list_decisions",
+            "Read the merged decision ledger for this project. Returns JSON with title, type, status, decided-by agent, and content. " +
+            "Before committing to a notable implementation choice that other agents depend on, call list_decisions " +
+            "(and get_memory + list_inbox) to check what the team has already decided — avoid re-litigating closed decisions.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Restrict to a specific agent's memory (optional — omit for all agents)")] string? agent = null,
+                [Description("Comma-separated tag filter (optional — omit for all tags)")] string? tags = null,
+                [Description("Filter by memory type: learning | pattern | core_context | update (optional)")] string? type = null,
+                CancellationToken ct = default) =>
+            {
+                string path;
+                if (!string.IsNullOrWhiteSpace(agent))
+                {
+                    var qs = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
+                    path = $"api/projects/{projectId}/agents/{Uri.EscapeDataString(agent)}/memory"
+                        + (qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty);
+                }
+                else
+                {
+                    var qs = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(tags)) qs.Add($"tags={Uri.EscapeDataString(tags)}");
+                    if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
+                    path = $"api/projects/{projectId}/memory"
+                        + (qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty);
+                }
+                return await GetJsonAsync(http, path, ct).ConfigureAwait(false);
+            },
+            "get_memory",
+            "Read agent memory for this project. Omit 'agent' to search across all agents (supports tag filter); " +
+            "supply 'agent' to fetch one agent's memory specifically. " +
+            "Before making a notable implementation choice, call get_memory " +
+            "(and list_decisions + list_inbox) to surface patterns, learnings, and gotchas peers have already recorded.");
 
         if (!string.Equals(agentName, "Coordinator", StringComparison.OrdinalIgnoreCase))
             yield break;
