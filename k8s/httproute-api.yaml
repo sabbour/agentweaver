@@ -1,12 +1,13 @@
-# HTTPRoute — routes /api/* to the Agentweaver API service.
+# HTTPRoute — routes /api/*, /auth/*, and OAuth 2.1 AS paths to the Agentweaver API service.
 #
-# All requests with path prefix /api are forwarded to agentweaver-api:8080.
-# The API container listens on 8080; no path rewrite is applied so the API
-# receives the full /api/... path (consistent with how Vite proxies it in dev).
+# All requests with path prefix /api or /auth are forwarded to agentweaver-api:8080.
+# OAuth 2.1 Authorization Server paths are also routed here:
+#   /.well-known/oauth-authorization-server  (RFC 8414 AS metadata, unauthenticated)
+#   /oauth/*                                 (authorize, token, register, revoke, jwks)
 #
 # Request path:
 #   Client -> Gateway (agentweaver-gateway) :443, TLS terminated
-#       -> HTTPRoute (this) PathPrefix:/api
+#       -> HTTPRoute (this)
 #       -> agentweaver-api Service :8080
 #       -> API pod :8080
 apiVersion: gateway.networking.k8s.io/v1
@@ -29,6 +30,15 @@ spec:
         - path:
             type: PathPrefix
             value: /auth
+        # RFC 8414 AS metadata discovery — unauthenticated, served by the API AS
+        - path:
+            type: Exact
+            value: /.well-known/oauth-authorization-server
+        # OAuth 2.1 AS endpoints: /oauth/authorize, /oauth/token,
+        # /oauth/register (RFC 7591), /oauth/revoke (RFC 7009), /oauth/jwks
+        - path:
+            type: PathPrefix
+            value: /oauth
       backendRefs:
         - name: agentweaver-api
           port: 8080

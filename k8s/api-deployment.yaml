@@ -75,6 +75,7 @@ spec:
               export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
               export Auth__GitHub__ClientId="${GitHub__ClientId}"
               export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
+              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
             - name: http
@@ -107,6 +108,17 @@ spec:
               value: https://${HOST}/auth/github/callback
             - name: Auth__GitHub__FrontendUrl
               value: https://${HOST}/
+            # OAuth 2.1 Authorization Server config (RFC 8414 / RFC 9728)
+            # Issuer must match the public host so iss claim == AS metadata URL.
+            - name: Auth__OAuth__Issuer
+              value: https://${HOST}
+            # Audience bound to the MCP resource (RFC 8707); RS validates aud on every request.
+            - name: Auth__OAuth__Audience
+              value: https://${HOST}/mcp
+            # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
+            # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
+            - name: Auth__Mcp__AllowGitHubPassthrough
+              value: "true"
             - name: OTEL_SERVICE_NAME
               value: agentweaver-api
             - name: OTEL_RESOURCE_ATTRIBUTES
