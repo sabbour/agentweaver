@@ -182,8 +182,8 @@ app.MapGet("/api/auth/github", async (
     });
 });
 
-// GET /api/github/repos — list authenticated user's GitHub repositories
-app.MapGet("/api/github/repos", async (
+// GET /api/github/accounts — authenticated user and their orgs, user first
+app.MapGet("/api/github/accounts", async (
     HttpContext httpContext,
     IGitHubTokenScopeProvider scopeProvider,
     IGitHubAccessTokenProvider accessTokenProvider,
@@ -201,14 +201,122 @@ app.MapGet("/api/github/repos", async (
     try
     {
         using var http = httpClientFactory.CreateClient("github");
+
+        // 1. Fetch the authenticated user's profile (login, name, avatar_url).
+        GitHubApiUser? apiUser;
+        using (var userReq = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user"))
+        {
+            userReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            userReq.Headers.UserAgent.ParseAdd("Agentweaver/1.0");
+            userReq.Headers.Accept.ParseAdd("application/vnd.github+json");
+
+            var userResp = await http.SendAsync(userReq, ct).ConfigureAwait(false);
+            if (!userResp.IsSuccessStatusCode)
+                return Results.Problem("Failed to fetch GitHub user profile.", statusCode: 500);
+
+            apiUser = await userResp.Content
+                .ReadFromJsonAsync<GitHubApiUser>(ct)
+                .ConfigureAwait(false);
+        }
+
+        if (apiUser is null)
+            return Results.Problem("GitHub user profile response was empty.", statusCode: 500);
+
+        var accounts = new List<GitHubAccountResponse>
+        {
+            new GitHubAccountResponse(
+                apiUser.Login ?? string.Empty,
+                apiUser.Name,
+                apiUser.AvatarUrl ?? string.Empty,
+                "user")
+        };
+
+        // 2. Fetch the user's orgs with pagination.
+        var page = 1;
+        const int perPage = 100;
+        while (true)
+        {
+            using var orgsReq = new HttpRequestMessage(HttpMethod.Get,
+                $"https://api.github.com/user/orgs?per_page={perPage}&page={page}");
+            orgsReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            orgsReq.Headers.UserAgent.ParseAdd("Agentweaver/1.0");
+            orgsReq.Headers.Accept.ParseAdd("application/vnd.github+json");
+
+            var orgsResp = await http.SendAsync(orgsReq, ct).ConfigureAwait(false);
+            if (!orgsResp.IsSuccessStatusCode) break;
+
+            var batch = await orgsResp.Content
+                .ReadFromJsonAsync<GitHubApiOrg[]>(ct)
+                .ConfigureAwait(false);
+
+            if (batch is null || batch.Length == 0) break;
+
+            accounts.AddRange(batch.Select(o => new GitHubAccountResponse(
+                o.Login ?? string.Empty,
+                o.Login, // GitHub org objects don't always return a display name; fall back to login
+                o.AvatarUrl ?? string.Empty,
+                "org")));
+
+            if (batch.Length < perPage) break;
+            page++;
+        }
+
+        return Results.Ok(accounts);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to list GitHub accounts for {User}", caller.User);
+        return Results.Problem("Failed to fetch GitHub accounts.", statusCode: 500);
+    }
+});
+
+// GET /api/github/repos — list GitHub repositories.
+// Optional ?account= query param selects whose repos to list:
+//   absent / own login → GET /user/repos?affiliation=owner (backward-compatible default)
+//   org login          → GET /orgs/{org}/repos?type=all
+app.MapGet("/api/github/repos", async (
+    HttpContext httpContext,
+    string? account,
+    IGitHubTokenScopeProvider scopeProvider,
+    IGitHubAccessTokenProvider accessTokenProvider,
+    IHttpClientFactory httpClientFactory,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var scope = scopeProvider.Resolve(caller.User);
+    var accessToken = await accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
+
+    if (string.IsNullOrWhiteSpace(accessToken))
+        return Results.Unauthorized();
+
+    // Determine which API path to use. caller.User is the GitHub login (set by
+    // GitHubTokenAuthMiddleware from the GitHub /user endpoint) so comparing against it
+    // avoids an extra round-trip to determine "is this account the authenticated user?"
+    var isOwnAccount = string.IsNullOrWhiteSpace(account)
+        || string.Equals(account, caller.User, StringComparison.OrdinalIgnoreCase);
+
+    try
+    {
+        using var http = httpClientFactory.CreateClient("github");
         var repos = new List<GitHubRepoResponse>();
         var page = 1;
         const int perPage = 100;
 
         while (true)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get,
-                $"https://api.github.com/user/repos?sort=pushed&per_page={perPage}&page={page}&affiliation=owner");
+            string url;
+            if (isOwnAccount)
+            {
+                url = $"https://api.github.com/user/repos?sort=pushed&per_page={perPage}&page={page}&affiliation=owner";
+            }
+            else
+            {
+                var encodedAccount = Uri.EscapeDataString(account!);
+                url = $"https://api.github.com/orgs/{encodedAccount}/repos?sort=pushed&per_page={perPage}&page={page}&type=all";
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
             request.Headers.UserAgent.ParseAdd("Agentweaver/1.0");
             request.Headers.Accept.ParseAdd("application/vnd.github+json");
@@ -269,3 +377,31 @@ file sealed class GitHubApiRepo
     [System.Text.Json.Serialization.JsonPropertyName("default_branch")]
     public string? DefaultBranch { get; set; }
 }
+
+/// <summary>Minimal GitHub API user shape for GET /api/github/accounts deserialization.</summary>
+file sealed class GitHubApiUser
+{
+    [System.Text.Json.Serialization.JsonPropertyName("login")]
+    public string? Login { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string? Name { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("avatar_url")]
+    public string? AvatarUrl { get; set; }
+}
+
+/// <summary>Minimal GitHub API org shape for GET /api/github/accounts deserialization.</summary>
+file sealed class GitHubApiOrg
+{
+    [System.Text.Json.Serialization.JsonPropertyName("login")]
+    public string? Login { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("avatar_url")]
+    public string? AvatarUrl { get; set; }
+}
+
+/// <summary>Account entry returned by GET /api/github/accounts.</summary>
+file sealed record GitHubAccountResponse(
+    [property: System.Text.Json.Serialization.JsonPropertyName("login")]   string Login,
+    [property: System.Text.Json.Serialization.JsonPropertyName("name")]    string? Name,
+    [property: System.Text.Json.Serialization.JsonPropertyName("avatar_url")] string AvatarUrl,
+    [property: System.Text.Json.Serialization.JsonPropertyName("type")]    string Type
+);
