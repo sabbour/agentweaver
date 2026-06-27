@@ -71,20 +71,42 @@ export default withMermaid({
       ],
       '/deep-dive/': [
         {
-          text: 'Deep Dive',
+          text: 'Foundations',
           items: [
             { text: 'System overview', link: '/deep-dive/00-system-overview' },
             { text: 'API core', link: '/deep-dive/api-core' },
             { text: 'Auth & security', link: '/deep-dive/auth-security' },
+          ],
+        },
+        {
+          text: 'Orchestration & agents',
+          items: [
             { text: 'Orchestration', link: '/deep-dive/orchestration' },
+            { text: 'Coordinator internals', link: '/deep-dive/coordinator-internals' },
+            { text: 'Workflow engine', link: '/deep-dive/workflow-engine' },
             { text: 'Team & casting', link: '/deep-dive/team-casting' },
             { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
+            { text: 'Review & merge', link: '/deep-dive/review-merge' },
+          ],
+        },
+        {
+          text: 'Execution & integration',
+          items: [
             { text: 'Sandbox', link: '/deep-dive/sandbox' },
+            { text: 'Git integration', link: '/deep-dive/git-integration' },
             { text: 'MCP server', link: '/deep-dive/mcp-server' },
-            { text: 'Frontend', link: '/deep-dive/frontend' },
             { text: 'Projects & workspaces', link: '/deep-dive/projects' },
-            { text: 'Infrastructure', link: '/deep-dive/infra-deployment' },
+          ],
+        },
+        {
+          text: 'Data & platform',
+          items: [
             { text: 'Data & persistence', link: '/deep-dive/data-persistence' },
+            { text: 'Memory & decisions', link: '/deep-dive/memory-decisions' },
+            { text: 'Events & observability', link: '/deep-dive/events-observability' },
+            { text: 'Frontend', link: '/deep-dive/frontend' },
+            { text: 'Infrastructure', link: '/deep-dive/infra-deployment' },
+            { text: 'Testing strategy', link: '/deep-dive/testing-strategy' },
           ],
         },
       ],
