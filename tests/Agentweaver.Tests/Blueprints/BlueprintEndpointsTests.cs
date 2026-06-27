@@ -331,4 +331,71 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         roster.Should().Contain(new[] { "backend-engineer", "docs-writer" });
         body.TryGetProperty("new_roles", out _).Should().BeFalse();
     }
+
+    [Fact]
+    public async Task GenerateBlueprint_BespokeRoleMissingFromRoster_IsAutoRostered_ReturnsBlueprint()
+    {
+        // Mirrors the live staging bug: the LLM declared 'job-match-analyst' in bespoke_roles but
+        // forgot to add it to roster. After the reconcile fix, generation must succeed and the
+        // auto-rostered bespoke id must appear in the returned roster.
+        _factory.Generator.Response = """
+            {
+              "id": "job-search-team",
+              "name": "Job Search Team",
+              "description": "Finds and compares jobs, generates a customized CV, and creates an interview guide.",
+              "roster": ["backend-engineer"],
+              "bespoke_roles": [
+                {
+                  "id": "job-match-analyst",
+                  "title": "Job Match Analyst",
+                  "charter": "Analyzes job postings against the user profile. Scores and ranks matches. Identifies skill gaps and strengths. Provides actionable recommendations."
+                }
+              ],
+              "workflows": ["software-delivery"],
+              "review_policy": "default",
+              "sandbox_profile": "default"
+            }
+            """;
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "Find jobs based on my profile, compare them, generate a customized CV, create an interview guide" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var blueprint = body.GetProperty("blueprint");
+        var roster = blueprint.GetProperty("roster").EnumerateArray()
+            .Select(r => r.GetString()).ToList();
+        roster.Should().Contain("job-match-analyst",
+            "the bespoke role declared in bespoke_roles must be auto-rostered when the LLM omits it from roster");
+    }
+
+    [Fact]
+    public async Task GenerateBlueprint_RosterRoleNeitherCatalogNorBespoke_IsStillRejected()
+    {
+        // Confirms that the reconcile step does NOT loosen validation for a roster role that has
+        // no catalog entry and no bespoke definition — it must still be rejected (no role minting).
+        const string unknownRoleId = "mystery-guru";
+        _factory.Generator.Response = $$"""
+            {
+              "id": "blueprint-still-bad",
+              "name": "Still Bad Team",
+              "description": "Rosters a role with no catalog entry and no bespoke definition.",
+              "roster": ["backend-engineer", "{{unknownRoleId}}"],
+              "bespoke_roles": [],
+              "workflows": ["software-delivery"],
+              "review_policy": "default",
+              "sandbox_profile": "default"
+            }
+            """;
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a mystery team" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("blueprint_generation_failed");
+
+        var catalog = _factory.Services.GetRequiredService<CatalogReader>();
+        catalog.HasRole(unknownRoleId).Should().BeFalse();
+    }
 }

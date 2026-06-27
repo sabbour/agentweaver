@@ -420,6 +420,40 @@ public sealed class BlueprintService
         string? generatedWorkflowYaml = null;
         var warnings = new List<string>(parsed.Warnings);
 
+        // RECONCILE: auto-roster bespoke roles that the LLM declared in bespoke_roles but
+        // omitted from roster. This is a recoverable omission on the generation path only —
+        // the shared Validate() remains strict for file-supplied blueprints (FR-040).
+        var rosterSet = new HashSet<string>(blueprint.Roster, StringComparer.OrdinalIgnoreCase);
+        var autoRostered = blueprint.BespokeRoles
+            .Where(b => !string.IsNullOrWhiteSpace(b.Id) &&
+                        !string.IsNullOrWhiteSpace(b.Charter) &&
+                        !_catalog.HasRole(b.Id) &&
+                        !rosterSet.Contains(b.Id))
+            .Select(b => b.Id)
+            .ToList();
+
+        if (autoRostered.Count > 0)
+        {
+            var augmentedRoster = blueprint.Roster.ToList();
+            augmentedRoster.AddRange(autoRostered);
+            blueprint = new Blueprint(
+                blueprint.Id,
+                blueprint.Name,
+                blueprint.Description,
+                augmentedRoster,
+                blueprint.Workflows,
+                blueprint.ReviewPolicy,
+                blueprint.SandboxProfile)
+            {
+                BespokeRoles = blueprint.BespokeRoles,
+            };
+            var ids = string.Join(", ", autoRostered);
+            warnings.Add($"Blueprint generation auto-rostered {autoRostered.Count} bespoke role(s): {ids}.");
+            _logger.LogInformation(
+                "Blueprint generation auto-rostered {Count} bespoke role(s): {Ids}",
+                autoRostered.Count, ids);
+        }
+
         // FR-063: the LLM signals "no library workflow fits" with an empty array. Treat an empty set,
         // an all-blank/"custom" set, or the legacy "default" sentinel as needing the fallback generator
         // so a stale ["default"] never suppresses CopilotWorkflowGenerator.

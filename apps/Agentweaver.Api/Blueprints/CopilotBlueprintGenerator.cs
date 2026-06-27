@@ -120,7 +120,8 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
               any id NOT in the catalog MUST also appear in "bespoke_roles" below.
             - "bespoke_roles": array of objects, each with "id" (string, kebab-case), "title" (string),
               and "charter" (string, 2-4 sentences). Only include roles NOT in the catalog. Omit or use
-              [] if all roster roles are from the catalog.
+              [] if all roster roles are from the catalog. Every id you place in bespoke_roles MUST ALSO
+              appear in the roster array.
             - "workflows": array of workflow id strings (only those whose process fits, or [] if none fit).
             - "review_policy": string. Use "default".
             - "sandbox_profile": string. One of: {{sandboxList}}.
