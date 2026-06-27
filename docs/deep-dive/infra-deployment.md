@@ -1,132 +1,375 @@
-# Infrastructure & Deployment — Deep Dive
+# Infrastructure & Deployment — Conceptual Deep Dive
 
-## Purpose & Scope
+## Purpose
 
-This document describes the Agentweaver AKS infrastructure, image flow, deployment pipeline, Kubernetes topology, secrets path, routing, and operational gotchas. It is based on the manifests in `k8s/*.yaml`, AKS scripts in `scripts/aks/*.sh`, the four production Dockerfiles, and `.dockerignore`.
+This guide explains the deployment logic behind Agentweaver's AKS infrastructure. It is intentionally not a manifest walkthrough. The goal is that an engineer who has never seen this repository could rebuild an equivalent deployment by understanding the responsibilities, boundaries, and operational trade-offs.
 
-The deployment target is the `agentweaver` namespace (`k8s/namespace.yaml:1-7`). The platform scripts default to resource group `agentweaver-rg`, cluster `agentweaver-aks-2`, ACR `agentweaverregistry`, region `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag derived from `git rev-parse --short HEAD` when `IMAGE_TAG` is not provided (`scripts/aks/00-variables.sh:4-30`).
+The deployment is built around five ideas:
 
-## Cluster & Platform (AKS, Gateway API/app routing, Cilium/ACNS, workload identity)
+1. **One public HTTPS entry point** routes browser, API, OAuth, and MCP traffic by path.
+2. **Three long-running application workloads** run separately: API, frontend/static host, and MCP server.
+3. **State is explicit and mounted**: SQLite data lives on a single-writer disk; shared workspaces live on a multi-writer file share.
+4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets through the CSI driver.
+5. **Networking starts closed**: default deny policies are opened only for the paths each component actually needs.
 
-`scripts/aks/10-create-cluster.sh` provisions the Azure resource group, ACR, and AKS cluster. The cluster is created with Azure CNI overlay, Cilium dataplane, ACNS enabled, Azure Linux nodes, Kata VM isolation, node auto-provisioning, app routing with Istio, Gateway API, a managed default domain, the Key Vault CSI add-on, OIDC issuer, workload identity, and ACR attachment (`scripts/aks/10-create-cluster.sh:58-80`). The script also installs the agent-sandbox CRDs/controller and waits for `SandboxClaim`, `SandboxTemplate`, and `SandboxWarmPool` CRDs (`scripts/aks/10-create-cluster.sh:89-95`).
+Default names used by the checked-in scripts are `agentweaver-rg`, `agentweaver-aks-2`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied.
 
-Important platform dependencies:
+## Rebuild mental model
 
-- **Gateway API/app routing**: the cluster is created with `--enable-app-routing-istio`, `--enable-gateway-api`, and `--enable-default-domain` (`scripts/aks/10-create-cluster.sh:72-74`). The `Gateway` uses `gatewayClassName: approuting-istio` and terminates HTTPS with the managed `agentweaver-tls` Secret (`k8s/gateway.yaml:23-38`).
-- **Cilium/ACNS**: egress policy includes Cilium FQDN allowlists. The cluster creation command includes `--network-dataplane cilium` and `--enable-acns`; ACNS is therefore required for this deployment shape (`scripts/aks/10-create-cluster.sh:64-68`).
-- **Workload identity**: `15-setup-identity.sh` creates the user-assigned managed identity, Key Vault, required secrets, Key Vault role assignment, enables OIDC/workload identity, and creates a federated credential for `system:serviceaccount:agentweaver:agentweaver-api` (`scripts/aks/15-setup-identity.sh:21-91`). `serviceaccount-api.yaml` carries the `azure.workload.identity/client-id` annotation populated through `envsubst` (`k8s/serviceaccount-api.yaml:1-9`).
-
-## Container Images
-
-`.dockerignore` excludes development secrets, Squad/Copilot state, node modules, build artifacts, tests, scripts, specs, and root Markdown files from build contexts (`.dockerignore:10-39`).
-
-| image | Dockerfile | build context | contents |
-|---|---|---|---|
-| `agentweaver-api` | `apps/Agentweaver.Api/Dockerfile` | repo root | .NET 10 API publish output plus an EF Core `MemoryDbContext` migration bundle, `kubectl`, `libgit2`, `/data`, `/app/logs`, non-root uid/gid 1000, listens on 8080 (`apps/Agentweaver.Api/Dockerfile:1-61`). |
-| `agentweaver-frontend` | `apps/web/Dockerfile` | repo root | React SPA build, VitePress docs build, ASP.NET Core static-file host, `apps/web/docker-entrypoint.sh`, non-root uid/gid 1000, default `AGENTWEAVER_API_URL=/api` (`apps/web/Dockerfile:1-50`). |
-| `agentweaver-mcp` | `apps/Agentweaver.Mcp/Dockerfile` | repo root | .NET 10 MCP server publish output, non-root uid/gid 1000, listens on 8080 (`apps/Agentweaver.Mcp/Dockerfile:1-31`). |
-| `agentweaver-sandbox` | `apps/agentweaver-sandbox/Dockerfile` | `apps/agentweaver-sandbox` | Ubuntu 24.04 sandbox base with curl, wget, git, build tools, Python, Node/npm, .NET 9, non-root user 1000, `/workspace`, and `sleep infinity` (`apps/agentweaver-sandbox/Dockerfile:1-36`). |
-
-### Build/import flow
-
-`20-build-push-images.sh` explicitly builds all four images with `az acr build`, so no local Docker daemon is required (`scripts/aks/20-build-push-images.sh:1-15`). The API, frontend, and MCP images use the repo root context because their Dockerfiles reference multiple subdirectories (`scripts/aks/20-build-push-images.sh:32-71`). The sandbox image uses `apps/agentweaver-sandbox` as its self-contained context (`scripts/aks/20-build-push-images.sh:76-86`).
-
-Unverified: the requested fact “unchanged images are retagged via `az acr import`” is not present in the scoped AKS scripts. The current checked-in `20-build-push-images.sh` rebuilds and pushes each image with `az acr build` (`scripts/aks/20-build-push-images.sh:36-86`).
-
-## Deployment Pipeline
-
-```mermaid
-flowchart LR
-  Vars["00-variables.sh<br/>derive/export env"] --> Build["20-build-push-images.sh<br/>az acr build"]
-  Build --> Import["Optional retag/import<br/>Unverified in scripts"]
-  Import --> Render["30-deploy.sh<br/>envsubst manifests"]
-  Render --> Apply["kubectl apply<br/>ordered resources"]
-  Apply --> Rollout["kubectl rollout status<br/>api/frontend/mcp"]
-  Rollout --> Verify["40-verify.sh<br/>pods, routes, secrets, RBAC, HTTP"]
-```
-
-`30-deploy.sh` prints the active kubectl context, namespace, ACR login server, and image tag before changing cluster state (`scripts/aks/30-deploy.sh:19-25`). It requires `envsubst` and fails fast if `IDENTITY_CLIENT_ID`, `KEYVAULT_NAME`, or `TENANT_ID` are missing (`scripts/aks/30-deploy.sh:27-40`).
-
-The deploy script applies the namespace, creates or reuses the managed `DefaultDomainCertificate`, derives `HOST` from its status, and renders every `k8s/*.yaml` into `scripts/aks/.rendered` with exactly these substitutions: `HOST`, `ACR_LOGIN_SERVER`, `IMAGE_TAG`, `IDENTITY_CLIENT_ID`, `KEYVAULT_NAME`, and `TENANT_ID` (`scripts/aks/30-deploy.sh:42-85`). It then applies resources in order: service account, SecretProviderClasses, RBAC, quota, PVCs; network policies and egress allowlists; services, gateway, routes, backup CronJob; sandbox template/warm pool when CRDs exist; and finally the deployments (`scripts/aks/30-deploy.sh:88-147`). Rollout waits cover API, frontend, and MCP deployments (`scripts/aks/30-deploy.sh:149-157`).
-
-`40-verify.sh` checks pod counts, gateway `Programmed=True`, HTTPRoute `Accepted=True` and `ResolvedRefs=True`, HTTP smoke tests, SecretProviderClass existence/status, API RBAC, and sandbox CRDs/resources (`scripts/aks/40-verify.sh:21-109`).
-
-## Kubernetes Topology
+At a high level, Agentweaver is a private application stack behind a public Gateway:
 
 ```mermaid
 flowchart TD
-  Client["Client HTTPS"] --> Gateway["Gateway<br/>agentweaver-gateway:443"]
-  Gateway --> ApiRoute["HTTPRoute<br/>agentweaver-api-route"]
-  Gateway --> FrontendRoute["HTTPRoute<br/>agentweaver-frontend-route"]
-  Gateway --> McpRoute["HTTPRoute<br/>agentweaver-mcp-route"]
+  Client["User / MCP client<br/>HTTPS"] --> Gateway["Gateway API listener<br/>TLS termination"]
 
-  ApiRoute --> ApiSvc["Service<br/>agentweaver-api:8080"]
-  FrontendRoute --> FrontendSvc["Service<br/>agentweaver-frontend:80"]
-  McpRoute --> McpSvc["Service<br/>agentweaver-mcp:8080"]
+  Gateway --> ApiRoute["API and OAuth routes"]
+  Gateway --> McpRoute["MCP routes"]
+  Gateway --> FrontendRoute["Frontend catch-all route"]
 
-  ApiSvc --> ApiDeploy["Deployment<br/>agentweaver-api<br/>1 replica/Recreate"]
-  FrontendSvc --> FrontendDeploy["Deployment<br/>agentweaver-frontend<br/>2 replicas"]
-  McpSvc --> McpDeploy["Deployment<br/>agentweaver-mcp<br/>1 replica"]
+  ApiRoute --> ApiSvc["API Service"]
+  McpRoute --> McpSvc["MCP Service"]
+  FrontendRoute --> FrontendSvc["Frontend Service"]
 
-  ApiDeploy --> DataPVC["PVC<br/>agentweaver-data RWO 10Gi"]
-  ApiDeploy --> WorkspacePVC["PVC<br/>agentweaver-workspace RWX 50Gi"]
-  Cron["CronJob<br/>agentweaver-sqlite-backup"] --> DataPVC
-  SandboxTemplate["SandboxTemplate<br/>kata-vm-isolation"] --> WorkspacePVC
-  WarmPool["SandboxWarmPool<br/>3 replicas"] --> SandboxTemplate
+  ApiSvc --> ApiPod["API pod<br/>orchestration, auth, persistence"]
+  McpSvc --> McpPod["MCP pod<br/>resource server"]
+  FrontendSvc --> WebPods["Frontend pods<br/>SPA + docs static host"]
+
+  ApiPod --> DataPVC["RWO data PVC<br/>agentweaver.db + memory.db"]
+  ApiPod --> WorkspacePVC["RWX workspace PVC<br/>worktrees + sandbox workspace"]
+  SandboxPool["Warm sandbox pool<br/>Kata-isolated pods"] --> WorkspacePVC
+
+  KeyVault["Azure Key Vault"] --> CSI["Secrets Store CSI"]
+  CSI --> ApiPod
+  CSI --> McpPod
+
+  ACR["Azure Container Registry"] --> ApiPod
+  ACR --> McpPod
+  ACR --> WebPods
+  ACR --> SandboxPool
 ```
 
-The API service selects `app: agentweaver-api` and exposes port 8080 (`k8s/api-service.yaml:1-18`). The frontend service maps service port 80 to pod port 8080 (`k8s/frontend-service.yaml:1-18`). The MCP service exposes port 8080 (`k8s/mcp-service.yaml:1-18`).
+If rebuilding this from scratch, create the platform first, then identity and secrets, then images, then Kubernetes primitives in dependency order. The application deployments are deliberately last because they depend on identity, persistent volumes, routes, and secrets being ready.
 
-The API deployment is a single replica with `Recreate` strategy because SQLite is single-writer on an RWO PVC (`k8s/api-deployment.yaml:9-15`). It runs an EF migration initContainer from the API image before starting the API process (`k8s/api-deployment.yaml:34-68`), mounts `agentweaver-data`, `agentweaver-workspace`, temp/log emptyDirs, and the CSI secrets volume (`k8s/api-deployment.yaml:144-203`). The frontend deployment runs two replicas (`k8s/frontend-deployment.yaml:9-27`). The MCP deployment runs one replica on the same service account as the API and mounts the MCP CSI secrets volume (`k8s/mcp-deployment.yaml:19-23`, `k8s/mcp-deployment.yaml:96-103`).
+Where this lives: `scripts/aks`, `k8s`.
 
-Storage is split between `agentweaver-data` (`ReadWriteOnce`, `managed-csi-premium`, 10Gi) and `agentweaver-workspace` (`ReadWriteMany`, `azurefile-csi-premium-uid1000`, 50Gi) (`k8s/pvc-data.yaml:1-12`, `k8s/pvc-workspace.yaml:1-12`). The custom workspace StorageClass sets Azure Files mount options for uid/gid 1000 because the built-in class mounts root-owned and `mountOptions` are immutable (`k8s/storageclass-workspace.yaml:1-15`, `k8s/storageclass-workspace.yaml:25-32`).
+## AKS platform choices
 
-The backup CronJob runs daily at `17 3 * * *`, performs a SQLite `.backup` into `/data/backups`, and deletes backups older than 14 days (`k8s/backup-cronjob.yaml:1-12`, `k8s/backup-cronjob.yaml:33-39`).
+### Why AKS with app routing, Gateway API, and Istio?
 
-## Secrets & Workload Identity
+Agentweaver needs public HTTPS, path-based routing, TLS certificate management, and clean separation between routing intent and individual services. Gateway API gives a Kubernetes-native model for that:
+
+- A **Gateway** says “this namespace owns an HTTPS listener for this host”.
+- **HTTPRoutes** say “these paths go to these services”.
+- Services remain ordinary internal Kubernetes load-balancing points.
+
+The checked-in cluster creation enables AKS app routing with the Istio variant, Gateway API, and the managed default domain. That means the cluster can provision the gateway implementation and certificate plumbing without hand-maintaining an ingress controller, public load balancer, and TLS cert chain separately.
+
+The trade-off is platform coupling: this deployment assumes AKS app routing behavior, the `approuting-istio` GatewayClass, and the managed default-domain certificate resource. A rebuild on another Kubernetes distribution would need an equivalent GatewayClass and certificate issuer.
+
+### Why Azure CNI overlay, Cilium, and ACNS?
+
+The network model uses both Kubernetes NetworkPolicy and Cilium FQDN-aware policies. Kubernetes NetworkPolicy is good at pod/namespace/IP/port rules, but it cannot express “allow `api.github.com` and Azure OpenAI domains by DNS name”. Cilium can.
+
+That is why the cluster is created with Azure CNI overlay, the Cilium dataplane, and ACNS. Overlay networking avoids consuming a VNet IP for every pod, while Cilium provides the dataplane features needed for DNS-aware egress controls.
+
+The operational gotcha is that the manifests are not merely “generic Kubernetes networking”. If Cilium/ACNS is missing, the Cilium FQDN allowlists will not enforce as intended and sandbox/app egress behavior will differ.
+
+### Why workload identity and Key Vault CSI?
+
+Secrets are cloud-owned data, not Kubernetes manifest data. The desired flow is:
+
+1. Store secrets in Azure Key Vault.
+2. Grant a user-assigned managed identity permission to read those secrets.
+3. Federate the Kubernetes service account to that managed identity through the AKS OIDC issuer.
+4. Mount selected Key Vault secrets into pods through the Secrets Store CSI driver.
+
+This avoids committing secrets, avoids long-lived Azure credentials inside containers, and lets Azure RBAC decide what the pod identity can read.
+
+The trade-off is bootstrapping complexity. The service account annotation, pod label for workload identity injection, federated credential subject, Key Vault RBAC assignment, tenant ID, and CSI `SecretProviderClass` must all agree. If one link is wrong, the pod can start but fail to mount secrets or fail the application startup guard.
+
+### Why Kata VM isolation and agent-sandbox CRDs?
+
+Agentweaver launches agent work in sandbox pods. Those pods run tools such as git, language runtimes, and package managers, so they are more exposed than the API/frontend/MCP pods. Kata VM isolation provides a stronger boundary than a normal Linux container runtime by putting each sandbox in a lightweight VM boundary.
+
+The sandbox controller adds higher-level objects such as sandbox templates and warm pools. The template defines the shape of sandbox pods; the warm pool keeps a few ready so first-use latency is lower.
+
+The trade-off is platform maturity and availability: the deploy script only applies sandbox resources when the CRDs are installed. A rebuild can run the core web/API/MCP stack without the sandbox CRDs, but agent execution that depends on Kubernetes sandboxes will not behave the same.
+
+Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/secretprovider-mcp.yaml`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`.
+
+## Workloads and their responsibilities
+
+### API workload
+
+The API is the authoritative backend. It handles orchestration, project/workspace operations, authentication/OAuth authorization-server endpoints, memory/decision data, sandbox lifecycle calls, and durable run state.
+
+It runs as **one replica** with a **Recreate** deployment strategy because the checked-in deployment uses SQLite on a ReadWriteOnce disk. The core problem is multi-attach and single-writer safety: two API pods writing the same SQLite files on an RWO volume would be unsafe and often impossible to mount. Recreate forces the old pod to release the disk before a new pod attaches it.
+
+Before the API starts, an init container runs the EF migration bundle for the memory database. This keeps schema migration close to deployment and ensures the database is upgraded before the application accepts traffic. The API container itself uses a read-only root filesystem, drops Linux capabilities, and mounts writable locations explicitly for data, workspace, logs, and scratch space.
+
+### Frontend workload
+
+The frontend image contains two things:
+
+- the React/Vite single-page app;
+- the generated VitePress documentation site.
+
+Both are served by a small ASP.NET Core static-file host. The frontend is safe to run with two replicas because it does not own writable application state. Runtime configuration is injected through a generated `env-config.js`, so the browser can call the API through the public `/api` path rather than a baked build-time URL.
+
+**Docs-build-in-frontend gotcha:** documentation is built into the frontend container image. Updating Markdown under `docs` does not update the deployed site until the frontend image is rebuilt and rolled out. Conversely, the frontend Docker build context must include `docs`; excluding it would produce an image without the published docs site.
+
+### MCP workload
+
+The MCP server is a separate resource-server process. It exposes the MCP endpoint and validates tokens issued by the API's OAuth authorization server. It uses the internal API service for API calls and JWKS lookup, while its issuer and audience settings are pinned to the public host so token claims match what clients see externally.
+
+This split keeps MCP protocol concerns out of the frontend and avoids making the API process also serve as the MCP resource server. The cost is that routing, identity, network policy, and OAuth metadata must all agree on which paths belong to the authorization server and which paths belong to the MCP resource server.
+
+### Sandbox workload
+
+Sandbox pods are not normal always-on services. They are ephemeral execution environments created from a template and optionally kept warm by a warm pool. They mount the shared workspace volume, run as non-root, disable service account token mounting, use a read-only root filesystem, and rely on an explicit temporary volume for writable scratch space.
+
+The API has narrow RBAC for creating and interacting with these sandbox resources. That is intentional: the API needs to create sandbox claims/pods and exec into them, but it should not be a broad cluster administrator.
+
+Where this lives: `k8s/api-deployment.yaml`, `k8s/frontend-deployment.yaml`, `k8s/mcp-deployment.yaml`, `k8s/rbac-api.yaml`, `apps/web/Dockerfile`, `apps/Agentweaver.Web/Program.cs`.
+
+## Request routing logic
+
+The public routing model is path-based. The Gateway terminates TLS once, then HTTPRoutes select the backend service.
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant G as Gateway HTTPS listener
+  participant R as HTTPRoute selection
+  participant S as Kubernetes Service
+  participant P as Pod
+
+  C->>G: HTTPS request for configured host
+  G->>G: Terminate TLS with managed cert
+  G->>R: Evaluate routes for same host
+  alt /api, /auth, /oauth, AS/OIDC discovery
+    R->>S: agentweaver-api:8080
+    S->>P: API pod
+  else /mcp or protected-resource metadata
+    R->>S: agentweaver-mcp:8080
+    S->>P: MCP pod
+  else everything else
+    R->>S: agentweaver-frontend:80
+    S->>P: Frontend pod on 8080
+  end
+```
+
+The important design detail is **specific routes before the catch-all**. The frontend route matches `/`, so it is intentionally the fallback. More specific API and MCP routes must exist for protocol paths that should not be swallowed by the SPA host.
+
+### API routes
+
+The API owns:
+
+- REST/API calls under `/api`;
+- GitHub auth callback and related browser auth paths under `/auth`;
+- OAuth authorization-server endpoints under `/oauth`;
+- authorization-server and OpenID discovery documents under `/.well-known/...`.
+
+This is because the API is the OAuth issuer. Clients must discover authorization, token, registration, revocation, and JWKS endpoints from the same public issuer host that appears in token claims.
+
+### MCP routes
+
+The MCP server owns:
+
+- MCP traffic under `/mcp`;
+- protected-resource metadata discovery paths;
+- a public health convenience path that is rewritten to the MCP server's internal health endpoint.
+
+The MCP server is the OAuth resource server. It validates tokens but does not mint them. For public metadata, clients need to discover the protected resource and then follow that metadata back to the API authorization server.
+
+### Frontend route
+
+The frontend owns everything else. It serves static assets, the React SPA fallback, and the generated docs under `/docs`. Unknown non-doc application paths return the SPA shell so client-side routing can handle them. Unknown docs paths return 404 rather than the SPA shell, which keeps broken documentation links visible.
+
+Where this lives: `k8s/httproute-api.yaml`, `k8s/mcp-httproute.yaml`, `k8s/httproute-frontend.yaml`, `k8s/frontend-service.yaml`, `apps/Agentweaver.Web/Program.cs`.
+
+## Secrets and workload identity
+
+The secret path is deliberately indirect:
 
 ```mermaid
 flowchart LR
-  KV["Azure Key Vault"] --> CSI["Secrets Store CSI<br/>SecretProviderClass"]
-  CSI --> K8sSecret["Kubernetes Secret<br/>agentweaver-secrets / agentweaver-mcp-secrets"]
-  CSI --> Volume["/mnt/secrets-store files"]
-  Volume --> Startup["container startup shell<br/>cat files into env"]
-  Startup --> ApiMcp["API/MCP process"]
-  SA["ServiceAccount<br/>agentweaver-api"] --> WI["Azure Workload Identity"]
-  WI --> CSI
+  KV["Azure Key Vault"] --> RBAC["Key Vault Secrets User<br/>managed identity"]
+  SA["Kubernetes ServiceAccount"] --> FED["OIDC federated credential"]
+  FED --> RBAC
+  RBAC --> CSI["Secrets Store CSI driver"]
+  CSI --> Files["Mounted secret files"]
+  CSI --> K8sSecret["Synced Kubernetes Secret"]
+  Files --> Startup["Startup shell exports env vars"]
+  Startup --> Process["API / MCP process"]
 ```
 
-`15-setup-identity.sh` refuses to write placeholder values and requires `MCP_API_KEY`, `MCP_AUTH_API_KEY`, `MCP_AUTH_USER`, `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET` before storing them in Key Vault (`scripts/aks/15-setup-identity.sh:9-19`, `scripts/aks/15-setup-identity.sh:53-58`). It grants the managed identity the `Key Vault Secrets User` role (`scripts/aks/15-setup-identity.sh:60-66`) and federates the AKS service account through OIDC (`scripts/aks/15-setup-identity.sh:68-91`).
+The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
-The API `SecretProviderClass` reads Key Vault secrets `mcp-api-key`, `github-client-id`, `github-client-secret`, and `mcp-oauth-signing-key`, and syncs them into Kubernetes Secret `agentweaver-secrets` (`k8s/secret-provider-class.yaml:1-42`). The MCP `SecretProviderClass` reads `mcp-api-key`, `mcp-auth-api-key`, and `mcp-auth-user`, and syncs them into `agentweaver-mcp-secrets` (`k8s/secretprovider-mcp.yaml:1-37`). Do not print real secret values.
+The API reads the MCP API key, GitHub OAuth client settings, and OAuth signing key. The MCP server reads its auth user and MCP-related keys. Both use the same workload identity service account, but separate SecretProviderClasses define which Key Vault objects are mounted for each workload.
 
-At container start, the API reads CSI-mounted files and exports `Auth__ApiKey`, `Mcp__ApiKey`, GitHub OAuth settings, and `Auth__OAuth__SigningKey` before launching `Agentweaver.Api.dll` (`k8s/api-deployment.yaml:73-85`). The MCP deployment similarly reads `mcp-auth-user` into `Auth__User` before launching `Agentweaver.Mcp.dll` (`k8s/mcp-deployment.yaml:32-38`).
+Rotation caveat: the CSI driver can refresh mounted files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
-Rotation caveat: the CSI configuration uses a two-minute rotation poll interval (`k8s/secret-provider-class.yaml:6-8`, `k8s/secretprovider-mcp.yaml:6-8`), but the deployments export secrets into process environment variables at startup. A rotated file value will not change an already-exported process environment value; restart pods unless the application re-reads the mounted file. The OAuth signing-key script says CSI polling can pick up a new version without restart only if the app re-reads `Auth__OAuth__SigningKey` on each token mint (`scripts/aks/16-provision-oauth-signing-key.sh:84-88`).
+OAuth signing-key caveat: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens.
 
-## Networking & Egress
+Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-oauth-signing-key.sh`, `k8s/serviceaccount-api.yaml`, `k8s/secret-provider-class.yaml`, `k8s/secretprovider-mcp.yaml`.
 
-The namespace uses default-deny ingress for Agentweaver pods except gateway pods and default-deny egress for API, MCP, and frontend (`k8s/networkpolicy-default-deny.yaml:1-38`). DNS egress to kube-dns is allowed for app pods (`k8s/networkpolicy-default-deny.yaml:39-70`). Internal app egress to Agentweaver pods on 8080 is allowed (`k8s/networkpolicy-default-deny.yaml:71-97`), and API/MCP are allowed external HTTPS egress on 443 (`k8s/networkpolicy-default-deny.yaml:98-120`).
+## Storage and persistence
 
-Ingress is intentionally narrow: gateway-to-API, gateway-to-frontend, and gateway-to-MCP allow traffic from the app-routing/Istio gateway identity to the relevant pods (`k8s/networkpolicy-default-deny.yaml:121-197`, `k8s/networkpolicy-mcp.yaml:1-25`). MCP-to-API ingress is separately allowed for JWKS validation at `http://agentweaver-api:8080/oauth/jwks` (`k8s/networkpolicy-default-deny.yaml:146-172`).
+Agentweaver separates storage by access pattern.
 
-Sandbox pods have deny-ingress and an egress allowlist for DNS plus the GitHub public IP range `140.82.112.0/20` on 443 (`k8s/networkpolicy-sandbox.yaml:1-50`). A Cilium FQDN policy allows sandbox egress to `api.github.com`, npm registry domains, and Azure AI/OpenAI/Cognitive Services/model domains (`k8s/cilium-network-policy-sandbox.yaml:1-48`). App pods also have a Cilium FQDN allowlist for GitHub, Azure AI/OpenAI/Cognitive Services/model domains, and `otel-collector.observability.svc.cluster.local`, with ports 443 and 4317 (`k8s/serviceentry-telemetry.yaml:1-47`).
+### Data PVC: single-writer SQLite state
 
-## Routing
+The data PVC is a premium managed disk mounted by the API. It holds the operational SQLite database and, by default, the EF-backed `memory.db` in the same `/data` directory.
 
-The `Gateway` is the public HTTPS entry point. It terminates TLS on port 443 for `${HOST}` using the managed `agentweaver-tls` certificate, and route attachment is restricted to the same namespace (`k8s/gateway.yaml:16-38`).
+The design optimizes for simplicity and local transactional behavior: SQLite is easy to operate, fast for a single backend, and avoids a managed database dependency. The trade-off is horizontal scaling. Because this is a single-writer storage model, the API is one replica and deployment uses Recreate. If you rebuild this for high availability, the equivalent design change is not “add more API replicas”; it is “move authoritative state to a multi-writer database such as SQL Server/PostgreSQL and revisit migrations, locks, and failure modes”.
 
-Routes:
+### Workspace PVC: shared worktrees and sandbox files
 
-- **API**: `agentweaver-api-route` sends `/api`, `/auth`, OAuth/OIDC discovery paths, and `/oauth/*` to service `agentweaver-api:8080` (`k8s/httproute-api.yaml:1-60`). Discovery includes `/.well-known/oauth-authorization-server`, `/.well-known/oauth-authorization-server/mcp`, `/.well-known/openid-configuration`, and `/.well-known/openid-configuration/mcp` (`k8s/httproute-api.yaml:36-56`).
-- **MCP**: `agentweaver-mcp-route` rewrites exact `/mcp/health` to `/healthz`, routes RFC 9728 protected-resource metadata at both root and `/mcp`-suffixed forms, and routes `/mcp` traffic to service `agentweaver-mcp:8080` (`k8s/mcp-httproute.yaml:1-47`).
-- **Frontend**: `agentweaver-frontend-route` is a catch-all `/` route to service `agentweaver-frontend:80`; the manifest notes Gateway API route specificity keeps more specific API routes ahead of this catch-all (`k8s/httproute-frontend.yaml:1-35`).
+The workspace PVC is an Azure Files share mounted ReadWriteMany. The API and sandbox pods both need to see project workspaces and generated files, which makes a shared filesystem a simpler fit than copying files between pods.
 
-## Operations & Gotchas
+The custom StorageClass exists because ownership matters. Containers run as uid/gid 1000 with locked-down filesystems. A default Azure Files mount can appear root-owned and ignore pod `fsGroup`, causing ordinary workspace writes to fail. The repo-owned StorageClass pins mount options so files are usable by the non-root containers.
 
-- **Deploy environment**: `RESOURCE_GROUP`, `CLUSTER_NAME`, `ACR_NAME`, `LOCATION`, `NAMESPACE`, `IMAGE_TAG`, `ACR_LOGIN_SERVER`, `KEYVAULT_NAME`, `TENANT_ID`, and `IDENTITY_CLIENT_ID` are exported by `00-variables.sh`; `IMAGE_TAG` defaults to the short Git SHA (`scripts/aks/00-variables.sh:18-43`). `30-deploy.sh` requires `IDENTITY_CLIENT_ID`, `KEYVAULT_NAME`, and `TENANT_ID` (`scripts/aks/30-deploy.sh:32-40`).
-- **Kubectl context**: `30-deploy.sh` prints `kubectl config current-context` before applying resources; verify it points at the intended cluster before running the script (`scripts/aks/30-deploy.sh:19-25`).
-- **No kubectl patch rule**: do not patch immutable cluster-managed storage in place. The workspace StorageClass documents that `mountOptions` are immutable and uses a repo-owned replacement class so changes go through manifests/GitOps instead (`k8s/storageclass-workspace.yaml:9-15`).
-- **Apply order matters**: workload identity, SecretProviderClasses, RBAC, quotas, and PVCs are applied before deployments; deployments are applied only after gateway readiness and sandbox resources (`scripts/aks/30-deploy.sh:88-147`).
-- **Backup job**: `agentweaver-sqlite-backup` runs from `alpine:3.20`, installs `sqlite`, writes timestamped backups under `/data/backups`, and prunes backups older than 14 days (`k8s/backup-cronjob.yaml:27-39`).
-- **Sandbox CRDs are conditional at deploy time**: `30-deploy.sh` applies `sandbox-template.yaml` and `sandbox-warmpool.yaml` only if `extensions.agents.x-k8s.io` resources are available (`scripts/aks/30-deploy.sh:122-129`). The template uses `runtimeClassName: kata-vm-isolation`, disables service account token automount, mounts the workspace PVC, and runs the sandbox image read-only/rootless (`k8s/sandbox-template.yaml:15-56`); the warm pool keeps three sandboxes (`k8s/sandbox-warmpool.yaml:1-12`).
+StorageClass gotcha: mount options are immutable. Do not patch a cluster-managed built-in class and hope existing PVCs change. Define the desired class, create/recreate the PVC as needed, and keep the storage behavior under version control.
+
+### Backups
+
+The checked-in backup job runs a SQLite online backup for `agentweaver.db`, writes timestamped files under the same data PVC, and prunes old matching backups.
+
+Verified: `memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the checked-in CronJob. The job backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not separately back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables.
+
+Unverified: this document does not establish that any external volume snapshot, cloud backup policy, or off-cluster backup captures `memory.db`. Based only on checked-in Kubernetes manifests, `memory.db` should be treated as not separately backed up.
+
+Unverified: backups are written under the same `/data` PVC in the checked-in CronJob. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but this document does not verify protection against loss of the entire PVC.
+
+Where this lives: `k8s/pvc-data.yaml`, `k8s/pvc-workspace.yaml`, `k8s/storageclass-workspace.yaml`, `k8s/backup-cronjob.yaml`, `apps/Agentweaver.Api/Program.cs`.
+
+## Network policy model
+
+The network design starts with “nothing can talk unless there is a reason”. That is the safest default for a system that runs agent-controlled work.
+
+### Ingress
+
+Application pods are default-denied for ingress. Only the Gateway implementation is allowed to reach API, frontend, and MCP pods on their HTTP ports. MCP is also allowed to call the API internally for JWKS validation.
+
+This creates a clean public boundary:
+
+- external clients enter through the Gateway;
+- the Gateway reaches services through narrow pod-level allows;
+- MCP-to-API is an explicit east-west exception, not an accidental side effect;
+- sandbox pods do not accept inbound traffic.
+
+### Egress
+
+Application pods are default-denied for egress and then granted:
+
+- DNS to kube-dns;
+- internal Agentweaver service traffic on the app port;
+- external HTTPS where required;
+- Cilium FQDN allows for GitHub, Azure AI/OpenAI/Cognitive Services/model endpoints, and telemetry.
+
+Sandbox pods are even narrower. They get DNS, a limited GitHub IP allowance, and Cilium FQDN-based egress for GitHub API, npm registry domains, and Azure AI/model endpoints. They also run without a service account token, so a compromised sandbox has less ambient Kubernetes authority.
+
+### Operational gotchas
+
+- DNS must be allowed for FQDN policies to work; blocking DNS breaks name-based egress.
+- FQDN allowlists depend on Cilium. Rebuilding on a non-Cilium dataplane requires a different egress-control strategy.
+- Broad “allow HTTPS anywhere” rules are easier but weaken the sandbox boundary. If you add one for debugging, remove it rather than letting it become permanent.
+- Gateway pods are created by the app-routing implementation, so label/namespace assumptions must match the actual Gateway implementation.
+
+Where this lives: `k8s/networkpolicy-default-deny.yaml`, `k8s/networkpolicy-mcp.yaml`, `k8s/networkpolicy-sandbox.yaml`, `k8s/cilium-network-policy-sandbox.yaml`, `k8s/serviceentry-telemetry.yaml`.
+
+## Build, retag, deploy, rollout logic
+
+The deployment pipeline is easiest to understand as a tag-convergence problem. A release should put every workload on a known image tag, then apply manifests that all refer to that same tag.
+
+```mermaid
+flowchart LR
+  Vars["Resolve release variables<br/>cluster, ACR, namespace, tag"] --> Images["Ensure images exist for tag"]
+  Images --> BuildChanged["Build changed images"]
+  Images --> RetagUnchanged["Retag/import unchanged images"]
+  BuildChanged --> Render["Render manifests with host, ACR, tag, identity"]
+  RetagUnchanged --> Render
+  Render --> Prereqs["Apply prerequisites<br/>identity, secrets, RBAC, PVCs, policies"]
+  Prereqs --> Routing["Apply services, gateway, routes"]
+  Routing --> Workloads["Apply deployments"]
+  Workloads --> Rollout["Wait for rollout and verify"]
+```
+
+### Why use a single image tag per release?
+
+The API, MCP, frontend, and sandbox images are developed together. A single tag lets a deploy answer “what code is running?” without reconstructing a matrix of per-service versions. It also makes rollback simpler: redeploy the previous tag consistently across all images.
+
+### Build changed images
+
+When code changes affect a service, build that image and push it to ACR with the release tag. The checked-in build script uses ACR remote builds, so the operator does not need a local Docker daemon. API, frontend, and MCP use the repo root as their build context because their Dockerfiles depend on shared repository content. The sandbox image has a narrower context because it is self-contained.
+
+For the API specifically, the image is more than the web host: it also carries the EF migration bundle used by the init container. That is why “build API” and “roll out API” are coupled to database migration behavior.
+
+### Retag unchanged images
+
+Conceptually, unchanged services still need the release tag. The clean registry pattern is to retag/import the previous known-good image digest to the new release tag instead of rebuilding it. That keeps all deployment manifests on one tag while avoiding unnecessary builds.
+
+Unverified: the checked-in AKS scripts do not include this retag-unchanged optimization. The current `20-build-push-images.sh` rebuilds and pushes all four images with `az acr build`. If a future pipeline adds `az acr import`/retag logic, it should preserve the invariant that every deployed image exists under the same `IMAGE_TAG` before manifests are applied.
+
+### Render and apply manifests
+
+Deployment renders manifests with environment-specific values: public host, ACR login server, image tag, workload identity client ID, Key Vault name, and tenant ID. Rendering keeps the source manifests reusable while still producing concrete Kubernetes objects for one environment.
+
+Apply order matters:
+
+1. Namespace first.
+2. Default-domain certificate and host derivation.
+3. Service account, workload identity annotation, SecretProviderClasses, RBAC, quotas, and PVCs.
+4. Network policies and egress allowlists.
+5. Services, Gateway, HTTPRoutes, and backup job.
+6. Sandbox template/warm pool if the CRDs exist.
+7. Deployments last.
+8. Rollout waits and post-deploy verification.
+
+This order prevents common race conditions: pods should not start before secrets can mount, before volumes exist, before identity is annotated, or before the Gateway host is known.
+
+### Rollout and verification
+
+Rollout waits confirm that Kubernetes accepted and started the API, frontend, and MCP deployments. Verification should then check route readiness, HTTP health, SecretProviderClass status, RBAC assumptions, and sandbox CRD/resources where applicable.
+
+The important distinction: rollout success means pods became ready; it does not prove all external protocol flows work. OAuth discovery, MCP metadata, JWKS validation, and docs routing each deserve smoke tests because they cross multiple components.
+
+Where this lives: `scripts/aks/00-variables.sh`, `scripts/aks/20-build-push-images.sh`, `scripts/aks/30-deploy.sh`, `scripts/aks/40-verify.sh`, `.dockerignore`.
+
+## Rebuild checklist
+
+To stand up an equivalent deployment:
+
+1. Create an AKS cluster with Cilium/ACNS, app routing Istio, Gateway API, managed default domain, Key Vault CSI, OIDC issuer, workload identity, and ACR attachment.
+2. Install sandbox CRDs/controller if Kubernetes-backed agent sandboxes are required.
+3. Create Key Vault secrets and a user-assigned managed identity with Key Vault secret read access.
+4. Federate the `agentweaver-api` service account subject to that managed identity.
+5. Build or retag all required images so API, frontend, MCP, and sandbox exist for one release tag.
+6. Render manifests with the environment-specific host, ACR, tag, identity, Key Vault, and tenant values.
+7. Apply prerequisites before deployments: identity, CSI secret providers, RBAC, storage, network policy, services, Gateway, routes, backup job.
+8. Deploy workloads and wait for rollouts.
+9. Smoke test browser routing, API health, OAuth discovery, MCP protected-resource metadata, MCP health, docs under `/docs`, secret mounting, and sandbox creation.
+10. Close the backup gap before treating the environment as production: include `memory.db` and protect against whole-PVC loss, not only single-file corruption.
+
+## Common failure modes
+
+- **Frontend works but API calls fail:** the catch-all frontend route is present, but API/MCP routes or route specificity are wrong.
+- **MCP initializes slowly or times out:** the MCP pod may be unable to reach the API JWKS endpoint because the east-west network allow is missing.
+- **Pods fail to start after secret rotation:** CSI files updated, but process environment variables did not; restart pods or change the app to re-read files.
+- **Workspace writes fail with permission errors:** Azure Files mounted with root ownership or wrong mount options; use a uid/gid-aware StorageClass and recreate affected PVCs if needed.
+- **Docs changes are not visible:** docs are baked into the frontend image; rebuild and roll out frontend.
+- **API rollout hangs on volume attach:** RWO disk is still attached to the old pod/node; Recreate reduces this risk, but node/storage delays can still happen.
+- **Sandbox cannot reach package/model endpoints:** Cilium FQDN policy or DNS allowance is missing, stale, or not supported by the cluster dataplane.
+- **OAuth clients reject tokens:** issuer/audience/public host values must match exactly between API token minting, MCP validation, and public metadata.
+
+## Minimal source map
+
+Use these paths for implementation details only after the concepts above are clear:
+
+- Platform and pipeline: `scripts/aks`.
+- Kubernetes objects: `k8s`.
+- Frontend/docs image and static host: `apps/web/Dockerfile`, `apps/Agentweaver.Web`.
+- API image/runtime: `apps/Agentweaver.Api`.
+- MCP image/runtime: `apps/Agentweaver.Mcp`.
+- Sandbox image: `apps/agentweaver-sandbox`.

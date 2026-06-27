@@ -1,107 +1,339 @@
-# Projects & Workspaces — Deep Dive
+# Projects & Workspaces — Conceptual Deep Dive
 
-## Purpose & Scope (what a "project" is in Agentweaver)
+## The mental model
 
-A project is Agentweaver's durable container for repository state, ownership, default model/provider settings, workflow/review/sandbox defaults, and the workspace path that runs and teams use. The domain record stores the project id, name, origin, working directory, default branch, owner, provider settings, lifecycle state, timestamps, and optional workflow/review/sandbox/blueprint metadata (`packages/Agentweaver.Domain/Project.cs:3-69`). Project origins are either `blank` or `github`; GitHub projects carry `SourceRepository` (`packages/Agentweaver.Domain/ProjectOrigin.cs:3-21`).
+A **project** is Agentweaver's durable boundary around a repository and the work Agentweaver performs against it. It answers five questions that every run, team, sandbox, and UI view needs answered before any agent can safely work:
 
-At the API boundary, projects are created from a request containing `name`, `origin`, `source_repository`, `working_directory`, provider/model defaults, and optional blueprint data (`apps/Agentweaver.Api/Contracts/Dtos.cs:530-552`). The response echoes the durable record plus runtime availability (`apps/Agentweaver.Api/Contracts/Dtos.cs:571-590`).
+1. **Whose work is this?** The project has an owner and is used as the authorization and listing boundary.
+2. **What repository is being worked on?** The project is either a blank Git repository created by Agentweaver or a clone of a GitHub repository.
+3. **Where is the repository stored?** The project points to a workspace directory that contains the base checkout.
+4. **Which defaults should agents use?** Provider/model, workflow, review, sandbox, and blueprint defaults are attached to the project so callers do not need to repeat them on every run.
+5. **Is this project allowed to start new work right now?** The lifecycle state and workspace availability together decide whether runs can be started.
 
-## Project Lifecycle
+The important design choice is that Agentweaver separates the **project record** from the **workspace contents**. The record is small durable metadata in the application database. The workspace is filesystem state: a Git checkout, `.squad` files, review policies, worktrees, and whatever the agents write. This split lets the API reason about ownership, lifecycle, defaults, and availability without treating the database as the source of truth for repository files.
+
+Where this lives:
+
+- `packages/Agentweaver.Domain/Project.cs`
+- `packages/Agentweaver.Domain/ProjectOrigin.cs`
+- `apps/Agentweaver.Api/Projects/`
+- `apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs`
+
+## Core concepts and invariants
+
+### Project identity is stable
+
+Every project receives an Agentweaver project id. That id is more than a database key: in cloud workspace mode it becomes the directory name under the shared workspace mount. This avoids deriving storage paths from user-provided project names or repository names, which may collide, contain unsafe characters, change over time, or leak information.
+
+The project name is user-facing and renameable. The project id is internal and stable.
+
+### Origin describes how the base repository was born
+
+Agentweaver recognizes two project origins:
+
+- **Blank**: Agentweaver creates an empty Git repository and makes an initial commit.
+- **GitHub**: Agentweaver clones a GitHub repository into the workspace.
+
+The origin is not merely decorative. It controls creation behavior, relink validation, and how much repository identity Agentweaver can verify later. A GitHub-origin project records the source repository so a relink can reject an unrelated checkout when the remote clearly does not match.
+
+### The workspace is the base checkout, not the run sandbox
+
+A project workspace is the long-lived base repository. Runs and orchestrations start from that base, but should not freely mutate it as their only working area. Per-run work uses isolated Git worktrees and branches so concurrent runs can proceed without overwriting each other.
+
+Think of the workspace as the project's **home repository**. A run gets a **temporary room** derived from that home.
+
+### Availability is runtime state, not persisted truth
+
+A project can exist in the database while its workspace is temporarily unavailable. For example, a Kubernetes pod may start before the persistent volume is mounted, or a local directory may have been moved. Agentweaver therefore computes `available` when reading the project instead of persisting it permanently.
+
+This prevents stale availability from becoming authoritative. The database says, "this project exists"; the workspace provider says, "its files are usable right now."
+
+## Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> ValidatingCreate: create request
+
+  ValidatingCreate --> ResolvingWorkspace: request is well formed
+  ValidatingCreate --> Rejected: bad name, origin, path, model, or repository
+
+  ResolvingWorkspace --> EnsuringWorkspace: choose local path or project-id PVC path
+  EnsuringWorkspace --> MaterializingRepository: directory exists and is writable
+  EnsuringWorkspace --> RolledBack: mount/path unavailable
+
+  MaterializingRepository --> PersistingProject: git init or clone succeeds
+  MaterializingRepository --> RolledBack: git init/clone fails
+
+  PersistingProject --> Active: database insert succeeds
+  PersistingProject --> RolledBack: database insert fails; created files are removed
+
+  Active --> Active: rename, update defaults, relink
+  Active --> RunBlocked: workspace unavailable or project deleting
+  RunBlocked --> Active: workspace becomes available again
+
+  Active --> Deleting: confirmed delete
+  Deleting --> Deleted: active runs cancelled, workspace released, record removed
+  Deleted --> [*]
+```
+
+A project creation request moves through four conceptual phases:
+
+1. **Validate intent**: ensure the name, origin, repository, path, and default model/provider settings make sense before touching storage.
+2. **Resolve storage**: turn the requested path into the actual workspace path. In local mode the caller controls this path. In persistent-volume mode Agentweaver ignores the caller's path and assigns one from the project id.
+3. **Materialize the repository**: either initialize a blank Git repository or clone from GitHub.
+4. **Persist the record**: write the durable project metadata only after the workspace and repository are usable.
+
+This order is deliberate. It avoids a database row that points at a repository that was never successfully created. When failure happens after files have been created but before the project is fully persisted, Agentweaver compensates by deleting the newly-created directory. This is not a full distributed transaction, but it gives the user the behavior they expect: failed creation should not leave half-created projects behind.
+
+Deletion is intentionally conservative. Agentweaver first marks the project as deleting, which blocks new runs. Then it cancels non-terminal runs, releases the workspace handle, and removes the project record. Project files are preserved rather than recursively destroyed as part of normal delete. That choice protects user code from accidental data loss and keeps infrastructure cleanup separate from application record cleanup.
+
+## Creating a blank project
+
+A blank project is for starting from nothing inside Agentweaver. The flow is:
+
+1. Allocate a project id.
+2. Resolve the workspace path.
+3. Require the target directory to be empty or absent.
+4. Create and write-probe the workspace.
+5. Initialize Git.
+6. Create an initial empty commit on the default branch.
+7. Materialize default project files where appropriate.
+8. Save the project record.
+
+The initial empty commit is important. A Git repository with no commits has an "unborn" branch, which makes branch and worktree operations awkward or impossible. By creating a first commit immediately, Agentweaver guarantees every later run has a real branch tip to start from.
+
+The empty-directory rule is equally important. Creation is allowed to create a new repository, not adopt arbitrary existing files. If the user wants to connect an existing checkout, that is a relink operation with different validation. This prevents Agentweaver from accidentally overwriting or reinterpreting user data during creation.
+
+## Creating a GitHub project
+
+A GitHub project is a project whose base workspace is cloned from GitHub. Conceptually, Agentweaver does three extra things beyond blank-project creation:
+
+1. It validates that the source is an HTTPS GitHub repository URL.
+2. It obtains a valid GitHub access token for the owner/session.
+3. It clones using that token as an ephemeral credential, then derives the default branch from the cloned repository.
+
+The token is used to perform the clone; it is not meant to become project metadata. The project stores repository identity and defaults, not the user's secret. This keeps long-lived project state safer and lets token refresh/sign-in remain an authentication concern rather than a project-storage concern.
+
+A subtle current behavior: the lower-level Git initializer can normalize `owner/repo` into a GitHub URL, but project creation currently validates the API input as a full `https://github.com/...` URL before it reaches that initializer. If a caller sends only `owner/repo`, the creation path should fail validation rather than clone.
+
+Failure during clone rolls back the workspace directory created for that attempt. Failure after clone but before database insert also removes the newly-created checkout. The intended user-facing invariant is simple: after a failed create, there should be no usable project record and no misleading partial project workspace.
+
+## Relinking an existing workspace
+
+Relink exists because files move. A local user may move a checkout, restore a backup, or mount storage at a new path. Relinking updates the project record to point at a new working directory without pretending this is a new project.
+
+Relink is deliberately more permissive than creation about existing content, but stricter about identity:
+
+- The target path must exist.
+- It must be a valid Git repository.
+- For GitHub-origin projects, if an `origin` remote is present, it must plausibly match the recorded source repository.
+- The default branch is re-derived from the repository's current HEAD.
+
+This design lets Agentweaver recover from storage movement while reducing the chance that a project is accidentally pointed at the wrong repository.
+
+## Workspace provisioning
+
+Workspace provisioning is abstracted behind a provider because local development and cloud deployment need different storage behavior while the rest of the project lifecycle should stay the same.
+
+Every provider answers the same questions:
+
+- **Resolve**: given a project id and requested path, what path should this project actually use?
+- **Ensure**: can that directory be created and written to?
+- **Check availability**: is the workspace usable right now?
+- **Check mount health**: is the provider's root storage healthy enough for this pod/process to serve requests?
+- **Release**: what should happen to provider-owned runtime resources when the project is deleted?
 
 ```mermaid
 flowchart TD
-  A[POST /api/projects] --> B{origin}
-  B -->|blank| C[Validate name/path/provider]
-  B -->|github| D[Validate source_repository + GitHub token]
-  C --> E[Resolve working directory]
-  D --> E
-  E --> F[Ensure workspace directory is writable]
-  F --> G{origin}
-  G -->|blank| H[git init + empty initial commit]
-  G -->|github| I[clone GitHub repo with ephemeral token]
-  H --> J[Materialize default review policy best-effort]
-  I --> J
-  J --> K[Insert project row]
-  K --> L[Return ProjectResponse with available=true]
+  Request[Create project request] --> Provider{Workspace provider}
+
+  Provider -->|local| LocalPath[Use caller-supplied path]
+  LocalPath --> LocalEnsure[Create directory if absent]
+  LocalEnsure --> LocalProbe[Check writable]
+
+  Provider -->|persistent-volume| ProjectId[Use project id as storage identity]
+  ProjectId --> PvcPath[MountRoot / projectId]
+  PvcPath --> PvcEnsure[Create per-project directory]
+  PvcEnsure --> PvcProbe[Write/delete probe]
+
+  LocalProbe --> WorkspaceReady[Workspace ready]
+  PvcProbe --> WorkspaceReady
+  WorkspaceReady --> Git[Initialize or clone Git repository]
 ```
 
-The HTTP handler validates `name`, `origin`, `source_repository`, and `working_directory`, validates any blueprint before creating storage, then dispatches to `CreateBlankAsync` or `CreateFromGitHubAsync` (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:33-129`). Creation returns `201 /api/projects/{id}`; when a blueprint is applied, the handler re-reads the project so workflow/review/sandbox defaults are reflected (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:131-175`).
+### Local filesystem provider
 
-Blank project creation resolves a working directory, requires it to be empty or absent, ensures the workspace, initializes a Git repository on `main`, writes a best-effort default review policy, and inserts the project (`apps/Agentweaver.Api/Projects/ProjectService.cs:48-115`). GitHub project creation additionally validates the URL, resolves a valid access token, clones the repository, derives the default branch, and inserts the project (`apps/Agentweaver.Api/Projects/ProjectService.cs:117-200`).
+The local provider is optimized for developer machines. The user supplies a working directory path, Agentweaver canonicalizes it, creates it if necessary, and checks that it can write there. Availability is simply whether the directory still exists.
 
-## ProjectService (create/list/get/delete; validation; persistence)
+This mode is flexible and transparent: users know exactly where files are. The trade-off is that it trusts local paths and local filesystem semantics, so it is appropriate for a controlled developer environment rather than multi-tenant cloud storage.
 
-`ProjectService` owns lifecycle operations over an `IProjectStore`, an `IProjectWorkspaceProvider`, `ProjectGitInitializer`, and GitHub token services (`apps/Agentweaver.Api/Projects/ProjectService.cs:16-42`).
+### Persistent-volume provider
 
-- **Create blank**: validates non-empty name, resolves the working directory, rejects non-empty existing directories, ensures workspace availability, initializes Git, then inserts the project (`apps/Agentweaver.Api/Projects/ProjectService.cs:57-105`, `apps/Agentweaver.Api/Projects/ProjectService.cs:389-396`).
-- **Create from GitHub**: validates non-empty source repository and HTTPS GitHub URL, requires a valid GitHub access token, ensures the workspace, clones the repository, then inserts the project (`apps/Agentweaver.Api/Projects/ProjectService.cs:127-163`, `apps/Agentweaver.Api/Projects/ProjectService.cs:415-424`).
-- **Rollback/compensation**: file-system or clone failures delete the created directory; DB insert failures also clean up the working directory (`apps/Agentweaver.Api/Projects/ProjectService.cs:72-80`, `apps/Agentweaver.Api/Projects/ProjectService.cs:190-198`).
-- **List/get**: reads projects through the store and wraps them as `ProjectView` with a runtime `Available` flag (`apps/Agentweaver.Api/Projects/ProjectService.cs:360-377`).
-- **Rename/settings/relink**: update name/provider defaults, or relink a project to an existing Git repository after validating the path, Git repo, optional remote match, and default branch (`apps/Agentweaver.Api/Projects/ProjectService.cs:207-280`).
-- **Delete**: uses a compare-and-set `Active -> Deleting`, cancels non-terminal runs, releases the workspace, then deletes only the project row; files are preserved (`apps/Agentweaver.Api/Projects/ProjectService.cs:287-334`).
+The persistent-volume provider is optimized for Kubernetes/cloud deployment. It ignores the requested working directory and assigns each project a path under a configured mount root, using the project id as the directory name. In the Agentweaver Kubernetes manifests, that mount root is `/workspace`, backed by the shared `agentweaver-workspace` persistent volume claim.
 
-Persistence is abstracted by `IProjectStore` (`packages/Agentweaver.Domain/IProjectStore.cs:3-51`). The SQLite store inserts, gets, lists, renames, updates provider and working-directory fields, marks deleting, and deletes rows in `projects` (`apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs:19-155`). The `projects` table contains the core identity/origin/workspace/provider/state/timestamp columns (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:231-247`), while store mapping reconstructs the domain record and optional workflow/review/sandbox/blueprint fields (`apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs:283-316`).
+The cloud design solves several problems:
 
-## Workspace Provisioning
+- **Path safety**: callers cannot choose arbitrary paths inside the API container.
+- **Collision avoidance**: project ids make directory collisions unlikely even if names or repository names repeat.
+- **Stable storage across pods**: a project can outlive the pod that created it.
+- **Shared access for sandboxes**: API and sandbox pods can mount the same workspace volume and see the same project files.
+- **Operational readiness**: Kubernetes can use a workspace health endpoint to keep pods out of service if the mount is missing or read-only.
 
-Workspace provisioning is behind `IProjectWorkspaceProvider`: it resolves a canonical path, ensures the directory is present and writable, reports project availability, probes mount-root health, and releases runtime resources (`packages/Agentweaver.Domain/IProjectWorkspaceProvider.cs:8-56`).
+The provider uses write/delete probes rather than trusting directory-existence checks for persistent volume health. This matters for CIFS/Azure Files-style mounts where some existence checks can produce false negatives even though writes succeed. The behavior Agentweaver actually needs is not "does stat say the directory exists?" but "can agents create and update files here?"
+
+Where this lives:
+
+- `packages/Agentweaver.Domain/IProjectWorkspaceProvider.cs`
+- `apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs`
+- `apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs`
+- `k8s/api-deployment.yaml`
+- `k8s/pvc-workspace.yaml`
+- `k8s/sandbox-template.yaml`
+
+## Why workspace isolation matters
+
+Workspace isolation is the difference between a safe automation platform and a process that edits whatever path it is handed.
+
+Agentweaver isolates at multiple levels:
+
+1. **Project isolation**: each project has its own base workspace.
+2. **Run isolation**: each run works in its own branch/worktree derived from the project repository.
+3. **Sandbox isolation**: sandbox execution is constrained to the configured workspace mount.
+4. **Lifecycle isolation**: deleting a project blocks new runs before cancelling existing work.
+
+This design exists because agents are concurrent, stateful, and allowed to modify files. Without isolated workspaces, two projects could collide. Without per-run worktrees, two runs in the same project could race on the same checkout. Without mount-root constraints, a sandbox could be pointed at files outside the intended project storage. Without a deleting state, a user could start new work while cleanup is in progress.
+
+The trade-off is storage complexity. Agentweaver must manage base repositories, worktrees, branch names, availability checks, and cleanup rules. The payoff is that project state remains understandable: base project files are stable, each run has a separate working area, and infrastructure failures can be diagnosed as workspace availability problems rather than mysterious agent behavior.
+
+## Relationship between projects, runs, workspaces, teams, and sandboxes
 
 ```mermaid
 flowchart LR
-  Config[Workspace:Provider] --> Local[local-filesystem]
-  Config --> PVC[persistent-volume/kubernetes]
-  Local --> LPath[caller working_directory]
-  PVC --> PPath[MountRoot/projectId]
-  PPath --> PVCClaim[agentweaver-workspace PVC mounted at /workspace]
+  Project[Project record] --> Defaults[Provider, model, workflow, review, sandbox defaults]
+  Project --> BaseWorkspace[Base workspace / Git checkout]
+  Project --> Runs[Project-scoped runs]
+  Project --> Orchestrations[Coordinator orchestrations]
+
+  BaseWorkspace --> SquadFiles[.squad agents, charters, decisions]
+  BaseWorkspace --> ReviewPolicies[.agentweaver review policies]
+  BaseWorkspace --> Worktrees[Per-run Git worktrees]
+
+  Runs --> Worktrees
+  Runs --> Agents[Selected agent/team member]
+  Agents --> SquadFiles
+
+  Orchestrations --> BaseWorkspace
+  Worktrees --> Sandbox[Sandbox execution]
+  BaseWorkspace --> WorkspaceBrowser[Workspace file/ref browser]
 ```
 
-Provider selection happens in DI: `Workspace:Provider=local` uses `LocalFilesystemWorkspaceProvider`; `persistent-volume` or `kubernetes` uses `PersistentVolumeWorkspaceProvider` (`apps/Agentweaver.Api/Program.cs:157-173`). Local mode honors the caller's path, creates the directory, probes writability, and treats availability as `Directory.Exists` (`apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:5-53`).
+### Runs
 
-Persistent-volume mode ignores the requested path and maps every project to `{Workspace:PersistentVolume:MountRoot}/{projectId}` (`apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs:29-36`). It creates the per-project directory, write-probes it, throws `WorkspaceUnavailableException` when the mount is missing or unwritable, and uses write probes for `IsAvailable` and mount-root health to avoid CIFS `Directory.Exists` false negatives (`apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs:38-120`). In AKS, the API config sets `Workspace__Provider=persistent-volume` and `Workspace__PersistentVolume__MountRoot=/workspace` (`k8s/api-deployment.yaml:105-108`), mounts the `workspace` volume at `/workspace` (`k8s/api-deployment.yaml:144-148`), and binds that volume to the `agentweaver-workspace` PVC (`k8s/api-deployment.yaml:186-192`). The PVC is ReadWriteMany, `azurefile-csi-premium-uid1000`, 50Gi (`k8s/pvc-workspace.yaml:1-11`).
+A run is always scoped to a project. When a run starts, Agentweaver uses the project to decide the repository path, default branch, provider/model defaults, and workflow defaults. The run then receives its own working context, typically a worktree and branch, so it can modify files without making the project base checkout itself the only mutable surface.
 
-Git initialization is separate from workspace provisioning. Blank projects create an empty initial commit and rename HEAD to the requested default branch (`apps/Agentweaver.Api/Git/ProjectGitInitializer.cs:23-55`). GitHub projects clone with an ephemeral access token and derive the default branch from the cloned repo's HEAD (`apps/Agentweaver.Api/Git/ProjectGitInitializer.cs:57-90`). Per-run isolation uses git worktrees: `WorktreeManager` creates `agentweaver/{runId}` branches under `Worktrees:BasePath` and adds physical worktree directories (`apps/Agentweaver.Api/Git/WorktreeManager.cs:15-20`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:44-57`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:108-140`).
+Starting a run should be rejected if the project is deleting or if the workspace is unavailable. This is a guardrail: an agent should not begin work against a repository it cannot read/write or a project that is being removed.
 
-## ProjectView / DTOs (what the API returns to the UI)
+### Orchestrations
 
-`ProjectView` is a read model containing the stored `Project` plus `Available`, which is computed at read time by `IProjectWorkspaceProvider.IsAvailable` rather than persisted (`apps/Agentweaver.Api/Projects/ProjectView.cs:5-13`, `apps/Agentweaver.Api/Projects/ProjectService.cs:373-377`). `MapProject` converts that view to JSON fields such as `project_id`, `origin`, `source_repository`, `working_directory`, `default_branch`, provider/model defaults, `available`, `state`, blueprint provenance, and allowed workflow ids (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:684-703`).
+Coordinator orchestrations also use the project as their boundary. They need the same basic facts as runs: where the repository is, what branch to start from, and what defaults apply.
 
-On the web side, `CreateProjectRequest` mirrors the API shape (`apps/web/src/api/types.ts:208-215`), `apiClient.createProject` posts to `/projects` (`apps/web/src/api/client.ts:162-164`), and the GitHub create dialog sends `source_repository` only for GitHub-origin projects (`apps/web/src/pages/ProjectGalleryPage.tsx:142-155`).
+Unverified: a dedicated `docs/deep-dive/orchestration.md` document is not present in this checkout.
 
-## API Endpoints
+### Teams and casting
 
-| Route | Verb | Handler | Purpose |
-|---|---:|---|---|
-| `/api/projects` | POST | `ProjectEndpoints.MapProjectEndpoints` | Create blank or GitHub project; validates request, optional blueprint, workspace, Git, and persistence (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:33-197`). |
-| `/api/server/info` | GET | `ProjectEndpoints.MapProjectEndpoints` | Public metadata including data directory and whether workspace paths are auto-assigned (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:199-204`). |
-| `/api/projects` | GET | `ProjectEndpoints.MapProjectEndpoints` | List caller-owned projects with availability (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:206-216`). |
-| `/api/projects/{id}` | GET | `ProjectEndpoints.MapProjectEndpoints` | Get one project after id parsing and owner check (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:218-231`). |
-| `/api/projects/{id}` | PATCH | `ProjectEndpoints.MapProjectEndpoints` | Rename a project (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:234-255`). |
-| `/api/projects/{id}/provider-settings` | PUT | `ProjectEndpoints.MapProjectEndpoints` | Update project-level provider/model defaults (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:258-285`). |
-| `/api/projects/{id}/relink` | POST | `ProjectEndpoints.MapProjectEndpoints` | Reconnect a project to a moved/restored working directory (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:288-310`). |
-| `/api/projects/{id}` | DELETE | `ProjectEndpoints.MapProjectEndpoints` | Confirm-gated delete; cancels active runs, releases workspace, deletes row (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:313-345`). |
-| `/api/projects/{id}/runs` | GET | `ProjectEndpoints.MapProjectEndpoints` | List runs scoped to a project, with optional filters (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:347-403`). |
-| `/api/projects/{id}/runs/{workflowRunId}` | GET | `ProjectEndpoints.MapProjectEndpoints` | Get one workflow run and enforce project isolation (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:409-455`). |
-| `/api/projects/{id}/runs` | POST | `ProjectEndpoints.MapProjectEndpoints` | Start a project run; checks project state and workspace availability (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:457-620`). |
-| `/api/projects/{id}/orchestrations` | POST | `ProjectEndpoints.MapProjectEndpoints` | Start a coordinator orchestration against the project's workspace/default branch (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:628-681`). |
-| `/api/projects/{id}/workspace/refs` | GET | `ProjectWorkspaceEndpoints.MapProjectWorkspaceEndpoints` | List base, active worktree, and assembly refs (`apps/Agentweaver.Api/Endpoints/ProjectWorkspaceEndpoints.cs:17-34`). |
-| `/api/projects/{id}/workspace` | GET | `ProjectWorkspaceEndpoints.MapProjectWorkspaceEndpoints` | List files for a selected ref (`apps/Agentweaver.Api/Endpoints/ProjectWorkspaceEndpoints.cs:36-54`). |
-| `/api/projects/{id}/workspace/files/{**path}/content` | GET | `ProjectWorkspaceEndpoints.MapProjectWorkspaceEndpoints` | Return file content for a selected ref, with path validation (`apps/Agentweaver.Api/Endpoints/ProjectWorkspaceEndpoints.cs:56-82`). |
-| `/api/github/accounts` | GET | `AuthEndpoints` | UI repo-picker dependency: list authenticated user and orgs (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:203-289`). |
-| `/api/github/repos?account=...` | GET | `AuthEndpoints` | UI repo-picker dependency: list owner/org repos as `full_name`, description, privacy, default branch (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:291-369`, `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:386-397`). |
-| `/healthz/workspace` | GET | `DiagnosticsEndpoints` | Workspace mount readiness probe; returns 503 when mount root is missing or read-only (`apps/Agentweaver.Api/Diagnostics/DiagnosticsEndpoints.cs:28-39`). |
+Team behavior is project-relative because team files live in the repository workspace, especially under `.squad`. When a project run targets an agent, Agentweaver can read that agent's charter from the project workspace and reject missing or inactive agents. This makes the repository itself part of the team's durable context.
 
-## Relationship to Runs, Teams, Sandboxes
+Unverified: a dedicated `docs/deep-dive/team-casting.md` document is not present in this checkout.
 
-- **Runs and orchestrations**: `Run` carries `ProjectId`, `RepositoryPath`, `OriginatingBranch`, `WorktreePath`, and `WorktreeBranch` (`packages/Agentweaver.Domain/Run.cs:7-31`). `WorkflowRun` is always project-scoped (`packages/Agentweaver.Domain/WorkflowRun.cs:8-23`). Starting a project run uses the project working directory as `RepositoryPath`, the project default branch unless overridden, and the project provider/model defaults (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:485-567`). Unverified: `docs/deep-dive/orchestration.md` does not exist in this checkout.
-- **Teams/casting**: project runs can target an active team member; the API reads `.squad/agents/{agent}/charter.md` from the project workspace and rejects missing/inactive agents (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:530-548`). Unverified: `docs/deep-dive/team-casting.md` does not exist in this checkout.
-- **Sandboxes**: Kubernetes sandbox execution expects requested working directories to be under the configured workspace mount (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:16-20`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:351-364`). The sandbox template mounts the same `agentweaver-workspace` PVC at `/workspace` (`k8s/sandbox-template.yaml:45-55`). See `docs/architecture/sandbox.md`.
+### Sandboxes
 
-## Failure Modes & Gotchas
+Sandboxes execute work while constrained to the configured workspace mount. In Kubernetes, both the API and sandbox template mount the same persistent workspace volume. That gives sandboxes access to the project/worktree files they need while keeping them inside the expected storage boundary.
 
-- **Generic "Failed to create the project" 500**: the create endpoint maps uncaught exceptions to `500` with the exception type/message (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:190-195`). Workspace-specific `WorkspaceUnavailableException` maps to `503 workspace_unavailable` (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:184-188`); if an AKS create still returns the generic 500, inspect the inner exception around Git clone/init, SQLite insert, blueprint application, or an unexpected filesystem exception not wrapped as `WorkspaceUnavailableException`.
-- **GitHub sign-in/token**: GitHub-origin project creation fails closed if no valid access token is available (`apps/Agentweaver.Api/Projects/ProjectService.cs:137-151`). The UI picker also needs `/api/github/accounts` and `/api/github/repos`; unauthenticated users can manually type `owner/repo`, but create still requires a token for clone (`apps/web/src/pages/ProjectGalleryPage.tsx:457-462`, `apps/Agentweaver.Api/Projects/ProjectService.cs:149-151`).
-- **GitHub URL shape mismatch**: the domain comment says `SourceRepository` may be `owner/repo` (`packages/Agentweaver.Domain/ProjectOrigin.cs:8-12`) and the Git initializer can normalize `owner/repo` (`apps/Agentweaver.Api/Git/ProjectGitInitializer.cs:63-68`), but `ProjectService.CreateFromGitHubAsync` currently requires an HTTPS URL starting with `https://github.com/` (`apps/Agentweaver.Api/Projects/ProjectService.cs:127-130`, `apps/Agentweaver.Api/Projects/ProjectService.cs:415-424`). If the UI submits picker values like `owner/repo`, creation returns `400`, not 500.
-- **Workspace PVC/mount**: in AKS, project paths are auto-assigned under `/workspace/{projectId}` and depend on the `agentweaver-workspace` PVC being mounted and writable (`apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs:29-75`, `k8s/api-deployment.yaml:105-108`, `k8s/api-deployment.yaml:186-192`). Startup logs a warning if the mount-root health probe fails, and `/healthz/workspace` should keep unmounted pods out of service (`apps/Agentweaver.Api/Program.cs:328-340`, `apps/Agentweaver.Api/Diagnostics/DiagnosticsEndpoints.cs:28-39`).
-- **Non-empty target directory**: create rejects an existing non-empty working directory and tells callers to relink instead (`apps/Agentweaver.Api/Projects/ProjectService.cs:389-396`).
-- **Deleting state blocks new work**: deletion first marks the project `Deleting`; run and orchestration start return `409 project_deleting` for that state (`apps/Agentweaver.Api/Projects/ProjectService.cs:287-334`, `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:490-496`, `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:653-657`).
-- **Workspace unavailable blocks runs**: even an existing project cannot start runs or orchestrations if `IsAvailable` fails (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:494-497`, `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:656-657`).
+See also: `docs/architecture/sandbox.md`.
+
+## API surface in concepts
+
+The Projects API exposes operations that map directly to the lifecycle concepts:
+
+- **Create**: validate intent, provision workspace, initialize/clone Git, persist metadata.
+- **List/get**: return stored project metadata plus computed availability.
+- **Rename/update defaults**: change mutable metadata without touching repository identity.
+- **Relink**: point a project record at a moved/restored Git checkout after validation.
+- **Delete**: transition to deleting, cancel active work, release workspace resources, remove the record.
+- **Start/list/get runs**: enforce project scope and workspace availability around workflow execution.
+- **Start orchestration**: run coordinator work against the project's repository boundary.
+- **Browse workspace**: expose selected refs and file content from the base checkout, active worktree, or assembly refs.
+- **GitHub account/repository helpers**: support the UI's repository picker before project creation.
+- **Workspace health**: report whether the configured workspace root is ready for service.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs`
+- `apps/Agentweaver.Api/Endpoints/ProjectWorkspaceEndpoints.cs`
+- `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs`
+- `apps/Agentweaver.Api/Diagnostics/DiagnosticsEndpoints.cs`
+
+## Failure modes and how to reason about them
+
+### Create returns validation errors
+
+Usually the request is inconsistent with the creation mode: blank projects need a usable workspace path in local mode; GitHub projects need a source repository; model ids must be acceptable; existing non-empty directories are not allowed during creation.
+
+Reasoning model: creation is for making a new controlled workspace. Existing non-empty content belongs to relink, not create.
+
+### GitHub project creation fails because the user is signed out
+
+Cloning private and user-scoped repositories requires a valid GitHub token. Agentweaver fails closed if it cannot obtain one. This is intentional: silently creating a project without a trustworthy clone would produce a broken workspace and confusing later failures.
+
+Reasoning model: authentication is a precondition of materializing a GitHub-origin workspace.
+
+### GitHub URL shape mismatch
+
+Current creation validation expects a full HTTPS GitHub URL beginning with `https://github.com/`. Although lower-level clone logic can understand `owner/repo`, the service-level validation happens first. A UI or client that submits `owner/repo` should expect request validation failure.
+
+Reasoning model: normalize client behavior to the API contract, not to an implementation detail deeper in the Git helper.
+
+### Workspace unavailable
+
+A project can be stored but temporarily unusable. Local directories can be moved or deleted. Kubernetes mounts can be absent, read-only, or not yet attached. In those cases the project may list with `available=false`, and starting new work should be blocked.
+
+Reasoning model: the project record is durable intent; workspace availability is live infrastructure health.
+
+### Persistent volume false negatives
+
+Some network filesystems can make existence probes unreliable. Agentweaver therefore uses write probes for persistent-volume availability and readiness checks. If writes fail, the workspace is unavailable even if a directory entry appears to exist. If writes succeed, the workspace is healthy enough for Agentweaver's purposes.
+
+Reasoning model: the platform needs write capability, so probe the capability directly.
+
+### Database insert fails after filesystem work
+
+Project creation is not a database-only operation. It creates directories and Git repositories before inserting the project row. If the final insert fails, Agentweaver attempts to delete the newly-created directory so users do not see orphaned half-projects.
+
+Reasoning model: compensate for side effects in reverse order when a multi-resource create fails.
+
+### Delete races with new work
+
+Deletion first transitions the project out of the active state. Run and orchestration start paths should reject a deleting project. Existing non-terminal runs are abandoned/marked terminal as part of deletion.
+
+Reasoning model: close the front door before sweeping up in-flight work.
+
+### Files remain after delete
+
+Deleting a project removes the project record and releases runtime workspace resources; it does not necessarily destroy user files. This is safer for source code and matches the idea that infrastructure storage lifecycle is separate from application metadata lifecycle.
+
+Reasoning model: application delete is not the same thing as secure data destruction.
+
+## Rebuilding checklist
+
+If you were rebuilding this subsystem from scratch, implement these pieces in this order:
+
+1. Define a project record with stable id, owner, name, origin, working directory, default branch, provider/default settings, lifecycle state, and timestamps.
+2. Define a workspace provider interface with resolve, ensure, availability, health, and release operations.
+3. Implement a local provider that honors user paths and a cloud provider that auto-assigns paths under a mounted root using project ids.
+4. Build creation as validate → resolve workspace → ensure writable → init/clone Git → persist record, with compensation on failure.
+5. Make blank repositories non-unborn by creating an initial commit.
+6. Clone GitHub repositories using ephemeral credentials and store repository identity, not the token.
+7. Compute availability at read/start time instead of persisting it.
+8. Gate run/orchestration start on project state and workspace availability.
+9. Use per-run worktrees/branches for concurrent work inside a project.
+10. Make delete a state transition first, then cancel work, release resources, and remove metadata while preserving files by default.

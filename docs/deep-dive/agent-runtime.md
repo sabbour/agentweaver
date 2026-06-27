@@ -1,246 +1,492 @@
-# Agent Runtime & Tools — Deep Dive
+# Agent Runtime & Tools — Conceptual Deep Dive
 
-## Purpose & Scope
+## Purpose and scope
 
-This document covers the runtime path that turns an Agentweaver run request into model execution, sandboxed tool activity, streamed run events, worktree commits, review/merge workflow outputs, and team-memory context.
+This document explains the runtime logic behind Agentweaver: how a human request becomes an agent turn, how tools are made available safely, how providers are selected, and how the system records what happened. It is written for an engineer who wants to rebuild the runtime from first principles, not for someone trying to follow source files line by line.
 
 Primary scope:
 
-- `Agentweaver.AgentRuntime`: provider runners, the live workflow agent, workflow turn executors, sandbox governance wiring, and Agentweaver loopback API tools.
-- `Agentweaver.AgentTools`: concrete `AIFunction` tools exposed to model providers and their string result contracts.
+- `Agentweaver.AgentRuntime`: the turn loop, provider seams, workflow agents, governance, RAI/Scribe touchpoints, and event emission.
+- `Agentweaver.AgentTools`: the model-callable tool catalog and the per-run context that makes tools safe and reproducible.
 
-`Agentweaver.Squad` is intentionally only referenced at runtime integration points here. The dedicated deep dive for casting, catalog, naming, `.squad/` serialization, sync, and memory import/export is [Team Casting — Deep Dive](team-casting.md).
+`Agentweaver.Squad` is only a runtime input here. For casting, roster management, `.squad/` serialization, naming, and memory import/export, see [Team Casting — Deep Dive](team-casting.md).
 
-The runtime has two related execution seams:
+## The runtime mental model
 
-1. **Legacy/one-shot `IAgentRunner` seam**: `AgentRunnerDispatcher` implements `IAgentRunner` and switches between `GitHubCopilotAgentRunner` and `FoundryAgentRunner` based on `ModelSource` (`packages/Agentweaver.Domain/IAgentRunner.cs:5-18`, `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:17-32`).
-2. **Live MAF workflow seam**: project runs are built as Microsoft Agents Framework (MAF) workflows. The worker node is a `CopilotAIAgent` created through `IWorkflowAgentFactory`, not the dispatcher; `RunWorkflowFactory` explicitly retains `IAgentRunner` only for DI/test compatibility and creates a `CopilotAIAgent` worker (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:72-89`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:136-150`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-358`, `packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentFactory.cs:47-61`).
+An Agentweaver run is not simply "send a prompt to a model." It is a controlled workflow around a model turn:
 
-`GitHubCopilotAgentRunner` is still used by model-assisted casting: `CastingService` builds an `AgentweaverAgentRuntime` over `IAgentRunner`, and that runtime calls `ExecuteAsync` with `ModelSource.GitHubCopilot`, which dispatches to the GitHub Copilot runner (`apps/Agentweaver.Api/Casting/CastingService.cs:501-505`, `apps/Agentweaver.Api/Infrastructure/AgentweaverAgentRuntime.cs:29-41`, `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:27-30`).
+1. **Prepare an isolated workspace** so the agent can change files without directly mutating the source branch.
+2. **Assemble identity and context** from the selected agent charter, task, project memory, active decisions, session context, and workspace boundaries.
+3. **Create a provider-backed turn agent** that knows how to speak to a model provider and stream results.
+4. **Expose tools through a governed tool plane** so the model can inspect, edit, ask questions, report intent, and record memory without bypassing policy.
+5. **Stream normalized events** so the UI, persistence layer, watch loop, review gates, and coordinator can reason about the run without knowing provider internals.
+6. **Persist the work and observations** by committing workspace changes, computing a diff, running review/RAI/Scribe steps, and exporting memory when appropriate.
 
-## Package Map (AgentRuntime / AgentTools / Squad — responsibilities)
+The important design choice is that model execution is treated as one node inside a broader workflow. The model decides what to do next, but the runtime decides what context it receives, which tools exist, whether an action is allowed, how output is observed, and how the run advances.
 
-| Package | Responsibilities | Key evidence |
-|---|---|---|
-| `packages/Agentweaver.AgentRuntime` | Registers runtime services; builds provider clients; runs GitHub Copilot and Foundry provider loops; owns the live `CopilotAIAgent`; creates MAF worker/RAI/Scribe agents; emits run events; wires sandbox governance, approvals, questions, and Agentweaver API tools. | DI registers client factories, runners, dispatcher, approval/question stores, run options, and `WorkflowAgentFactory` (`packages/Agentweaver.AgentRuntime/AgentRuntimeServiceCollectionExtensions.cs:16-36`). `CopilotAIAgent` wraps the GitHub Copilot SDK, preserves governance/event emission, and is serializable/checkpointable (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:18-40`). |
-| `packages/Agentweaver.AgentTools` | Defines `ISandboxTool`, per-run `SandboxToolContext`, tool options, and the canonical registry of model-callable sandbox functions. | `ISandboxTool` exposes a name and creates an `AIFunction` (`packages/Agentweaver.AgentTools/ISandboxTool.cs:5-17`). `SandboxToolRegistry.Build` instantiates tools and conditionally adds shell execution (`packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:15-37`). |
-| `packages/Agentweaver.Squad` | Runtime input provider for team membership, charters, and memory artifacts. Deep package details are covered in [Team Casting — Deep Dive](team-casting.md). | Project run submission validates `agent_name` through `SquadReader` and loads `.squad/agents/{name}/charter.md` before runtime launch (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:530-548`). |
+## Package responsibilities
 
-The API wires these packages together. `Program.cs` registers workflow services and orchestration services before `AddAgentRuntime()` (`apps/Agentweaver.Api/Program.cs:76-86`, `apps/Agentweaver.Api/Program.cs:193-201`) and also registers the casting services that provide team/charter inputs to runtime launches (`apps/Agentweaver.Api/Program.cs:247-251`).
+| Area | Conceptual responsibility |
+|---|---|
+| `Agentweaver.AgentRuntime` | Owns the live turn agents, provider adapters, workflow executors, sandbox governance, run-event emission, review/RAI/Scribe integration, and Agentweaver loopback API tools. |
+| `Agentweaver.AgentTools` | Defines the canonical tool contracts as `AIFunction`s and the per-run context they need: workspace, sandbox root, executor, redactor, approvals, options, event hooks, and question gates. |
+| `Agentweaver.Squad` | Supplies runtime inputs such as agent identity, charters, team membership, decisions, and memory artifacts. The runtime consumes these inputs but does not own team casting. |
 
-## Runner Abstraction & Dispatch (interfaces, AgentRunnerDispatcher, which runner is used when)
+The packages are intentionally separated so tool contracts can remain provider-neutral while the runtime decides how each provider sees and governs those tools.
 
-`IAgentRunner` is the provider-neutral interface: it accepts task text, working directory, repository path, model source, run id, optional model id, optional stream writer, cancellation token, and optional system-prompt context (`packages/Agentweaver.Domain/IAgentRunner.cs:10-18`). The only valid provider enum values are `GitHubCopilot` and `MicrosoftFoundry` (`packages/Agentweaver.Domain/ModelSource.cs:3-11`).
+Where this lives:
 
-`AgentRunnerDispatcher` chooses the concrete runner:
+- `packages/Agentweaver.AgentRuntime`
+- `packages/Agentweaver.AgentTools`
+- `packages/Agentweaver.Squad`
 
-- `ModelSource.GitHubCopilot` -> `GitHubCopilotAgentRunner`.
-- `ModelSource.MicrosoftFoundry` -> `FoundryAgentRunner`.
-- Anything else throws `NotSupportedException` (`packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:27-32`).
+## The life of a run
 
-```mermaid
-flowchart TD
-    A[Caller with IAgentRunner] --> B[AgentRunnerDispatcher.ExecuteAsync]
-    B --> C{ModelSource}
-    C -->|GitHubCopilot| D[GitHubCopilotAgentRunner]
-    C -->|MicrosoftFoundry| E[FoundryAgentRunner]
-    C -->|other| F[NotSupportedException]
+A run begins in the API layer, but its core shape is runtime-driven:
 
-    G[Project run workflow] --> H[RunWorkflowFactory]
-    H --> I[IWorkflowAgentFactory.CreateWorkerAgent]
-    I --> J[CopilotAIAgent live MAF worker]
-
-    K[CastingService] --> L[AgentweaverAgentRuntime]
-    L --> A
-```
-
-Important distinction:
-
-- **Project run workflow path**: `RunOrchestrator` copies `Run.ModelSource` into `AgentTurnInput.ModelSource`, then calls `RunWorkflowFactory.StartAsync` (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:108-121`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:276-289`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:384-394`). `RunWorkflowFactory` builds a workflow node with `AgentTurnExecutor` and a worker from `_agentFactory.CreateWorkerAgent()` (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-373`). The production factory returns `new CopilotAIAgent(...)` for worker/rubberduck and specialized subclasses for RAI/Scribe (`packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentFactory.cs:47-61`). `AgentTurnExecutor` calls `_agent.SetupAsync(...)` and `_agent.RunTurnAsync(...)`; it does not dispatch on `input.ModelSource` (`packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:64-107`).
-- **One-shot/casting path**: `AgentweaverAgentRuntime.RunAsync` calls `_agentRunner.ExecuteAsync(... ModelSource.GitHubCopilot ...)` (`apps/Agentweaver.Api/Infrastructure/AgentweaverAgentRuntime.cs:29-41`). This reaches `GitHubCopilotAgentRunner` through the dispatcher (`packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:27-30`).
-- **Foundry path**: `FoundryAgentRunner` is wired only behind the `IAgentRunner` dispatcher path: `AgentRunnerDispatcher.ExecuteAsync` routes `ModelSource.MicrosoftFoundry` to `_foundry.ExecuteAsync(...)` (`packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:17-32`). When reached, `FoundryAgentRunner` creates an Azure OpenAI chat client through `FoundryClientFactory` and runs an explicit multi-turn tool loop with `MaxTurns = 30` (`packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:72-82`, `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:121-161`, `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:167-235`; `packages/Agentweaver.AgentRuntime/Providers/FoundryClientFactory.cs:24-41`). The inspected app-level `IAgentRunner` callers pin `ModelSource.GitHubCopilot` (casting/runtime, blueprint generation, and workflow generation), so no app caller currently reaches the dispatcher with `ModelSource.MicrosoftFoundry` (`apps/Agentweaver.Api/Infrastructure/AgentweaverAgentRuntime.cs:33-41`, `apps/Agentweaver.Api/Blueprints/CopilotBlueprintGenerator.cs:133-142`, `apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:234-243`).
-
-Verified: live project/coordinator runs do **not** go through `AgentRunnerDispatcher`, so a `microsoft-foundry` run request is persisted and carried as `AgentTurnInput.ModelSource` but still executes with the `CopilotAIAgent` worker. The standalone run endpoint accepts either API model source into `Run.ModelSource` (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:44-52`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:65-76`), project runs resolve explicit/default provider and model id before reserving the `Run` (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:498-517`, `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:550-567`), and `AgentTurnInput` carries `ModelSource` as a string (`packages/Agentweaver.AgentRuntime/Workflow/WorkflowMessages.cs:4-23`); however the workflow worker is selected solely by `IWorkflowAgentFactory.CreateWorkerAgent()` (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-358`, `packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentFactory.cs:47-49`). Coordinator-originated parent, pickup, and child runs hard-code `ModelSource.GitHubCopilot` before reaching the same workflow path (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:116-128`, `apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:55-65`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:402-414`).
-
-## Agent Turn Loop
-
-The live agent loop is centered on `CopilotAIAgent`:
-
-1. `RunOrchestrator` creates or reuses a worktree, resolves the agent charter, compiles memory context, constructs `AgentTurnInput`, starts the workflow, registers it, and starts a supervised watch loop (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:76-147`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:468-548`).
-2. `RunWorkflowFactory` creates a fresh worker `CopilotAIAgent`, creates `AgentTurnExecutor`, and wires review/merge/RAI/Scribe workflow nodes around it (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-373`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:380-430`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:507-530`).
-3. `AgentTurnExecutor` merges inline node charters into system prompt context, calls `SetupAsync`, runs one turn, commits worktree changes, computes diff, and returns `AgentTurnOutput` (`packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:64-107`, `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:135-152`).
-4. `CopilotAIAgent.SetupAsync` loads sandbox policy, chooses direct vs sandbox executor, creates file/search tools, builds `SandboxToolContext`, builds session tools, and configures Copilot `SessionConfig` with working directory, disabled config discovery, deterministic session id, system message, tools, and model (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:192-239`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:241-259`).
-5. `RunTurnAsync` creates or resumes the SDK session and calls `ExecuteStreamingLoopAsync` (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:291-302`).
-6. `ExecuteStreamingLoopAsync` emits sandbox/system/task/tool metadata, then streams the model call, retrying on token refresh or rate limit as needed (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:368-437`).
-7. `StreamTurnOnceAsync` iterates `_inner.RunStreamingAsync`, emits token deltas, emits final message content when no deltas arrived, and translates SDK tool lifecycle objects into `tool.call`, `tool.result`, or `tool.error` run events (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:462-512`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:606-663`).
-8. The permission handler gates URL fetches, custom tools, MCP/native file/shell requests, and fail-closed errors before execution (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:675-942`).
+1. **Reserve the run.** The API validates the task, repository/project, branch, model preference, and optional `agent_name`. It creates a durable run record before work begins.
+2. **Resolve the working area.** The orchestrator creates or reuses a worktree. Coordinator child runs can share a parent worktree so subtasks collaborate on one branch instead of creating isolated branches that later conflict.
+3. **Resolve the agent identity.** Project runs validate that the requested agent exists in the team and load that agent's charter. The charter is part of the system context, not an implementation detail.
+4. **Compile context.** Runtime context is ordered so durable decisions and memory precede the current task. Child worker runs receive narrower context to reduce leakage and keep subtasks focused.
+5. **Start a workflow.** The workflow wraps the worker turn with surrounding nodes: review, merge, RAI, Scribe, and coordinator-specific paths when needed.
+6. **Watch and persist.** A watch loop listens to workflow and runtime events, translates them into UI-visible status, persists history, and handles terminal states.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant API as API endpoint
-    participant OR as RunOrchestrator
-    participant MC as MemoryContextCompiler
-    participant WF as RunWorkflowFactory / MAF
-    participant EX as AgentTurnExecutor
-    participant AG as CopilotAIAgent
-    participant SDK as GitHub Copilot SDK agent
-    participant SG as SandboxGovernance
-    participant T as Tool / native operation
-    participant WS as WorktreeOps
-    participant WL as RunWatchLoop
+    participant OR as Run orchestrator
+    participant CTX as Context compiler
+    participant WF as Workflow
+    participant EX as Agent turn executor
+    participant AG as Turn agent
+    participant SDK as Provider SDK
+    participant TOOL as Tool/governance plane
+    participant WT as Worktree operations
+    participant WATCH as Watch loop / event stream
 
-    API->>OR: start run
-    OR->>OR: create/reuse worktree + resolve charter
-    OR->>MC: compile decisions/memory/session context
-    MC-->>OR: systemPromptContext
-    OR->>WF: StartAsync(AgentTurnInput)
-    WF->>EX: invoke agent node
-    EX->>AG: SetupAsync(worktree, repo, runId, model, context, stream, project, agent)
-    AG->>AG: build SessionConfig + tools + permission handler
-    EX->>AG: RunTurnAsync(task, isRevision)
-    AG->>SDK: RunStreamingAsync(task, session)
-    SDK-->>AG: text deltas
-    AG-->>WL: agent.message.delta events
-    SDK-->>AG: tool lifecycle / permission request
-    AG->>SG: EvaluateToolCall(tool, args)
-    SG-->>AG: allow / deny
-    alt allowed
-        SDK->>T: execute tool/native operation
-        T-->>SDK: result
-        SDK-->>AG: ToolExecutionComplete
-        AG-->>WL: tool.result
-    else denied
-        AG-->>WL: tool.error + run.degraded
-    end
-    SDK-->>AG: final assistant message / no more tool calls
-    AG-->>WL: agent.turn.end
-    AG-->>EX: assistant text
-    EX->>WS: CommitChanges + GetDiff + GetStepCount
+    API->>OR: Request run
+    OR->>OR: Reserve run + prepare worktree
+    OR->>CTX: Compile charter, decisions, memory, session context
+    CTX-->>OR: System prompt context
+    OR->>WF: Start workflow with AgentTurnInput
+    WF->>EX: Invoke worker node
+    EX->>AG: Setup run-scoped session, tools, permissions
+    EX->>AG: Run one turn with task
+    AG->>SDK: Stream model execution
+    SDK-->>AG: Text deltas
+    AG-->>WATCH: agent.message.delta
+    SDK-->>AG: Tool or permission request
+    AG->>TOOL: Evaluate policy and execute if allowed
+    TOOL-->>AG: Result or denial
+    AG-->>WATCH: tool.* / run.degraded / run.outcome
+    SDK-->>AG: Final assistant response
+    AG-->>WATCH: agent.turn.end
+    AG-->>EX: Assistant text
+    EX->>WT: Commit changes, compute diff, count steps
     EX-->>WF: AgentTurnOutput
-    WF-->>WL: review / merge / terminal events
+    WF-->>WATCH: Review, merge, RAI, Scribe, terminal events
 ```
 
-For Foundry, the loop is explicit in `FoundryAgentRunner`: it sends `ChatMessage` history with `ChatOptions.Tools`, streams response updates, reconstructs the assistant message, executes any `FunctionCallContent` against registered `AIFunction`s, appends `FunctionResultContent` as a tool-role message, and repeats until no calls or `MaxTurns` is reached (`packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:153-161`, `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:167-235`, `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:237-336`).
+### Why this shape?
 
-## Tool Catalog & Dispatch
+- **The run must be restartable.** Workflows and provider sessions can be checkpointed or reconstructed, so long-running runs survive process boundaries better than a single in-memory method call.
+- **The model must not own policy.** The model can request a shell command or file edit, but governance, approvals, and sandbox boundaries are enforced outside the model.
+- **The UI needs provider-neutral events.** A Copilot stream, a Foundry chat loop, a tool denial, and a review gate all become normalized run events.
+- **Post-processing is part of correctness.** A useful agent run is not complete when the model stops talking; Agentweaver still needs a diff, commit, review state, RAI verdict, and memory pass.
 
-### Registry and context
+Where this lives:
 
-Every `AgentTools` tool implements `ISandboxTool` and creates a Microsoft.Extensions.AI `AIFunction` (`packages/Agentweaver.AgentTools/ISandboxTool.cs:5-17`). `SandboxToolContext` is the per-run dependency bundle: agent id, working directory, sandbox root, executor, file/search tools, redactor, options, logger, optional event emitter, run id, shell approval predicates, and optional question gate (`packages/Agentweaver.AgentTools/SandboxToolContext.cs:7-39`). `SandboxToolOptions` carries shell enablement, timeout, allowed repository roots, destructive command approval patterns, require-all-shell-approval, and network enablement (`packages/Agentweaver.AgentTools/SandboxToolOptions.cs:3-30`).
+- `apps/Agentweaver.Api/Runs`
+- `packages/Agentweaver.AgentRuntime/Workflow`
+- `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
 
-`SandboxToolRegistry.Build` constructs the canonical list and conditionally inserts `run_command` only when the executor has real isolation or direct mode and shell is enabled (`packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:15-37`). `GetToolNames` exposes the canonical names for display/availability (`packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:40-44`).
+## Agent turn loop
 
-### Tool table
+A **turn** is one bounded attempt by an agent to satisfy a task in a workspace. The turn loop has five conceptual phases.
 
-| Tool | Input/output contract | Handler |
-|---|---|---|
-| `run_command` | Inputs: `command`, optional `timeout_ms`. Requires HITL approval for all shell or destructive patterns, validates shell command, executes `SandboxCommand`, returns `stdout`, `stderr`, `exit_code`, and flags such as `timed_out` / `output_truncated`; denied/approval-required commands return explanatory strings. | `RunCommandTool` (`packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs:12-18`, `packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs:19-63`, `packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs:65-86`) |
-| `read_file` | Input: `path` relative to working directory. Returns file content or `Error: ...`. | `ReadFileTool` (`packages/Agentweaver.AgentTools/Tools/ReadFileTool.cs:10-19`) |
-| `grep_search` | Inputs: `pattern`, optional `is_regex`, `include_pattern`, `max_results`. Returns `relativePath:line: content` lines or `No matches found.` | `GrepSearchTool` (`packages/Agentweaver.AgentTools/Tools/GrepSearchTool.cs:10-23`) |
-| `file_search` | Inputs: glob `pattern`, optional `max_results`. Returns matching paths or `No files found.` | `FileSearchTool` (`packages/Agentweaver.AgentTools/Tools/FileSearchTool.cs:10-21`) |
-| `str_replace_editor` | Inputs: `path`, unique `old_str`, `new_str`. Returns `ok`, `not replaced`, or `Error: ...`. | `StrReplaceEditorTool` (`packages/Agentweaver.AgentTools/Tools/StrReplaceEditorTool.cs:10-21`) |
-| `apply_patch` | Input: `patch` in Copilot CLI patch grammar. Returns `Patch applied. ...` with per-hunk summary or `Error: ...`. | `ApplyPatchTool` (`packages/Agentweaver.AgentTools/Tools/ApplyPatchTool.cs:10-21`) |
-| `create_file` | Inputs: `path`, `file_text`. Creates a new file and returns `ok` or `Error: ...`; fails if file exists. | `CreateFileTool` (`packages/Agentweaver.AgentTools/Tools/CreateFileTool.cs:10-20`) |
-| `write_file` | Inputs: `path`, `content`. Creates or overwrites a file; returns `ok` or `Error: ...`. | `EditFileTool` (`packages/Agentweaver.AgentTools/Tools/EditFileTool.cs:10-20`) |
-| `report_intent` | Input: `intent`. Tool function returns a reminder string; Copilot runtime suppresses raw tool lifecycle and emits `agent.intent` from permission/lifecycle handling. | `ReportIntentTool` (`packages/Agentweaver.AgentTools/Tools/ReportIntentTool.cs:10-19`), Copilot handling (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:622-640`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:763-779`) |
-| `report_outcome` | Inputs: `achieved`, `reason`. Tool function returns `Outcome recorded.`; Copilot runtime emits `run.outcome`. | `ReportOutcomeTool` (`packages/Agentweaver.AgentTools/Tools/ReportOutcomeTool.cs:10-19`), Copilot handling (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:781-803`) |
-| `ask_question` | Input: `question`. Emits `agent.question_asked`, blocks on `IQuestionGate`, emits `agent.question_answered`, returns answer text or a best-judgement fallback on no gate/timeout. | `AskQuestionTool` (`packages/Agentweaver.AgentTools/Tools/AskQuestionTool.cs:8-15`, `packages/Agentweaver.AgentTools/Tools/AskQuestionTool.cs:29-64`) |
+### 1. Setup: build the run-scoped execution environment
 
-### Provider dispatch behavior
+The turn agent is configured per run, not globally. Setup receives the working directory, repository root, run id, model id, stream writer, project id, agent name, system context, and cancellation token. From those inputs it builds:
 
-Copilot and Foundry consume the same tool definitions differently:
+- a provider session configuration;
+- a deterministic session identity tied to the run;
+- a system prompt containing the base runtime instructions plus charter/memory context;
+- sandbox policy and the selected command executor;
+- file/search/edit helper objects scoped to the workspace;
+- tool context and tool catalog;
+- a permission handler that mediates native provider operations;
+- an event emitter that can write normalized `RunEvent`s.
 
-- **Copilot live workflow (`CopilotAIAgent`)** builds the full registry only to extract `report_intent`, `report_outcome`, and optionally `ask_question`, then appends Agentweaver API tools when `projectId` and `agentName` are set (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:1023-1060`). It deliberately does not register the full sandbox registry with Copilot because native file/shell tools are governed through the SDK permission handler; the older `GitHubCopilotAgentRunner` comment says registering only these functions avoids native-tool conflicts and keeps governance tight (`packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs:771-793`).
-- **Copilot native and custom calls** are gated by `BuildPermissionHandler`. It handles URL fetch HITL approval, side-effect-free `report_intent` / `report_outcome`, Agentweaver API tools, custom external tools, native read/write/shell/MCP requests, fail-closed exceptions, and emits denial/degraded events (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:686-750`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:753-883`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:885-942`).
-- **Foundry** registers the full `SandboxToolRegistry.Build` result as `ChatOptions.Tools`, maps common aliases like `edit` -> `write_file`, performs governance before invocation, calls `AIFunction.InvokeAsync`, and appends `FunctionResultContent` back to the chat history (`packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:150-161`, `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:228-329`).
-- **Agentweaver API tools** are runtime-owned tools, not part of `AgentTools`. They expose memory/decision/session tools for all project agents and additional project/run/coordinator tools only when `agentName == "Coordinator"` (`packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs:18-38`, `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs:51-238`, `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs:239-368`).
+This phase intentionally disables provider-side config discovery for the live Copilot path. The runtime wants a controlled tool surface; it should not accidentally load arbitrary local MCP servers, skills, or config from the repository.
 
-## Squad Touchpoints
+**Invariant:** anything that can affect tool access, workspace location, prompt context, or event output must be derived during setup and reset between runs. A reused agent instance must not leak event state, permission state, or registered tool names from a previous run.
 
-This runtime uses Squad data as **inputs**, but does not own the Squad domain. For the deep dive on team casting, catalog, naming, model records, analysis, `.squad/` serialization/sync, and memory import/export, see [Team Casting — Deep Dive](team-casting.md).
+### 2. Start or resume the provider session
 
-Runtime-relevant touchpoints:
+The live Copilot worker uses a provider SDK session. If a workflow resumes, the runtime can deserialize the provider session state; otherwise it creates a fresh session. This is why the live worker implements serialization hooks. Ephemeral built-in reviewers such as RAI and Scribe intentionally do not need durable session state because they run short, single-purpose turns.
 
-- Project run submission validates that `agent_name` is an active team member and loads the member charter from `.squad/agents/{name}/charter.md` before creating the run (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:530-548`).
-- `RunOrchestrator` resolves charters again defensively and injects the charter into `systemPromptContext` ahead of compiled memory context (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:444-466`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:524-548`).
-- Coordinator planning uses the current `Team` roster to assign real cast members to subtasks; dispatch then launches child runs through the same runtime path (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:27-35`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:37-64`).
+**Trade-off:** preserving provider session state improves continuity and checkpointing, but it couples the live worker to provider-specific serialization. Agentweaver hides that coupling behind the workflow turn-agent interface.
 
-## Integration with the API (how Runs/Coordinator drive the runtime)
+### 3. Stream model execution
 
-### Service registration
+The runtime sends the task into the provider session and consumes streaming updates. During streaming it emits:
 
-At startup, the API registers event streaming, worktree, merge, workflow, watch-loop, restart, and orchestration services (`apps/Agentweaver.Api/Program.cs:70-86`), then calls `AddAgentRuntime()` (`apps/Agentweaver.Api/Program.cs:193-201`). `AddAgentRuntime()` registers:
+- configuration snapshots such as selected sandbox backend and registered tools;
+- the task and effective system prompt metadata;
+- assistant token deltas;
+- tool call, result, and error events;
+- special semantic events such as `agent.intent` and `run.outcome`;
+- terminal turn events.
 
-- sandbox executor factory,
-- Copilot/Foundry client factories,
-- `GitHubCopilotAgentRunner`, `FoundryAgentRunner`, and `IAgentRunner -> AgentRunnerDispatcher`,
-- shell/tool approval gates,
-- question gate,
-- run options store,
-- `IWorkflowAgentFactory -> WorkflowAgentFactory` (`packages/Agentweaver.AgentRuntime/AgentRuntimeServiceCollectionExtensions.cs:16-36`).
+The runtime also retries known recoverable provider failures such as token refresh or rate-limit cases. It does not change the task semantics during retry; it simply attempts to complete the same turn.
 
-### Standalone and project run endpoints
+**Invariant:** every observable action should produce stable, ordered events. Tool results must not appear before their call. Denials must not be silent. A degraded run must emit `run.degraded` before the run appears terminal to clients.
 
-`POST /api/runs` validates task, repository, branch, and model source, creates a pending `Run`, seeds run options, and calls `RunOrchestrator.StartRunAsync` (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:33-98`).
+### 4. Mediate tool use
 
-`POST /api/projects/{id}/runs` loads project settings, resolves model source/model id/base branch, validates `agent_name` as an active team member, loads the charter, reserves the run row, and starts `StartReservedProjectRunAsync` in a background task (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:457-537`, `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:539-620`).
+The model may request file reads, edits, shell commands, URL fetches, API tools, or custom functions. The runtime classifies the request, evaluates policy, and either allows execution or returns a denial.
 
-### Run orchestration
+For Copilot live runs, native provider operations are governed through the permission-request callback. This lets Agentweaver use provider-native file/shell capabilities while still applying Agentweaver policy. For registered custom functions, the runtime can decide whether to suppress raw tool lifecycle events and emit more meaningful domain events instead.
 
-`RunOrchestrator` is a "thin launcher": it creates a worktree, persists/updates the run, opens the live stream, builds context, starts the MAF workflow, registers it, and starts a supervised watch loop (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:12-17`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:76-147`). For child coordinator runs, it reuses the coordinator's shared worktree and starts the trimmed child workflow (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:149-223`).
+For Foundry, the runtime runs an explicit loop: send chat history and tool definitions, receive function calls, evaluate governance, invoke the matching function, append the function result to chat history, and continue until no calls remain or the turn limit is reached.
 
-Context assembly is a first-class step:
+**Invariant:** the model only sees string-like tool results. This keeps the tool contract simple and portable across providers.
 
-- `MemoryContextCompiler` orders context as decisions, core context, high-importance learnings/patterns, and current session (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:7-12`, `apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:54-116`).
-- `RunOrchestrator.BuildContextAsync` injects child workers with only charter + active architectural/scope decisions + workspace boundary, while normal worker runs receive compiled memory plus charter and the memory protocol (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:468-548`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:551-599`).
+### 5. Close the turn and hand control back to the workflow
 
-### Workflow execution, watching, and persistence
+When the provider has no more work for the turn, the executor collects the assistant response, commits workspace changes, computes the diff, counts steps, and returns a structured turn output. The workflow then decides whether to proceed to review, ask for revision, merge, run RAI, run Scribe, or finish.
 
-`RunWorkflowFactory` builds the MAF workflow, checkpoint manager, run graph metadata, agent/RAI/Scribe/merge/review nodes, and loopback API settings used by memory tools (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:21-24`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:156-172`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:175-201`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-430`).
+**Trade-off:** committing at the turn boundary creates a clear audit point and diff, but means each turn must be treated as an atomic unit of work. Multi-turn revision is modeled as additional workflow edges rather than hidden continuation inside the provider loop.
 
-`RunWatchLoopService` watches MAF streaming events, translates executor lifecycle events into UI `workflow.step` events, records review gate requests, handles terminal outputs, abandons/cleans up completed runs, and fails runs on watch-loop errors/timeouts (`apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:14-18`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:56-96`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:98-176`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:188-236`).
+Where this lives:
 
-Run events are persisted/backfilled through `RunWorkflowFactory.PersistRunEventsAsync`, which mirrors in-memory stream history to the durable event stream or `RunEvents` table and completes the live channel (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:273-338`).
+- `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+- `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs`
+- `packages/Agentweaver.AgentRuntime/Workflow/IWorkflowTurnAgent.cs`
 
-### Coordinator runtime
+## Runner selection and provider seams
 
-Coordinator runs are MAF workflows too. `CoordinatorWorkflowFactory` builds Phase 1 as draft -> confirmation gate -> finalize/revise loop, and its confirmed path calls `CoordinatorOrchestratorExecutor.OrchestrateAsync` to decompose and persist a work plan (`apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:17-31`, `apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:108-175`).
+Agentweaver has two provider seams that are easy to confuse.
 
-`CoordinatorRunService.ActivateAsync` seeds run options, creates the run stream, starts the coordinator workflow, registers it, and starts watching (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:214-245`). Phase 2 dispatch is owned by `CoordinatorDispatchService`, which launches ready subtasks as child runs via `RunOrchestrator.StartChildRunAsync`, observes child run streams, and emits coordinator topology/subtask lifecycle events (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:37-64`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:120-150`).
+### Seam 1: the legacy/one-shot runner dispatcher
 
-## Extension Points & Gotchas
+`IAgentRunner` is a provider-neutral interface for "execute this task in this directory with this model source." The dispatcher chooses a concrete runner from `ModelSource`:
+
+- `GitHubCopilot` routes to the GitHub Copilot runner.
+- `MicrosoftFoundry` routes to the Foundry runner.
+- unknown providers fail fast.
+
+This seam is useful for one-shot model-assisted tasks and older runtime paths. Foundry is plumbed here and can run if a caller reaches this dispatcher with `MicrosoftFoundry`.
+
+### Seam 2: the live workflow turn-agent seam
+
+Project and coordinator runs are Microsoft Agents Framework workflows. The worker node is created through the workflow agent factory as a Copilot-backed workflow turn agent. The workflow executor calls `SetupAsync` and `RunTurnAsync` on that worker; it does not dispatch on `AgentTurnInput.ModelSource` to select Foundry.
+
+This is the key nuance:
+
+> The dispatcher can route to Foundry, but the live project/coordinator run path currently builds the Copilot workflow agent. Foundry is plumbed behind the dispatcher, but it is not active on the live run path.
+
+```mermaid
+flowchart TD
+    A[Caller wants model execution] --> B{Which seam?}
+
+    B -->|IAgentRunner one-shot seam| C[AgentRunnerDispatcher]
+    C --> D{ModelSource}
+    D -->|GitHubCopilot| E[GitHub Copilot runner]
+    D -->|MicrosoftFoundry| F[Foundry runner]
+    D -->|Unknown| G[Fail fast]
+
+    B -->|Live project/coordinator workflow| H[RunWorkflowFactory]
+    H --> I[IWorkflowAgentFactory]
+    I --> J[Copilot workflow turn agent]
+    J --> K[SetupAsync + RunTurnAsync]
+
+    L[Casting / model-assisted generation] --> C
+    M[Project runs / coordinator child runs] --> H
+```
+
+### Why keep both seams?
+
+- The dispatcher is simple and provider-neutral. It is a good adapter for operations that only need "prompt plus workspace plus result."
+- The workflow turn-agent seam supports checkpointing, structured workflow edges, review loops, RAI/Scribe nodes, and provider session state.
+- Keeping Foundry behind the dispatcher lets the project evolve toward provider choice without forcing the live workflow to support all provider-specific session behavior immediately.
+
+### Foundry's conceptual loop
+
+Foundry does not use the Copilot SDK's native permission callback. Its runner owns the tool loop directly:
+
+1. Build chat history with the system prompt and user task.
+2. Register the full sandbox tool catalog as chat tools.
+3. Ask the model for the next assistant response.
+4. If the response contains function calls, normalize aliases, evaluate governance, invoke allowed functions, and append results.
+5. Repeat until the model stops calling tools or a maximum turn count is reached.
+
+This makes Foundry easier to reason about as a classic tool-calling loop, but it means the runner must implement details that Copilot delegates to its SDK.
+
+Unverified: no inspected app-level live run path currently selects Foundry through the workflow factory. External callers that directly use `IAgentRunner` could still exercise the Foundry dispatcher path.
+
+Where this lives:
+
+- `packages/Agentweaver.Domain/IAgentRunner.cs`
+- `packages/Agentweaver.Domain/ModelSource.cs`
+- `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs`
+- `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs`
+- `packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs`
+- `packages/Agentweaver.AgentRuntime/Workflow`
+
+## Tool model
+
+Tools are the runtime's contract with the model. A tool is not just a method; it is a named capability with a schema, description, result contract, policy context, and event behavior.
+
+### Why tool context is per-run
+
+The same tool name can mean different concrete authority in different runs. `read_file` in one run must be scoped to that run's worktree, while `run_command` may be disabled, sandboxed, or approval-gated depending on run options. For that reason, tools are built from a `SandboxToolContext` rather than from global singletons.
+
+A run-scoped tool context contains the facts a tool needs to make safe decisions:
+
+- agent identity and run id;
+- working directory and sandbox root;
+- command executor and whether it provides real isolation;
+- file/search/edit helpers restricted to allowed roots;
+- output redaction;
+- shell/network/destructive-command options;
+- approval predicates and question gates;
+- event hooks for user-visible progress.
+
+**Invariant:** tools should not rediscover authority from process state. They should receive authority explicitly through context.
+
+### Canonical sandbox tools
+
+The canonical catalog covers a small set of capabilities:
+
+| Capability | Conceptual purpose |
+|---|---|
+| `read_file` | Let the model inspect known files. |
+| `file_search` | Let the model discover paths by glob-like patterns. |
+| `grep_search` | Let the model find text without reading the whole repository. |
+| `str_replace_editor` | Make precise edits when the old text is known. |
+| `apply_patch` | Apply structured multi-file patches. |
+| `create_file` / `write_file` | Create or overwrite files when the runtime allows it. |
+| `run_command` | Execute commands through the selected sandbox/direct executor, subject to shell policy and approval. |
+| `report_intent` | Let the agent announce what it is about to do in a UI-friendly way. |
+| `report_outcome` | Let the agent declare whether the task was achieved and why. |
+| `ask_question` | Let the agent request human input through a controlled gate instead of stalling silently. |
+
+`run_command` is conditional. It only exists when shell execution is enabled and the selected executor mode is acceptable for the run. This avoids advertising a capability the runtime will never allow.
+
+### Copilot live tool exposure
+
+The live Copilot path intentionally does **not** register the entire sandbox catalog as custom functions. Instead:
+
+- provider-native file/shell operations are allowed to exist, but every operation is mediated by the permission handler;
+- selected custom functions such as intent/outcome/question are registered because they represent Agentweaver-specific semantics;
+- Agentweaver API tools are registered when the run has project and agent identity;
+- raw lifecycle events for some semantic tools are suppressed and replaced with higher-level events such as `agent.intent` or `run.outcome`.
+
+This design avoids duplicate/conflicting file tools while keeping Agentweaver governance in front of native provider operations.
+
+### Foundry tool exposure
+
+Foundry receives the full canonical sandbox catalog as function tools. Because Foundry does not have the same native permission callback, the runner performs the whole loop explicitly: map the requested function name, check governance, invoke the function, convert the result to text, and append it to chat history.
+
+### Agentweaver API tools
+
+Agentweaver API tools are runtime-owned loopback tools, not sandbox file tools. They let agents interact with project state through the same API surface humans and MCP clients use.
+
+Common project-agent tools include:
+
+- submit a decision to the inbox;
+- record memory;
+- update the current session;
+- list decisions and pending inbox entries;
+- read memory;
+- export memory artifacts.
+
+Coordinator runs receive additional coordination tools because they manage plans and child work. Regular workers should not get coordinator-only authority.
+
+**Trade-off:** loopback API tools make agents first-class participants in project memory, but they must be scoped by project id, agent name, API base URL, and API key. Without those boundaries, a tool call could affect the wrong project.
+
+### Human-in-the-loop tools
+
+Some actions require a human or external decision:
+
+- shell commands may require approval globally or when they match destructive patterns;
+- URL fetches can be approval-gated;
+- `ask_question` can pause on a question gate and resume with the answer.
+
+The tool should always produce a useful result even when the gate is unavailable or times out: either a denial, a fallback instruction to use best judgment, or an explicit explanation. Silent blocking is not acceptable.
+
+```mermaid
+flowchart LR
+    M[Model requests capability] --> R{Runtime classification}
+    R -->|Native file/shell/fetch| P[Permission handler]
+    R -->|Registered AIFunction| F[Function invocation]
+    R -->|Agentweaver API tool| A[Loopback API call]
+
+    P --> G[Governance evaluation]
+    F --> G
+    A --> S[Project API authorization/scope]
+
+    G -->|Allowed| X[Execute]
+    G -->|Denied| D[Return denial + emit tool.error]
+    X --> O[String result]
+    D --> O
+    O --> E[Normalized run events]
+    E --> M
+```
+
+Where this lives:
+
+- `packages/Agentweaver.AgentTools`
+- `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs`
+- `packages/Agentweaver.AgentRuntime/SandboxGovernance.cs`
+- `packages/Agentweaver.AgentRuntime/InMemoryToolApprovalGate.cs`
+- `packages/Agentweaver.AgentRuntime/InMemoryQuestionGate.cs`
+
+## Governance and sandboxing
+
+The runtime assumes model output is untrusted intent. A requested command or edit is not safe just because the model produced it.
+
+Governance answers three questions:
+
+1. **Is the capability available?** For example, shell execution may be disabled entirely.
+2. **Is the target in bounds?** File operations should stay inside allowed repository/workspace roots.
+3. **Does the action need approval or denial?** Destructive commands, broad shell access, URL fetches, and native tool requests can require explicit approval or fail closed.
+
+The sandbox executor is the mechanical side of this policy. It determines where commands run and whether execution has real isolation. The governance layer is the decision side. The event stream is the observability side.
+
+**Important invariant:** denial is a successful policy outcome, not an internal failure. The agent and UI should see that the attempted action was blocked, why it was blocked, and whether the run is now degraded.
+
+**Trade-off:** stricter fail-closed behavior improves safety but can reduce agent autonomy. Agentweaver mitigates this by surfacing denials as context the agent can adapt to, rather than hiding them.
+
+Where this lives:
+
+- `packages/Agentweaver.AgentRuntime/SandboxGovernance.cs`
+- `packages/Agentweaver.SandboxExec`
+- `packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs`
+- `packages/Agentweaver.AgentRuntime/NativeToolExclusion.cs`
+
+## Event emission
+
+Events are the runtime's shared language. They decouple provider-specific streaming from the rest of Agentweaver.
+
+A useful event stream must provide:
+
+- **ordering:** sequence numbers increase monotonically for a run;
+- **correlation:** tool results and errors refer back to tool calls;
+- **semantic compression:** noisy provider internals can become domain events like `agent.intent`;
+- **durability:** live streams can be mirrored into persistent history;
+- **terminal clarity:** clients should know when a turn ended, when a run degraded, and when workflow nodes completed.
+
+The Copilot live agent therefore emits both low-level and high-level events: token deltas, tool calls, tool results, tool errors, sandbox selections, warnings, system prompt metadata, task metadata, RAI verdicts, Scribe status, and run outcome signals.
+
+The runtime is careful about event timing. If a tool denial happens near the end of a turn, `run.degraded` is flushed before the terminal turn/run events so a live client does not render a clean success while missing the warning.
+
+Where this lives:
+
+- `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+- `packages/Agentweaver.AgentRuntime/Workflow/WorkflowStepEvents.cs`
+- `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`
+- `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs`
+
+## RAI and Scribe touchpoints
+
+RAI and Scribe are built-in agents that reuse the same Copilot-based turn machinery but serve narrow workflow roles.
+
+### RAI
+
+RAI runs after the worker produces changes and before the work is treated as safe to ship. It receives the produced diff and reviews for security vulnerabilities, harmful content, PII exposure, and ethical concerns. Its verdict controls workflow behavior:
+
+- **GREEN:** proceed.
+- **YELLOW:** advisory warning; proceed with caution.
+- **REVISE:** send actionable feedback back into the workflow so the worker can revise.
+- **RED:** flag content safety and fail the RAI gate.
+
+The verdict parser is intentionally defensive: it looks for explicit verdict markers rather than treating any mention of a word like "red" as a verdict. If RAI fails or returns an unparseable response, configuration decides whether to fail closed or proceed with an advisory warning.
+
+### Scribe
+
+Scribe runs after a project run reaches a terminal state. Its role is memory hygiene, not code generation. It reviews what happened, records durable learnings or patterns, updates session context, and exports memory artifacts. Scribe failures are non-fatal to the completed run; they should be visible, but they should not turn a finished worker run into a failed one.
+
+Scribe uses the same loopback API tool model as other agents, but its charter narrows authority: manage memory, merge/archive/export as appropriate, and do not make product/design decisions on behalf of the worker.
+
+Where this lives:
+
+- `packages/Agentweaver.AgentRuntime/RaiAIAgent.cs`
+- `packages/Agentweaver.AgentRuntime/ScribeAIAgent.cs`
+- `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs`
+- `packages/Agentweaver.AgentRuntime/Workflow/ScribeTurnExecutor.cs`
+
+## Squad touchpoints
+
+The runtime consumes Squad data as context and routing input:
+
+- project run submission validates that `agent_name` belongs to the active team;
+- the selected agent's charter is injected into the system context;
+- project decisions and memories are compiled into prompt context;
+- coordinator planning can assign work to real team members and dispatch child runs through the same runtime path.
+
+The runtime should not know how to cast a team, name agents, or serialize the `.squad/` directory beyond consuming the artifacts it needs. Keep that domain in Squad. See [Team Casting — Deep Dive](team-casting.md).
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs`
+- `apps/Agentweaver.Api/Runs/RunOrchestrator.cs`
+- `apps/Agentweaver.Api/Coordinator`
+- `packages/Agentweaver.Squad`
+
+## Rebuilding the runtime: design checklist
+
+If you were rebuilding Agentweaver's runtime, preserve these design invariants:
+
+1. **Separate workflow orchestration from provider execution.** A model turn is a workflow node, not the whole run.
+2. **Make provider selection explicit.** Do not assume a model source string affects live workflows unless the workflow factory dispatches on it.
+3. **Build tools per run.** Tool authority must come from run context, not process globals.
+4. **Govern before executing.** File, shell, network, native, and API actions must pass policy outside the model.
+5. **Return stable tool strings.** Providers differ, but the model should receive simple, predictable tool results.
+6. **Normalize events.** UI and persistence should depend on Agentweaver event types, not provider SDK objects.
+7. **Make denials observable.** A blocked action should emit a tool error and, when appropriate, a degraded-run signal.
+8. **Commit at boundaries.** The workflow needs durable worktree state and diffs after turns.
+9. **Keep memory explicit.** Agents record decisions and memory through API tools; prompt context is compiled deliberately.
+10. **Treat reviewers as agents with narrow charters.** RAI and Scribe reuse the runtime but have constrained responsibilities.
+
+## Extension points and gotchas
 
 ### Adding a tool
 
-1. Add an `ISandboxTool` implementation under `packages/Agentweaver.AgentTools/Tools/` with a canonical `Name` and `CreateFunction` returning an `AIFunction` (`packages/Agentweaver.AgentTools/ISandboxTool.cs:8-17`).
-2. Add it to `SandboxToolRegistry.Build` and `GetToolNames` if it should be part of the canonical catalog (`packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:15-44`).
-3. If the tool is for Foundry, confirm governance can evaluate it before invocation; Foundry injects/normalizes args and calls `governance.EvaluateToolCall` before `InvokeAsync` (`packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:262-318`).
-4. If the tool is for Copilot live workflow, decide whether it should be:
-   - a native SDK tool governed by `PermissionRequest` mapping (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:952-976`),
-   - a custom session tool added in `BuildSessionConfigTools` (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:1023-1060`), or
-   - an Agentweaver API tool added in `AgentweaverApiTools.Build` (`packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs:40-57`).
-5. Emit stable string results. The model sees tool results as strings in both runners (`packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:316-329`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:565-577`).
-6. For HITL tools, add stream events and an API answer/approval seam. Existing examples are shell approvals (`packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs:19-63`), URL approvals (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:686-750`), and questions (`packages/Agentweaver.AgentTools/Tools/AskQuestionTool.cs:49-60`).
+To add a provider-neutral sandbox tool:
+
+1. Define the tool name, input schema, description, and string result contract.
+2. Decide what run-scoped authority it needs and add that to the tool context if necessary.
+3. Add it to the canonical registry only if it should be generally available.
+4. Decide how each provider should see it:
+   - Foundry can receive it as a normal function tool.
+   - Copilot live may be better served by native provider capabilities plus permission handling, or by a selected custom function if the tool has Agentweaver-specific semantics.
+5. Add governance and event behavior before exposing it to the model.
 
 Gotchas:
 
-- `run_command` is absent unless shell is enabled and execution is real-isolated or direct (`packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:31-35`).
-- Copilot `SessionConfig.EnableConfigDiscovery` is forced `false` to avoid loading external MCP/skills/config from disk (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:241-250`).
-- Copilot live workflow does not register the full sandbox registry; native tool names are governed by permission requests, while only selected custom functions and API tools are registered (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:1023-1060`).
-- Denied tool calls should be observable and non-silent. `CopilotAIAgent` emits `tool.error` and `run.degraded` for denied native/custom calls (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:854-860`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:910-919`).
+- Advertising a tool the runtime will deny every time trains the model badly. Prefer conditional registration.
+- If the tool has side effects, denial and approval paths need first-class event output.
+- Avoid returning complex provider-specific objects. Convert results into concise strings.
 
-### Adding a runner/provider
+### Adding a provider
 
-1. Add the provider to `ModelSource` and API string conversion (`packages/Agentweaver.Domain/ModelSource.cs:7-27`).
-2. Implement `IAgentRunner.ExecuteAsync` with the same stream/event semantics and result contract (`packages/Agentweaver.Domain/IAgentRunner.cs:10-18`).
-3. Register the concrete runner in `AddAgentRuntime()` and update `AgentRunnerDispatcher` (`packages/Agentweaver.AgentRuntime/AgentRuntimeServiceCollectionExtensions.cs:26-35`, `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:27-32`).
-4. Update API validators that currently accept only `github-copilot` or `microsoft-foundry` (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:50-52`, `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:498-517`).
-5. Decide whether the provider participates in the live MAF workflow. Today, the live worker seam is `IWorkflowTurnAgent`, and production creates `CopilotAIAgent`; adding a provider for live project runs requires a new `IWorkflowTurnAgent` implementation or a factory dispatch based on `AgentTurnInput.ModelSource` (`packages/Agentweaver.AgentRuntime/Workflow/IWorkflowTurnAgent.cs:18-42`, `packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentFactory.cs:47-61`, `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:89-107`).
+To add a provider for the one-shot seam, implement the runner interface, register it, and update the dispatcher/model-source conversion.
+
+To add a provider for live project/coordinator runs, that is not enough. You also need a workflow turn-agent implementation that supports setup, turn execution, event normalization, tool governance, and ideally session serialization. Then update the workflow agent factory to select it based on run input.
 
 Gotchas:
 
-- The live worker must support setup, turn execution, disposal, and preferably session serialization/checkpointing. `CopilotAIAgent` delegates session serialization/deserialization to the inner SDK agent so MAF checkpoints include Copilot session state (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:322-353`).
-- `RaiAIAgent` and `ScribeAIAgent` are thin `CopilotAIAgent` subclasses that intentionally no-op serialization because they are ephemeral single-turn agents (`packages/Agentweaver.AgentRuntime/RaiAIAgent.cs:10-40`, `packages/Agentweaver.AgentRuntime/ScribeAIAgent.cs:10-39`).
-- The base prompt is intentionally minimal; agent identity and working style should come from charter/system prompt context, not provider code (`packages/Agentweaver.AgentRuntime/AgentBasePrompt.cs:3-52`).
-- `RunOrchestrator` always appends `WorkerMemoryProtocol` to worker/child prompts so new runners must preserve system-prompt context if they should use memory/decision tools (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:35-52`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:551-559`).
+- Foundry support in the dispatcher does not imply Foundry support in live workflows.
+- New providers must preserve system-prompt context, memory instructions, and event semantics.
+- If the provider has no native permission callback, the runner must own the tool loop explicitly.
+
+### Changing RAI or Scribe
+
+RAI and Scribe are workflow safety/memory nodes, not general worker agents. Keep their charters narrow and their failure behavior explicit:
+
+- RAI may block or request revision depending on verdict.
+- Scribe should report failure but not invalidate an already-terminal worker run.
+- Both should avoid long-lived session assumptions unless their workflow role changes.

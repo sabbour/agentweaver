@@ -1,137 +1,311 @@
-# Sandbox Subsystem — Deep Dive
+# Sandbox Subsystem — Conceptual Deep Dive
 
-## Purpose & Scope (why isolate agent execution)
+## What the sandbox is protecting against
 
-Agentweaver runs model-selected file tools and shell commands against a project workspace. The sandbox subsystem limits the blast radius of those actions by combining:
+Agentweaver lets an AI agent inspect files, edit a workspace, search source, and optionally run shell commands. Those capabilities are useful only if the agent can act like an engineer, but they also create an escape problem: a model can be mistaken, prompt-injected, or asked to run commands whose side effects are broader than the current project.
 
-- a deny-by-default governance gate for tool calls (`SandboxGovernance` loads a policy with `defaultAction: Deny` and also calls `SandboxPolicyBackend` directly) [packages/Agentweaver.AgentRuntime/SandboxGovernance.cs:18-29](../../packages/Agentweaver.AgentRuntime/SandboxGovernance.cs) [packages/Agentweaver.AgentRuntime/SandboxGovernance.cs:110-148](../../packages/Agentweaver.AgentRuntime/SandboxGovernance.cs);
-- filesystem containment for read/write/search tools under the per-run working directory [packages/Agentweaver.SandboxFs/SandboxPathValidator.cs:17-49](../../packages/Agentweaver.SandboxFs/SandboxPathValidator.cs);
-- an `ISandboxExecutor` abstraction for process isolation, selected per deployment [packages/Agentweaver.SandboxExec/ISandboxExecutor.cs:3-33](../../packages/Agentweaver.SandboxExec/ISandboxExecutor.cs);
-- Kubernetes-native sandbox pods for production AKS deployments, backed by `SandboxClaim` resources and warm pods [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:27-39](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs);
-- Kubernetes `NetworkPolicy`/`CiliumNetworkPolicy` for sandbox egress control [k8s/networkpolicy-sandbox.yaml:17-50](../../k8s/networkpolicy-sandbox.yaml) [k8s/cilium-network-policy-sandbox.yaml:1-48](../../k8s/cilium-network-policy-sandbox.yaml).
+The sandbox is therefore built around one rule: **agent actions must be useful inside the assigned workspace and boring everywhere else**. A well-behaved agent should barely notice the sandbox. A malicious or confused agent should be unable to:
 
-The same API surface also supports local developer execution via Windows `mxc`, WSL2, Linux `bwrap`, Linux `lxc-exec`, or a final `direct` passthrough fallback [packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:6-15](../../packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs).
+- read or write files outside the run workspace;
+- escape through `..`, absolute paths, Windows drive tricks, UNC/device paths, symlinks, or junctions;
+- run host-level shell commands when no real process isolation exists;
+- reach arbitrary internal services from a production sandbox pod;
+- leave long-lived compute, network listeners, or preview tunnels after the run ends;
+- exfiltrate obvious secrets through large command output.
 
-## Architecture (mermaid: API -> sandbox claim -> warm pool pod -> exec/fs)
+This is not one mechanism. It is a layered isolation model:
+
+1. **Governance decides whether a tool call is allowed.** Unknown tools and suspicious paths fail closed before tool code runs.
+2. **Filesystem tools validate again at the point of use.** The implementation assumes governance can be bypassed or fed malformed arguments.
+3. **Shell commands run through an executor abstraction.** The runtime can choose a local isolation backend for development or a Kubernetes-backed sandbox for production.
+4. **Production sandboxes are isolated pods.** They use hardened pod settings, a shared workspace mount, bounded lifetime claims, and network policy egress controls.
+5. **Output is bounded and redacted.** The sandbox assumes command output itself can become an exfiltration channel.
+
+The result is defense in depth rather than a single perfect wall.
+
+Where this lives: `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.AgentTools`, `packages/Agentweaver.SandboxFs`, `packages/Agentweaver.SandboxExec`, `apps/Agentweaver.Api/Sandbox`, `k8s`
+
+## The core mental model
+
+Think of every agent action as passing through three concentric boundaries:
+
+```mermaid
+flowchart LR
+    Model[Model proposes tool call] --> Governance[Governance boundary<br/>default deny + known-tool policy]
+    Governance --> Tool[Tool boundary<br/>path validation + structured errors]
+    Tool --> Executor[Execution boundary<br/>local sandbox or Kubernetes pod]
+    Executor --> Workspace[(Workspace root)]
+    Executor --> Network[Network egress policy]
+
+    Governance -. denies .-> Stop1[No side effect]
+    Tool -. rejects .-> Stop2[No file escape]
+    Executor -. isolates .-> Stop3[No host escape]
+```
+
+Each boundary has a different job:
+
+- **Governance boundary:** answers “is this kind of action allowed for this run?” It is intentionally deny-by-default. A tool name must be recognized, and path-bearing arguments must resolve inside the sandbox root.
+- **Tool boundary:** answers “is this exact file operation safe right now?” It re-validates paths, rejects reparse-point escapes, and returns controlled failures to the agent loop.
+- **Execution boundary:** answers “where does this process actually run?” It hides the host behind a container, namespace, VM, or — only in explicit non-production cases — direct passthrough.
+- **Network boundary:** answers “what can this isolated process talk to?” In production, this is handled by Kubernetes/Cilium policy, not by trusting shell command text.
+
+The important design choice is that boundaries are **redundant**. Governance is not trusted as the only check, path validation is not trusted as process isolation, and process isolation is not trusted as network isolation.
+
+## Why command execution needs stronger isolation than file tools
+
+File tools are narrow: read this path, write this file, search this tree. Shell commands are broad: a single command can spawn processes, run interpreters, traverse the filesystem, open sockets, install packages, fork children, or encode data into output.
+
+For that reason, `run_command` is treated as a privileged capability:
+
+1. The shell tool is only registered when shell execution is enabled and the selected executor is acceptable for the current mode.
+2. Destructive command patterns, or policies that require approval for all shell commands, trigger a human-in-the-loop approval gate before execution.
+3. The command validator rejects malformed shell requests such as missing/invalid working directories, null bytes, or excessive command length.
+4. The command is packaged with the run workspace, timeout, filesystem policy, network flag, and optional run ID.
+5. The selected executor runs it and returns only bounded, redacted stdout/stderr plus an exit code.
+
+This design does not try to parse every shell command into safe and unsafe subcommands. That would be brittle. Instead, the system validates the shell envelope, requires approval for dangerous patterns, and relies on the executor boundary to contain whatever the shell actually does.
+
+Where this lives: `packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs`, `packages/Agentweaver.SandboxExec`
+
+## Filesystem containment: make the workspace the only universe
+
+The filesystem sandbox exists because path strings are adversarial input. An agent may ask for `../../secrets`, an absolute host path, a Windows device path, a UNC share, or a benign-looking path whose parent is a symlink to somewhere else. The containment rule is simple: **all file effects must resolve to the sandbox root or one of its children**.
+
+A rebuild should implement containment in two phases.
+
+### Phase 1: lexical rejection before touching the filesystem
+
+Before opening anything, reject inputs that are obviously outside the contract:
+
+- empty paths;
+- absolute paths when the tool expects a relative workspace path;
+- `..` path segments;
+- Windows device paths such as `\\?\` or `\\.\`;
+- UNC paths such as `\\server\share`;
+- drive-relative paths such as `C:foo`;
+- normalized paths whose prefix is not the normalized sandbox root.
+
+This catches cheap escape attempts without giving the filesystem a chance to resolve links or special names.
+
+### Phase 2: real-path verification at the point of use
+
+Lexical checks are necessary but insufficient. A path can look safe and still escape through a symlink or junction. Agentweaver therefore treats symlink/junction ancestors as untrusted and verifies the final opened handle where possible.
+
+The invariant is:
+
+> The path must be inside the workspace both before opening and after the OS resolves the object that was opened.
+
+That second check matters because it narrows time-of-check/time-of-use races. If an attacker swaps a path between validation and open, the final handle resolution can still detect that the opened object is outside the sandbox.
+
+### Why tools return structured failures
+
+Sandbox violations are not treated as fatal runtime crashes. File tools return clear, structured failures to the agent. This keeps the run alive while making the boundary visible: the agent can choose a safe path and continue, but it cannot pressure the runtime into ignoring the violation.
+
+### Search is constrained enumeration
+
+Search tools do not accept arbitrary host roots. They enumerate the sandbox root, avoid reparse points, skip high-noise/generated directories such as `.git`, `node_modules`, `bin`, `obj`, and `.vs`, and cap results. This is partly security and partly agent ergonomics: bounded search prevents accidental huge responses and reduces the chance of leaking irrelevant data.
+
+Where this lives: `packages/Agentweaver.SandboxFs`
+
+## Governance: fail closed before side effects
+
+The governance layer is the first policy checkpoint for model-selected tools. Its conceptual contract is:
+
+- default action is deny;
+- unknown tool names are denied;
+- known file tools must provide a recognized path argument;
+- search tools are allowed only because they are implemented as sandbox-root enumeration;
+- shell tools must provide a working directory inside the sandbox root;
+- internal governance exceptions deny the call rather than allowing it.
+
+Agentweaver also performs a direct sandbox-backend evaluation in addition to the governance kernel evaluation. That redundancy is deliberate: even if one policy integration changes behavior, the dedicated containment backend still has to approve the call.
+
+For shell specifically, governance adds a capability check: if the selected executor does not represent acceptable isolation for shell mode, shell execution is denied. The model should not be able to obtain a host shell merely because a tool name exists.
+
+Where this lives: `packages/Agentweaver.AgentRuntime/SandboxGovernance.cs`, `packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs`
+
+## Executor abstraction: one command contract, many isolation backends
+
+The executor abstraction separates “what the agent wants to run” from “where and how it runs.” The runtime passes a command object containing:
+
+- command line;
+- working directory;
+- environment variables;
+- filesystem policy;
+- timeout;
+- network-enabled flag;
+- optional Agentweaver run ID.
+
+Every executor returns the same shape: exit code, stdout, stderr, timeout flag, and output-truncated flag. This uniform contract lets the agent runtime stay stable while deployments choose different isolation implementations.
+
+### Backend selection logic
+
+Executor selection is environment-aware:
 
 ```mermaid
 flowchart TD
-    User[Agent run request] --> API[Agentweaver.Api]
-    API --> Runner[Copilot / Foundry runner]
-    Runner --> Tools[SandboxToolRegistry]
-    Tools --> Governance[SandboxGovernance + SandboxPolicyBackend]
-    Governance --> FileTools[SandboxedFileTools / SandboxedSearchTools]
-    Governance --> RunCommand[run_command tool]
-    RunCommand --> Executor[ISandboxExecutor]
-    Executor --> Router[SandboxExecutorRouter]
-    Router -->|in cluster or Sandbox:Backend=kubernetes| K8sExec[KubernetesSandboxExecutor]
-    Router -->|local| LocalExec[mxc / WSL / bwrap / lxc / direct]
-    K8sExec --> Claim[SandboxClaim<br/>extensions.agents.x-k8s.io/v1alpha1]
-    Claim --> WarmPool[SandboxWarmPool<br/>replicas: 3]
-    WarmPool --> Pod[agentweaver-sandbox pod<br/>Kata runtime + /workspace PVC]
-    K8sExec -->|pods/exec WebSocket| Pod
-    FileTools --> Workspace[(workspace root)]
-    Pod --> Workspace
+    Start[Need an ISandboxExecutor] --> Override{Sandbox:Backend set?}
+    Override -->|kubernetes| K8s[Kubernetes executor]
+    Override -->|local| Local[Local factory]
+    Override -->|not set| InCluster{KUBERNETES_SERVICE_HOST present?}
+    InCluster -->|yes| K8s
+    InCluster -->|no| Local
+
+    K8s --> K8sOK{Kubernetes client initializes?}
+    K8sOK -->|yes| ClaimExec[Use SandboxClaim warm-pool pods]
+    K8sOK -->|no| FailClosed[Throw: do not fall back]
+
+    Local --> Windows{Windows?}
+    Windows -->|yes| Mxc[processcontainer mxc]
+    Mxc -->|unavailable| Wsl[WSL2 bwrap/unshare]
+    Wsl -->|unavailable| Direct[direct passthrough warning]
+
+    Windows -->|no| Linux{Linux?}
+    Linux -->|yes| Bwrap[linux-bwrap]
+    Bwrap -->|unavailable| Lxc[lxc-exec]
+    Lxc -->|unavailable| Direct
 ```
 
-The API registers the runtime, then overrides the runtime's default `ISandboxExecutor` with `SandboxExecutorRouter`; it also registers the pod-name registry and port-forward service [apps/Agentweaver.Api/Program.cs:193-204](../../apps/Agentweaver.Api/Program.cs). `SandboxExecutorRouter` chooses Kubernetes when `Sandbox:Backend` is `kubernetes`, or when the API is in-cluster and the backend is not forced to `local`; if Kubernetes initialization fails, it throws instead of falling back to local execution [apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:30-83](../../apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs).
+The key production invariant is **fail closed in cluster**. If the API is running inside Kubernetes and the Kubernetes executor cannot initialize, Agentweaver throws instead of silently using a weaker local executor. A fallback that is acceptable on a developer laptop would be a security downgrade in production.
 
-## Sandbox Lifecycle (provision from warm pool, claim, run, teardown)
+### Local backends and their trade-offs
 
-For the Kubernetes backend, one command execution follows this path:
+Local execution exists for development, tests, and non-cluster deployments. It is intentionally best-effort and transparent about gaps:
 
-1. **Choose a claim name.** If `SandboxCommand.AgentweaverRunId` is present, the executor derives `run-{id-prefix}` so the run can later map back to the pod; otherwise it uses a random ID [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:70-79](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs).
-2. **Clamp timeout below claim TTL.** Command timeout is capped at `Sandbox:Kubernetes:TimeoutSeconds - 30s` to avoid the controller deleting the claim mid-command [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:80-90](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs).
-3. **Validate the pod working directory.** The requested working directory must be the configured workspace mount or a child of it [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:351-364](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs).
-4. **Create a `SandboxClaim`.** The executor posts `apiVersion: extensions.agents.x-k8s.io/v1alpha1`, `kind: SandboxClaim`, `spec.templateRef`, and `spec.ttl` [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:165-184](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs).
-5. **Wait for binding.** It polls until `status.phase == "Bound"` and reads the pod name from `status.sandbox.name` or `status.podName` [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:186-227](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs).
-6. **Register the pod for previews.** When a run ID is present, the pod is stored in `IPodNameRegistry` so port-forward endpoints can find it [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:121-130](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs) [apps/Agentweaver.Api/Sandbox/IPodNameRegistry.cs:3-20](../../apps/Agentweaver.Api/Sandbox/IPodNameRegistry.cs).
-7. **Exec in the pod.** The command is executed through Kubernetes WebSocket pod exec against container `agentweaver-sandbox`, using `/bin/sh -c` and the resolved working directory [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:247-285](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs) [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:381-395](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs).
-8. **Bounded output + redaction.** stdout, stderr, and status streams are read with 4 MiB caps; stdout/stderr are passed through `SandboxOutputRedactor` before returning [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:250-285](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs).
-9. **Teardown.** For ad-hoc commands without a run ID, the claim is deleted immediately. For run-scoped claims, the executor intentionally retains the claim for preview until run cleanup or TTL [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:139-147](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs). Run cleanup unregisters the pod and stops any active port-forward sessions [apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:469-496](../../apps/Agentweaver.Api/Runs/RunWatchLoopService.cs).
-
-Preview/debugging uses separate endpoints that start, list, and stop `kubectl port-forward` sessions for the sandbox pod [apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:11-64](../../apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs) [apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:67-121](../../apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs). The service binds forwards to `127.0.0.1`, enforces per-run/global limits, and shells out to `kubectl port-forward` [apps/Agentweaver.Api/Sandbox/PortForwardService.cs:65-84](../../apps/Agentweaver.Api/Sandbox/PortForwardService.cs) [apps/Agentweaver.Api/Sandbox/PortForwardService.cs:99-120](../../apps/Agentweaver.Api/Sandbox/PortForwardService.cs) [apps/Agentweaver.Api/Sandbox/PortForwardService.cs:206-235](../../apps/Agentweaver.Api/Sandbox/PortForwardService.cs).
-
-## SandboxExec & SandboxFs (interfaces, how commands/files are proxied)
-
-### Command execution
-
-`ISandboxExecutor` exposes metadata (`IsRealIsolation`, `BackendName`, network warnings) plus buffered and streaming execution [packages/Agentweaver.SandboxExec/ISandboxExecutor.cs:7-33](../../packages/Agentweaver.SandboxExec/ISandboxExecutor.cs). `SandboxCommand` carries the command line, working directory, filesystem policy, timeout, network flag, and optional Agentweaver run ID [packages/Agentweaver.SandboxExec/ISandboxExecutor.cs:35-49](../../packages/Agentweaver.SandboxExec/ISandboxExecutor.cs).
-
-`run_command` is a custom tool that:
-
-- performs HITL approval for destructive commands or when all shell commands require approval [packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs:19-63](../../packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs);
-- validates working-directory containment, command length, and null bytes [packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs:65-69](../../packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs) [packages/Agentweaver.SandboxExec/ShellCommandValidator.cs:14-40](../../packages/Agentweaver.SandboxExec/ShellCommandValidator.cs);
-- builds a filesystem policy and invokes the selected executor [packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs:70-85](../../packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs).
-
-The local executor selection order is:
-
-| Backend | Selection / security note |
-| --- | --- |
-| `processcontainer` | Windows `mxc` when `wxc-exec.exe` is found and the SDK probe reports support; output is capped and redacted [packages/Agentweaver.SandboxExec/MxcSandboxExecutor.cs:38-170](../../packages/Agentweaver.SandboxExec/MxcSandboxExecutor.cs) [packages/Agentweaver.SandboxExec/MxcSandboxExecutor.cs:180-265](../../packages/Agentweaver.SandboxExec/MxcSandboxExecutor.cs). |
-| `wsl-bwrap` / `wsl-unshare` | WSL2 backend chosen by SDK support; `wsl-bwrap` uses targeted mounts and namespaces, while non-bwrap WSL has a network warning [packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:23-51](../../packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs) [packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-160](../../packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs). |
-| `linux-bwrap` | Preferred Linux backend; binds the workdir to `/workspace`, mounts selected tool/runtime paths read-only, creates tmpfs for `/tmp`, `/home`, `/root`, and unshares PID/user/network unless network is enabled [packages/Agentweaver.SandboxExec/LinuxBwrapExecutor.cs:55-89](../../packages/Agentweaver.SandboxExec/LinuxBwrapExecutor.cs). |
-| `lxc-native-linux` | Linux fallback when `lxc-exec` is found at known absolute paths or assembly-adjacent bundle [packages/Agentweaver.SandboxExec/LinuxNativeMxcSandboxExecutor.cs:33-67](../../packages/Agentweaver.SandboxExec/LinuxNativeMxcSandboxExecutor.cs) [packages/Agentweaver.SandboxExec/LinuxNativeMxcSandboxExecutor.cs:77-163](../../packages/Agentweaver.SandboxExec/LinuxNativeMxcSandboxExecutor.cs). |
-| `direct` | Final passthrough fallback; runs host `cmd.exe /c` or `/bin/bash -c` with no process isolation [packages/Agentweaver.SandboxExec/PassthroughExecutor.cs:8-22](../../packages/Agentweaver.SandboxExec/PassthroughExecutor.cs) [packages/Agentweaver.SandboxExec/PassthroughExecutor.cs:30-97](../../packages/Agentweaver.SandboxExec/PassthroughExecutor.cs). |
-
-### Filesystem and search tools
-
-Runners create `SandboxedFileTools` and `SandboxedSearchTools` rooted at the working directory, then pass them into `SandboxToolContext` [packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs:217-245](../../packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs) [packages/Agentweaver.AgentTools/SandboxToolContext.cs:7-39](../../packages/Agentweaver.AgentTools/SandboxToolContext.cs). `SandboxToolRegistry` exposes file/search/edit tools, and only includes `run_command` when shell is enabled and the executor is real isolation or explicit `direct` mode [packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:11-45](../../packages/Agentweaver.AgentTools/SandboxToolRegistry.cs).
-
-Filesystem enforcement has two layers:
-
-1. `SandboxPolicyBackend` recognizes known file/search/shell tools, denies unknown tool names, validates path-bearing arguments, and validates shell working directories [packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs:14-51](../../packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs) [packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs:60-145](../../packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs).
-2. The tool implementations validate again. `SandboxPathValidator` rejects absolute paths, `..`, device paths, UNC paths, drive-relative paths, and symlink/junction ancestors; after opening a handle, it resolves the final path and re-checks containment [packages/Agentweaver.SandboxFs/SandboxPathValidator.cs:23-49](../../packages/Agentweaver.SandboxFs/SandboxPathValidator.cs) [packages/Agentweaver.SandboxFs/SandboxPathValidator.cs:104-163](../../packages/Agentweaver.SandboxFs/SandboxPathValidator.cs).
-
-Reads, writes, creates, string replacements, line inserts, and patches all route through `SandboxedFileTools` and return structured failures instead of throwing into the agent loop [packages/Agentweaver.SandboxFs/SandboxedFileTools.cs:5-19](../../packages/Agentweaver.SandboxFs/SandboxedFileTools.cs) [packages/Agentweaver.SandboxFs/SandboxedFileTools.cs:37-83](../../packages/Agentweaver.SandboxFs/SandboxedFileTools.cs) [packages/Agentweaver.SandboxFs/SandboxedFileTools.cs:89-142](../../packages/Agentweaver.SandboxFs/SandboxedFileTools.cs) [packages/Agentweaver.SandboxFs/SandboxedFileTools.cs:439-492](../../packages/Agentweaver.SandboxFs/SandboxedFileTools.cs). Search never follows reparse points, skips `.git`, `node_modules`, `bin`, `obj`, and `.vs`, and caps results [packages/Agentweaver.SandboxFs/SandboxedSearchTools.cs:12-31](../../packages/Agentweaver.SandboxFs/SandboxedSearchTools.cs) [packages/Agentweaver.SandboxFs/SandboxedSearchTools.cs:73-111](../../packages/Agentweaver.SandboxFs/SandboxedSearchTools.cs) [packages/Agentweaver.SandboxFs/SandboxedSearchTools.cs:173-233](../../packages/Agentweaver.SandboxFs/SandboxedSearchTools.cs).
-
-## Container Image & Shim (apps/agentweaver-sandbox, copilot-sandbox session, shim/server.js if present)
-
-The production sandbox image lives in `apps/agentweaver-sandbox/Dockerfile`. It is `ubuntu:24.04`, installs common agent build/runtime tools (`git`, `build-essential`, Python 3, Node.js/npm), installs .NET 9 into `/usr/local/dotnet`, creates UID/GID 1000, sets `WORKDIR /workspace`, drops to `USER 1000`, and uses `sleep infinity` so commands arrive via pod exec [apps/agentweaver-sandbox/Dockerfile:1-36](../../apps/agentweaver-sandbox/Dockerfile). The AKS build script builds and pushes this image from that self-contained context [scripts/aks/20-build-push-images.sh:76-86](../../scripts/aks/20-build-push-images.sh).
-
-The Kubernetes template hardens that image with `runtimeClassName: kata-vm-isolation`, `restartPolicy: Never`, `automountServiceAccountToken: false`, non-root pod security context, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, dropped Linux capabilities, and a writable `/tmp` `emptyDir` [k8s/sandbox-template.yaml:15-38](../../k8s/sandbox-template.yaml) [k8s/sandbox-template.yaml:46-56](../../k8s/sandbox-template.yaml).
-
-Unverified: this repository does not contain a root-level `copilot-sandbox/` directory, `shim/server.js`, or `CopilotSessionService` source file. The only repo-local `CopilotSession` reference found in the API is for read-only history resume in `RunEndpoints`, not for the Kubernetes sandbox shim [apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:637-652](../../apps/Agentweaver.Api/Endpoints/RunEndpoints.cs). I also did not find repo-local code that saves pasted image attachments to `/workspace/.copilot/uploads` or enforces an 8 MiB upload cap; the verified output cap in this subsystem is 4 MiB for command/tool output [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:250-285](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs) [packages/Agentweaver.Domain/SandboxPolicy.cs:82-86](../../packages/Agentweaver.Domain/SandboxPolicy.cs).
-
-## Kubernetes Resources (SandboxTemplate, WarmPool, claim template, RBAC)
-
-| Resource | File | What it does |
+| Backend family | Conceptual role | Trade-off |
 | --- | --- | --- |
-| `SandboxTemplate/agentweaver-sandbox` | `k8s/sandbox-template.yaml` | Defines the warm-pod blueprint in API group `extensions.agents.x-k8s.io/v1alpha1`; disallows env-var injection; labels pods `app: agentweaver-sandbox`; uses the sandbox image [k8s/sandbox-template.yaml:1-14](../../k8s/sandbox-template.yaml) [k8s/sandbox-template.yaml:26-29](../../k8s/sandbox-template.yaml). |
-| Workspace + tmp volumes | `k8s/sandbox-template.yaml` | Mounts shared PVC `agentweaver-workspace` at `/workspace` and an `emptyDir` at `/tmp` [k8s/sandbox-template.yaml:46-56](../../k8s/sandbox-template.yaml). |
-| `SandboxWarmPool/agentweaver-sandbox` | `k8s/sandbox-warmpool.yaml` | Keeps three warm sandboxes ready against the template [k8s/sandbox-warmpool.yaml:1-12](../../k8s/sandbox-warmpool.yaml). |
-| `SandboxClaim` template | `k8s/sandbox-claim-template.yaml` | Shows the per-run claim shape: `run-{runId}`, `templateRef: agentweaver-sandbox`, `ttl: 600s` [k8s/sandbox-claim-template.yaml:1-10](../../k8s/sandbox-claim-template.yaml). |
-| API ServiceAccount | `k8s/serviceaccount-api.yaml` | Names the `agentweaver-api` ServiceAccount and annotates it for Azure workload identity [k8s/serviceaccount-api.yaml:1-9](../../k8s/serviceaccount-api.yaml). |
-| API Role/RoleBinding | `k8s/rbac-api.yaml` | Grants the API ServiceAccount `get/create/delete` on `sandboxclaims`, `get/create` on pods, and `create` on `pods/exec` [k8s/rbac-api.yaml:1-29](../../k8s/rbac-api.yaml) [k8s/rbac-api.yaml:31-46](../../k8s/rbac-api.yaml). |
-| Namespace quota | `k8s/quota.yaml` | Caps namespace resources and allows at most 20 `sandboxclaims.extensions.agents.x-k8s.io` [k8s/quota.yaml:1-17](../../k8s/quota.yaml). |
+| Windows process container (`mxc`) | Use OS/container support to isolate a process from the host. | Network allowlisting is not equivalent to Kubernetes policy, so warnings are surfaced. |
+| WSL2 with bubblewrap/unshare | Run Linux-style namespace isolation from Windows. | Strength depends on the available WSL backend; some variants warn about unrestricted network behavior. |
+| Native Linux bubblewrap | Bind the workspace as `/workspace`, mount only selected runtime paths read-only, create tmpfs homes/temp, and unshare PID/user/network namespaces unless network is enabled. | Useful local isolation, but still not the same operational boundary as a production Kata pod plus cluster policy. |
+| Native Linux `lxc-exec` | Fallback Linux isolation when bubblewrap is unavailable. | Depends on host LXC availability and configuration. |
+| Direct passthrough | Last-resort host shell. | **Not isolation.** Use only when the surrounding environment is already disposable or explicitly trusted. |
 
-Deployment applies the sandbox template and warm pool only if the `extensions.agents.x-k8s.io` CRD is present [scripts/aks/30-deploy.sh:123-128](../../scripts/aks/30-deploy.sh). Verification checks the `kata-vm-isolation` runtime class plus the template and warm pool resources [scripts/aks/40-verify.sh:104-108](../../scripts/aks/40-verify.sh). The API deployment explicitly sets `Sandbox__Backend=kubernetes`, the namespace, template ref, and `/workspace` mount root [k8s/api-deployment.yaml:105-114](../../k8s/api-deployment.yaml).
+Where this lives: `packages/Agentweaver.SandboxExec`, `apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs`
 
-## Network Isolation & Egress Allowlist (Cilium FQDN, network policies)
+## Kubernetes sandbox lifecycle: claims over pods
 
-Sandbox pods are selected by `app: agentweaver-sandbox` [k8s/sandbox-template.yaml:11-14](../../k8s/sandbox-template.yaml). The standard Kubernetes policies:
+Production command execution is built around Kubernetes sandbox claims rather than directly creating ad-hoc pods for every command. The reason is latency and lifecycle control:
 
-- create an ingress policy with no ingress rules, which denies inbound traffic to sandbox pods [k8s/networkpolicy-sandbox.yaml:1-16](../../k8s/networkpolicy-sandbox.yaml);
-- create an egress policy that allows DNS to kube-dns and HTTPS to GitHub's `140.82.112.0/20` public range; no service/pod CIDR is included [k8s/networkpolicy-sandbox.yaml:17-50](../../k8s/networkpolicy-sandbox.yaml).
+- A **SandboxTemplate** defines the pod shape and hardening policy.
+- A **SandboxWarmPool** keeps ready sandboxes available from that template.
+- A **SandboxClaim** asks the sandbox controller for one sandbox instance for a bounded TTL.
+- The executor waits until the claim is bound to a concrete pod, then uses Kubernetes pod exec to run the command.
 
-The Cilium policy adds FQDN-based egress for:
+```mermaid
+sequenceDiagram
+    participant Agent as Agent run
+    participant API as Agentweaver API
+    participant Claim as SandboxClaim
+    participant Controller as Sandbox controller
+    participant Pool as Warm pool
+    participant Pod as Sandbox pod
+    participant Registry as Pod registry
 
-- DNS through kube-dns [k8s/cilium-network-policy-sandbox.yaml:12-25](../../k8s/cilium-network-policy-sandbox.yaml);
-- `api.github.com` over TCP 443 [k8s/cilium-network-policy-sandbox.yaml:26-31](../../k8s/cilium-network-policy-sandbox.yaml);
-- `registry.npmjs.org` and `*.npmjs.org` over TCP 443 [k8s/cilium-network-policy-sandbox.yaml:32-38](../../k8s/cilium-network-policy-sandbox.yaml);
-- Azure AI/OpenAI/Cognitive Services/Models domains over TCP 443 [k8s/cilium-network-policy-sandbox.yaml:39-48](../../k8s/cilium-network-policy-sandbox.yaml).
+    Agent->>API: run_command(command, workdir, timeout)
+    API->>API: choose claim name from run ID or random ID
+    API->>API: clamp command timeout below claim TTL
+    API->>API: verify workdir is under /workspace
+    API->>Claim: create SandboxClaim(templateRef, ttl)
+    Claim->>Controller: request sandbox instance
+    Controller->>Pool: assign warm sandbox
+    Pool-->>Pod: bound pod is ready
+    Controller-->>Claim: status.phase = Bound, pod name
+    API->>Claim: poll until Bound
+    API->>Registry: remember pod name for run previews
+    API->>Pod: exec /bin/sh -c command
+    Pod-->>API: stdout/stderr/status streams
+    API->>API: cap + redact output, parse exit code
+    alt ad-hoc command
+        API->>Claim: delete claim immediately
+    else run-scoped command
+        API->>Claim: retain until run cleanup or TTL
+    end
+```
 
-The router reads `Sandbox:Kubernetes:ServiceCidr`/`ClusterServiceCidr` and `SandboxEgressCidrExclusions`; if the service CIDR is not excluded, it logs a warning because sandbox egress could otherwise reach in-cluster services [apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:57-75](../../apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs) [apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:86-106](../../apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs).
+### Why claims have TTLs
 
-Local network behavior differs by backend. Windows `processcontainer` reports a network warning because allowlist enforcement is unavailable [packages/Agentweaver.SandboxExec/MxcSandboxExecutor.cs:18-24](../../packages/Agentweaver.SandboxExec/MxcSandboxExecutor.cs). WSL warns unless the selected backend is `WslBubblewrap` [packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:47-51](../../packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs). Runners emit `sandbox.warning` when an executor reports a network warning, or when project policy explicitly enables outbound network [packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs:229-243](../../packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs) [packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:105-119](../../packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs).
+A shell command can hang, or a client can disconnect. The claim TTL gives the controller an independent cleanup clock. Agentweaver also clamps the command timeout below the claim TTL so the controller should not delete the sandbox while the executor is still expecting a result.
 
-## Security Properties & Gotchas (uploads cap, isolation boundaries)
+### Why run IDs map to pod names
 
-- **Fail-closed routing in cluster.** In-cluster Kubernetes executor initialization errors throw instead of silently using a weaker local backend [apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:53-83](../../apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs).
-- **Kata + pod hardening.** Production sandboxes run with Kata VM runtime, no service-account token, non-root UID/GID, seccomp runtime default, read-only root filesystem, no privilege escalation, and all capabilities dropped [k8s/sandbox-template.yaml:15-38](../../k8s/sandbox-template.yaml).
-- **Shared workspace PVC.** The sandbox process is isolated, but `/workspace` is a shared PVC named `agentweaver-workspace`; this is an execution boundary, not a secrecy boundary between all workloads that can mount that PVC [k8s/sandbox-template.yaml:46-56](../../k8s/sandbox-template.yaml).
-- **Run-scoped Kubernetes claims are retained.** Because run-scoped claims are kept for preview until cleanup or TTL, operators should size `SandboxClaim` quota and warm-pool capacity accordingly [apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:139-147](../../apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs) [k8s/quota.yaml:1-17](../../k8s/quota.yaml).
-- **`direct` is not isolation.** The passthrough executor runs commands on the host shell and sets `IsRealIsolation` to `false`; use it only when the deployment environment itself is the sandbox [packages/Agentweaver.SandboxExec/PassthroughExecutor.cs:8-22](../../packages/Agentweaver.SandboxExec/PassthroughExecutor.cs).
-- **Filesystem controls are defense-in-depth.** Governance denies unknown tools, then `SandboxedFileTools` validates paths and verifies opened handles; directory listing intentionally has a narrow filename-only TOCTOU residual risk documented in code [packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs:68-80](../../packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs) [packages/Agentweaver.SandboxFs/SandboxedFileTools.cs:820-835](../../packages/Agentweaver.SandboxFs/SandboxedFileTools.cs).
-- **Output is redacted and capped.** Command output is passed through secret/PII redaction patterns [packages/Agentweaver.SandboxExec/SandboxOutputRedactor.cs:5-41](../../packages/Agentweaver.SandboxExec/SandboxOutputRedactor.cs) [packages/Agentweaver.SandboxExec/SandboxOutputRedactor.cs:87-111](../../packages/Agentweaver.SandboxExec/SandboxOutputRedactor.cs). Default project policy caps output at 4 MiB [packages/Agentweaver.Domain/SandboxPolicy.cs:82-86](../../packages/Agentweaver.Domain/SandboxPolicy.cs).
-- **Unverified upload behavior.** The requested `/workspace/.copilot/uploads` and 8 MiB pasted-image cap are not verified in this repository snapshot. Treat any such behavior as external or pending until a repo-owned shim/session service is added.
+Run-scoped commands may need preview/debug support. When a command belongs to an Agentweaver run, the executor derives a stable claim name from the run ID and records the bound pod name. Preview endpoints can then locate the sandbox pod and establish `kubectl port-forward` sessions. Those sessions are bound to loopback, limited per run and globally, and cleaned up when the run lifecycle ends.
+
+### Why ad-hoc and run-scoped cleanup differ
+
+Ad-hoc commands have no reason to keep a sandbox alive after the command returns, so the claim is deleted immediately. Run-scoped commands may keep the claim until cleanup or TTL so preview remains available. That improves developer experience but consumes warm-pool/quota capacity for longer, so operators must size quotas and warm pools accordingly.
+
+Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/PortForwardService.cs`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`, `k8s/sandbox-claim-template.yaml`
+
+## Production pod isolation and hardening
+
+The sandbox pod is intentionally boring. It contains common build/runtime tools so agents can run normal project commands, but it is not privileged and should not receive cluster credentials.
+
+The production template applies several important constraints:
+
+- **Kata runtime:** the pod uses `kata-vm-isolation`, adding a VM boundary around the container workload.
+- **No service account token:** the sandbox does not automatically receive Kubernetes API credentials.
+- **Non-root identity:** the container runs as UID/GID 1000.
+- **No privilege escalation and no Linux capabilities:** the process should not be able to acquire broader kernel privileges.
+- **Read-only root filesystem:** tools cannot persist changes into the image filesystem.
+- **Writable workspace and temp only:** the shared workspace PVC is mounted at `/workspace`; `/tmp` is an `emptyDir`.
+- **Never restart:** failed or completed sandbox pods are not automatically restarted as hidden long-lived state.
+
+The image installs practical tooling — Git, C/C++ build essentials, Python, Node/npm, and .NET — because an agent that cannot build or test is not useful. The security posture comes from pod/runtime policy and network policy, not from making the image empty.
+
+Important boundary: the shared workspace PVC is an execution workspace, not a secrecy boundary between every workload that can mount it. The sandbox limits process and network blast radius; it does not make shared storage private from other principals with access to the same volume.
+
+Where this lives: `apps/agentweaver-sandbox/Dockerfile`, `k8s/sandbox-template.yaml`
+
+## Network isolation and egress allowlisting
+
+Network access is an exfiltration and lateral-movement channel. A sandboxed command that can reach arbitrary addresses can probe cluster services, call metadata endpoints, or send data to the internet. Production network policy therefore follows an allowlist model.
+
+The standard Kubernetes policies select pods labeled `app: agentweaver-sandbox` and enforce:
+
+- **no inbound traffic** to sandbox pods;
+- **DNS only to kube-dns**;
+- **HTTPS only to the configured GitHub public IP range**;
+- no broad service or pod CIDR allowlist.
+
+The Cilium policy adds FQDN-based egress for common agent dependencies:
+
+- `api.github.com`;
+- `registry.npmjs.org` and `*.npmjs.org`;
+- Azure AI/OpenAI/Cognitive Services/Models domains;
+- DNS through kube-dns.
+
+The service-CIDR warning is important. If sandbox egress accidentally includes the cluster service CIDR, a sandbox pod may be able to reach internal Kubernetes services even if internet egress looks restricted. Agentweaver checks configured service CIDR exclusions and logs a warning when the cluster service CIDR is not excluded.
+
+Local backends cannot all enforce the same network model. Where network allowlisting is unavailable or weaker, executors report warnings, and runners emit sandbox warning events. Treat those warnings as a deployment property, not as an agent-visible suggestion.
+
+Where this lives: `k8s/networkpolicy-sandbox.yaml`, `k8s/cilium-network-policy-sandbox.yaml`, `apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs`, `packages/Agentweaver.SandboxExec`
+
+## Rebuild blueprint
+
+If rebuilding this subsystem from scratch, implement it in this order:
+
+1. **Define the workspace invariant.** Pick one sandbox root per run. Every file tool, search tool, and shell working directory must resolve inside it.
+2. **Create a path validator.** Reject obvious path escapes lexically, reject symlink/junction ancestors, and verify opened handles against the sandbox root.
+3. **Wrap all file/search tools.** Do not expose raw host file APIs to the model. Return structured errors for violations.
+4. **Add deny-by-default governance.** Allow only known tools and known argument shapes. Fail closed on unknown tools and internal policy errors.
+5. **Define a command executor interface.** Keep command input/output stable so the runtime is independent of the isolation backend.
+6. **Gate shell execution.** Require shell enablement, working-directory containment, destructive-command approval, timeout bounds, output caps, and redaction.
+7. **Provide local executors.** Prefer real local isolation where available; mark direct passthrough as non-production and warn loudly.
+8. **Provide a production Kubernetes executor.** Use claims, templates, warm pools, TTLs, pod exec, and fail-closed backend selection.
+9. **Harden the pod.** Use non-root, no token, no privilege escalation, dropped capabilities, read-only root, explicit writable mounts, and a stronger runtime class where available.
+10. **Add network policy.** Deny inbound traffic and allow only required egress. Exclude service/pod CIDRs unless there is a deliberate, reviewed reason.
+11. **Plan cleanup.** Delete ad-hoc claims, retain run-scoped claims only while previews need them, and enforce TTL/quota as independent backstops.
+12. **Surface warnings.** If a backend cannot enforce a promised boundary, emit an explicit warning rather than silently weakening isolation.
+
+## Security invariants and gotchas
+
+- **Default deny is an invariant.** A new tool should do nothing until governance and tool-level validation know how to constrain it.
+- **Path containment is checked more than once.** This is intentional defense in depth, not duplication to remove.
+- **Shell parsing is not the security boundary.** The executor and OS/container boundary must contain arbitrary shell behavior.
+- **Kubernetes fallback must fail closed.** In production, silently downgrading to local or direct execution is worse than failing the run.
+- **Direct passthrough is not a sandbox.** It is useful only when the host environment is already disposable/trusted.
+- **Run-scoped sandboxes consume capacity while retained.** Preview support trades resource usage for debuggability.
+- **Shared `/workspace` is shared storage.** Do not treat the PVC as a per-tenant secrecy boundary unless the surrounding storage model enforces that.
+- **Output can leak data.** Keep caps and redaction even when process isolation is strong.
+- **Directory listing has a narrow residual race.** The code documents a filename-only TOCTOU residual risk for listing; file reads/writes use stronger open-and-verify handling.
+- **Unverified upload behavior.** This repository snapshot does not verify a root-level `copilot-sandbox/` directory, `shim/server.js`, `CopilotSessionService`, saving pasted image attachments to `/workspace/.copilot/uploads`, or an 8 MiB pasted-image upload cap. Treat those behaviors as external or pending until repo-owned code exists. The verified command/tool output cap in this subsystem is 4 MiB.

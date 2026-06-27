@@ -1,218 +1,508 @@
-# Auth & Security — Deep Dive
+# Auth & Security — Conceptual Deep Dive
 
-## Purpose & Scope
+## Purpose and mental model
 
-This document describes the authentication, authorization, and security boundaries for `Agentweaver.Api`, with emphasis on:
+Agentweaver has three related but distinct security jobs:
 
-- browser/web GitHub sign-in;
-- GitHub organization authorization for the SAML-enforced `microsoft` organization;
-- the Agentweaver-hosted OAuth 2.1 Authorization Server used by MCP clients;
-- Agentweaver-minted JWT validation, refresh-token rotation, revocation, and `jti` denylisting;
-- GitHub token storage, middleware ordering, and bypass/exemption rules.
+1. **Know who is calling.** A request must carry a bearer credential that can be mapped to a GitHub user or an Agentweaver-issued OAuth identity.
+2. **Know whether that user is allowed.** Most non-bootstrap surfaces are restricted to members of a configured GitHub organization, usually `microsoft`, and optionally a team.
+3. **Let MCP clients authenticate without learning GitHub secrets.** Agentweaver acts as an OAuth 2.1 Authorization Server for MCP clients. GitHub remains the human identity provider; Agentweaver mints short-lived tokens for its own MCP resource.
 
-Evidence comes from the API auth/security implementation and the MCP OAuth design doc. The API registers GitHub auth services and the OAuth AS in `Program.cs` (`apps/Agentweaver.Api/Program.cs:111-133`), uses fixed-window rate limiting for selected OAuth flow endpoints (`apps/Agentweaver.Api/Program.cs:135-154`), then runs GitHub token authentication before org authorization (`apps/Agentweaver.Api/Program.cs:360-363`) and maps the auth/OAuth endpoints (`apps/Agentweaver.Api/Program.cs:374-375`).
+The design deliberately separates **identity proof** from **authorization policy**:
 
-Deployment secrets are intentionally not reproduced here. Production reads GitHub OAuth client material and the MCP signing key from Key Vault-mounted files into environment variables (`k8s/api-deployment.yaml:77-85`, `k8s/secret-provider-class.yaml:21-29`). The checked-in production defaults set `Auth:GitHub:AllowedOrg` to `microsoft` and leave OAuth signing/issuer/audience empty unless deployment config pins them (`apps/Agentweaver.Api/appsettings.json:21-31`).
+- GitHub proves the user's identity and can prove org/team membership when GitHub's APIs allow it.
+- Agentweaver enforces local invariants: allowed org, token lifetime, redirect policy, PKCE, refresh-token rotation, revocation, and middleware exemptions.
+- MCP clients receive Agentweaver credentials, not GitHub credentials.
 
-Unverified in code: the live production GitHub client ID value itself is not stored in source. The project decision log says web auth was moved from an OAuth App (`Ov...`) to a GitHub App user-to-server app (`Iv...`) and that the client secret is still required for the user authorization-code exchange (`.squad/decisions.md:3548-3554`). The API code is generic GitHub authorization-code OAuth: it requires configured `Auth:GitHub:ClientId`, `ClientSecret`, and `CallbackUrl` (`apps/Agentweaver.Api/Auth/GitHubOAuthRedirectService.cs:38-42`, `apps/Agentweaver.Api/Auth/GitHubOAuthRedirectService.cs:48-58`).
+The important rebuild principle is: **never trust a client merely because it reached a route**. Each route should be either explicitly public bootstrap/discovery, or it should pass through bearer-token authentication and org authorization.
 
-## Web Sign-In Flow
+## Threat model and guardrail summary
+
+Agentweaver assumes attackers may:
+
+- steal redirect URLs from browser history, logs, or `Referer` headers;
+- replay authorization codes or refresh tokens;
+- point OAuth error redirects at attacker-controlled URLs;
+- send raw GitHub tokens, legacy API keys, malformed JWTs, or revoked Agentweaver JWTs;
+- exploit SAML-enforced GitHub org behavior to create false membership conclusions;
+- set unsafe config flags accidentally in production;
+- run high-volume probing against public OAuth endpoints.
+
+The main guardrails are:
+
+- **No long-lived token in redirect URLs.** Browser sign-in redirects with a short-lived, single-use code, then returns the GitHub token only from a POST exchange.
+- **PKCE S256 for public clients.** MCP clients cannot use `plain` PKCE and cannot redeem a code without the verifier.
+- **Redirect validation before redirecting.** Invalid OAuth clients or redirect URIs get local errors, not redirects to untrusted destinations.
+- **Short-lived access tokens.** Agentweaver JWTs last about 15 minutes; refresh tokens are rotating and theft-sensitive.
+- **Revocation at two layers.** Refresh-token chains can be revoked, and access-token `jti` values can be deny-listed until expiry.
+- **Fail closed on uncertain authorization.** If org membership cannot be verified for a live request, the request is blocked rather than allowed.
+- **Do not cache uncertainty.** Transient GitHub failures and rate limits are not cached as durable authorization facts.
+- **Production startup guards.** Test auth bypasses and missing public OAuth issuer/audience config fail fast in production.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Program.cs`
+- `apps/Agentweaver.Api/Security`
+- `apps/Agentweaver.Api/Auth`
+- `apps/Agentweaver.Mcp`
+
+## Web sign-in: GitHub OAuth on behalf of the user
+
+Web sign-in solves a browser problem: the user needs to authorize Agentweaver with GitHub, but the browser must not receive server secrets and should not receive the GitHub access token through a URL.
+
+Conceptually, Agentweaver behaves as a confidential GitHub OAuth client:
+
+1. The browser asks Agentweaver to start sign-in.
+2. Agentweaver creates a random CSRF `state`, remembers it briefly, and redirects the browser to GitHub's authorization page.
+3. GitHub authenticates the human and redirects back with an authorization `code` and the same `state`.
+4. Agentweaver validates and consumes the `state`, then exchanges the code server-to-server using its GitHub client ID, callback URL, and client secret.
+5. Agentweaver calls GitHub `/user` with the returned GitHub access token to learn the login.
+6. Agentweaver stores the GitHub token for later server use.
+7. Instead of putting that GitHub token in the frontend redirect, Agentweaver creates a one-time web session code, redirects with only that opaque code, and requires the frontend to redeem it by POST.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Browser
-    participant API as Agentweaver.Api
-    participant OAuth as GitHubOAuthRedirectService
-    participant GitHub as GitHub App / GitHub OAuth
-    participant Exchange as WebSessionExchangeService
-    participant Store as IGitHubTokenStore
+    participant API as Agentweaver API
+    participant GitHub
+    participant Store as GitHub token store
 
-    Browser->>API: GET /auth/github/authorize
-    API->>OAuth: BeginAuthorization()
-    OAuth-->>API: GitHub authorize URL with client_id, redirect_uri, scopes, CSRF state
-    API-->>Browser: 302 to GitHub
-    Browser->>GitHub: user approves/signs in
-    GitHub-->>API: GET /auth/github/callback?code&state
-    API->>OAuth: ExchangeCodeAsync(code, state)
-    OAuth->>GitHub: POST /login/oauth/access_token (client_id + client_secret + code)
-    OAuth->>GitHub: GET /user with returned access token
-    OAuth->>Store: store GitHubToken under installation scope
-    API->>Exchange: Issue(accessToken, login)
-    API-->>Browser: 302 frontend?auth=success&code=one-time-code
-    Browser->>API: POST /api/auth/session/exchange { code }
-    API->>Exchange: TryRedeem(code)
-    API-->>Browser: { session_token, login }
+    Browser->>API: Start GitHub sign-in
+    API->>API: Generate short-lived CSRF state
+    API-->>Browser: Redirect to GitHub authorize URL
+    Browser->>GitHub: User signs in / approves scopes
+    GitHub-->>API: Callback with code + state
+    API->>API: Validate and consume state
+    API->>GitHub: Exchange code using server-side client secret
+    GitHub-->>API: GitHub access token
+    API->>GitHub: Fetch /user for login
+    API->>Store: Persist GitHub token and identity
+    API->>API: Issue 60-second one-time web code
+    API-->>Browser: Redirect to frontend with opaque code only
+    Browser->>API: POST code to session exchange endpoint
+    API-->>Browser: Return session token + login in response body
 ```
 
-`GET /auth/github/authorize` starts the redirect flow and returns a GitHub authorization URL (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:30-42`). `GitHubOAuthRedirectService.BeginAuthorization()` generates a 256-bit URL-safe CSRF `state`, stores it for 10 minutes, and builds `/login/oauth/authorize` with `client_id`, `redirect_uri`, configured scopes, and `state` (`apps/Agentweaver.Api/Auth/GitHubOAuthRedirectService.cs:60-76`).
+### Why this shape
 
-The same callback endpoint serves both browser sign-in and MCP OAuth broker callbacks. If the `state` belongs to a pending MCP authorization, control goes to the broker path; otherwise the browser sign-in path runs (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:44-82`). Browser sign-in rejects GitHub errors/missing parameters by redirecting the frontend with an error (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:84-89`).
+- **CSRF state** binds the callback to a sign-in Agentweaver initiated.
+- **Server-side code exchange** keeps the GitHub client secret out of browsers and MCP clients.
+- **GitHub `/user` lookup** turns an opaque GitHub access token into the accountable login Agentweaver uses for ownership checks.
+- **One-time POST exchange** avoids leaking the GitHub access token through URL logs, history, analytics, reverse proxies, or referrers.
+- **Short lifetimes and single use** make stolen intermediate codes less valuable.
 
-For browser sign-in, the callback exchanges the GitHub code for a user access token (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:90-96`). The exchange validates and removes the CSRF state (`apps/Agentweaver.Api/Auth/GitHubOAuthRedirectService.cs:81-88`), then posts to GitHub `/login/oauth/access_token` with `client_id`, `client_secret`, `code`, and `redirect_uri` (`apps/Agentweaver.Api/Auth/GitHubOAuthRedirectService.cs:90-100`). This is why the on-behalf-of user authorization-code flow still needs `Auth:GitHub:ClientSecret`; it is a server-side confidential exchange, not a public-client secret.
+### Invariants to preserve when rebuilding
 
-After GitHub returns an access token, the API calls `GET https://api.github.com/user`, extracts the login/avatar, constructs a `GitHubToken`, and stores it through `IGitHubTokenStore` under `GitHubTokenScope.Installation` (`apps/Agentweaver.Api/Auth/GitHubOAuthRedirectService.cs:113-126`). The returned browser credential is not put directly in the redirect URL. Instead, the callback issues a short-lived single-use code and redirects with only that opaque code (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:92-99`). `WebSessionExchangeService` stores the code in memory for 60 seconds (`apps/Agentweaver.Api/Auth/WebSessionExchangeService.cs:20-27`), issues a 256-bit random code (`apps/Agentweaver.Api/Auth/WebSessionExchangeService.cs:37-47`), and atomically removes it on redemption (`apps/Agentweaver.Api/Auth/WebSessionExchangeService.cs:49-67`). The frontend redeems it via anonymous `POST /api/auth/session/exchange`, which returns `{ session_token, login }` only after successful redemption (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:106-117`).
+- The GitHub `state` must be random, short-lived, and consumed exactly once.
+- The callback must reject missing code/state and GitHub errors.
+- The GitHub token must not be placed in a query string or fragment.
+- The one-time frontend exchange code must be random, short-lived, and atomically removed on redemption.
+- Public sign-in endpoints are bootstrap routes; do not require a bearer token before the user has one.
 
-Device flow remains available for authenticated API callers: `POST /api/auth/github/device` starts the flow and stores the `device_code` server-side (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:119-150`, `apps/Agentweaver.Api/Auth/GitHubDeviceFlowAuthService.cs:49-83`); `POST /api/auth/github/poll` polls GitHub and persists the resulting token (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:152-174`, `apps/Agentweaver.Api/Auth/GitHubDeviceFlowAuthService.cs:85-145`).
+Unverified: the live production GitHub client ID is not stored in source. The project decision log says web auth moved from a GitHub OAuth App to a GitHub App user-to-server app, while the server-side authorization-code exchange still requires a client secret.
 
-## GitHub Org Authorization Gate
+Where this lives:
+
+- `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs`
+- `apps/Agentweaver.Api/Auth/GitHubOAuthRedirectService.cs`
+- `apps/Agentweaver.Api/Auth/WebSessionExchangeService.cs`
+- `.squad/decisions.md`
+
+## API bearer authentication: accepting tokens safely
+
+After bootstrap, protected API calls use `Authorization: Bearer ...`. The API tries to resolve the caller in this order:
+
+1. **Agentweaver OAuth JWT.** If the bearer looks like a JWT and validates as an Agentweaver-issued access token, use its subject, GitHub login, org claim, and `jti`.
+2. **Raw GitHub bearer token.** Otherwise, ask GitHub `/user` whether the token is valid and which login owns it.
+3. **Development-only bypass.** A configured bypass can map tokens to users only in Development; production refuses to start if bypass flags are enabled.
+
+The old API-key registry in `Agentweaver.Api` is retained only as a compatibility type and reports no configured keys. Hosted MCP still has a configured API-key fast path for older clients/automation, but normal end-to-end identity should be either a raw GitHub token or an Agentweaver OAuth JWT that the backend can validate.
 
 ```mermaid
 flowchart TD
-    A[Non-exempt request] --> B{CallerContext exists?}
+    A[Bearer token arrives on protected API route] --> B{Looks like valid Agentweaver JWT?}
+    B -- yes --> C{jti deny-listed?}
+    C -- yes --> X[401]
+    C -- no --> D[Caller = JWT subject + GitHub login + org]
+    B -- no --> E[Call GitHub /user]
+    E -- valid --> F[Caller = GitHub login]
+    E -- invalid --> X
+    D --> G[Org authorization middleware]
+    F --> G
+```
+
+### Why this shape
+
+- **JWT first** lets MCP callers use Agentweaver-issued tokens without calling GitHub on every request.
+- **Raw GitHub fallback** preserves direct API use by users who already have a GitHub OAuth token.
+- **Short validation caches** reduce GitHub API load but avoid long-lived stale identity decisions.
+- **Deny-list check** gives access-token revocation meaning even before the 15-minute JWT lifetime expires.
+- **Production bypass guard** prevents a test convenience from becoming a production backdoor.
+
+### Invariants to preserve when rebuilding
+
+- Never treat an arbitrary bearer token as a user without validating it.
+- Cache token validation by a token hash, not by raw token value in logs or cache keys intended for inspection.
+- Negative validation results should have a much shorter cache lifetime than positive results.
+- A revoked Agentweaver JWT must fail before caller context is created.
+- Middleware that needs caller identity must run after bearer-token authentication.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
+- `apps/Agentweaver.Api/Security/ApiKeyRegistry.cs`
+- `apps/Agentweaver.Api/Security/TestingBypassGuard.cs`
+
+## GitHub org authorization and the SAML nuance
+
+Identity answers "who are you?" Authorization answers "are you allowed to use this Agentweaver deployment?" For hosted Agentweaver, the primary policy is membership in the configured GitHub organization, usually `microsoft`, with an optional team restriction.
+
+The authorization middleware runs after bearer authentication. It handles two caller classes differently:
+
+- **Agentweaver OAuth JWT callers:** trust the signed `org` claim only if it equals the configured allowed org. This is safe because org membership was checked when the Authorization Server issued the token and is rechecked on refresh when possible.
+- **Raw GitHub token callers:** use the caller's GitHub token to ask GitHub whether the login is in the allowed org/team.
+
+```mermaid
+flowchart TD
+    A[Non-exempt request] --> B{Caller context exists?}
     B -- no --> U[401 unauthenticated]
-    B -- yes --> C{Caller is Agentweaver OAuth JWT?}
-    C -- yes --> D{org claim == Auth:GitHub:AllowedOrg?}
-    D -- yes --> ALLOW[allow]
-    D -- no --> F[403]
-    C -- no/raw GitHub token --> E[Extract Bearer token + login]
-    E --> P[Authenticated /orgs/{org}/members/{login}]
-    P -- 204/200 --> T{AllowedTeam configured?}
-    P -- 403 SAML/404/302/not member/inconclusive --> PUB[Unauthenticated /orgs/{org}/public_members/{login}]
-    PUB -- 204/200 --> T
-    PUB -- not member + private check inconclusive --> I[Inconclusive: 403 retry later, never cache]
-    PUB -- not member + private check definitive --> DENY[403 denied]
+    B -- yes --> C{Agentweaver OAuth JWT?}
+    C -- yes --> D{JWT org claim matches allowed org?}
+    D -- yes --> ALLOW[Allow]
+    D -- no --> DENY[403]
+
+    C -- no --> E[Use caller GitHub token + login]
+    E --> P[Authenticated private org membership check]
+    P -- member --> T{Team restriction configured?}
+    P -- SAML blocked / not member / inconclusive --> PUB[Unauthenticated public-membership check]
+    PUB -- public member --> T
+    PUB -- private check inconclusive --> RETRY[403 retry later; do not cache]
+    PUB -- not public and private check definitive --> DENY
     T -- no --> ALLOW
-    T -- yes --> TEAM[Authenticated team membership endpoint]
+    T -- yes --> TEAM[Authenticated team membership check]
     TEAM -- member --> ALLOW
-    TEAM -- not member/SAML --> DENY
+    TEAM -- not member or SAML blocked --> DENY
 ```
 
-`GitHubOrgAuthorizationMiddleware` must run after `GitHubTokenAuthMiddleware` because it depends on `context.Items["agentweaver.caller"]` (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:6-16`, `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:99-106`). It fails closed when `Auth:GitHub:AllowedOrg` is unset (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:91-97`), and the app default config sets that org to `microsoft` (`apps/Agentweaver.Api/appsettings.json:21-24`; production also sets `Auth__GitHub__AllowedOrg=microsoft`, `k8s/api-deployment.yaml:115-118`).
+### The SAML-enforced org problem
 
-Membership checks are cached for five minutes to reduce GitHub API calls (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:15-18`, `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:28-29`). The cache key includes login, allowed org, and optional team slug (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:66-69`). Critically, `Inconclusive` results are never cached because they represent transient GitHub failures or token problems (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:71-79`).
+For SAML-enforced GitHub organizations, an authenticated API request can fail even for a real member if the token has not been SAML-authorized for that org. This matters because the normal private membership endpoint may return a SAML-related failure instead of a simple "member" or "not member" answer.
 
-The first probe is the authenticated private membership endpoint:
+Agentweaver uses a two-probe strategy:
 
-```text
-GET https://api.github.com/orgs/{org}/members/{login}
-Authorization: Bearer <caller GitHub token>
+1. **Authenticated private membership check.** This can prove private org membership when the token has sufficient org/SAML access.
+2. **Unauthenticated public-membership fallback.** This can prove membership only for users who have publicized their org membership.
+
+The fallback must be unauthenticated. If Agentweaver sends the same SAML-blocked token to the public-members endpoint, GitHub can still apply SAML enforcement and return a misleading failure. Without an auth header, GitHub returns the public-membership truth: public members are visible; private members are not.
+
+The unavoidable trade-off is that private members whose token cannot prove membership and who have not publicized membership may be denied or asked to retry. Agentweaver chooses this over allowing unverifiable callers into a protected deployment.
+
+### Result semantics
+
+- **Allowed:** GitHub proved org membership and, if configured, team membership.
+- **Denied:** GitHub gave a definitive non-member answer.
+- **Org access not granted:** the token is valid but cannot access the org/team private API, commonly because SAML SSO was not authorized.
+- **Inconclusive:** GitHub could not answer reliably because of rate limiting, token failure, network failure, or server error.
+
+Only stable answers are cached briefly. Inconclusive answers are never cached, because caching them would turn a transient GitHub problem into a durable denial.
+
+### Invariants to preserve when rebuilding
+
+- Fail closed if `AllowedOrg` is missing on non-exempt routes.
+- Do not let HTTP redirects from GitHub turn into accidental success; membership probes should not auto-follow GitHub redirects.
+- Detect rate limits before classifying `403` as SAML/org denial.
+- Never cache inconclusive authorization decisions.
+- If using JWT org claims, ensure the Authorization Server really enforced org membership before issuing the token.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs`
+- `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs`
+- `apps/Agentweaver.Api/appsettings.json`
+- `k8s/api-deployment.yaml`
+
+## OAuth 2.1 Authorization Server for MCP
+
+MCP clients are public clients: they cannot safely hold a GitHub client secret, and Agentweaver should not hand them the user's GitHub token. The solution is to make `Agentweaver.Api` an OAuth 2.1 Authorization Server for the MCP resource.
+
+In this model:
+
+- GitHub remains the upstream human identity provider.
+- Agentweaver is the OAuth Authorization Server seen by MCP clients.
+- The MCP server is the OAuth Resource Server.
+- The client receives Agentweaver authorization codes, access tokens, and refresh tokens — never GitHub tokens or GitHub client secrets.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as MCP Client
+    participant MCP as Agentweaver MCP Resource Server
+    participant AS as Agentweaver API / Authorization Server
+    participant GitHub
+    participant Store as OAuth stores
+
+    Client->>MCP: Request /mcp without token
+    MCP-->>Client: 401 with protected-resource metadata link
+    Client->>MCP: Fetch protected-resource metadata
+    MCP-->>Client: Authorization server issuer
+    Client->>AS: Fetch authorization-server metadata + JWKS URI
+    Client->>AS: Register client redirect URIs (optional DCR)
+    Client->>AS: /oauth/authorize with client_id, redirect_uri, S256 challenge
+    AS->>AS: Validate client, redirect URI, response_type, PKCE
+    AS-->>Client: Browser redirect to GitHub
+    Client->>GitHub: User signs in
+    GitHub-->>AS: Callback with code + state
+    AS->>GitHub: Exchange GitHub code server-side
+    AS->>AS: Enforce org membership
+    AS-->>Client: Redirect to client with Agentweaver authorization code
+    Client->>AS: /oauth/token with code_verifier
+    AS->>AS: Consume code and verify PKCE/client/redirect binding
+    AS->>Store: Store hashed rotating refresh token
+    AS-->>Client: JWT access token + opaque refresh token
+    Client->>MCP: /mcp with Bearer JWT
+    MCP->>AS: Fetch/cache JWKS as needed
+    MCP->>MCP: Validate JWT offline
 ```
 
-The code builds that URL at `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:82-87`. The `github-authz` client disables auto-redirects so a GitHub `302` does not become a misleading success (`apps/Agentweaver.Api/Program.cs:117-118`, `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:172-175`).
+### Public discovery endpoints
 
-SAML caveat: for a SAML-enforced org such as `microsoft`, an authenticated request whose token is not SAML-authorized can return `403`; this is not treated as membership success. The service documents that the public-members fallback must be unauthenticated because GitHub applies SAML enforcement even to authenticated calls to the public endpoint, whereas an unauthenticated public-members request returns the true public-membership status (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:89-99`). The fallback call explicitly passes `sendAuthHeader: false` for `/orgs/{org}/public_members/{login}` (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:101-105`).
+OAuth-capable MCP clients need unauthenticated discovery before they have a token. Agentweaver therefore publishes:
 
-Rate limiting is deliberately separated from denial. The response mapper checks `429`, or `403` with `X-RateLimit-Remaining: 0` or `Retry-After`, before mapping ordinary `403` to SAML/org-access failure (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:197-220`). Rate-limit responses become `Inconclusive`, so they are not cached and cannot pin a false denial (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:197-215`).
+- Authorization Server metadata (`/.well-known/oauth-authorization-server` and MCP-suffixed alias).
+- OIDC-compatible discovery aliases for clients that probe those paths.
+- JWKS for the public signing key.
+- MCP Protected Resource metadata from the MCP server, advertising the authorization server and resource.
 
-Other result handling:
+Discovery should not require auth; otherwise clients could not learn how to authenticate. The trade-off is that discovery reveals public configuration, so it should expose only non-secret metadata.
 
-- `204 No Content` and `200 OK` mean member (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:222-225`).
-- Authenticated `401` and `5xx` are `Inconclusive` because the service cannot distinguish non-membership from an expired token or GitHub outage (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:227-234`).
-- If the private check was inconclusive and public membership is not confirmed, the service returns `Inconclusive`, not `Denied` (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:107-122`).
-- A configured `Auth:GitHub:AllowedTeam` must be `org/team-slug`; malformed values disable the team check with a warning (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:41-56`). The team endpoint is checked after org membership, with `403` mapped to `OrgAccessNotGranted` (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:138-161`).
+### Authorization endpoint logic
 
-For Agentweaver-minted OAuth JWT callers, the org middleware does not call GitHub on every API request. It trusts the token's `org` claim only if it matches the configured allowed org because org membership was enforced when the Authorization Server issued the token and rechecked on refresh (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:108-128`).
+`/oauth/authorize` is intentionally strict before redirecting anywhere:
 
-## OAuth 2.1 Authorization Server
+1. Require `client_id`.
+2. Validate `redirect_uri` against the redirect policy.
+3. If the client registered dynamically, require the requested redirect URI to match that registered set. Native loopback registrations may ignore port for usability, but token redemption still binds to the exact redirect URI used in the authorization request.
+4. Require `response_type=code`.
+5. Require PKCE with `code_challenge_method=S256`.
+6. Record the client's request, keyed by the GitHub CSRF state used for the brokered login.
+7. Redirect the user to GitHub.
 
-Agentweaver.Api hosts a public-client OAuth 2.1 Authorization Server for MCP clients. The implementation advertises RFC 8414 metadata and JWKS, supports authorization-code + PKCE S256, Dynamic Client Registration (RFC 7591), rotating refresh tokens, revocation (RFC 7009), and OIDC-compatible discovery aliases (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:7-20`). The older `docs/mcp-oauth.md` describes the same Option C design and notes that the GitHub `client_secret` and user GitHub token stay server-side (`docs/mcp-oauth.md:5-15`, `docs/mcp-oauth.md:143-154`).
+Validation failures return local OAuth error responses instead of redirects. This avoids open-redirect vulnerabilities where an attacker supplies a malicious redirect URI and receives error details or codes.
 
-### Endpoint table
+### Brokered GitHub login
 
-| Endpoint | Auth | Rate limit | Purpose | Evidence |
-|---|---:|---:|---|---|
-| `GET /.well-known/oauth-authorization-server` | anonymous | no | RFC 8414 AS metadata | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:28-50` |
-| `GET /.well-known/oauth-authorization-server/mcp` | anonymous | no | path-aware MCP metadata alias | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:49-51` |
-| `GET /.well-known/openid-configuration` | anonymous | no | OIDC discovery alias | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:52-54` |
-| `GET /.well-known/openid-configuration/mcp` | anonymous | no | path-aware OIDC alias | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:52-54` |
-| `GET /oauth/jwks` | anonymous | no | public signing key set | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:56-67` |
-| `GET /oauth/authorize` | anonymous | yes (`oauth`) | authorization-code request, GitHub broker redirect, mandatory PKCE | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:69-128` |
-| `POST /oauth/token` | anonymous public-client | yes (`oauth`) | `authorization_code` and `refresh_token` grants | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:130-243` |
-| `POST /oauth/register` | anonymous | yes (`oauth`) | Dynamic Client Registration (RFC 7591), public clients only | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:245-306` |
-| `POST /oauth/revoke` | anonymous | yes (`oauth`) | Refresh chain revocation and access-token `jti` denylist (RFC 7009) | `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:308-338` |
+The broker joins two flows:
 
-Metadata returns `issuer`, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`, `jwks_uri`, `revocation_endpoint`, supported scopes, response/grant types, S256-only PKCE methods, and `token_endpoint_auth_methods_supported=["none"]` (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:30-46`). Issuer is configured by `Auth:OAuth:Issuer` or derived from the request host; audience is configured by `Auth:OAuth:Audience` or defaults to `{issuer}/mcp` (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:17-32`). Production refuses to start unless issuer and audience are pinned to public values (`apps/Agentweaver.Api/Security/OAuthConfigGuard.cs:21-50`; `apps/Agentweaver.Api/Program.cs:39-43`).
+- the MCP client's OAuth authorization-code flow with Agentweaver; and
+- Agentweaver's confidential OAuth flow with GitHub.
 
-### PKCE, redirect URI policy, and brokered GitHub login
+The GitHub callback is shared with web sign-in. Agentweaver decides which path to take by checking whether the callback `state` belongs to a pending MCP authorization. If yes, it finishes the brokered MCP flow: exchange GitHub code, verify org membership, then issue an Agentweaver authorization code for the MCP client redirect.
 
-`/oauth/authorize` validates `client_id` and `redirect_uri` before redirecting anywhere, preventing error redirects to untrusted destinations (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:85-92`). Static redirect policy permits loopback HTTP (`127.0.0.1`, `::1`, `localhost`) and configured HTTPS prefixes, rejecting fragments and embedded userinfo (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:34-80`). If a client has registered with DCR, its exact registered redirect URIs are authoritative (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:93-103`, `apps/Agentweaver.Api/Auth/OAuth/McpClientStore.cs:45-62`).
+The MCP authorization code is not a GitHub code. It is a short-lived, single-use Agentweaver artifact bound to:
 
-PKCE is mandatory and S256-only: missing `code_challenge` or any `code_challenge_method` other than `S256` is rejected (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:108-113`). Authorization codes are redeemed once, expire in 60 seconds, and are bound to `redirect_uri`, `client_id`, and PKCE verifier (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:120-122`, `apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:238-260`). PKCE verification compares `BASE64URL(SHA256(ASCII(code_verifier)))` with the stored challenge using fixed-time comparison (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:267-275`).
+- client ID;
+- redirect URI;
+- PKCE challenge;
+- GitHub login / subject;
+- requested scope.
 
-The broker reuses `GitHubOAuthRedirectService`: it starts GitHub authorization, extracts GitHub's CSRF state, and records the MCP client's request keyed by that state (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:144-162`). On callback, it exchanges the GitHub code, enforces org membership before token issuance, then issues an opaque Agentweaver authorization code for the client redirect (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:168-236`). It also stores the brokered GitHub token per user on a best-effort basis so refresh-time org rechecks can use it; the GitHub token is never returned to the MCP client (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:211-231`).
+### Token endpoint logic
+
+`/oauth/token` supports two grants:
+
+- **authorization_code:** consume the Agentweaver authorization code, verify client ID, exact redirect URI, and PKCE verifier, then mint a JWT access token and issue a refresh token.
+- **refresh_token:** rotate the refresh token, optionally recheck org membership, and mint a new JWT access token.
+
+Token responses are marked `no-store` because they contain bearer credentials.
+
+Refresh-time org recheck is best effort. If Agentweaver has a brokered GitHub token for the user, it asks GitHub again. A definitive non-member result revokes and denies. An inconclusive result falls back to the org claim captured at issuance so transient GitHub or SAML-token problems do not lock out valid private-org users every time a GitHub token expires.
 
 ### Dynamic Client Registration
 
-`POST /oauth/register` accepts a subset of RFC 7591 metadata: `redirect_uris`, optional `client_name`, and optional `token_endpoint_auth_method` (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:350-361`). Every redirect URI must pass the same redirect policy as `/authorize` (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:270-280`). Confidential clients are rejected; only public clients with `token_endpoint_auth_method=none` are supported (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:282-290`). Registered clients receive an ephemeral non-secret `client_id` (`mcp_...`) and exact redirect URI set (`apps/Agentweaver.Api/Auth/OAuth/McpClientStore.cs:25-43`, `apps/Agentweaver.Api/Auth/OAuth/McpClientRegistration.cs:5-16`).
+Dynamic Client Registration lets public MCP clients register redirect URIs and receive a non-secret `client_id`. The registered redirect set becomes the per-client redirect allowlist. Agentweaver rejects confidential client auth methods because this design assumes public clients plus PKCE, not client secrets.
 
-### Token, refresh, and revocation behavior
+### Revocation
 
-For `grant_type=authorization_code`, `/oauth/token` redeems the code, mints a 15-minute JWT access token, and issues an opaque refresh token bound to subject, GitHub login, client ID, scope, and org (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:152-179`). For `grant_type=refresh_token`, the refresh token is rotated and a new access token is minted (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:181-240`).
+`/oauth/revoke` is idempotent. Unknown tokens still produce success, matching OAuth revocation semantics and avoiding token existence oracles. If the token is a refresh token, Agentweaver revokes the whole chain. If the token is a valid Agentweaver access token, Agentweaver deny-lists its `jti` until natural expiry.
 
-Refresh-time org membership is rechecked when a brokered GitHub token is available. A definitive `Denied` or `OrgAccessNotGranted` revokes the presented refresh token and returns `403 access_denied`; `Inconclusive` falls back to the issuance-time org claim so transient GitHub failure or expired brokered tokens do not lock out private-org members (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:191-227`).
+### Invariants to preserve when rebuilding
 
-`POST /oauth/revoke` is idempotent and always returns success for unknown tokens, per RFC 7009 semantics. It revokes refresh-token chains and, when the supplied token is a valid Agentweaver access token, extracts the `jti` and deny-lists it until natural expiry (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:308-338`).
+- OAuth discovery and authorization bootstrap endpoints must be public, but rate-limit expensive flow endpoints.
+- Redirect URI validation must happen before any redirect.
+- PKCE must be mandatory and S256-only.
+- Authorization codes must be short-lived, single-use, and bound to client, redirect URI, and PKCE.
+- MCP clients must never receive GitHub access tokens or the GitHub client secret.
+- Refresh tokens must rotate; reuse should revoke the chain.
 
-## MCP Token Service
+Where this lives:
 
-`McpTokenService` signs Agentweaver access tokens using RS256. In production, it loads an RSA private key from `Auth:OAuth:SigningKey`, which is intended to be backed by Key Vault secret `mcp-oauth-signing-key`; without a configured key, it generates an ephemeral local-development key and logs a warning (`apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:14-20`, `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:34-69`). JWKS exposes the public RSA key with deterministic `kid`, `kty=RSA`, `use=sig`, and `alg=RS256` (`apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:127-140`, `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:204-214`).
+- `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`
+- `apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs`
+- `docs/mcp-oauth.md`
 
-JWT shape:
+## MCP bearer JWTs: issuance, validation, and forwarding
 
-| Claim/header | Source/meaning | Evidence |
-|---|---|---|
-| `alg=RS256`, `kid` | current RSA signing key | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:23-31`, `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:66-69` |
-| `iss` | resolved issuer | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:95-104` |
-| `aud` | MCP resource audience, usually `{issuer}/mcp` | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:95-104`, `apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:27-32` |
-| `sub` | authenticated subject, currently GitHub login | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:82-91` |
-| `gh_login` | GitHub login | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:82-91` |
-| `scope` | `mcp:invoke` | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:23-27`, `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:82-91` |
-| `org` | allowed org captured at issuance, if configured | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:92-94` |
-| `iat`, `nbf`, `exp` | now, now, now + 15 minutes | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:84-104` |
-| `jti` | unique token ID for revocation denylist | `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:85-91` |
+Agentweaver access tokens are JWTs signed with RS256. They are designed to be validated offline by the MCP Resource Server and by the API.
 
-Validation requires issuer, audience, lifetime, signing key, and RS256 with 30 seconds of clock skew (`apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:109-125`). `TryValidateAccessToken` returns false for non-Agentweaver JWTs or invalid tokens so the middleware can fall through to raw GitHub token validation (`apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:145-180`). `TryReadJtiAndExpiry` validates a token and extracts `jti` plus expiry for revocation (`apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:182-202`).
+A token represents:
 
-The API middleware validates Agentweaver JWTs before trying the raw GitHub-token path. It resolves issuer/audience, validates the token offline, checks the `jti` denylist through `McpRefreshTokenStore`, and creates a `CallerContext` with `IsOAuthJwt=true` and the org claim (`apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:168-190`). Denied JTIs live in `McpRevokedJtis` and are checked until expiry (`apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:139-160`, `apps/Agentweaver.Api/Auth/OAuth/McpRevokedJti.cs:5-24`).
+- **issuer (`iss`)**: the public Agentweaver Authorization Server issuer;
+- **audience (`aud`)**: the MCP resource, usually `{issuer}/mcp`;
+- **subject (`sub`)**: the authenticated GitHub login;
+- **GitHub login (`gh_login`)**: explicit login claim for downstream identity;
+- **scope**: currently `mcp:invoke`;
+- **org**: the allowed org captured at issuance;
+- **lifetime claims**: issued-at, not-before, expiry;
+- **JWT ID (`jti`)**: revocation handle.
 
-## Token Stores
+```mermaid
+flowchart LR
+    AS[Agentweaver API signs JWT with RSA private key] --> JWKS[Publishes public key as JWKS]
+    Client[MCP client presents JWT] --> MCP[MCP validates signature, iss, aud, exp, alg]
+    JWKS --> MCP
+    MCP --> Forward[Forward same bearer token to API]
+    Forward --> API[API validates JWT and checks jti denylist]
+    API --> Authz[Org middleware trusts matching org claim]
+```
+
+### Signing keys
+
+Production should load a stable RSA private key from configuration/secret storage. Local development can generate an ephemeral key so the flow works on a developer machine, but ephemeral keys invalidate tokens on restart and are unsuitable for multi-instance or hosted deployments.
+
+JWKS exposes only the public key. The `kid` is deterministic from public key material so the same key advertises the same identity across restarts.
+
+### Validation responsibilities
+
+The MCP server validates JWTs using cached JWKS from the Authorization Server. It checks signature, issuer, audience, lifetime, and RS256 algorithm. That lets MCP reject invalid tokens without calling GitHub or the Authorization Server on every request.
+
+The API also validates Agentweaver JWTs when MCP forwards calls downstream. The API additionally checks the `jti` denylist, because revocation state lives in the API database. This split keeps MCP stateless for normal validation while preserving authoritative revocation at the backend.
+
+### Issuer and audience pinning
+
+In production, issuer and audience must be public, stable values. Internal service-to-service hosts such as `http://agentweaver-api:8080` are not the OAuth issuer the client discovered and not the audience embedded in tokens. If production derived issuer/audience from internal request hosts, valid forwarded JWTs would fail validation. Agentweaver therefore requires pinned issuer/audience config in production for both API and HTTP-mode MCP.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs`
+- `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs`
+- `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
+- `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
+- `apps/Agentweaver.Api/Security/OAuthConfigGuard.cs`
+- `apps/Agentweaver.Mcp/Program.cs`
+
+## Token stores and lifetimes
+
+Agentweaver uses different storage strategies for different credential types because each type has a different replay risk and lifecycle.
 
 ### GitHub user tokens
 
-`IGitHubTokenStore` stores `GitHubToken` records containing access token, optional refresh token, expiry, login, avatar URL, and scopes (`packages/Agentweaver.Domain/IGitHubTokenStore.cs:3-34`). Scopes are either `installation` or per-user (`user:{userId}`) (`packages/Agentweaver.Domain/IGitHubTokenStore.cs:9-18`). The default registered scope provider is installation-scoped (`apps/Agentweaver.Api/Program.cs:111-115`), with a caller-scoped provider available for hosted multi-tenant deployments (`apps/Agentweaver.Api/Auth/CallerTokenScopeProvider.cs:5-16`, `apps/Agentweaver.Api/Auth/FixedInstallationScopeProvider.cs:5-13`).
+GitHub tokens are the credentials Agentweaver uses to act on behalf of a signed-in user or to recheck org membership. They may include access token, optional refresh token, expiry, login, avatar URL, and scopes.
 
-On Windows, `OsCredentialStoreGitHubTokenStore` uses Windows Credential Manager (`CRED_TYPE_GENERIC`, DPAPI-protected), with credential target names separated by scope and signed-out tombstones to suppress fallback (`apps/Agentweaver.Api/Auth/OsCredentialStoreGitHubTokenStore.cs:8-18`, `apps/Agentweaver.Api/Auth/OsCredentialStoreGitHubTokenStore.cs:116-156`). On non-Windows it falls back to a file store (`apps/Agentweaver.Api/Auth/OsCredentialStoreGitHubTokenStore.cs:20-27`). The file store writes one JSON file per scope under `{DataDirectory}/auth/{scope-key}.json`, sanitizes scope keys for filenames, and sets owner-only `0600` permissions on Unix best-effort (`apps/Agentweaver.Api/Auth/FileSystemGitHubTokenStore.cs:7-24`, `apps/Agentweaver.Api/Auth/FileSystemGitHubTokenStore.cs:110-126`). The in-memory implementation is development/test-only and loses tokens on restart (`apps/Agentweaver.Api/Auth/InMemoryGitHubTokenStore.cs:6-12`).
+Token scopes separate storage domains:
 
-`GitHubTokenRefreshService` centralizes valid-token retrieval and refresh. It returns non-expiring or not-near-expiry tokens directly, serializes refreshes per scope, signs out if refresh is impossible, and never logs raw token values (`apps/Agentweaver.Api/Auth/GitHubTokenRefreshService.cs:10-28`, `apps/Agentweaver.Api/Auth/GitHubTokenRefreshService.cs:57-105`). GitHub refresh uses the configured `client_id`, `client_secret`, `grant_type=refresh_token`, and stored refresh token (`apps/Agentweaver.Api/Auth/GitHubTokenRefreshService.cs:119-170`).
+- **installation scope** for the default web sign-in storage model;
+- **per-user scope** for hosted/multi-user flows and brokered MCP refresh-time org checks.
 
-### OAuth refresh tokens, clients, and access-token denylist
+On Windows, tokens are stored in Windows Credential Manager, protected by OS facilities. On non-Windows, Agentweaver falls back to per-scope JSON files under its data directory with owner-only permissions where supported. A signed-out tombstone is stored to distinguish "user explicitly signed out" from "never signed in".
 
-MCP refresh tokens are opaque to clients but stored only as SHA-256 hashes; a database disclosure cannot replay the plaintext token (`apps/Agentweaver.Api/Auth/OAuth/McpRefreshToken.cs:5-13`, `apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:15-24`). Tokens have a 30-day sliding lifetime and 90-day absolute lifetime (`apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:27-31`). Rotation consumes the current token and creates a new one in the same chain; presenting a consumed/revoked token revokes the whole chain as reuse detection (`apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:62-120`).
+A refresh helper centralizes token retrieval. It returns still-valid tokens directly, serializes refreshes per scope to avoid refresh races, signs out when refresh is impossible, and avoids logging raw token values.
 
-Refresh revocation is chain-wide and idempotent (`apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:122-137`). Access-token revocation adds the `jti` to a bounded denylist until expiry (`apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:139-160`). EF indexes enforce unique refresh-token hashes, unique revoked JTIs, and unique DCR client IDs (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:75-80`).
+### OAuth authorization state and web exchange codes
 
-Dynamic clients are persisted in `McpClientRegistrations` with a non-secret client ID and newline-separated exact redirect URIs (`apps/Agentweaver.Api/Auth/OAuth/McpClientRegistration.cs:17-31`). `McpClientStore` creates random `mcp_...` IDs and returns registered redirect URIs for exact-match enforcement at `/oauth/authorize` (`apps/Agentweaver.Api/Auth/OAuth/McpClientStore.cs:25-73`).
+Some OAuth artifacts are intentionally in-memory:
 
-## Middleware & Exemptions
+- GitHub CSRF states;
+- MCP pending authorizations keyed by GitHub state;
+- Agentweaver authorization codes;
+- browser one-time session exchange codes.
 
-`GitHubTokenAuthMiddleware` authenticates API calls. It applies only to `/api/*`, exempting `/api/ping`, `/api/health`, and `/api/auth/session/exchange` because that endpoint exchanges the one-time web sign-in code for a token (`apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:134-147`). For Agentweaver OAuth JWTs it validates offline and checks the `jti` denylist (`apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:168-190`). For raw GitHub bearer tokens it caches the result of `GET /user` by SHA-256 token hash for five minutes on success and 30 seconds on failure (`apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:193-202`, `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:217-245`).
+These are short-lived bootstrap artifacts, not durable sessions. The trade-off is operational: a process restart can force the user to restart an OAuth flow, but it avoids persisting sensitive, replayable intermediate codes.
 
-`ApiKeyAuthMiddleware` is now a compatibility shim over `GitHubTokenAuthMiddleware.GetCaller`; the old `ApiKeyRegistry` reports no configured keys (`apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:255-263`, `apps/Agentweaver.Api/Security/ApiKeyRegistry.cs:3-18`). Test bypasses exist but are honored only in Development (`apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:53-61`, `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:93-131`; `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:53-72`). Production startup fails if either test bypass flag is enabled (`apps/Agentweaver.Api/Security/TestingBypassGuard.cs:13-47`, `apps/Agentweaver.Api/Program.cs:33-37`).
+### OAuth refresh tokens
 
-`GitHubOrgAuthorizationMiddleware` exempts these prefixes from org/team checks:
+MCP refresh tokens are opaque to clients and stored only as SHA-256 hashes. A database disclosure should not let an attacker replay plaintext refresh tokens.
 
-- `/health`, `/healthz`, `/api/health`, `/api/ping`;
-- `/auth` and `/api/auth`;
-- `/mcp`;
-- `/oauth`;
-- `/.well-known`.
+Refresh tokens have two lifetimes:
 
-The list is defined at `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:25-39` and applied with prefix matching at `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:191-199`. The `/oauth` and `/.well-known` exemptions are required because discovery and the public-client OAuth flow must be reachable before the client has a token (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:35-38`).
+- a **sliding lifetime** extended on successful rotation;
+- an **absolute lifetime** that caps the whole chain.
 
-Repository path submission has separate security hardening: UNC/device/relative/drive-relative paths and alternate data streams are rejected, optional allowlisted roots are resolved through real paths, and rejection messages avoid path-existence oracles (`apps/Agentweaver.Api/Security/RepositoryRootValidator.cs:7-21`, `apps/Agentweaver.Api/Security/RepositoryRootValidator.cs:73-151`).
+Every refresh consumes the presented token and creates a successor in the same chain. Presenting a consumed or revoked token is treated as possible theft and revokes the entire chain.
 
-## Security Properties, Threats & Gotchas
+### Dynamic clients and revoked JTIs
 
-- **GitHub secrets stay server-side.** The browser and MCP clients never receive the GitHub `client_secret`; MCP clients also never receive the user's GitHub token. The broker documentation and code state this boundary explicitly (`apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:101-117`, `docs/mcp-oauth.md:151-154`).
-- **Do not put tokens in URLs.** Browser sign-in uses a 60-second one-time code so the GitHub access token is returned only via POST body, not redirect query strings (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:92-99`, `apps/Agentweaver.Api/Auth/WebSessionExchangeService.cs:8-19`).
-- **SAML org checks are subtle.** For `microsoft`, authenticated membership/public-members requests can be SAML-blocked. The working fallback is the unauthenticated `/public_members/{login}` probe; only publicized org membership can succeed there (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:89-105`). Private members who do not publicize membership may be denied unless the authenticated GitHub App user token can prove membership.
-- **Rate-limit `403` is not denial.** GitHub primary/secondary rate limits map to `Inconclusive` and are never cached (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:197-215`, `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:73-79`).
-- **Cache only stable authz answers.** `Allowed`, `Denied`, and `OrgAccessNotGranted` are cached for five minutes; `Inconclusive` is not (`apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs:66-79`). Be careful changing this: caching transient failures can pin false denials.
-- **Issuer/audience must be public and stable in production.** Internal service hosts would break JWT validation because AS-minted tokens are audience-bound to the public MCP resource. Production startup requires pinned `Auth:OAuth:Issuer` and `Auth:OAuth:Audience` (`apps/Agentweaver.Api/Security/OAuthConfigGuard.cs:3-18`, `apps/Agentweaver.Api/Security/OAuthConfigGuard.cs:31-50`).
-- **PKCE is S256 only.** `plain` is rejected and authorization codes are single-use, short-lived, and bound to client/redirect/PKCE (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:108-113`, `apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:238-260`).
-- **Redirect URI exactness matters.** Validate `redirect_uri` before any redirect; registered clients get exact-match redirect enforcement, and static HTTPS prefixes are only defense-in-depth (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:85-103`, `apps/Agentweaver.Api/Auth/OAuth/McpClientRegistration.cs:5-16`).
-- **Refresh-token reuse is treated as theft.** Reusing a consumed or revoked refresh token revokes the chain (`apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:82-87`).
-- **Revoked access tokens remain invalid until expiry.** `/oauth/revoke` adds valid access-token `jti` values to the denylist, and middleware rejects denied JTIs before setting caller context (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:308-338`, `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:173-180`).
-- **Local/dev keys are not production keys.** Ephemeral OAuth signing keys are acceptable only for local development because tokens fail after restart and are not shareable across instances (`apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:54-64`).
-- **Auth bypass flags are development-only.** Middleware ignores bypass flags outside Development and Production startup fails if bypass is configured (`apps/Agentweaver.Api/Security/TestingBypassGuard.cs:29-47`, `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:93-114`, `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs:53-72`).
+Dynamic client registrations persist non-secret client IDs and registered redirect URIs. Access-token revocation persists JWT IDs (`jti`) with expiry timestamps so the API can reject revoked JWTs until they would naturally expire.
+
+Where this lives:
+
+- `packages/Agentweaver.Domain/IGitHubTokenStore.cs`
+- `apps/Agentweaver.Api/Auth/OsCredentialStoreGitHubTokenStore.cs`
+- `apps/Agentweaver.Api/Auth/FileSystemGitHubTokenStore.cs`
+- `apps/Agentweaver.Api/Auth/GitHubTokenRefreshService.cs`
+- `apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs`
+- `apps/Agentweaver.Api/Auth/OAuth/McpClientStore.cs`
+- `apps/Agentweaver.Api/Memory/MemoryDbContext.cs`
+
+## Middleware exemptions and bootstrap surfaces
+
+Security middleware cannot simply protect every route, because some routes exist specifically to let unauthenticated clients discover or obtain credentials. Agentweaver therefore uses explicit exemptions.
+
+### API bearer-token middleware
+
+The API bearer-token middleware applies to `/api/*` except:
+
+- ping/health routes;
+- the web session exchange route that redeems the one-time browser sign-in code.
+
+That exchange route is exempt because the one-time code is the credential being exchanged for a bearer token. Requiring a bearer token there would create a sign-in loop.
+
+### API org-authorization middleware
+
+Org authorization exempts:
+
+- health routes;
+- web and API auth bootstrap routes;
+- MCP routes;
+- OAuth Authorization Server routes;
+- well-known discovery routes.
+
+The rule is not "these routes are unimportant." The rule is "these routes either must be public bootstrap/discovery or are protected by a different layer." OAuth endpoints have their own validation and rate limiting; MCP has its own bearer middleware in HTTP mode.
+
+### MCP bearer middleware
+
+HTTP-mode MCP exempts:
+
+- healthz;
+- OAuth Protected Resource metadata.
+
+All MCP tool calls require a bearer token. MCP first accepts configured legacy API keys for compatibility, then Agentweaver JWTs, then — while enabled — raw GitHub tokens as a transitional path. When a caller token is accepted, MCP forwards that same bearer token to the API so the backend sees the real caller identity rather than a shared service identity.
+
+### Invariants to preserve when rebuilding
+
+- Exemptions should be path-specific, documented, and intentionally small.
+- Public bootstrap routes must have their own input validation and, where expensive, rate limits.
+- Do not exempt a route merely because it is inconvenient to authenticate.
+- Middleware ordering matters: authentication before authorization.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
+- `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs`
+- `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
+- `apps/Agentweaver.Mcp/Program.cs`
+
+## Rebuild checklist
+
+If rebuilding Agentweaver auth from scratch, implement the system in this order:
+
+1. **Token abstraction:** define caller context with subject, GitHub login, optional org, and whether the credential is an Agentweaver JWT.
+2. **GitHub web sign-in:** confidential code exchange, CSRF state, GitHub `/user` lookup, secure token storage, one-time browser exchange code.
+3. **Bearer middleware:** validate Agentweaver JWTs, check revocation, fall back to raw GitHub `/user`, then attach caller context.
+4. **Org authorization:** enforce configured org/team, account for SAML, separate denied from inconclusive, cache only stable answers.
+5. **OAuth Authorization Server:** discovery, JWKS, authorize, token, DCR, revoke, PKCE S256, redirect policy, brokered GitHub login.
+6. **MCP Resource Server:** protected-resource metadata, bearer challenge, JWKS-based JWT validation, downstream token forwarding.
+7. **Stores:** OS/file GitHub token store, hashed rotating refresh-token store, dynamic client registration store, `jti` denylist.
+8. **Production guards:** fail fast for auth bypass flags and missing public issuer/audience config.
+
+The central design rule is: **GitHub proves the human, Agentweaver narrows that proof to its own resource, and every shortcut must either be short-lived, single-use, explicitly public, or development-only.**
