@@ -97,7 +97,7 @@ public static class OAuthServerEndpoints
                 .GetRedirectUrisAsync(client_id!, ctx.RequestAborted)
                 .ConfigureAwait(false);
             if (registeredUris is not null
-                && !registeredUris.Contains(redirect_uri!, StringComparer.Ordinal))
+                && !OAuthServerConfig.RedirectUriMatchesRegistered(redirect_uri!, registeredUris))
             {
                 return InvalidRequest("redirect_uri does not match a redirect URI registered for this client_id.");
             }

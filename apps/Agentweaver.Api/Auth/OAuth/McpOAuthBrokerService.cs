@@ -54,11 +54,7 @@ public static class OAuthServerConfig
         if (!string.IsNullOrEmpty(uri.UserInfo)) return false;
 
         if (uri.Scheme == Uri.UriSchemeHttp)
-        {
-            var host = uri.Host;
-            return host is "127.0.0.1" or "::1"
-                || host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
-        }
+            return IsLoopbackHost(uri.Host);
 
         if (uri.Scheme == Uri.UriSchemeHttps)
         {
@@ -74,6 +70,40 @@ public static class OAuthServerConfig
             }
 
             return false;
+        }
+
+        return false;
+    }
+
+    private static bool IsLoopbackHost(string host) =>
+        host is "127.0.0.1" or "::1"
+        || host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Matches a requested <paramref name="redirectUri"/> against a client's DCR-registered set.
+    /// Non-loopback URIs require an exact ordinal match. For loopback URIs (127.0.0.1 / ::1 /
+    /// localhost) the port is IGNORED per RFC 8252 §7.3: native clients bind a fresh ephemeral
+    /// loopback port on every run, so a registered loopback URI matches any port sharing the same
+    /// scheme, host and path. Returns true when the requested URI matches any registered entry.
+    /// </summary>
+    public static bool RedirectUriMatchesRegistered(string redirectUri, IReadOnlyList<string> registeredUris)
+    {
+        if (registeredUris.Contains(redirectUri, StringComparer.Ordinal))
+            return true;
+
+        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var requested)
+            || requested.Scheme != Uri.UriSchemeHttp
+            || !IsLoopbackHost(requested.Host))
+            return false;
+
+        foreach (var registered in registeredUris)
+        {
+            if (Uri.TryCreate(registered, UriKind.Absolute, out var reg)
+                && reg.Scheme == Uri.UriSchemeHttp
+                && IsLoopbackHost(reg.Host)
+                && string.Equals(reg.Host, requested.Host, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(reg.AbsolutePath, requested.AbsolutePath, StringComparison.Ordinal))
+                return true;
         }
 
         return false;

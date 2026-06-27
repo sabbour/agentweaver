@@ -141,7 +141,27 @@ public sealed class OAuthTokenLifecycleTests : IClassFixture<OAuthWebApplication
     }
 
     // =========================================================================
-    // S2-07b (STUB — requires Tank T5 DCR)
+    // RFC 8252 §7.3 loopback redirect matching (OAuthServerConfig.RedirectUriMatchesRegistered).
+    // Native clients bind a fresh ephemeral loopback port per run, so a registered loopback URI
+    // must match any port sharing the same scheme/host/path; non-loopback requires exact match.
+    // =========================================================================
+    [Theory]
+    [InlineData("http://127.0.0.1:0/", "http://127.0.0.1:54321/", true)]   // registered :0, request real port
+    [InlineData("http://127.0.0.1:5000/", "http://127.0.0.1:61234/", true)] // any loopback port matches
+    [InlineData("http://localhost:5000/", "http://localhost:7777/", true)]
+    [InlineData("http://127.0.0.1:5000/cb", "http://127.0.0.1:7777/cb", true)] // path preserved
+    [InlineData("http://127.0.0.1:5000/cb", "http://127.0.0.1:7777/other", false)] // path differs
+    [InlineData("http://127.0.0.1:5000/", "http://localhost:7777/", false)]  // host differs
+    [InlineData("https://app.example.com/cb", "https://app.example.com/cb", true)] // non-loopback exact
+    [InlineData("https://app.example.com/cb", "https://app.example.com/cb2", false)] // non-loopback no port-ignore
+    public void RedirectUriMatchesRegistered_LoopbackIgnoresPort(string registered, string requested, bool expected)
+    {
+        Agentweaver.Api.Auth.OAuth.OAuthServerConfig
+            .RedirectUriMatchesRegistered(requested, new[] { registered })
+            .Should().Be(expected);
+    }
+
+    // =========================================================================
     // Non-loopback redirect_uri at /oauth/register → 400.
     // =========================================================================
     [Fact(Skip = "TODO: Tank T5 (DCR) — non-loopback redirect_uri must be rejected at /oauth/register")]
