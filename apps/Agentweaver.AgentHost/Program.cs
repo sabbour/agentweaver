@@ -75,7 +75,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentHostStartupSe
 // CopilotAIAgent singleton that AgentHostStartupService runs SetupAsync on.
 // Preview packages pinned to 1.9.0-preview.260603.1 per spec H7.
 var agentHostedBuilder = builder.AddAIAgent(
-    "agentweaver-pod",
+    A2ATurnBridgeAgent.AgentName,
     (sp, _) => new A2ATurnBridgeAgent(
         sp.GetRequiredService<CopilotAIAgent>(),
         sp.GetRequiredService<ILogger<A2ATurnBridgeAgent>>()),

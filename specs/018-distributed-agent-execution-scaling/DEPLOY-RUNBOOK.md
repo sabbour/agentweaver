@@ -336,3 +336,50 @@ Worker: 1/1 Running — GET :8081/healthz → {"status":"ok","role":"worker"}
 | `agentweaver-a2a-client-tls` | Client cert + key + CA | 365 days (2027-06-27) |
 
 To rotate: `bash scripts/aks/gen-a2a-mtls-certs.sh --force`
+
+---
+
+## ACTIVATED (v2) — P2/P3 Final Cutover — 2026-06-27T21:25 UTC
+
+**Executed by**: Link (asabbour@microsoft.com)  
+**HEAD at activation**: cf1283e7 (de4a7a58 data-layer abstraction fix included)
+
+### Live state
+
+| Item | Value |
+|------|-------|
+| API image | cf1283e7-pg1 |
+| Worker image | cf1283e7-pg1 |
+| Database__Provider | Postgres (both API and worker) |
+| HOME | /workspace/.home (RWX Azure Files; shared token store/worktrees) |
+| agentweaver-data PVC | Retained (not deleted); no longer mounted on API/worker |
+| API replicas | 2 / RollingUpdate (SQLite single-writer constraint lifted) |
+| Worker | 1/1 Running (node vmss000000, min 1 / max 3 HPA) |
+| Sandbox mode | in-api (pod-per-run held for P1.5) |
+
+### Step results
+
+| Step | Result |
+|------|--------|
+| 1 Build cf1283e7-pg1 | PASSED — pushed to agentweaverregistry.azurecr.io |
+| 2 Token store copy | PASSED — /workspace/.home/.local/share/agentweaver present |
+| 3 Data re-migration | PASSED — Projects 3/3 skipped (already in PG), Runs 31/31, BacklogTasks 19/19 |
+| 4 Prep manifest | PASSED — HOME=/workspace/.home, Postgres, no agentweaver-data PVC |
+| 5 Apply replicas:1 | PASSED — efbundle up to date, no SqliteException, health OK |
+| 6 Scale replicas:2 | PASSED — 2/2 Running, both healthy |
+| 7 Worker + HPA | PASSED — 1/1 Running /healthz+/readyz OK, Postgres queries in logs |
+
+### Rollback (if needed)
+
+`bash
+# Restore sqlite manifest and apply
+cd C:\Users\asabbour\Git\agentweaver-spec018
+git checkout -- k8s/api-deployment.yaml
+# Apply with envsubst as usual
+export ACR_LOGIN_SERVER=agentweaverregistry.azurecr.io IMAGE_TAG=cf1283e7-pg1 ...
+envsubst < k8s/api-deployment.yaml | kubectl apply -f -
+kubectl -n agentweaver rollout status deploy/agentweaver-api --timeout=180s
+# Delete worker if needed:
+kubectl -n agentweaver delete deploy/agentweaver-worker
+`
+

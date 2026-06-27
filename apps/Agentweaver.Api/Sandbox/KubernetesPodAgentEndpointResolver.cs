@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using k8s;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
@@ -28,19 +29,29 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
     private readonly string _namespace;
     private readonly SandboxAgentOptions _options;
     private readonly ILogger<KubernetesPodAgentEndpointResolver> _logger;
+    // spec-018 P1.5: pod-per-run launch lifecycle. The endpoint resolver is the single
+    // chokepoint every pod-per-run turn passes through (via RemoteAgentProxy.SetupAsync),
+    // so it lazily launches the AgentHost pod on first resolve for a run when none is
+    // registered yet. Null when the lifecycle is unavailable (non-cluster / misconfig).
+    private readonly IAgentHostPodLifecycle? _podLifecycle;
+    // Dedupes concurrent launches for the same run (e.g. parallel sub-agent turns) and
+    // caches the in-flight/launched task so a run is launched at most once.
+    private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _launches = new(StringComparer.Ordinal);
 
     public KubernetesPodAgentEndpointResolver(
         IKubernetes k8sClient,
         IPodNameRegistry podRegistry,
         string @namespace,
         SandboxAgentOptions options,
-        ILogger<KubernetesPodAgentEndpointResolver> logger)
+        ILogger<KubernetesPodAgentEndpointResolver> logger,
+        IAgentHostPodLifecycle? podLifecycle = null)
     {
         _k8sClient = k8sClient ?? throw new ArgumentNullException(nameof(k8sClient));
         _podRegistry = podRegistry ?? throw new ArgumentNullException(nameof(podRegistry));
         _namespace = @namespace ?? throw new ArgumentNullException(nameof(@namespace));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _podLifecycle = podLifecycle;
     }
 
     /// <inheritdoc />
@@ -49,11 +60,22 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         var podName = _podRegistry.TryGet(runId);
         if (podName is null)
         {
-            _logger.LogWarning(
-                "KubernetesPodAgentEndpointResolver: no pod registered for run {RunId}; " +
-                "SandboxClaim may not yet be bound.",
-                runId);
-            return null;
+            // Lazily launch the AgentHost pod for this run. This is the only place the
+            // pod is provisioned in pod-per-run mode — LaunchAgentHostPodAsync creates the
+            // SandboxClaim, waits for it to bind, and registers the pod name + endpoint.
+            if (_podLifecycle is not null)
+            {
+                podName = await EnsurePodLaunchedAsync(runId, ct).ConfigureAwait(false);
+            }
+
+            if (podName is null)
+            {
+                _logger.LogWarning(
+                    "KubernetesPodAgentEndpointResolver: no pod registered for run {RunId}; " +
+                    "SandboxClaim may not yet be bound.",
+                    runId);
+                return null;
+            }
         }
 
         try
@@ -87,6 +109,50 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             _logger.LogError(ex,
                 "KubernetesPodAgentEndpointResolver: failed to resolve pod IP for run {RunId} (pod={PodName})",
                 runId, podName);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Launches the AgentHost pod for <paramref name="runId"/> exactly once, deduping
+    /// concurrent callers. Returns the bound pod name (now registered in
+    /// <see cref="IPodNameRegistry"/>), or <see langword="null"/> if the launch failed.
+    /// </summary>
+    private async Task<string?> EnsurePodLaunchedAsync(string runId, CancellationToken ct)
+    {
+        // A run already registered (raced ahead of us) — nothing to launch.
+        var existing = _podRegistry.TryGet(runId);
+        if (existing is not null)
+            return existing;
+
+        var launch = _launches.GetOrAdd(
+            runId,
+            id => new Lazy<Task<string>>(
+                // Use a non-cancelable token: the pod's lifetime spans the whole run, not a
+                // single turn's cancellation scope. Released by RunWatchLoopService on suspend.
+                () => _podLifecycle!.LaunchAgentHostPodAsync(id, CancellationToken.None)));
+
+        try
+        {
+            _logger.LogInformation(
+                "KubernetesPodAgentEndpointResolver: no pod registered for run {RunId}; " +
+                "launching AgentHost pod.",
+                runId);
+
+            await launch.Value.WaitAsync(ct).ConfigureAwait(false);
+            return _podRegistry.TryGet(runId);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Drop the cached failed launch so a subsequent turn can retry.
+            _launches.TryRemove(runId, out _);
+            _logger.LogError(ex,
+                "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}",
+                runId);
             return null;
         }
     }

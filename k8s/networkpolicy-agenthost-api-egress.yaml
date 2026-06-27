@@ -1,0 +1,38 @@
+# NetworkPolicy — API egress to AgentHost (sandbox) pods on the A2A port.
+#
+# spec-018 P1.5 GAP FIX: the worker already has egress to sandbox:8088
+# (networkpolicy-worker.yaml `allow-worker-agenthost-egress`), but the API does NOT —
+# `allow-app-internal-egress` (networkpolicy-default-deny.yaml) only opens port 8080 for
+# api/mcp/frontend. In the P3 split, interactive UI-driven runs (POST /runs -> SSE) execute
+# in the API process, so the API is the one that launches the pod and hosts RemoteAgentProxy
+# for those runs. Without this rule the API's A2A connection to the pod on 8088 is dropped by
+# the default-deny egress, even though the pod-side ingress (networkpolicy-agenthost.yaml)
+# already permits api -> pod:8088.
+#
+# Additive only — does NOT modify any existing policy. Cilium/ACNS (--enable-acns) enforce
+# both this and the L7/FQDN policies together; an additive allow is safe.
+#
+# Pairs with the ingress rule allow-worker-to-agenthost-a2a (networkpolicy-agenthost.yaml),
+# which already lists agentweaver-api as a permitted source.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-agenthost-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-api
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: agentweaver-sandbox
+      ports:
+        - protocol: TCP
+          port: 8088

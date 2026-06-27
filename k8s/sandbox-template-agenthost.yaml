@@ -1,0 +1,125 @@
+# SandboxTemplate — agentweaver-agent-host (spec-018 P1.5, pod-per-run).
+#
+# This is the template referenced by KubernetesSandboxOptions.AgentHostTemplateRef
+# (default "agentweaver-agent-host"). KubernetesSandboxExecutor.LaunchAgentHostPodAsync
+# creates a SandboxClaim with templateRef=agentweaver-agent-host and injects per-run
+# AgentHost__* env vars; the pod runs Agentweaver.AgentHost which hosts the
+# A2ATurnBridgeAgent over A2A and the worker/api connects via RemoteAgentProxy.
+#
+# Differences from agentweaver-sandbox (k8s/sandbox-template.yaml):
+#   - image: agentweaver-agent-host (the real AgentHost), NOT the sleep-infinity image.
+#   - envVarsInjectionPolicy: Allowed — the executor injects AgentHost__RunId etc.
+#   - PoC: RequireMtls=false comes from the mounted configmap-agenthost (plain http :8088).
+#   - PoC: readOnlyRootFilesystem relaxed to false (CopilotClient / git write to $HOME).
+#     PRODUCTION must restore readOnlyRootFilesystem: true + a writable $HOME emptyDir.
+#
+# Pod label `app: agentweaver-sandbox` is intentional: it makes ALL existing sandbox
+# NetworkPolicies apply unchanged (ingress 8088 from worker+api, DNS egress, Cilium FQDN
+# egress allowlist) — no policy edits, --enable-acns/Cilium policies untouched. The extra
+# component label distinguishes agent-host pods for observability.
+#
+# Apply (envsubst):
+#   ACR_LOGIN_SERVER=agentweaverregistry.azurecr.io AGENTHOST_IMAGE_TAG=cf1283e7 \
+#     envsubst < k8s/sandbox-template-agenthost.yaml | kubectl apply -f -
+---
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: agentweaver-agent-host
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+    app.kubernetes.io/component: agent-host
+spec:
+  # The executor injects AgentHost__RunId / AgentHost__WorkingDirectory / etc. into the
+  # SandboxClaim spec.env at launch — the controller may only honor these when injection
+  # is allowed. (If the CRD rejects "Allowed", the pod still functions: RequireMtls/Port/
+  # A2APath come from the mounted configmap; only the per-run RunId correlation is lost.)
+  envVarsInjectionPolicy: Allowed
+  podTemplate:
+    metadata:
+      labels:
+        app: agentweaver-sandbox
+        app.kubernetes.io/part-of: agentweaver
+        app.kubernetes.io/component: agent-host
+    spec:
+      runtimeClassName: kata-vm-isolation
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agentweaver-agent-host
+          image: ${ACR_LOGIN_SERVER}/agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            # PoC: relaxed so CopilotClient/git can write to $HOME. PRODUCTION: set true and
+            # add a writable emptyDir at /home/appuser (and keep /tmp writable).
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          # spec-018: A2A listener port (AgentHost:Port). PoC plain-http; prod mTLS.
+          ports:
+            - name: a2a
+              containerPort: 8088
+              protocol: TCP
+          env:
+            # ASP.NET reads config from env + the mounted appsettings.k8s.json (added AFTER
+            # env in Program.cs, so the configmap wins for shared keys). RunId is injected
+            # per-run by the executor; the rest come from the configmap.
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+          envFrom:
+            # PoC ONLY: per-run GitHub Copilot token source. The pod authenticates via the
+            # config-fallback token Providers:GitHubCopilot:GitHubToken (GitHubCopilotClientFactory
+            # -> ReadConfigFallbackToken). For the PoC this is a single static token in a Secret;
+            # optional:true so the pod still starts if absent (the turn then fails auth with a
+            # clear "GitHub Copilot is not authorized" message). PRODUCTION: inject a run-scoped
+            # token at claim time, or use workload identity (platform-deployment.md §3.3).
+            - secretRef:
+                name: agentweaver-agenthost-poc
+                optional: true
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+            # Optional in PoC (RequireMtls=false): server TLS cert. Required in production.
+            - name: a2a-tls
+              mountPath: /mnt/a2a-tls
+              readOnly: true
+            # AgentHost Kestrel/security config — RequireMtls=false (PoC) lives here.
+            - name: agenthost-config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: agentweaver-workspace
+        - name: tmp
+          emptyDir: {}
+        - name: a2a-tls
+          secret:
+            secretName: agentweaver-a2a-server-tls
+            defaultMode: 0400
+            optional: true
+        - name: agenthost-config
+          configMap:
+            name: agenthost-config

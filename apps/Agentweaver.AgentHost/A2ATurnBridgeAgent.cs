@@ -56,8 +56,25 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
 {
+    /// <summary>
+    /// The MAF agent name this bridge is registered under (<c>AddAIAgent</c> /
+    /// <c>MapA2AHttpJson</c>). MAF validates that the factory-produced agent's
+    /// <see cref="AIAgent.Name"/> matches the registered key, so the bridge must report this
+    /// name rather than delegating <see cref="Name"/> to the inner <see cref="CopilotAIAgent"/>
+    /// (whose name is unset). Used by both <c>Program.cs</c> and the round-trip integration test.
+    /// </summary>
+    public const string AgentName = "agentweaver-pod";
+
     private readonly IPodTurnRunner _runner;
     private readonly ILogger<A2ATurnBridgeAgent> _logger;
+
+    /// <summary>
+    /// Reports the registered MAF agent name. <see cref="DelegatingAIAgent"/> otherwise forwards
+    /// <see cref="Name"/> to the inner agent, whose name is empty — which makes
+    /// <c>MapA2AHttpJson</c>'s factory-name validation throw
+    /// (<c>returned an agent with name '', but the expected name is 'agentweaver-pod'</c>).
+    /// </summary>
+    public override string Name => AgentName;
 
     /// <summary>Production constructor: drives the pod's singleton <see cref="CopilotAIAgent"/>.</summary>
     public A2ATurnBridgeAgent(CopilotAIAgent inner, ILogger<A2ATurnBridgeAgent> logger)

@@ -123,8 +123,12 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         // TLS/cert settings per H1 (mTLS or bearer). Client lifetime is per-run.
         _httpClient = _httpClientFactory.CreateClient("a2a-sandbox-pod");
 
-        // The A2AClient endpoints: {podEndpointUri}/v1/message:stream and /v1/card.
-        var a2aClient = new A2AClient(podEndpointUri, _httpClient);
+        // The pod hosts its A2A endpoints via MapA2AHttpJson (HTTP+JSON transport):
+        //   POST {podEndpointUri}/message:stream  and  GET {podEndpointUri}/card.
+        // We MUST use the matching A2AHttpJsonClient — the JSON-RPC A2AClient posts to the base
+        // path and 404s against the HTTP+JSON routes (the two A2A transports are not interchange-
+        // able). Both implement IA2AClient, which A2AAgent wraps.
+        var a2aClient = new A2AHttpJsonClient(podEndpointUri, _httpClient);
 
         // Wrap as A2AAgent — framework-native A2A client seam (spec §4.7.5).
         _a2aAgent = new A2AAgent(

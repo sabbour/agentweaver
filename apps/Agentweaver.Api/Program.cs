@@ -286,9 +286,13 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             var k8sClient = new Kubernetes(k8sConfig);
             var podRegistry = sp.GetRequiredService<IPodNameRegistry>();
             var ns = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+            // Optional: present in-cluster so the resolver can lazily launch the AgentHost
+            // pod on first resolve (pod-per-run). Absent => resolver only reads the registry.
+            var podLifecycle = sp.GetService<IAgentHostPodLifecycle>();
             return new KubernetesPodAgentEndpointResolver(
                 k8sClient, podRegistry, ns, sandboxAgentOptions,
-                loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>());
+                loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>(),
+                podLifecycle);
         }
         catch
         {
