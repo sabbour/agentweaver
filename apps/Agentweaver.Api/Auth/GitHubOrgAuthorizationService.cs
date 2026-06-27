@@ -87,18 +87,22 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             ct).ConfigureAwait(false);
 
         // If primary check fails (SAML redirect → 302, not a member → 404, or inconclusive → token
-        // expired/network/5xx), fall back to the public members endpoint before deciding. This handles
-        // the common case where the token is not SAML-authorized so the private endpoint returns
-        // 302/401 rather than a definitive answer.
-        // NOTE: The public_members endpoint is a PUBLIC endpoint and is NOT SAML-gated, so sending the
-        // user's token does not change the 204/404 result but moves the call from the 60/hr
-        // unauthenticated rate-limit bucket to the user's 5000/hr authenticated bucket.
+        // expired/network/5xx), fall back to the public members endpoint (UNAUTHENTICATED) before
+        // deciding. This handles the common case where the token is not SAML-authorized so the private
+        // endpoint returns 302/401 rather than a definitive answer.
+        // CRITICAL: This call MUST be unauthenticated. For a SAML-enforced org, GitHub applies SAML
+        // enforcement to any AUTHENTICATED request whose token is not SAML-authorized — even against the
+        // public_members endpoint — and returns 403 instead of the public 204. An UNAUTHENTICATED request
+        // bypasses SAML and returns the true public-membership status (204 for a publicized member).
+        // The trade-off is GitHub's 60/hr-per-IP unauthenticated rate limit; rate-limit responses are
+        // classified as Inconclusive below (and never cached) so a transient blip cannot pin a false denial.
         if (orgResult != CheckResult.Member)
         {
             var publicResult = await CheckEndpointAsync(
                 accessToken,
                 $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/public_members/{Uri.EscapeDataString(login)}",
-                ct).ConfigureAwait(false);
+                ct,
+                sendAuthHeader: false).ConfigureAwait(false);
 
             if (publicResult != CheckResult.Member)
             {
