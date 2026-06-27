@@ -17,6 +17,7 @@ let currentEvents: RunStreamEvent[] = [];
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
+    getSystemRuntime: vi.fn().mockResolvedValue({ kubernetes: false, podName: null }),
     getProjectRuns: vi.fn(),
     getTeam: vi.fn(),
     getRun: vi.fn(),

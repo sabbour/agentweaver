@@ -342,6 +342,9 @@ builder.Services.Configure<SandboxRuntimeOptions>(builder.Configuration.GetSecti
 // Port-forward service (017-preview): manages kubectl port-forward sessions per run.
 builder.Services.AddSingleton<PortForwardService>();
 
+// Kubernetes runtime environment detection (pod name, in-cluster flag).
+builder.Services.AddSingleton<IKubernetesEnvironment, DefaultKubernetesEnvironment>();
+
 // Authentication
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IGitHubOrgAuthorizationService, GitHubOrgAuthorizationService>();
@@ -609,6 +612,7 @@ else
     app.MapDiagnosticsEndpoints();
     app.MapMetricsEndpoints();
     app.MapSandboxEndpoints();
+    app.MapSystemEndpoints();
 }
 
 app.Run();

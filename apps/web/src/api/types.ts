@@ -590,6 +590,8 @@ export interface TopologyNode {
   assignedAgent?: string;
   selectedModelId?: string;
   childRunId?: string;
+  /** Pod name for the execution environment of this specific node (spec-018). Null today — all agents share the API pod; set per-node after distributed phases. */
+  executionPodName?: string | null;
 }
 
 // Dependency edge: from = dependency, to = dependent. Edges never change.
@@ -836,6 +838,12 @@ export interface WorkflowStageDto {
 export interface WorkflowStagesResponse {
   available: boolean;
   stages: WorkflowStageDto[];
+}
+
+// GET /api/system/runtime — Kubernetes execution context for the running API pod.
+export interface RuntimeInfo {
+  kubernetes: boolean;
+  podName: string | null;
 }
 
 // A single executed diagnostic probe with its outcome (FR-016). snake_case wire.

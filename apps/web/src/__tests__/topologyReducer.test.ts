@@ -105,4 +105,58 @@ describe('topologyReducer', () => {
     expect(state.nodes['subtask-5'].childRunId).toBe('guid-5');
     expect(state.nodeOrder).toEqual(['coordinator', 'subtask-5']);
   });
+
+  it('stores executionPodName from snapshot nodes', () => {
+    const snapshot = makeEvent('coordinator.topology', {
+      version: 1, seq: 0,
+      nodes: [
+        { id: 'coordinator', kind: 'coordinator', title: 'Coordinator', status: 'running', executionPodName: 'api-pod-abc' },
+        { id: 's1', kind: 'subtask', title: 'Build API', status: 'pending' },
+      ],
+      edges: [],
+    }, 1);
+    const state = buildTopologyState([snapshot]);
+    expect(state.nodes['coordinator'].executionPodName).toBe('api-pod-abc');
+    // Node without executionPodName stays undefined
+    expect(state.nodes['s1'].executionPodName).toBeUndefined();
+  });
+
+  it('stores executionPodName from coordinator.topology delta', () => {
+    const delta = makeEvent('coordinator.topology', {
+      version: 1, seq: 1, changed: [{ id: 's1', status: 'running', executionPodName: 'agent-pod-worker-7' }],
+    }, 2);
+    const state = buildTopologyState([SNAPSHOT, delta]);
+    expect(state.nodes['s1'].executionPodName).toBe('agent-pod-worker-7');
+    // Other nodes are unaffected
+    expect(state.nodes['s2'].executionPodName).toBeUndefined();
+  });
+
+  it('stores executionPodName from subtask.* events', () => {
+    const running = makeEvent('subtask.running', {
+      subtaskId: 's1', status: 'running', executionPodName: 'agent-pod-worker-3',
+    }, 2);
+    const state = buildTopologyState([SNAPSHOT, running]);
+    expect(state.nodes['s1'].executionPodName).toBe('agent-pod-worker-3');
+  });
+
+  it('executionPodName=null from subtask event is stored as null (explicit null overrides)', () => {
+    const running = makeEvent('subtask.running', {
+      subtaskId: 's1', status: 'running', executionPodName: null,
+    }, 2);
+    const state = buildTopologyState([SNAPSHOT, running]);
+    expect(state.nodes['s1'].executionPodName).toBeNull();
+  });
+
+  it('preserves executionPodName across subsequent merges when not present in patch', () => {
+    const delta1 = makeEvent('coordinator.topology', {
+      version: 1, seq: 1, changed: [{ id: 's1', status: 'running', executionPodName: 'agent-pod-worker-3' }],
+    }, 2);
+    const delta2 = makeEvent('coordinator.topology', {
+      version: 1, seq: 2, changed: [{ id: 's1', status: 'completed' }],
+    }, 3);
+    const state = buildTopologyState([SNAPSHOT, delta1, delta2]);
+    // executionPodName was set in delta1 and should survive delta2 which doesn't include it
+    expect(state.nodes['s1'].executionPodName).toBe('agent-pod-worker-3');
+    expect(state.nodes['s1'].status).toBe('completed');
+  });
 });

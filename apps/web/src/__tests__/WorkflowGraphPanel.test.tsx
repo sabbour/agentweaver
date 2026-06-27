@@ -6,7 +6,7 @@
  * through the full WorkflowRunPage loading chain, which avoids async
  * descriptor-fetch timing issues in happy-dom.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, waitFor, cleanup } from '@testing-library/react';
 import { ReactFlow } from '@xyflow/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
@@ -20,6 +20,12 @@ class ResizeObserverStub {
   disconnect() {}
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+vi.mock('../api/apiClient', () => ({
+  apiClient: {
+    getSystemRuntime: vi.fn().mockResolvedValue({ kubernetes: false, podName: null }),
+  },
+}));
 
 import {
   workflowNodeTypes,

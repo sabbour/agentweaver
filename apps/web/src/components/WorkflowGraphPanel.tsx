@@ -50,6 +50,8 @@ import {
 } from '@xyflow/react';
 import { apiClient } from '../api/apiClient';
 import { AgentAvatar } from './AgentAvatar';
+import { PodIndicator } from './PodIndicator';
+import { useRuntimeInfo } from '../hooks/useRuntimeInfo';
 import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
 import { NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H, layoutDag } from '../utils/dagLayout';
 
@@ -75,6 +77,8 @@ export interface ExecutorState {
   completedAt?: number;
   /** Short human-readable status line from the backend workflow.step payload.message field. */
   message?: string;
+  /** Per-step execution pod name from workflow.step SSE (spec-018). Null today; non-null per-agent after distributed phases. */
+  executionPodName?: string | null;
 }
 
 /** Data passed into every React Flow WorkflowNode.  Optional fields are ignored when
@@ -94,6 +98,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   reviewedBy?: string;
   runOutcome?: { achieved: boolean; reason: string };
   runDegraded?: { toolName: string; reason: string };
+  /** Per-node execution pod name (spec-018). Null today (global fallback used); non-null per-agent after distributed phases. */
+  executionPodName?: string | null;
   /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
   dir?: 'LR' | 'TB';
   /** When true and the node is running, an orange tool-approval badge is shown. */
@@ -504,7 +510,11 @@ export function WorkflowNode({ data }: NodeProps) {
     runOutcome,
     runDegraded,
     hasPendingApproval,
+    executionPodName: nodeExecutionPodName,
   } = data as WorkflowNodeData;
+  const { podName: globalPodName } = useRuntimeInfo();
+  // Per-node pod name takes priority; fall back to the global API pod when on k8s.
+  const resolvedPodName = (nodeExecutionPodName as string | null | undefined) ?? globalPodName;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
 
@@ -552,12 +562,14 @@ export function WorkflowNode({ data }: NodeProps) {
   const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
 
   return (
-    <div
-      className={cardClass}
-      role="article"
-      aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
-      data-node-type={nodeType ?? 'default'}
-    >
+    <>
+      <PodIndicator podName={resolvedPodName} />
+      <div
+        className={cardClass}
+        role="article"
+        aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
+        data-node-type={nodeType ?? 'default'}
+      >
       <Handle type="target" position={targetPos} style={handleStyle} />
       <Handle type="source" position={sourcePos} style={handleStyle} />
 
@@ -662,6 +674,7 @@ export function WorkflowNode({ data }: NodeProps) {
         </div>
       )}
     </div>
+    </>
   );
 }
 

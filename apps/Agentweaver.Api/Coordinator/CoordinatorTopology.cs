@@ -1,3 +1,4 @@
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Memory;
 
 namespace Agentweaver.Api.Coordinator;
@@ -31,7 +32,8 @@ public static class CoordinatorTopology
         string workPlanStatus,
         IReadOnlyList<Subtask> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
-        long seq)
+        long seq,
+        IPodNameRegistry? podRegistry = null)
     {
         var nodes = new List<object>(subtasks.Count + 1)
         {
@@ -47,6 +49,7 @@ public static class CoordinatorTopology
                 childRunId = (string?)null,
                 phase = (string?)null,
                 isolation = (string?)null,
+                executionPodName = (string?)null,
             },
         };
 
@@ -64,6 +67,7 @@ public static class CoordinatorTopology
                 childRunId = s.ChildRunId,
                 phase = (string?)s.Phase,
                 isolation = (string?)s.IsolationStrategy,
+                executionPodName = string.IsNullOrEmpty(s.ChildRunId) ? null : podRegistry?.TryGet(s.ChildRunId),
             });
         }
 
@@ -110,7 +114,7 @@ public static class CoordinatorTopology
     }
 
     /// <summary>Changed-node shape for a subtask delta (the coordinator applies it by id).</summary>
-    public static object SubtaskNode(Subtask s) => new
+    public static object SubtaskNode(Subtask s, IPodNameRegistry? podRegistry = null) => new
     {
         id = SubtaskNodeId(s.Id),
         kind = "subtask",
@@ -119,6 +123,7 @@ public static class CoordinatorTopology
         agent = (string?)s.AssignedAgent,
         model = (string?)s.SelectedModelId,
         childRunId = s.ChildRunId,
+        executionPodName = string.IsNullOrEmpty(s.ChildRunId) ? null : podRegistry?.TryGet(s.ChildRunId),
     };
 
     /// <summary>Changed-node shape for the coordinator node when the work-plan status transitions.</summary>
@@ -131,5 +136,6 @@ public static class CoordinatorTopology
         agent = (string?)null,
         model = (string?)null,
         childRunId = (string?)null,
+        executionPodName = (string?)null,
     };
 }

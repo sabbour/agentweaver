@@ -1,5 +1,6 @@
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Api.Sandbox;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -37,13 +38,14 @@ public static class CoordinatorGraphDescriptor
         string coordinatorRunId,
         IReadOnlyList<Subtask> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
-        string? assemblyStage = null)
+        string? assemblyStage = null,
+        IPodNameRegistry? podRegistry = null)
     {
         var projected = subtasks
             .Select(s => new SubtaskNode(
                 s.Id, s.Title, s.AssignedAgent, s.SelectedModelId, s.Phase, s.IsolationStrategy, s.ChildRunId))
             .ToList();
-        return BuildCore(coordinatorRunId, projected, dependencies, assemblyStage);
+        return BuildCore(coordinatorRunId, projected, dependencies, assemblyStage, podRegistry);
     }
 
     /// <summary>
@@ -57,7 +59,7 @@ public static class CoordinatorGraphDescriptor
         BuildCore(coordinatorRunId, Array.Empty<SubtaskNode>(), Array.Empty<(int, int)>(), assemblyStage: null);
 
     /// <summary>Builds the descriptor from the <see cref="CoordinatorWorkPlanView"/> projection.</summary>
-    public static GraphDescriptor Build(CoordinatorWorkPlanView plan)
+    public static GraphDescriptor Build(CoordinatorWorkPlanView plan, IPodNameRegistry? podRegistry = null)
     {
         var projected = plan.Subtasks
             .Select(s => new SubtaskNode(
@@ -66,14 +68,15 @@ public static class CoordinatorGraphDescriptor
         var deps = plan.Dependencies
             .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
             .ToList();
-        return BuildCore(plan.CoordinatorRunId, projected, deps, plan.AssemblyStage);
+        return BuildCore(plan.CoordinatorRunId, projected, deps, plan.AssemblyStage, podRegistry);
     }
 
     private static GraphDescriptor BuildCore(
         string coordinatorRunId,
         IReadOnlyList<SubtaskNode> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
-        string? assemblyStage)
+        string? assemblyStage,
+        IPodNameRegistry? podRegistry = null)
     {
         var nodes = new List<GraphNode>(subtasks.Count + 5)
         {
@@ -95,7 +98,8 @@ public static class CoordinatorGraphDescriptor
                 Model: s.Model,
                 Phase: s.Phase,
                 Isolation: s.Isolation,
-                ChildRunId: s.ChildRunId));
+                ChildRunId: s.ChildRunId,
+                ExecutionPodName: string.IsNullOrEmpty(s.ChildRunId) ? null : podRegistry?.TryGet(s.ChildRunId)));
         }
 
         // Collective-assembly stage (Phase 3). Each node flips planned -> live once its stage has

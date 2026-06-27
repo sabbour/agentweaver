@@ -72,6 +72,10 @@ function readNodeFields(raw: Record<string, unknown>): Partial<TopologyNodeState
     assignedAgent: str(raw['assignedAgent']) ?? str(raw['agent']),
     selectedModelId: str(raw['selectedModelId']) ?? str(raw['model']),
     childRunId: str(raw['childRunId']),
+    // Defensive read: null today (single-pod), non-null after spec-018 distributed phases.
+    executionPodName: raw['executionPodName'] !== undefined
+      ? (raw['executionPodName'] === null ? null : str(raw['executionPodName']) ?? null)
+      : undefined,
   };
 }
 
@@ -93,6 +97,10 @@ function mergeNode(
     selectedModelId: patch.selectedModelId ?? prev?.selectedModelId ?? defaults.selectedModelId,
     childRunId: patch.childRunId ?? prev?.childRunId ?? defaults.childRunId,
     steering: patch.steering ?? prev?.steering,
+    // Per-node pod name: use patch value if explicitly provided (even null); otherwise preserve prior.
+    executionPodName: patch.executionPodName !== undefined
+      ? patch.executionPodName
+      : (prev?.executionPodName ?? defaults.executionPodName),
   };
   return { ...state, nodeOrder, nodes: { ...state.nodes, [id]: merged } };
 }
@@ -161,6 +169,7 @@ export function topologyReducer(
             assignedAgent: parsed.node.assignedAgent,
             selectedModelId: parsed.node.selectedModelId,
             childRunId: parsed.node.childRunId,
+            executionPodName: parsed.node.executionPodName,
           };
           nodeOrder.push(parsed.id);
         }        const edges: TopologyEdge[] = Array.isArray(p['edges'])
@@ -208,6 +217,10 @@ export function topologyReducer(
           childRunId,
           assignedAgent: str(p['assignedAgent']),
           selectedModelId: str(p['selectedModelId']),
+          // Read executionPodName defensively from subtask.* events (spec-018).
+          executionPodName: p['executionPodName'] !== undefined
+            ? (p['executionPodName'] === null ? null : str(p['executionPodName']) ?? null)
+            : undefined,
         },
         { kind: 'subtask' },
       );

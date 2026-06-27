@@ -14,6 +14,7 @@ class ResizeObserverStub {
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
+    getSystemRuntime: vi.fn().mockResolvedValue({ kubernetes: false, podName: null }),
     getRunGraph: vi.fn(),
     getWorkPlan: vi.fn(),
     getCoordinatorChildren: vi.fn(),
