@@ -48,6 +48,8 @@ internal static class AgentBasePrompt
         list_inbox to check what peers have already decided or are proposing. This prevents
         conflicting choices from landing in parallel runs.
         When you make a significant cross-cutting decision of your own, call submit_decision
-        so other agents can see it before they make dependent choices.
+        so other agents can see it before they make dependent choices. Namespace your slug by
+        topic and agent (e.g. 'api-shape--yourname') so peer decisions on the same topic can
+        coexist in the inbox without collision.
         """;
 }

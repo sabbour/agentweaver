@@ -19,6 +19,7 @@ export default withMermaid({
       { text: 'Guide', link: '/guide/' },
       { text: 'Reference', link: '/reference/api' },
       { text: 'Architecture', link: '/architecture/overview' },
+      { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
     ],
     sidebar: {
       '/guide/': [
@@ -65,6 +66,25 @@ export default withMermaid({
             { text: 'Sandbox', link: '/architecture/sandbox' },
             { text: 'Events', link: '/architecture/events' },
             { text: 'AKS Architecture', link: '/architecture-aks' },
+          ],
+        },
+      ],
+      '/deep-dive/': [
+        {
+          text: 'Deep Dive',
+          items: [
+            { text: 'System overview', link: '/deep-dive/00-system-overview' },
+            { text: 'API core', link: '/deep-dive/api-core' },
+            { text: 'Auth & security', link: '/deep-dive/auth-security' },
+            { text: 'Orchestration', link: '/deep-dive/orchestration' },
+            { text: 'Team & casting', link: '/deep-dive/team-casting' },
+            { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
+            { text: 'Sandbox', link: '/deep-dive/sandbox' },
+            { text: 'MCP server', link: '/deep-dive/mcp-server' },
+            { text: 'Frontend', link: '/deep-dive/frontend' },
+            { text: 'Projects & workspaces', link: '/deep-dive/projects' },
+            { text: 'Infrastructure', link: '/deep-dive/infra-deployment' },
+            { text: 'Data & persistence', link: '/deep-dive/data-persistence' },
           ],
         },
       ],

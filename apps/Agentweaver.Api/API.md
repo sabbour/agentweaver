@@ -100,8 +100,11 @@ Unknown id returns `404`. Status values: `pending`, `in_progress`, `completed`,
 ### GET /api/runs/{id}/stream
 
 Server-sent event stream of the run's events. Requires a valid bearer key and
-run ownership — non-owners receive `404` (no existence leak). Each frame carries
-the per-run `sequence` as the SSE `id` and the event payload as `data`:
+run ownership — main-run non-owners receive `404` (no existence leak), while
+sub-stream non-owners may receive `403`. Sub-stream IDs such as `{runId}-rai`,
+`{runId}-scribe`, and `{runId}-rubberduck` are also accepted. Each frame carries
+the per-run `sequence` as the SSE `id`, the run event `type` as the SSE
+`event`, and the event-specific JSON payload as `data`:
 
 ```
 id: 3
@@ -110,40 +113,77 @@ data: {"delta":"Hello","messageId":"msg-001"}
 
 id: 4
 event: run.completed
-data: {}
+data: {"result":"completed"}
 
 event: done
 data: {}
 ```
 
-Event types:
+Common event types:
 
 | Event | Payload |
 |-------|---------|
 | `agent.message.delta` | `{"delta":"...","messageId":"..."}` — incremental token |
-| `agent.message` | `{"messageId":null,"content":"..."}` — complete message (restart fallback) |
-| `run.completed` | `{}` |
-| `run.failed` | `{"message":"The agent encountered an internal error."}` |
+| `agent.message` | `{"content":"...","messageId":null}` — complete message fallback |
+| `workflow.step` | `{"step":"review","status":"started","label":"Review","timestamp_utc":"..."}` |
+| `review.requested` | `{"tree_hash":"...","request_id":"..."}` — review HITL gate; live stream closes after this event |
+| `review.approved`, `review.declined`, `review.changes_requested` | `{}` or review/revision metadata |
+| `revision.started` | `{}` or `{"revision":1}` |
+| `merge.started` | `{"tree_hash":"..."}` |
+| `merge.completed` | `{"merged_commit_hash":"...","merge_mode":"..."}` |
+| `merge.failed` | `{"reason":"..."}` |
+| `merge.conflicted` | `{"conflicting_files":["..."]}` |
+| `run.completed` | `{"result":"completed"}` or `{"result":"no_changes"}` |
+| `run.failed` | `{"reason":"..."}` with optional `code` / `detail` |
+| `run.outcome` | `{"achieved":true,"reason":"..."}` |
+| `run.degraded` | `{"toolName":"...","reason":"..."}` |
+| `run.workflow_graph` | graph descriptor payload |
+| `tool.approval_required` | `{"requestId":"...","displayId":"...","toolName":"web_fetch","url":"...","intention":"...","message":"..."}` |
+| `tool.auto_approved` | `{"requestId":"...","toolName":"web_fetch","url":"..."}` |
+| `agent.question_asked` | `{"requestId":"...","question":"..."}` |
+| `agent.question_answered` | `{"requestId":"...","answer":"...","timedOut":false}` |
+| `rai.verdict` | `{"verdict":"green","runId":"..."}` on RAI sub-streams such as `{runId}-rai` |
+| `coordinator.workflow_selected` | `{"selectedId":"...","selectedName":"...","rationale":"...","wasAutoSelected":true,"overrideHint":"...","available":[{"id":"...","name":"..."}]}` |
 
-The stream ends with a synthetic `done` frame after the terminal event.
+Coordinator runs also emit `coordinator.*` and `subtask.*` lifecycle events using
+the payloads defined by the canonical `EventTypes` contract. The stream ends
+with a synthetic `done` frame after terminal completion or when the live workflow
+pauses at the review gate.
 
 Reconnect with the `Last-Event-ID` header set to the last sequence you saw. The
-server resumes from that point in the in-memory event buffer. Reconnection works
-while the run's entry is retained in memory (up to 256 completed runs; in-progress
-entries evicted after approximately two hours). Delivery is at-least-once;
+server resumes from that point. Active runs first use the live `RunStreamStore`;
+when the live entry is unavailable, the endpoint replays the durable `RunEvents`
+log through `IRunEventStream.SubscribeAsync`. Delivery is at-least-once;
 deduplicate by `sequence`.
 
-After a process restart the in-memory history is lost. If the run already
-completed, the endpoint replays the stored final result as a single
-`agent.message` event and closes. If the run was still in progress, restart
-recovery marks it as failed and the stream returns `done` with no events.
+After a process restart or live-entry eviction, persisted events are replayed
+from `RunEvents`. Legacy completed rows that predate durable events may be
+returned as a single `agent.message` fallback containing the stored result.
 
 `Content-Type: text/event-stream`.
 
 ### GET /api/runs/{id}/events
 
-Not yet implemented. Planned as a JSON endpoint over a durable append-only event
-log (FR-022). Currently returns `404`.
+Returns the persisted `RunEvents` for a run, ordered by `sequence`. Requires run
+ownership; invalid ids return `400`, unknown ids return `404`, and non-owners
+return `403`.
+
+Response `200`:
+
+```json
+[
+  {
+    "sequence": 1,
+    "type": "agent.message.delta",
+    "payload": { "delta": "Hello", "messageId": "msg-001" }
+  },
+  {
+    "sequence": 2,
+    "type": "run.completed",
+    "payload": { "result": "completed" }
+  }
+]
+```
 
 ### POST /api/runs/{id}/review
 
@@ -269,29 +309,51 @@ applied (run not awaiting review, or a decision already recorded) returns `409`.
 
 ## Event types on the stream
 
-Events emitted by the agent runtime during a run:
+Events use the canonical `RunEvent` shape: `sequence`, `type`, and
+event-specific `payload`. The SSE endpoint maps these to `id`, `event`, and
+`data`; the JSON events endpoint returns the same values as objects.
+
+Common run events:
 
 | Type | Payload fields |
 |------|----------------|
 | `agent.message.delta` | `delta`, `messageId` |
-| `agent.message` | `content`, `messageId` (restart fallback only) |
+| `agent.message` | `content`, optional `messageId` |
+| `workflow.step` | `step`, `status`, `label`, `timestamp_utc`, optional `agent_name`, `message`, `reviewer` |
+| `review.requested` | `tree_hash`, `request_id` |
+| `review.approved` / `review.declined` | empty object |
+| `review.changes_requested` | optional `revision` |
+| `revision.started` | optional `revision` |
+| `merge.started` | `tree_hash` |
+| `merge.completed` | `merged_commit_hash`, `merge_mode` |
+| `merge.failed` | `reason` |
+| `merge.conflicted` | `conflicting_files` |
 | `coordinator.workflow_selected` | `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, `overrideHint`, `available[]` |
-| `run.completed` | (empty) |
-| `run.failed` | `message` |
+| `run.completed` | `result` |
+| `run.failed` | `reason`, optional `code`, `detail` |
+| `run.outcome` | `achieved`, `reason` |
+| `run.degraded` | `toolName`, `reason` |
+| `run.workflow_graph` | graph descriptor |
+| `tool.approval_required` | `requestId`, `displayId`, `toolName`, optional `url`, `intention`, `message` |
+| `tool.auto_approved` | `requestId`, `toolName`, optional `url` |
+| `agent.question_asked` | `requestId`, `question` |
+| `agent.question_answered` | `requestId`, `answer`, `timedOut` |
+| `rai.verdict` | `verdict`, `runId` |
+| coordinator/subtask events | `coordinator.*` and `subtask.*` lifecycle payloads from the canonical event contract |
 
 The `done` frame (no `id` field) signals the end of the stream.
 
 ## Persistence
 
-One SQLite table backs the API, created on startup with WAL enabled:
+The main API store is a SQLite table created on startup with WAL enabled:
 
 - `runs` — run records with status, timing, submitting user, task, model source,
   and the final result text.
 
-The run's event stream is held in memory by `RunStreamStore` and is not persisted
-to SQLite. After a process restart, the granular event history is unavailable —
-only the final `result` text survives in the `runs` table. A durable append-only
-event log (`run_events`) is specified (FR-022) but not yet implemented.
+Run events are persisted separately in the EF `MemoryDbContext` SQLite database
+(`memory.db`) as `RunEvents`. `RunStreamStore` remains the low-latency live
+fan-out layer and retains a bounded in-memory history for recently completed
+runs, but durable replay and `GET /api/runs/{id}/events` read from `RunEvents`.
 
 The database path defaults to `agentweaver.db` in the application data directory
 and is overridable with `Database:Path`. Worktrees default to a `worktrees`

@@ -47,28 +47,59 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
         || string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "agent_name, slug, type, and content are required." });
 
+    // De-collision helper: converts an agent name to a safe kebab-case slug segment.
+    static string SlugSegment(string name) =>
+        System.Text.RegularExpressions.Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+
+    // Load only the first existing entry for this (ProjectId, Slug) pair.
     var exists = await memoryDb.DecisionInbox
         .FirstOrDefaultAsync(e => e.ProjectId == id && e.Slug == request.Slug, ct);
+
+    string effectiveSlug = request.Slug!;
+
     if (exists is not null)
     {
-        if (exists.Status != "pending")
-            return Results.Conflict(new { error = "Entry has already been merged or rejected." });
-
-        exists.AgentName = request.AgentName!;
-        exists.Type = request.Type!;
-        exists.Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : request.Slug!;
-        exists.Content = request.Content!;
-        exists.Rationale = request.Rationale;
-        exists.UpdatedAt = DateTimeOffset.UtcNow;
-        await memoryDb.SaveChangesAsync(ct);
-        await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
-        return Results.Ok(new
+        if (exists.AgentName == request.AgentName)
         {
-            exists.Id, exists.AgentName, exists.Slug, exists.Type, exists.Title, exists.Content,
-            exists.Rationale, exists.Status,
-            decision_id = exists.DecisionId, merged_at = exists.MergedAt,
-            created_at = exists.CreatedAt, updated_at = exists.UpdatedAt,
-        });
+            // Same agent retrying the same slug — idempotent update in place (retry-safe).
+            if (exists.Status != "pending")
+                return Results.Conflict(new { error = "Entry has already been merged or rejected." });
+
+            exists.Type = request.Type!;
+            exists.Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : request.Slug!;
+            exists.Content = request.Content!;
+            exists.Rationale = request.Rationale;
+            exists.UpdatedAt = DateTimeOffset.UtcNow;
+            await memoryDb.SaveChangesAsync(ct);
+            await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+            return Results.Ok(new
+            {
+                exists.Id, exists.AgentName, exists.Slug, exists.Type, exists.Title, exists.Content,
+                exists.Rationale, exists.Status,
+                decision_id = exists.DecisionId, merged_at = exists.MergedAt,
+                created_at = exists.CreatedAt, updated_at = exists.UpdatedAt,
+            });
+        }
+
+        // Different agent submitted the same slug — de-collide to avoid silently losing a peer
+        // decision. Scheme: "{original}--{agent-segment}", then "...--2", "...--3", etc.
+        // NOTE: There is a residual TOCTOU race — two concurrent different-agent submissions can
+        // independently read the same slug set and both choose the same de-collided slug, resulting
+        // in two entries sharing that slug. This is acceptable for the inbox's append-only semantics
+        // (no data is lost). Adding a unique DB index on (ProjectId, Slug) would eliminate the race
+        // but requires a migration; left as a follow-up.
+        var agentSegment = SlugSegment(request.AgentName!);
+        effectiveSlug = $"{request.Slug}--{agentSegment}";
+        if (await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == effectiveSlug, ct))
+        {
+            int counter = 2;
+            string candidate;
+            do
+            {
+                candidate = $"{request.Slug}--{agentSegment}--{counter++}";
+            } while (await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == candidate, ct));
+            effectiveSlug = candidate;
+        }
     }
 
     var now = DateTimeOffset.UtcNow;
@@ -76,9 +107,9 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     {
         ProjectId = id,
         AgentName = request.AgentName!,
-        Slug = request.Slug!,
+        Slug = effectiveSlug,
         Type = request.Type!,
-        Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : request.Slug!,
+        Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : effectiveSlug,
         Content = request.Content!,
         Rationale = request.Rationale,
         Status = "pending",

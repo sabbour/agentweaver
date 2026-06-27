@@ -383,20 +383,116 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
     }
 
     [Fact]
+    public async Task Test_InboxSubmit_SameAgentSameSlug_UpdatesInPlace_NotDuplicated()
+    {
+        var projectId = await CreateProjectAsync();
+        const string slug = "same-agent-retry";
+
+        (await SubmitInboxAsync(projectId, agentName: "agent-a", slug: slug, content: "v1"))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+        var second = await SubmitInboxAsync(projectId, agentName: "agent-a", slug: slug, content: "v2");
+
+        second.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.Created);  // same-agent retry must update in place
+        (await CountInboxEntriesBySlugAsync(projectId, slug)).Should().Be(1,
+            "same-agent retry must not create a duplicate entry");
+
+        var entry = await GetInboxEntryBySlugAsync(projectId, slug);
+        entry!.Content.Should().Be("v2", "idempotent update must overwrite content");
+        entry.AgentName.Should().Be("agent-a");
+    }
+
+    [Fact]
+    public async Task Test_InboxSubmit_DifferentAgentSameSlug_CreatesSeparateEntry()
+    {
+        var projectId = await CreateProjectAsync();
+        const string slug = "shared-topic";
+
+        (await SubmitInboxAsync(projectId, agentName: "agent-alpha", slug: slug, content: "alpha perspective"))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var second = await SubmitInboxAsync(projectId, agentName: "agent-beta", slug: slug, content: "beta perspective");
+
+        second.StatusCode.Should().Be(HttpStatusCode.Created,
+            "a different agent's decision must not be dropped — a new de-collided entry must be created");
+
+        var body = await second.Content.ReadFromJsonAsync<JsonElement>();
+        var storedSlug = body.GetProperty("slug").GetString()!;
+        storedSlug.Should().NotBe(slug, "the stored slug must be de-collided from the original");
+        storedSlug.Should().StartWith(slug, "the de-collided slug must retain the original as a prefix");
+
+        var alphaEntry = await GetInboxEntryBySlugAsync(projectId, slug);
+        alphaEntry.Should().NotBeNull();
+        alphaEntry!.AgentName.Should().Be("agent-alpha");
+        alphaEntry.Content.Should().Be("alpha perspective");
+
+        var betaEntry = await GetInboxEntryBySlugAsync(projectId, storedSlug);
+        betaEntry.Should().NotBeNull();
+        betaEntry!.AgentName.Should().Be("agent-beta");
+        betaEntry.Content.Should().Be("beta perspective");
+    }
+
+    [Fact]
+    public async Task Test_InboxSubmit_DifferentAgentOnMergedSlug_CreatesNewEntry()
+    {
+        var projectId = await CreateProjectAsync();
+        const string slug = "merged-topic";
+        var decisionId = await SeedDecisionAsync(projectId, "agent-alpha", "architectural", "Alpha decision", "alpha content");
+        await SeedInboxEntryAsync(projectId, "agent-alpha", slug, "architectural", "Alpha", "alpha content",
+            status: "merged", decisionId: decisionId, mergedAt: DateTimeOffset.UtcNow);
+
+        var response = await SubmitInboxAsync(projectId, agentName: "agent-beta", slug: slug, content: "beta perspective");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created,
+            "a different agent's decision on a merged slug must be created, not silently dropped");
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var storedSlug = body.GetProperty("slug").GetString()!;
+        storedSlug.Should().NotBe(slug, "stored slug must be de-collided from the merged slug");
+
+        var betaEntry = await GetInboxEntryBySlugAsync(projectId, storedSlug);
+        betaEntry.Should().NotBeNull();
+        betaEntry!.AgentName.Should().Be("agent-beta");
+        betaEntry.Status.Should().Be("pending");
+        betaEntry.Content.Should().Be("beta perspective");
+    }
+
+    [Fact]
+    public async Task Test_InboxSubmit_DifferentAgentOnRejectedSlug_CreatesNewEntry()
+    {
+        var projectId = await CreateProjectAsync();
+        const string slug = "rejected-topic";
+        await SeedInboxEntryAsync(projectId, "agent-alpha", slug, "architectural", "Alpha", "alpha content",
+            status: "rejected");
+
+        var response = await SubmitInboxAsync(projectId, agentName: "agent-beta", slug: slug, content: "beta perspective");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created,
+            "a different agent's decision on a rejected slug must be created, not silently dropped");
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var storedSlug = body.GetProperty("slug").GetString()!;
+        storedSlug.Should().NotBe(slug, "stored slug must be de-collided from the rejected slug");
+
+        var betaEntry = await GetInboxEntryBySlugAsync(projectId, storedSlug);
+        betaEntry.Should().NotBeNull();
+        betaEntry!.AgentName.Should().Be("agent-beta");
+        betaEntry.Status.Should().Be("pending");
+    }
+
+    [Fact]
     public async Task Test_InboxSubmit_ConflictOnMergedSlug_Returns409()
     {
-        // When a slug was already merged (status != "pending"), re-submitting the same slug must 409.
-        // This is the live scenario that caused opaque "Tool execution failed" in the agent runtime.
+        // When the SAME agent re-submits a slug it already merged, return 409.
         var projectId = await CreateProjectAsync();
         var decisionId = await SeedDecisionAsync(projectId, "smith", "architectural", "Existing", "decision");
         await SeedInboxEntryAsync(projectId, "smith", "already-merged-slug", "architectural",
             "Done", "done", status: "merged", decisionId: decisionId, mergedAt: DateTimeOffset.UtcNow);
 
-        var response = await SubmitInboxAsync(projectId, slug: "already-merged-slug",
+        var response = await SubmitInboxAsync(projectId, agentName: "smith", slug: "already-merged-slug",
             title: "Re-submit attempt", content: "Should conflict");
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict,
-            "re-submitting a slug whose entry is already merged must return 409, not update the entry");
+            "same-agent re-submit on an already-merged slug must return 409");
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetString().Should().NotBeNullOrEmpty();
     }
@@ -404,11 +500,12 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
     [Fact]
     public async Task Test_InboxSubmit_ConflictOnRejectedSlug_Returns409()
     {
+        // When the SAME agent re-submits a slug it already rejected, return 409.
         var projectId = await CreateProjectAsync();
         await SeedInboxEntryAsync(projectId, "smith", "already-rejected-slug", "architectural",
             "Rejected", "rejected content", status: "rejected");
 
-        var response = await SubmitInboxAsync(projectId, slug: "already-rejected-slug",
+        var response = await SubmitInboxAsync(projectId, agentName: "smith", slug: "already-rejected-slug",
             title: "Re-submit attempt", content: "Should conflict");
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict,

@@ -56,7 +56,7 @@ internal static class AgentweaverApiTools
 
         yield return AIFunctionFactory.Create(
             async (
-                [Description("Unique kebab-case slug for idempotency, e.g. 'prefer-async-over-sync'")] string slug,
+                [Description("Unique kebab-case slug for idempotency. Namespace by topic and agent to avoid collisions with peer agents, e.g. 'prefer-async-over-sync--tank' or 'api-shape--nova'. If a collision is detected the server will de-collide automatically and return the effective slug in the response.")] string slug,
                 [Description("Decision type: architectural | scope | process | pattern | technical")] string type,
                 [Description("Short, descriptive title for the decision")] string title,
                 [Description("Full decision content — what was decided and why")] string content,
