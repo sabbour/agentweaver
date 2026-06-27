@@ -16,7 +16,7 @@ namespace Agentweaver.Api.Runs;
 /// </summary>
 public sealed class RunOrchestrator
 {
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly WorktreeManager _worktreeManager;
     private readonly RunWorkflowFactory _workflowFactory;
@@ -52,7 +52,7 @@ public sealed class RunOrchestrator
         """;
 
     public RunOrchestrator(
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunStreamStore streamStore,
         WorktreeManager worktreeManager,
         RunWorkflowFactory workflowFactory,

@@ -9,16 +9,16 @@ using Agentweaver.Domain;
 namespace Agentweaver.Api.Runs;
 
 /// <summary>
-/// Implements IMergeCoordinator by coordinating RepositoryMergeLock + SqliteRunStore CAS transitions.
+/// Implements IMergeCoordinator by coordinating RepositoryMergeLock + IRunStore CAS transitions.
 /// </summary>
 public sealed class MergeCoordinator : IMergeCoordinator
 {
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RepositoryMergeLock _mergeLock;
     private readonly IWorktreeOperations _worktreeOps;
     private readonly ILogger<MergeCoordinator> _logger;
 
-    public MergeCoordinator(SqliteRunStore runStore, RepositoryMergeLock mergeLock, IWorktreeOperations worktreeOps, ILogger<MergeCoordinator> logger)
+    public MergeCoordinator(IRunStore runStore, RepositoryMergeLock mergeLock, IWorktreeOperations worktreeOps, ILogger<MergeCoordinator> logger)
     {
         _runStore = runStore;
         _mergeLock = mergeLock;

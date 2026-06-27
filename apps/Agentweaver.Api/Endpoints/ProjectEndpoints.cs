@@ -36,7 +36,7 @@ app.MapPost("/api/projects", async (
     CreateProjectRequest request,
     ProjectService projectService,
     BlueprintService blueprintService,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunWorkflowRegistry workflowRegistry,
     IProjectStore projectStore,
     ILogger<Program> logger,
@@ -315,7 +315,7 @@ app.MapDelete("/api/projects/{id}", async (
     HttpContext httpContext,
     string id,
     ProjectService projectService,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunWorkflowRegistry workflowRegistry,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -353,7 +353,7 @@ app.MapGet("/api/projects/{id}/runs", async (
     bool? include_children,
     int? limit,
     IProjectStore projectStore,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
 {
@@ -412,7 +412,7 @@ app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
     string id,
     string workflowRunId,
     IProjectStore projectStore,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorStatusReader coordinator,
     CancellationToken ct) =>
 {
@@ -461,8 +461,8 @@ app.MapPost("/api/projects/{id}/runs", async (
     CreateProjectRunRequest request,
     IProjectStore projectStore,
     IProjectWorkspaceProvider workspaceProvider,
-    SqliteRunStore runStore,
-    SqliteWorkflowRunStore workflowRunStore,
+    IRunStore runStore,
+    IWorkflowRunStore workflowRunStore,
     RunStreamStore streamStore,
     RunOrchestrator orchestrator,
     ILogger<Program> logger,

@@ -64,7 +64,7 @@ public interface ICoordinatorDispatch
 /// </summary>
 public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 {
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunOrchestrator _orchestrator;
     private readonly CoordinatorSteeringQueue _steering;
@@ -86,7 +86,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
     public CoordinatorDispatchService(
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunStreamStore streamStore,
         RunOrchestrator orchestrator,
         CoordinatorSteeringQueue steering,

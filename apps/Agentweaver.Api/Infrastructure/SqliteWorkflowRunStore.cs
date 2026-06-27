@@ -3,7 +3,7 @@ using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Infrastructure;
 
-public sealed class SqliteWorkflowRunStore
+public sealed class SqliteWorkflowRunStore : IWorkflowRunStore
 {
     private readonly SqliteDb _db;
     public SqliteWorkflowRunStore(SqliteDb db) => _db = db;

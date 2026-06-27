@@ -21,7 +21,7 @@ public sealed class BoardProjectionService
     private const int TerminalRecentLimit = 20;
 
     private readonly IBacklogTaskStore _backlogStore;
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly IWorkflowStageProjector _stageProjector;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IProjectStore _projectStore;
@@ -29,7 +29,7 @@ public sealed class BoardProjectionService
 
     public BoardProjectionService(
         IBacklogTaskStore backlogStore,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         IWorkflowStageProjector stageProjector,
         IServiceScopeFactory scopeFactory,
         IProjectStore projectStore,

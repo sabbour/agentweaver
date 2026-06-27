@@ -87,7 +87,7 @@ public static class BacklogDecomposeEndpoints
             string id,
             DecomposeRequest request,
             IProjectStore projectStore,
-            SqliteBacklogTaskStore backlogStore,
+            IBacklogTaskStore backlogStore,
             BacklogDecomposeService decomposeService,
             CancellationToken ct) =>
         {

@@ -53,7 +53,7 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IQuestionGate _questionGate;
     private readonly RunStreamStore _streamStore;
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CoordinatorAutopilot> _logger;
@@ -68,7 +68,7 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
         IToolApprovalGate toolApprovalGate,
         IQuestionGate questionGate,
         RunStreamStore streamStore,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
         IConfiguration configuration)

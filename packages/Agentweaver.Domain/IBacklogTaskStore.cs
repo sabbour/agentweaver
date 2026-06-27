@@ -86,4 +86,12 @@ public interface IBacklogTaskStore
         Run coordinatorRun,
         DateTimeOffset claimedAt,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the set of task titles already associated with a given source file path in a project.
+    /// Used for idempotency in spec-to-backlog decomposition (avoids creating duplicate titles
+    /// from repeated decompose calls on the same file).
+    /// </summary>
+    Task<HashSet<string>> GetExistingTitlesFromSourceAsync(
+        ProjectId projectId, string sourceFilePath, CancellationToken ct = default);
 }

@@ -18,13 +18,13 @@ namespace Agentweaver.Api.Coordinator;
 public sealed class CoordinatorPickupService
 {
     private readonly IBacklogTaskStore _backlogStore;
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly CoordinatorRunService _coordinatorRunService;
     private readonly ILogger<CoordinatorPickupService> _logger;
 
     public CoordinatorPickupService(
         IBacklogTaskStore backlogStore,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         CoordinatorRunService coordinatorRunService,
         ILogger<CoordinatorPickupService> logger)
     {

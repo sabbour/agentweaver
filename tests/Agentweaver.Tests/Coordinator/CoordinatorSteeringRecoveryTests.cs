@@ -54,6 +54,7 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
         services.AddSingleton(_runStore);
+        services.AddSingleton<IRunStore>(_runStore);
         services.AddSingleton<ICoordinatorDispatch>(_dispatch);
         _provider = services.BuildServiceProvider();
 

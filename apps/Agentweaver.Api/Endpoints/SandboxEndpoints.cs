@@ -17,7 +17,7 @@ public static class SandboxEndpoints
             string runId,
             PortForwardRequest request,
             PortForwardService portForwardService,
-            SqliteRunStore runStore,
+            IRunStore runStore,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -71,7 +71,7 @@ public static class SandboxEndpoints
             string runId,
             string sessionId,
             PortForwardService portForwardService,
-            SqliteRunStore runStore,
+            IRunStore runStore,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -96,7 +96,7 @@ public static class SandboxEndpoints
             HttpContext httpContext,
             string runId,
             PortForwardService portForwardService,
-            SqliteRunStore runStore,
+            IRunStore runStore,
             CancellationToken ct) =>
         {
             if (!Agentweaver.Domain.RunId.TryParse(runId, out var parsedRunId))

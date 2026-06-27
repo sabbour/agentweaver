@@ -34,7 +34,7 @@ public sealed class RunWorkflowFactory
     private readonly IMergeCoordinator _mergeCoordinator;
     private readonly RunStreamStore _streamStore;
     private readonly IRunEventStream? _eventStream;
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IWorkflowAgentFactory _agentFactory;
@@ -80,7 +80,7 @@ public sealed class RunWorkflowFactory
         IWorktreeOperations worktreeOps,
         IMergeCoordinator mergeCoordinator,
         RunStreamStore streamStore,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         ILoggerFactory loggerFactory,
         IServiceScopeFactory scopeFactory,
         IWorkflowAgentFactory agentFactory,
@@ -122,7 +122,7 @@ public sealed class RunWorkflowFactory
         IWorktreeOperations worktreeOps,
         IMergeCoordinator mergeCoordinator,
         RunStreamStore streamStore,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         ILoggerFactory loggerFactory,
         IServiceScopeFactory scopeFactory,
         IWorkflowAgentFactory agentFactory,

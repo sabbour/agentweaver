@@ -100,7 +100,7 @@ app.MapPost("/api/runs", async (
 app.MapGet("/api/runs/{id}", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunStreamStore streamStore,
     CoordinatorStatusReader coordinator,
     IRunOptionsStore runOptions,
@@ -228,7 +228,7 @@ app.MapGet("/api/runs/{id}", async (
 app.MapPost("/api/runs/{id}/archive", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -256,7 +256,7 @@ app.MapPost("/api/runs/{id}/archive", async (
 app.MapDelete("/api/runs/{id}", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry registry,
     IWorktreeOperations worktreeOps,
@@ -315,7 +315,7 @@ app.MapGet("/api/runs/{id}/stream", async (
     HttpContext httpContext,
     string id,
     RunStreamStore streamStore,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IRunEventStream eventStream,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -508,7 +508,7 @@ app.MapGet("/api/runs/{id}/stream", async (
 app.MapGet("/api/runs/{id}/events", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -553,7 +553,7 @@ app.MapGet("/api/runs/{id}/events", async (
 app.MapGet("/api/runs/{id}/graph", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunWorkflowFactory workflowFactory,
     CoordinatorRunService coordinator,
     ILogger<Program> logger,
@@ -610,7 +610,7 @@ app.MapGet("/api/runs/{id}/graph", async (
 app.MapGet("/api/runs/{id}/history", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     GitHubCopilotClientFactory copilotClientFactory,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -686,7 +686,7 @@ app.MapPost("/api/runs/{id}/review", async (
     HttpContext httpContext,
     string id,
     ReviewRequest request,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry workflowRegistry,
     PendingRequestStore pendingStore,
@@ -864,7 +864,7 @@ app.MapPost("/api/runs/{id}/review", async (
 app.MapPost("/api/runs/{id}/commit", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunStreamStore streamStore,
     WorktreeManager worktreeManager,
     IMergeCoordinator mergeCoordinator,
@@ -1036,8 +1036,8 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     HttpContext httpContext,
     string id,
     RequestChangesRequest request,
-    SqliteRunStore runStore,
-    SqliteRunRevisionStore revisionStore,
+    IRunStore runStore,
+    IRunRevisionStore revisionStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry workflowRegistry,
     RunWorkflowFactory workflowFactory,
@@ -1179,7 +1179,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
 app.MapPost("/api/runs/{id}/retry", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorRunService coordinator,
     RunOrchestrator orchestrator,
     IProjectStore projectStore,
@@ -1309,7 +1309,7 @@ app.MapPost("/api/runs/{id}/retry", async (
 app.MapGet("/api/runs/{id}/workspace", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -1464,7 +1464,7 @@ app.MapPost("/api/runs/{id}/shell-approvals", async (
     HttpContext httpContext,
     string id,
     ShellApprovalRequest body,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IShellApprovalStore approvalStore,
     CancellationToken ct) =>
 {
@@ -1488,7 +1488,7 @@ app.MapPost("/api/runs/{id}/shell-denials", async (
     HttpContext httpContext,
     string id,
     ShellApprovalRequest body,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IShellApprovalStore approvalStore,
     CancellationToken ct) =>
 {
@@ -1512,7 +1512,7 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     HttpContext httpContext,
     string id,
     ToolApprovalRequest body,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IToolApprovalGate approvalGate,
     CancellationToken ct) =>
 {
@@ -1546,7 +1546,7 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     HttpContext httpContext,
     string id,
     ToolApprovalRequest body,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IToolApprovalGate approvalGate,
     CancellationToken ct) =>
 {
@@ -1574,7 +1574,7 @@ app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
     string id,
     string requestId,
     AnswerQuestionRequest body,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IQuestionGate questionGate,
     CancellationToken ct) =>
 {
@@ -1604,7 +1604,7 @@ app.MapPost("/api/runs/{id}/auto-approve", async (
     HttpContext httpContext,
     string id,
     EnableFlagRequest body,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IRunOptionsStore runOptions,
     CancellationToken ct) =>
 {
@@ -1625,7 +1625,7 @@ app.MapPost("/api/runs/{id}/autopilot", async (
     HttpContext httpContext,
     string id,
     EnableFlagRequest body,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     IRunOptionsStore runOptions,
     CancellationToken ct) =>
 {
@@ -1705,7 +1705,7 @@ app.MapGet("/api/runs/{id}/files", async (
     HttpContext httpContext,
     string id,
     string? filter,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -1791,7 +1791,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     HttpContext httpContext,
     string id,
     string path,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -2078,7 +2078,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
     RunId runId,
     Run run,
     ReviewRequest request,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     RunStreamStore streamStore,
     IWorktreeOperations worktreeOps,
     IMergeCoordinator mergeCoordinator,

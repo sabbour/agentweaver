@@ -38,7 +38,7 @@ namespace Agentweaver.Api.Coordinator;
 /// </summary>
 public sealed class CoordinatorRunService
 {
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
     private readonly PendingRequestStore _pendingStore;
@@ -55,7 +55,7 @@ public sealed class CoordinatorRunService
     private readonly CancellationToken _appStopping;
 
     public CoordinatorRunService(
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunStreamStore streamStore,
         RunWorkflowRegistry registry,
         PendingRequestStore pendingStore,

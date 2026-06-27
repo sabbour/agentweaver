@@ -293,7 +293,7 @@ public sealed class ProjectService
     /// </summary>
     public async Task<bool> DeleteAsync(
         ProjectId id,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunWorkflowRegistry workflowRegistry,
         CancellationToken ct = default)
     {
@@ -336,7 +336,7 @@ public sealed class ProjectService
 
     public async Task RollbackCreationAsync(
         ProjectId id,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunWorkflowRegistry workflowRegistry,
         CancellationToken ct = default)
     {

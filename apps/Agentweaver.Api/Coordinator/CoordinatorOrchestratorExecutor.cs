@@ -290,7 +290,7 @@ public sealed class CoordinatorOrchestratorExecutor
         {
             if (RunId.TryParse(runId, out var parsed))
             {
-                var runStore = scope.ServiceProvider.GetRequiredService<SqliteRunStore>();
+                var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
                 var run = await runStore.GetAsync(parsed, ct).ConfigureAwait(false);
                 if (run is not null && run.Origin == RunOrigin.BacklogPickup)
                     return WorkflowInvocationKind.Heartbeat;

@@ -55,9 +55,9 @@ public sealed class ProjectWorkspaceService
     private const int BinaryProbeBytes = 8192;
 
     private readonly IProjectStore _projectStore;
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
 
-    public ProjectWorkspaceService(IProjectStore projectStore, SqliteRunStore runStore)
+    public ProjectWorkspaceService(IProjectStore projectStore, IRunStore runStore)
     {
         _projectStore = projectStore;
         _runStore = runStore;

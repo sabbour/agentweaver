@@ -222,7 +222,7 @@ public sealed class WorktreeManager
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var runStore = scope.ServiceProvider.GetRequiredService<SqliteRunStore>();
+            var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
             var run = runStore.GetAsync(runId, CancellationToken.None).GetAwaiter().GetResult();
             if (run?.SubtaskId is null || !int.TryParse(run.SubtaskId, out var subtaskId))
                 return null;

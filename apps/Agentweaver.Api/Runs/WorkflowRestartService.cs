@@ -20,7 +20,7 @@ namespace Agentweaver.Api.Runs;
 /// </summary>
 public sealed class WorkflowRestartService
 {
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
     private readonly PendingRequestStore _pendingStore;
@@ -31,7 +31,7 @@ public sealed class WorkflowRestartService
     private readonly ILogger<WorkflowRestartService> _logger;
 
     public WorkflowRestartService(
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunStreamStore streamStore,
         RunWorkflowRegistry registry,
         PendingRequestStore pendingStore,

@@ -73,10 +73,22 @@ if (!isWorker)
 // SqliteDb is still registered so SQLite-dependent singletons that aren't yet migrated compile fine;
 // it is harmless when Postgres is used (the DB is simply never opened).
 builder.Services.AddSingleton<SqliteDb>();
-builder.Services.AddSingleton<SqliteRunStore>();
-builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<SqliteRunStore>());
-builder.Services.AddSingleton<SqliteRunRevisionStore>();
-builder.Services.AddSingleton<SqliteWorkflowRunStore>();
+// Provider-aware run stores. In Postgres mode the EF-backed equivalents are registered in the
+// Database:Provider block below; the concrete SQLite stores must NOT be registered or injected then,
+// otherwise consumers binding the concrete type would open an empty ephemeral SQLite DB and crash.
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    var _isPostgres = _provider is "postgres" or "postgresql";
+    if (!_isPostgres)
+    {
+        builder.Services.AddSingleton<SqliteRunStore>();
+        builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<SqliteRunStore>());
+        builder.Services.AddSingleton<SqliteRunRevisionStore>();
+        builder.Services.AddSingleton<IRunRevisionStore>(sp => sp.GetRequiredService<SqliteRunRevisionStore>());
+        builder.Services.AddSingleton<SqliteWorkflowRunStore>();
+        builder.Services.AddSingleton<IWorkflowRunStore>(sp => sp.GetRequiredService<SqliteWorkflowRunStore>());
+    }
+}
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
 // IRunEventStream is registered conditionally in the Database:Provider block below.
@@ -381,7 +393,9 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
         builder.Services.AddSingleton<EfRunStore>();
         builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<EfRunStore>());
         builder.Services.AddSingleton<EfRunRevisionStore>();
+        builder.Services.AddSingleton<IRunRevisionStore>(sp => sp.GetRequiredService<EfRunRevisionStore>());
         builder.Services.AddSingleton<EfWorkflowRunStore>();
+        builder.Services.AddSingleton<IWorkflowRunStore>(sp => sp.GetRequiredService<EfWorkflowRunStore>());
         builder.Services.AddSingleton<EfCastProposalStore>();
 
         // Durable pub/sub event stream backed by EF + Postgres (two-layer: serializable tx + channel)

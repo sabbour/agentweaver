@@ -26,7 +26,7 @@ public sealed class CastingService
     private readonly ProjectSignalScanner _signalScanner;
     private readonly ILogger<CastingService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
 
     public CastingService(
         IProjectStore projectStore,
@@ -36,7 +36,7 @@ public sealed class CastingService
         ProjectSignalScanner signalScanner,
         ILogger<CastingService> logger,
         IServiceScopeFactory scopeFactory,
-        SqliteRunStore runStore)
+        IRunStore runStore)
     {
         _projectStore = projectStore;
         _catalog = catalog;

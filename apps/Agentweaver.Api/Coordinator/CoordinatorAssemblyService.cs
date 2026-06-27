@@ -52,7 +52,7 @@ public interface ICoordinatorAssembly
 /// </summary>
 public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 {
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly CoordinatorAssemblyStore _assemblyStore;
     private readonly AssemblyReviewGate _reviewGate;
@@ -66,7 +66,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
 
     public CoordinatorAssemblyService(
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunStreamStore streamStore,
         CoordinatorAssemblyStore assemblyStore,
         AssemblyReviewGate reviewGate,

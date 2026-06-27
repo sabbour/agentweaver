@@ -10,7 +10,7 @@ namespace Agentweaver.Api.Infrastructure;
 /// the raw and sanitized feedback comment, and the tree hash at the time of
 /// the request so that the full history of changes can be reconstructed.
 /// </summary>
-public sealed class SqliteRunRevisionStore
+public sealed class SqliteRunRevisionStore : IRunRevisionStore
 {
     private readonly SqliteDb _db;
 

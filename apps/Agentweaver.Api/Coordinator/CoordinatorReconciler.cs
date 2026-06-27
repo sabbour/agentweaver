@@ -31,7 +31,7 @@ namespace Agentweaver.Api.Coordinator;
 public sealed class CoordinatorReconciler
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly ICoordinatorDispatch _dispatch;
     private readonly ICoordinatorAssembly? _assembly;
@@ -39,7 +39,7 @@ public sealed class CoordinatorReconciler
 
     public CoordinatorReconciler(
         IServiceScopeFactory scopeFactory,
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunStreamStore streamStore,
         ICoordinatorDispatch dispatch,
         ILogger<CoordinatorReconciler> logger,

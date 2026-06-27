@@ -219,7 +219,7 @@ public sealed class CoordinatorSteeringService
     private readonly CoordinatorSteeringQueue _queue;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RunWorkflowFactory? _runWorkflowFactory;
-    private readonly SqliteRunStore? _runStore;
+    private readonly IRunStore? _runStore;
     private readonly ILogger<CoordinatorSteeringService> _logger;
 
     public CoordinatorSteeringService(
@@ -229,7 +229,7 @@ public sealed class CoordinatorSteeringService
         IServiceScopeFactory scopeFactory,
         ILogger<CoordinatorSteeringService> logger,
         RunWorkflowFactory? runWorkflowFactory = null,
-        SqliteRunStore? runStore = null)
+        IRunStore? runStore = null)
     {
         _streamStore = streamStore;
         _registry = registry;
@@ -528,7 +528,7 @@ public sealed class CoordinatorSteeringService
         // A plan exists — this MIGHT be a recoverable parked coordinator, so resolve the run store and
         // dispatch engine now (kept out of the no-plan path so the lightweight steering unit tests,
         // which register only MemoryDbContext, never need them).
-        var runStore = sp.GetRequiredService<SqliteRunStore>();
+        var runStore = sp.GetRequiredService<IRunStore>();
         var dispatch = sp.GetRequiredService<ICoordinatorDispatch>();
 
         var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);

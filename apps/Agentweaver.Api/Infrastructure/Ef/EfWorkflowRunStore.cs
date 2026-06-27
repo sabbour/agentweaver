@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Infrastructure.Ef;
 
-public sealed class EfWorkflowRunStore
+public sealed class EfWorkflowRunStore : IWorkflowRunStore
 {
     private readonly IDbContextFactory<MemoryDbContext> _factory;
     public EfWorkflowRunStore(IDbContextFactory<MemoryDbContext> factory) => _factory = factory;

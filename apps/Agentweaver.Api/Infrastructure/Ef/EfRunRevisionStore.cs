@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Infrastructure.Ef;
 
-public sealed class EfRunRevisionStore
+public sealed class EfRunRevisionStore : IRunRevisionStore
 {
     private readonly IDbContextFactory<MemoryDbContext> _factory;
     public EfRunRevisionStore(IDbContextFactory<MemoryDbContext> factory) => _factory = factory;

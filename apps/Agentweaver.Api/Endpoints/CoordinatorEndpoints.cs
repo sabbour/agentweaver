@@ -31,7 +31,7 @@ public static class CoordinatorEndpoints
 app.MapGet("/api/runs/{id}/outcome-spec", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -60,7 +60,7 @@ app.MapGet("/api/runs/{id}/outcome-spec", async (
 app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -97,7 +97,7 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
     HttpContext httpContext,
     string id,
     ReviseOutcomeSpecRequest request,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -143,7 +143,7 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
 app.MapGet("/api/runs/{coordinatorRunId}/work-plan", async (
     HttpContext httpContext,
     string coordinatorRunId,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -173,7 +173,7 @@ app.MapGet("/api/runs/{coordinatorRunId}/work-plan", async (
 app.MapGet("/api/runs/{coordinatorRunId}/children", async (
     HttpContext httpContext,
     string coordinatorRunId,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -204,7 +204,7 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
     HttpContext httpContext,
     string coordinatorRunId,
     SteerRequest request,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     CoordinatorSteeringService steering,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -261,7 +261,7 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
     HttpContext httpContext,
     string coordinatorRunId,
     AssemblyReviewRequest request,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     Agentweaver.Api.Coordinator.AssemblyReviewGate reviewGate,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -315,7 +315,7 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
 app.MapGet("/api/runs/{id}/assembly/files", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -356,7 +356,7 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     HttpContext httpContext,
     string id,
     string path,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -419,7 +419,7 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
 app.MapGet("/api/runs/{id}/assembly/workspace", async (
     HttpContext httpContext,
     string id,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -474,7 +474,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     HttpContext httpContext,
     string id,
     string path,
-    SqliteRunStore runStore,
+    IRunStore runStore,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
