@@ -4,13 +4,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Agentweaver.AgentRuntime;
-using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
-using Agentweaver.SandboxExec;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -40,12 +37,6 @@ public sealed class CoordinatorWorkflowFactory
         "confirmable outcome spec (desired outcome, in/out of scope, assumptions, and only the " +
         "clarifying questions that would materially change scope). Do not do domain work yourself.";
 
-    private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
-    private readonly ISandboxExecutor _sandboxExecutor;
-    private readonly ISandboxPolicyStore _sandboxPolicyStore;
-    private readonly IShellApprovalStore _approvalStore;
-    private readonly IToolApprovalGate _toolApprovalGate;
     private readonly ICoordinatorSpecDrafter _drafter;
     private readonly RunStreamStore _streamStore;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -56,24 +47,13 @@ public sealed class CoordinatorWorkflowFactory
     private readonly CoordinatorOrchestratorExecutor _orchestrator;
 
     public CoordinatorWorkflowFactory(
-        GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
-        ISandboxExecutor sandboxExecutor,
-        ISandboxPolicyStore sandboxPolicyStore,
-        IShellApprovalStore approvalStore,
-        IToolApprovalGate toolApprovalGate,
+        IWorkflowAgentFactory agentFactory,
         ICoordinatorSpecDrafter drafter,
         RunStreamStore streamStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
         IConfiguration configuration)
     {
-        _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
-        _sandboxExecutor = sandboxExecutor;
-        _sandboxPolicyStore = sandboxPolicyStore;
-        _approvalStore = approvalStore;
-        _toolApprovalGate = toolApprovalGate;
         _drafter = drafter;
         _streamStore = streamStore;
         _scopeFactory = scopeFactory;
@@ -86,13 +66,10 @@ public sealed class CoordinatorWorkflowFactory
         _checkpointManager = CheckpointManager.CreateJson(store);
 
         // Phase 2 orchestrator: decompose + persist runs only after the human confirms the spec.
+        // Uses IWorkflowAgentFactory (flag-driven): WorkflowAgentFactory for in-api,
+        // RemoteWorkflowAgentFactory for pod-per-run.
         _orchestrator = new CoordinatorOrchestratorExecutor(
-            copilotClientFactory,
-            scopeProvider,
-            sandboxExecutor,
-            sandboxPolicyStore,
-            approvalStore,
-            toolApprovalGate,
+            agentFactory,
             streamStore,
             scopeFactory,
             loggerFactory,

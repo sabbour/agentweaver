@@ -22,6 +22,67 @@ public sealed class KubernetesSandboxOptions
     /// <summary>Cluster service CIDR that must be excluded by sandbox egress policy.</summary>
     public string? ServiceCidr { get; init; }
     public IReadOnlyList<string> SandboxEgressCidrExclusions { get; init; } = [];
+
+    // ── Pod-per-run AgentHost lifecycle options (spec §9 / Q3 hybrid) ─────────
+
+    /// <summary>
+    /// SandboxClaim template that provisions an AgentHost pod (runs
+    /// <c>Agentweaver.AgentHost</c> with the A2A listener). Separate from
+    /// <see cref="TemplateRef"/> (which is the plain Ubuntu command-exec sandbox).
+    /// Default: <c>agentweaver-agent-host</c>.
+    /// </summary>
+    public string AgentHostTemplateRef { get; init; } = "agentweaver-agent-host";
+
+    /// <summary>
+    /// Port the AgentHost Kestrel listener binds to inside the pod.
+    /// Worker builds the A2A endpoint as <c>http://&lt;podIP&gt;:&lt;AgentHostPort&gt;&lt;AgentHostA2APath&gt;</c>.
+    /// TLS/mTLS termination is owned by Link (H1) — leave hook here for cert wiring.
+    /// Default: 8088.
+    /// </summary>
+    public int AgentHostPort { get; init; } = 8088;
+
+    /// <summary>
+    /// A2A path prefix mounted by <c>MapA2AHttpJson</c> inside the AgentHost pod.
+    /// Must match <c>AgentHost:A2APath</c> set in the pod's configuration.
+    /// Default: <c>/a2a/agent</c>.
+    /// </summary>
+    public string AgentHostA2APath { get; init; } = "/a2a/agent";
+
+    /// <summary>
+    /// URL scheme for the AgentHost A2A endpoint. <c>http</c> for plain; <c>https</c>
+    /// when Link's TLS cert wiring (H1) is active. Default: <c>http</c>.
+    /// </summary>
+    public string AgentHostScheme { get; init; } = "https";
+}
+
+/// <summary>
+/// Top-level sandbox runtime options bound from the <c>Sandbox</c> configuration section
+/// (not under <c>Sandbox:Kubernetes</c>). Controls the agent-execution mode and
+/// the pod-release-on-suspend behaviour (Q3 hybrid).
+/// </summary>
+public sealed class SandboxRuntimeOptions
+{
+    /// <summary>
+    /// Agent execution mode.
+    /// <list type="bullet">
+    ///   <item><c>in-api</c> (default) — run agents in-process; instant rollback path (§4.7.6).</item>
+    ///   <item><c>pod-per-run</c> — launch a per-run AgentHost sandbox pod; activate A2A transport.</item>
+    /// </list>
+    /// </summary>
+    public string AgentExecutionMode { get; init; } = "in-api";
+
+    /// <summary>
+    /// When <c>true</c> (default) and <see cref="AgentExecutionMode"/> is <c>pod-per-run</c>,
+    /// the AgentHost pod is released (SandboxClaim deleted) whenever the MAF graph suspends
+    /// at a <c>RequestPort</c> (HITL/review gate) or the coordinator idles awaiting children.
+    /// Set to <c>false</c> to keep the pod warm across suspension (lower resume latency, higher
+    /// resource cost; recommended only for short-wait HITL in dev/staging).
+    /// </summary>
+    public bool ReleasePodOnSuspend { get; init; } = true;
+
+    /// <inheritdoc cref="AgentExecutionMode"/>
+    public bool IsPodPerRun =>
+        string.Equals(AgentExecutionMode, "pod-per-run", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -36,12 +97,15 @@ public sealed class KubernetesSandboxOptions
 /// Automatically selected by the API when <c>KUBERNETES_SERVICE_HOST</c> is present
 /// (see <see cref="SandboxExecutorFactory.IsInCluster"/>).
 /// </summary>
-internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
+internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPodLifecycle
 {
     private const string ApiGroup = "extensions.agents.x-k8s.io";
     private const string ApiVersion = "v1alpha1";
     private const string ClaimPlural = "sandboxclaims";
     private const string ContainerName = "agentweaver-sandbox";
+
+    // Prefix for AgentHost SandboxClaim names to distinguish them from per-command claims.
+    private const string AgentHostClaimPrefix = "agent-";
 
     private readonly IKubernetes _client;
     private readonly KubernetesSandboxOptions _options;
@@ -158,6 +222,120 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor
             foreach (var line in result.Stderr.Split('\n'))
                 yield return new SandboxOutputChunk(SandboxOutputStream.Stderr, line);
         yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, result.ExitCode.ToString());
+    }
+
+    // ── IAgentHostPodLifecycle — pod-per-run lifecycle (spec §9 / Q3) ─────────────
+
+    /// <inheritdoc/>
+    public async Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+    {
+        var claimBase = runId.Replace("-", "", StringComparison.Ordinal);
+        claimBase = claimBase[..Math.Min(12, claimBase.Length)];
+        var claimName = $"{AgentHostClaimPrefix}{claimBase}";
+
+        _logger.LogInformation(
+            "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
+            runId, claimName);
+
+        await CreateAgentHostClaimAsync(claimName, runId, ct).ConfigureAwait(false);
+
+        var podName = await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
+
+        _podRegistry?.Register(runId, podName);
+
+        var podIp = await GetPodIpAsync(podName, ct).ConfigureAwait(false);
+
+        var endpointUrl =
+            $"{_options.AgentHostScheme}://{podIp}:{_options.AgentHostPort}{_options.AgentHostA2APath}";
+
+        _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
+
+        _logger.LogInformation(
+            "KubernetesSandboxExecutor: AgentHost A2A endpoint for run {RunId} = {Endpoint}",
+            runId, endpointUrl);
+
+        return endpointUrl;
+    }
+
+    /// <inheritdoc/>
+    public async Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
+    {
+        var claimBase = runId.Replace("-", "", StringComparison.Ordinal);
+        claimBase = claimBase[..Math.Min(12, claimBase.Length)];
+        var claimName = $"{AgentHostClaimPrefix}{claimBase}";
+
+        _logger.LogInformation(
+            "KubernetesSandboxExecutor: releasing AgentHost pod for run {RunId} (claim {Claim})",
+            runId, claimName);
+
+        await DeleteClaimAsync(claimName).ConfigureAwait(false);
+        _podRegistry?.Unregister(runId);
+
+        _logger.LogInformation(
+            "KubernetesSandboxExecutor: AgentHost pod released for run {RunId}", runId);
+    }
+
+    /// <summary>
+    /// Creates a <c>SandboxClaim</c> that provisions an AgentHost pod (using the
+    /// <c>AgentHostTemplateRef</c> template). Injects per-run env vars into the spec
+    /// so the pod's <c>AgentHost</c> process can read its <c>AgentHost:RunId</c>, etc.
+    /// </summary>
+    private Task CreateAgentHostClaimAsync(string claimName, string runId, CancellationToken ct)
+    {
+        var manifest = new
+        {
+            apiVersion = $"{ApiGroup}/{ApiVersion}",
+            kind = "SandboxClaim",
+            metadata = new { name = claimName, @namespace = _options.Namespace },
+            spec = new
+            {
+                templateRef = _options.AgentHostTemplateRef,
+                ttl = $"{_options.TimeoutSeconds}s",
+                // Per-run env vars for Agentweaver.AgentHost (injected into the pod spec
+                // by the sandbox controller if it supports the `env` field; otherwise the
+                // template or a mounted ConfigMap carries the static config and the runId
+                // is derived from the claim name by convention).
+                env = new[]
+                {
+                    new { name = "AgentHost__RunId", value = runId },
+                    new { name = "AgentHost__WorkingDirectory", value = _options.WorkspaceMountPath },
+                    new { name = "AgentHost__RepositoryPath", value = _options.WorkspaceMountPath },
+                    new { name = "AgentHost__A2APath", value = _options.AgentHostA2APath },
+                },
+            },
+        };
+
+        return _client.CustomObjects.CreateNamespacedCustomObjectAsync(
+            manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
+            cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Reads the pod IP from the Kubernetes API after the claim is Bound.
+    /// Polls every 2 s until <c>status.podIP</c> is non-empty (pod has been scheduled
+    /// and assigned a network address).
+    /// </summary>
+    private async Task<string> GetPodIpAsync(string podName, CancellationToken ct)
+    {
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var pod = await _client.CoreV1.ReadNamespacedPodAsync(
+                podName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
+
+            var ip = pod?.Status?.PodIP;
+            if (!string.IsNullOrWhiteSpace(ip))
+                return ip;
+
+            _logger.LogDebug(
+                "KubernetesSandboxExecutor: waiting for pod IP of {Pod} (current: {Ip})",
+                podName, ip ?? "(none)");
+
+            await Task.Delay(2000, ct).ConfigureAwait(false);
+        }
     }
 
     // ── Claim management ──────────────────────────────────────────────────────────

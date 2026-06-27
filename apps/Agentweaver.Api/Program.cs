@@ -200,6 +200,83 @@ builder.Services.AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>();
 builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     sp.GetRequiredService<ISandboxExecutorRouter>().Resolve());
 
+// spec-018 P1: AgentExecutionMode flag + A2A client seam (RemoteAgentProxy).
+// Sandbox:AgentExecutionMode=in-api (default) keeps all agent turns in-process.
+// Sandbox:AgentExecutionMode=pod-per-run routes turns to the per-run sandbox pod via A2A.
+// IWorkflowAgentFactory override: must be registered AFTER AddAgentRuntime() to win.
+{
+    var agentMode = SandboxAgentOptions.ParseMode(
+        builder.Configuration["Sandbox:AgentExecutionMode"]);
+
+    var sandboxAgentOptions = new SandboxAgentOptions
+    {
+        AgentExecutionMode = agentMode,
+        AgentHostPort = int.TryParse(builder.Configuration["Sandbox:AgentHost:Port"], out var p) ? p : 8080,
+        AgentHostScheme = builder.Configuration["Sandbox:AgentHost:Scheme"] ?? "https",
+        AgentHostA2APath = builder.Configuration["Sandbox:AgentHost:A2APath"] ?? "/a2a/agent",
+    };
+    builder.Services.AddSingleton(sandboxAgentOptions);
+
+    // ISandboxAgentEndpointResolver: Kubernetes-native when in-cluster, no-op otherwise.
+    // The no-op resolver causes a clear error if pod-per-run is attempted outside K8s.
+    builder.Services.AddSingleton<ISandboxAgentEndpointResolver>(sp =>
+    {
+        var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+        if (!SandboxExecutorFactory.IsInCluster)
+            return new NoOpSandboxAgentEndpointResolver();
+
+        try
+        {
+            var k8sConfig = KubernetesClientConfiguration.InClusterConfig();
+            var k8sClient = new Kubernetes(k8sConfig);
+            var podRegistry = sp.GetRequiredService<IPodNameRegistry>();
+            var ns = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+            return new KubernetesPodAgentEndpointResolver(
+                k8sClient, podRegistry, ns, sandboxAgentOptions,
+                loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>());
+        }
+        catch
+        {
+            return new NoOpSandboxAgentEndpointResolver();
+        }
+    });
+
+    // Named HttpClient for A2A sandbox pod connections.
+    // In production, configure client certificate / bearer handler here per H1 (mTLS/TLS).
+    builder.Services.AddHttpClient("a2a-sandbox-pod")
+        .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(30));
+
+    // RemoteWorkflowAgentFactory registered as an alternative to WorkflowAgentFactory.
+    builder.Services.AddSingleton<RemoteWorkflowAgentFactory>();
+
+    // Override IWorkflowAgentFactory if pod-per-run is requested.
+    // AddAgentRuntime() registers WorkflowAgentFactory; this last-wins override replaces it.
+    if (agentMode == AgentExecutionMode.PodPerRun)
+    {
+        builder.Services.AddSingleton<IWorkflowAgentFactory>(sp =>
+            sp.GetRequiredService<RemoteWorkflowAgentFactory>());
+    }
+}
+
+// spec-018 P1: IAgentHostPodLifecycle registration (pod-per-run launch/release lifecycle).
+// KubernetesSandboxExecutor implements IAgentHostPodLifecycle when in-cluster. Register it
+// as a non-nullable singleton that delegates to the ISandboxExecutor. When not in K8s the
+// service is absent and RunWatchLoopService receives null (optional parameter).
+if (SandboxExecutorFactory.IsInCluster)
+{
+    builder.Services.AddSingleton<IAgentHostPodLifecycle>(sp =>
+    {
+        var lifecycle = sp.GetRequiredService<ISandboxExecutor>() as IAgentHostPodLifecycle;
+        return lifecycle ?? throw new InvalidOperationException(
+            "ISandboxExecutor does not implement IAgentHostPodLifecycle in Kubernetes mode. " +
+            "KubernetesSandboxExecutor is expected when KUBERNETES_SERVICE_HOST is set.");
+    });
+}
+
+// SandboxRuntimeOptions: controls ReleasePodOnSuspend and AgentExecutionMode at runtime.
+// Bound from the same "Sandbox" section; the IsPodPerRun computed prop used by RunWatchLoopService.
+builder.Services.Configure<SandboxRuntimeOptions>(builder.Configuration.GetSection("Sandbox"));
+
 // Port-forward service (017-preview): manages kubectl port-forward sessions per run.
 builder.Services.AddSingleton<PortForwardService>();
 

@@ -1,5 +1,6 @@
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -28,6 +29,9 @@ public sealed class RunWatchLoopService
     private readonly ILogger<RunWatchLoopService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _watchLoopTimeout;
+    // Pod-per-run lifecycle — null when AgentExecutionMode=in-api or not in Kubernetes.
+    private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly SandboxRuntimeOptions _sandboxRuntime;
 
     public RunWatchLoopService(
         SqliteRunStore runStore,
@@ -39,7 +43,9 @@ public sealed class RunWatchLoopService
         IHostApplicationLifetime lifetime,
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
-        ILogger<RunWatchLoopService> logger)
+        ILogger<RunWatchLoopService> logger,
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -51,6 +57,8 @@ public sealed class RunWatchLoopService
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         _watchLoopTimeout = ResolveWatchLoopTimeout(configuration);
+        _podLifecycle = podLifecycle;
+        _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
     }
 
     /// <summary>
@@ -151,6 +159,12 @@ public sealed class RunWatchLoopService
                         request_id = rie.Request.RequestId
                     });
                     entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "started", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
+
+                    // Q3 hybrid: checkpoint-and-release the AgentHost pod when the workflow
+                    // suspends at a RequestPort gate, if ReleasePodOnSuspend=true (spec §9/§12.2).
+                    // Resume correctness relies on the DB-backed ICheckpointStore + serialized
+                    // session blob — not on A2A contextId state (§4.7.3).
+                    await ReleasePodOnSuspendSafeAsync(runId).ConfigureAwait(false);
                     break;
 
                 case WorkflowOutputEvent woe:
@@ -183,6 +197,30 @@ public sealed class RunWatchLoopService
         return TimeSpan.TryParse(configured, out var timeout) && timeout > TimeSpan.Zero
             ? timeout
             : TimeSpan.FromHours(4);
+    }
+
+    /// <summary>
+    /// Releases the AgentHost pod for the given run on workflow suspension (Q3 hybrid).
+    /// Best-effort: logs and swallows exceptions so a pod-release failure never disrupts
+    /// the watch loop's HITL handling.
+    /// </summary>
+    private async Task ReleasePodOnSuspendSafeAsync(string runId)
+    {
+        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun || !_sandboxRuntime.ReleasePodOnSuspend)
+            return;
+
+        try
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(runId).ConfigureAwait(false);
+            _logger.LogInformation(
+                "RunWatchLoopService: AgentHost pod released on suspension for run {RunId}", runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "RunWatchLoopService: failed to release AgentHost pod on suspension for run {RunId} (best-effort)",
+                runId);
+        }
     }
 
     /// <summary>

@@ -1,0 +1,71 @@
+# ConfigMap — AgentHost Kestrel / TLS / security configuration.
+#
+# H4 (spec-018): Kestrel bounded listener — connection limits, request-body
+# cap, keep-alive / header timeouts generous enough for long-lived SSE
+# streams, bounded concurrency.
+#
+# H1 (spec-018): TLS config points to the workload-bound server cert mounted
+# from Secret agentweaver-a2a-server-tls; ClientCertificateMode=RequireCertificate
+# forces the connecting worker to present its mTLS client cert on every
+# connection, satisfying the "workload-bound" identity requirement without
+# requiring SPIFFE/SPIRE (deferred — see gen-a2a-mtls-certs.sh).
+#
+# H3 (spec-018): GateCardEndpoint=true signals the AgentHost entrypoint
+# (Morpheus) to apply an authorization policy on GET /v1/card.  Morpheus must
+# wire an [Authorize] policy (or equivalent middleware) on the card endpoint so
+# that only authenticated workers can retrieve the AgentCard; the Kestrel
+# RequireCertificate mode provides the transport-layer gate.
+#
+# Morpheus wiring notes:
+#   1. Call builder.Configuration.AddJsonFile("/app/config/appsettings.k8s.json",
+#      optional: false) after the default configuration sources.
+#   2. Kestrel picks up Kestrel:Endpoints:A2A automatically from IConfiguration.
+#   3. Read AgentHost:Security:GateCardEndpoint and, if true, require an
+#      authorization policy (bearer or cert subject check) on MapGet("/v1/card").
+#   4. Read AgentHost:ClientCACertPath and load it as the X509Certificate2 for
+#      validating the client cert presented by the worker (store in
+#      SslStream/HttpsConnectionAdapterOptions.ClientCertificateMode).
+#   5. Implement an SSE heartbeat loop that emits a comment event (":\n\n")
+#      every HeartbeatIntervalSeconds to prevent proxy/LB idle-timeout drops.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agenthost-config
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+data:
+  appsettings.k8s.json: |
+    {
+      "Kestrel": {
+        "Endpoints": {
+          "A2A": {
+            "Url": "https://0.0.0.0:8088",
+            "Certificate": {
+              "Path": "/mnt/a2a-tls/tls.crt",
+              "KeyPath": "/mnt/a2a-tls/tls.key"
+            },
+            "ClientCertificateMode": "RequireCertificate"
+          }
+        },
+        "Limits": {
+          "MaxConcurrentConnections": 50,
+          "MaxConcurrentUpgradedConnections": 50,
+          "MaxRequestBodySize": 10485760,
+          "KeepAliveTimeout": "00:02:00",
+          "RequestHeadersTimeout": "00:00:30"
+        }
+      },
+      "AgentHost": {
+        "A2APort": 8088,
+        "ClientCACertPath": "/mnt/a2a-tls/ca.crt",
+        "HeartbeatIntervalSeconds": 15,
+        "Security": {
+          "GateCardEndpoint": true,
+          "RequireClientCertificate": true,
+          "ClientCertSubjectCN": "agentweaver-worker",
+          "SkipTlsHostnameVerification": true
+        }
+      }
+    }

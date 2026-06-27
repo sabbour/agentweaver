@@ -141,6 +141,18 @@ spec:
               value: grpc
             - name: TMPDIR
               value: /tmp
+            # H1 (spec-018): paths for worker mTLS client cert used by RemoteAgentProxy
+            # when dialing the AgentHost A2A endpoint.  Morpheus wires these into
+            # the HttpClientHandler that backs the A2AAgent / IA2AClient.
+            - name: Sandbox__A2A__ClientCertPath
+              value: /mnt/a2a-client-tls/tls.crt
+            - name: Sandbox__A2A__ClientKeyPath
+              value: /mnt/a2a-client-tls/tls.key
+            - name: Sandbox__A2A__CACertPath
+              value: /mnt/a2a-client-tls/ca.crt
+            # H4: A2A port — must match the Kestrel endpoint in configmap-agenthost.yaml.
+            - name: Sandbox__A2A__Port
+              value: "8088"
           volumeMounts:
             - name: data
               mountPath: /data
@@ -152,6 +164,12 @@ spec:
               mountPath: /app/logs
             - name: secrets-store
               mountPath: /mnt/secrets-store
+              readOnly: true
+            # H1 (spec-018): worker mTLS client cert + CA cert for A2A transport.
+            # RemoteAgentProxy must load tls.crt / tls.key as the client certificate
+            # and ca.crt as the trust anchor when dialing the AgentHost A2A endpoint.
+            - name: a2a-client-tls
+              mountPath: /mnt/a2a-client-tls
               readOnly: true
           resources:
             requests:
@@ -200,3 +218,9 @@ spec:
             readOnly: true
             volumeAttributes:
               secretProviderClass: agentweaver-secrets
+        # H1 (spec-018): worker mTLS client cert for A2A transport (spec-018).
+        # Secret created by scripts/aks/gen-a2a-mtls-certs.sh.
+        - name: a2a-client-tls
+          secret:
+            secretName: agentweaver-a2a-client-tls
+            defaultMode: 0400

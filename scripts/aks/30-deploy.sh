@@ -105,11 +105,18 @@ echo "Applying network policies and egress allowlists..."
 apply_rendered networkpolicy-default-deny.yaml
 apply_rendered networkpolicy-mcp.yaml
 apply_rendered networkpolicy-sandbox.yaml
+# H2 (spec-018): A2A ingress — worker→agenthost on port 8088 only; no egress change.
+apply_rendered networkpolicy-agenthost.yaml
 apply_rendered cilium-network-policy-sandbox.yaml
 apply_rendered serviceentry-telemetry.yaml
 
 echo ""
 echo "Applying services, gateway, routes, and backup jobs..."
+# H1 (spec-018): generate A2A mTLS certs (idempotent — skips if secrets exist).
+echo "Ensuring A2A mTLS certificates are present (H1)..."
+bash "${SCRIPT_DIR}/gen-a2a-mtls-certs.sh"
+# H4/H3 (spec-018): AgentHost Kestrel + card-authz config.
+apply_rendered configmap-agenthost.yaml
 apply_rendered api-service.yaml
 apply_rendered frontend-service.yaml
 apply_rendered mcp-service.yaml

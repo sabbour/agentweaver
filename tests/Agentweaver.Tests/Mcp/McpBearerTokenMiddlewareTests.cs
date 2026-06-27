@@ -253,10 +253,17 @@ public sealed class McpBearerTokenMiddlewareTests
         var cache    = new MemoryCache(new MemoryCacheOptions());
         var handler  = githubHandler ?? new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized);
         var factory  = new SingleClientHttpClientFactory(handler);
+        var validator = new McpAccessTokenValidator(
+            config,
+            cache,
+            factory,
+            NullLogger<McpAccessTokenValidator>.Instance);
 
         return new McpBearerTokenMiddleware(
             next,
             registry,
+            validator,
+            config,
             cache,
             factory,
             NullLogger<McpBearerTokenMiddleware>.Instance);

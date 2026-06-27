@@ -1,0 +1,38 @@
+# NetworkPolicy — A2A ingress to AgentHost (sandbox) pods.
+#
+# H2 (spec-018): scoped INGRESS to agentweaver-sandbox pods on ONLY the A2A
+# port (8088), from ONLY agentweaver-api (worker/API) pods — label-selector
+# scoped.  No other source may reach the A2A listener.
+#
+# Relationship to existing policies:
+#   - networkpolicy-sandbox.yaml `sandbox-deny-ingress` provides the default
+#     deny for ingress.  Kubernetes NetworkPolicy is additive: this file adds
+#     the sole permitted exception without touching or removing that policy.
+#   - Egress policies in networkpolicy-sandbox.yaml and
+#     cilium-network-policy-sandbox.yaml are NOT modified (H6 preserved).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-to-agenthost-a2a
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  # Target: sandbox / AgentHost pods only.
+  podSelector:
+    matchLabels:
+      app: agentweaver-sandbox
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Only pods labelled app: agentweaver-api (the worker/API tier).
+        # All other sources remain blocked by the default-deny base policy.
+        - podSelector:
+            matchLabels:
+              app: agentweaver-api
+      ports:
+        # A2A HTTPS listener only.  No other port is opened.
+        - protocol: TCP
+          port: 8088

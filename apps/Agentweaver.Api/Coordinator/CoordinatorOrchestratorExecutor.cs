@@ -4,15 +4,12 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Agentweaver.AgentRuntime;
-using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
-using Agentweaver.SandboxExec;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
 using Agentweaver.Squad.Squad;
@@ -56,12 +53,7 @@ public sealed class CoordinatorOrchestratorExecutor
         plus the memory/session/inbox tools.
         """;
 
-    private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
-    private readonly ISandboxExecutor _sandboxExecutor;
-    private readonly ISandboxPolicyStore _sandboxPolicyStore;
-    private readonly IShellApprovalStore _approvalStore;
-    private readonly IToolApprovalGate _toolApprovalGate;
+    private readonly IWorkflowAgentFactory _agentFactory;
     private readonly RunStreamStore _streamStore;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILoggerFactory _loggerFactory;
@@ -72,12 +64,7 @@ public sealed class CoordinatorOrchestratorExecutor
     private readonly CatalogReader _catalog = new();
 
     public CoordinatorOrchestratorExecutor(
-        GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
-        ISandboxExecutor sandboxExecutor,
-        ISandboxPolicyStore sandboxPolicyStore,
-        IShellApprovalStore approvalStore,
-        IToolApprovalGate toolApprovalGate,
+        IWorkflowAgentFactory agentFactory,
         RunStreamStore streamStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
@@ -85,12 +72,7 @@ public sealed class CoordinatorOrchestratorExecutor
         string? apiBaseUrl,
         string? apiKey)
     {
-        _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
-        _sandboxExecutor = sandboxExecutor;
-        _sandboxPolicyStore = sandboxPolicyStore;
-        _approvalStore = approvalStore;
-        _toolApprovalGate = toolApprovalGate;
+        _agentFactory = agentFactory ?? throw new ArgumentNullException(nameof(agentFactory));
         _streamStore = streamStore;
         _scopeFactory = scopeFactory;
         _loggerFactory = loggerFactory;
@@ -391,7 +373,7 @@ public sealed class CoordinatorOrchestratorExecutor
     private async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
         CoordinatorDraftInput input, OutcomeSpec spec, WorkflowDefinition? selectedWorkflow, CancellationToken ct)
     {
-        CopilotAIAgent? agent = null;
+        IWorkflowTurnAgent? agent = null;
         try
         {
             var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "coordinator")
@@ -476,20 +458,11 @@ public sealed class CoordinatorOrchestratorExecutor
 
             charter = ApplyDecompositionPromptBudget(input.RunId, charter, coordinatorContext, task);
 
-            agent = new CopilotAIAgent(
-                _copilotClientFactory,
-                _scopeProvider,
-                _sandboxExecutor,
-                _sandboxPolicyStore,
-                _approvalStore,
-                _toolApprovalGate,
-                _loggerFactory.CreateLogger<CopilotAIAgent>());
+            // Use the flag-driven factory: WorkflowAgentFactory (in-api) or RemoteWorkflowAgentFactory
+            // (pod-per-run). The coordinator's decompose turn uses the same IWorkflowTurnAgent seam
+            // as any worker agent turn — identical mechanism to RunWorkflowFactory (§4.6).
+            agent = _agentFactory.CreateWorkerAgent();
 
-            // Stream the decomposition turn (intent, tool calls, and the agent's reasoning) onto the
-            // COORDINATOR run stream so the reused run timeline shows live output while the coordinator
-            // plans, instead of an empty session. RecordingChannelWriter appends to the coordinator
-            // entry with the next sequence; the agent emits no run.completed, so it won't prematurely
-            // terminate the coordinator timeline (only agent.turn.end, which just closes the turn).
             var coordEntry = _streamStore.Get(input.RunId);
             var streamWriter = coordEntry is null ? null : new RecordingChannelWriter(coordEntry);
 
@@ -506,8 +479,7 @@ public sealed class CoordinatorOrchestratorExecutor
                 apiKey: _apiKey,
                 ct).ConfigureAwait(false);
 
-            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
+            var response = await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
 
             var parsed = ParseDecomposition(response, input.RunId);
             if (parsed is null)

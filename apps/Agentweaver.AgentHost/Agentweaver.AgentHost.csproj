@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.Domain\Agentweaver.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      A2A server hosting packages — pinned to the same preview stamp as
+      Microsoft.Agents.AI.GitHub.Copilot (1.9.0-preview.260603.1) per spec §4.7.1 / H7.
+      Gated behind Sandbox:AgentExecutionMode=pod-per-run; in-api is the instant rollback.
+    -->
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A" Version="1.9.0-preview.260603.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.9.0-preview.260603.1" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Agentweaver.AgentHost</AssemblyName>
+    <RootNamespace>Agentweaver.AgentHost</RootNamespace>
+    <!-- Suppress preview-API diagnostic for Microsoft.Agents.AI preview packages (H7 authorized). -->
+    <NoWarn>$(NoWarn);MEAI001</NoWarn>
+  </PropertyGroup>
+
+</Project>
