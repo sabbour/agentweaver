@@ -42,14 +42,34 @@ if (!requireMtls && !kestrelEndpointsConfigured)
 }
 
 // ── GitHub credential chain ────────────────────────────────────────────────────
-// The token is expected in Providers:GitHubCopilot:GitHubToken (set at pod launch).
-// PodGitHubTokenStore is seeded below from the factory's config-fallback path; the
-// factory itself reads GitHubToken from config directly, so the token store is a
-// backstop for the scope-provider resolution path.
-var podTokenStore = new PodGitHubTokenStore();
-builder.Services.AddSingleton<IGitHubTokenStore>(podTokenStore);
-builder.Services.AddSingleton<IGitHubTokenScopeProvider, PodInstallationScopeProvider>();
-// No IGitHubAccessTokenProvider (token is static at pod lifetime).
+// Two paths, selected by AgentHost:UseSharedTokenStore:
+//
+//  (a) Shared file store (spec-018 P1.5 live PoC): the cluster mounts the agentweaver-workspace
+//      RWX volume at /workspace with HOME=/workspace/.home, and the API persists the user's GitHub
+//      token to {HOME}/.local/share/agentweaver/auth/user_<id>.json. When UseSharedTokenStore=true
+//      the pod READS that same shared store directly — the token never moves, no secret is created.
+//      Pairs with a per-user scope provider so the correct user_<id>.json is read.
+//
+//  (b) Default: PodGitHubTokenStore (NeverSignedIn) + installation scope. The factory then falls
+//      back to Providers:GitHubCopilot:GitHubToken from config (e.g. an injected env/secret).
+//
+// No IGitHubAccessTokenProvider is wired (token is static at pod lifetime; the shared store already
+// holds a freshly-issued user token).
+if (builder.Configuration.GetValue("AgentHost:UseSharedTokenStore", false))
+{
+    var authDir = SharedTokenStorePaths.ResolveAuthDir(
+        builder.Configuration["AgentHost:SharedTokenStorePath"]);
+    var configuredUserId = builder.Configuration["AgentHost:UserId"];
+    builder.Services.AddSingleton<IGitHubTokenStore>(new SharedHomeGitHubTokenStore(authDir));
+    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(
+        new SharedUserScopeProvider(authDir, configuredUserId));
+}
+else
+{
+    var podTokenStore = new PodGitHubTokenStore();
+    builder.Services.AddSingleton<IGitHubTokenStore>(podTokenStore);
+    builder.Services.AddSingleton<IGitHubTokenScopeProvider, PodInstallationScopeProvider>();
+}
 
 // ── Sandbox policy (no DB in pod) ─────────────────────────────────────────────
 builder.Services.AddSingleton<ISandboxPolicyStore, PodSandboxPolicyStore>();

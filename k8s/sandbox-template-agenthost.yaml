@@ -12,6 +12,10 @@
 #   - PoC: RequireMtls=false comes from the mounted configmap-agenthost (plain http :8088).
 #   - PoC: readOnlyRootFilesystem relaxed to false (CopilotClient / git write to $HOME).
 #     PRODUCTION must restore readOnlyRootFilesystem: true + a writable $HOME emptyDir.
+#   - GitHub token: the pod mounts the SHARED agentweaver-workspace RWX volume at /workspace with
+#     HOME=/workspace/.home and AgentHost__UseSharedTokenStore=true, so it READS the same
+#     {HOME}/.local/share/agentweaver/auth/user_<id>.json the API persisted. No secret is created
+#     and the token never leaves the shared store. (PRODUCTION: workload identity, §3.3.)
 #
 # Pod label `app: agentweaver-sandbox` is intentional: it makes ALL existing sandbox
 # NetworkPolicies apply unchanged (ingress 8088 from worker+api, DNS egress, Cilium FQDN
@@ -19,7 +23,7 @@
 # component label distinguishes agent-host pods for observability.
 #
 # Apply (envsubst):
-#   ACR_LOGIN_SERVER=agentweaverregistry.azurecr.io AGENTHOST_IMAGE_TAG=cf1283e7 \
+#   ACR_LOGIN_SERVER=agentweaverregistry.azurecr.io AGENTHOST_IMAGE_TAG=be1e28fa \
 #     envsubst < k8s/sandbox-template-agenthost.yaml | kubectl apply -f -
 ---
 apiVersion: extensions.agents.x-k8s.io/v1alpha1
@@ -79,16 +83,17 @@ spec:
             # per-run by the executor; the rest come from the configmap.
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
-          envFrom:
-            # PoC ONLY: per-run GitHub Copilot token source. The pod authenticates via the
-            # config-fallback token Providers:GitHubCopilot:GitHubToken (GitHubCopilotClientFactory
-            # -> ReadConfigFallbackToken). For the PoC this is a single static token in a Secret;
-            # optional:true so the pod still starts if absent (the turn then fails auth with a
-            # clear "GitHub Copilot is not authorized" message). PRODUCTION: inject a run-scoped
-            # token at claim time, or use workload identity (platform-deployment.md §3.3).
-            - secretRef:
-                name: agentweaver-agenthost-poc
-                optional: true
+            # spec-018 P1.5 — shared RWX token store. HOME points at the agentweaver-workspace
+            # volume so the pod's {HOME}/.local/share/agentweaver/auth/user_<id>.json is the SAME
+            # file the API/worker wrote (the cluster runs api+worker with HOME=/workspace/.home).
+            # The token is read in-place; no secret is created or injected.
+            - name: HOME
+              value: "/workspace/.home"
+            # Selects SharedHomeGitHubTokenStore + SharedUserScopeProvider in AgentHost/Program.cs
+            # so CopilotAIAgent.SetupAsync authenticates from that shared store. The scope provider
+            # discovers the signed-in user_<id>.json automatically (no UserId injection required).
+            - name: AgentHost__UseSharedTokenStore
+              value: "true"
           resources:
             requests:
               memory: "1Gi"
