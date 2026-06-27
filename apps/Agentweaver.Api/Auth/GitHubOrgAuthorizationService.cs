@@ -87,16 +87,18 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             ct).ConfigureAwait(false);
 
         // If primary check fails (SAML redirect → 302, not a member → 404, or inconclusive → token
-        // expired/network/5xx), fall back to the public members endpoint (unauthenticated) before
-        // deciding. This handles the common case where the token is not SAML-authorized so the private
-        // endpoint returns 302/401 rather than a definitive answer.
+        // expired/network/5xx), fall back to the public members endpoint before deciding. This handles
+        // the common case where the token is not SAML-authorized so the private endpoint returns
+        // 302/401 rather than a definitive answer.
+        // NOTE: The public_members endpoint is a PUBLIC endpoint and is NOT SAML-gated, so sending the
+        // user's token does not change the 204/404 result but moves the call from the 60/hr
+        // unauthenticated rate-limit bucket to the user's 5000/hr authenticated bucket.
         if (orgResult != CheckResult.Member)
         {
             var publicResult = await CheckEndpointAsync(
                 accessToken,
                 $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/public_members/{Uri.EscapeDataString(login)}",
-                ct,
-                sendAuthHeader: false).ConfigureAwait(false);
+                ct).ConfigureAwait(false);
 
             if (publicResult != CheckResult.Member)
             {
@@ -188,6 +190,28 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
         using (response)
         {
+            // Detect GitHub rate-limit responses BEFORE mapping 403 → OrgAccessNotGranted.
+            // GitHub primary rate-limit 403s carry X-RateLimit-Remaining: 0; secondary limits use
+            // 403/429 with Retry-After. Treat these as Inconclusive so they are never cached and a
+            // transient rate-limit blip does not pin a false denial for the full cache TTL.
+            bool isRateLimited =
+                response.StatusCode == System.Net.HttpStatusCode.TooManyRequests
+                || (response.StatusCode == System.Net.HttpStatusCode.Forbidden
+                    && (response.Headers.TryGetValues("X-RateLimit-Remaining", out var rlVals)
+                            && rlVals.FirstOrDefault() == "0"
+                        || response.Headers.TryGetValues("Retry-After", out _)));
+
+            if (isRateLimited)
+            {
+                _logger.LogWarning(
+                    "GitHub API rate-limit response ({StatusCode}) received for org membership check. " +
+                    "Treating as Inconclusive to avoid caching a false denial.",
+                    (int)response.StatusCode);
+                return CheckResult.Inconclusive;
+            }
+
+            // A genuine SAML-enforcement 403 (no rate-limit headers) means the token is not authorized
+            // for this org's private API.
             if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 return CheckResult.OrgAccessNotGranted;
 
@@ -197,9 +221,7 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
                 return CheckResult.Member;
 
             // An AUTHENTICATED call that comes back 401 (token expired/revoked) or 5xx (GitHub outage)
-            // is inconclusive — we cannot distinguish "not a member" from "couldn't ask". Unauthenticated
-            // public-member probes never carry a token, so a 401 there is not expected; only the
-            // authenticated path can produce a meaningful inconclusive signal.
+            // is inconclusive — we cannot distinguish "not a member" from "couldn't ask".
             if (sendAuthHeader
                 && (response.StatusCode == System.Net.HttpStatusCode.Unauthorized
                     || (int)response.StatusCode >= 500))
