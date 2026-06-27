@@ -488,6 +488,13 @@ export function WorkflowRunPage() {
           newState.startedAt = prev?.startedAt;
           if (!isNaN(tsMs)) newState.completedAt = tsMs;
         }
+        // Defensive read: null today (single-pod); non-null per-step after spec-018 distributed phases.
+        if ('executionPodName' in evt.payload) {
+          const rawPod = evt.payload['executionPodName'];
+          newState.executionPodName = rawPod === null ? null : rawPod != null ? String(rawPod) : undefined;
+        } else {
+          newState.executionPodName = prev?.executionPodName;
+        }
         map[step] = newState;
       } else if (evt.type === 'review.changes_requested') {
         // Belt-and-suspenders: backend now emits workflow.step for review, but handle the
@@ -679,6 +686,7 @@ export function WorkflowRunPage() {
             runOutcome:     node.id === 'agent' ? runOutcome : undefined,
             runDegraded:    node.id === 'agent' ? runDegraded : undefined,
             hasPendingApproval: node.id === 'agent' ? hasPendingApproval : undefined,
+            executionPodName: planned ? undefined : (executorStates[node.id]?.executionPodName ?? null),
           } as WorkflowNodeData,
           position: { x: 0, y: 0 },
         };
@@ -718,6 +726,7 @@ export function WorkflowRunPage() {
         runOutcome:     def.key === 'agent' ? runOutcome : undefined,
         runDegraded:    def.key === 'agent' ? runDegraded : undefined,
         hasPendingApproval: def.key === 'agent' ? hasPendingApproval : undefined,
+        executionPodName: executorStates[def.key]?.executionPodName ?? null,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));

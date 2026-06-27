@@ -7,6 +7,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -59,6 +60,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly ICollectiveAssemblyPipeline _pipeline;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IPodNameRegistry? _podRegistry;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
@@ -75,7 +77,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IServiceProvider serviceProvider,
         IHostApplicationLifetime lifetime,
         ILogger<CoordinatorAssemblyService> logger,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IPodNameRegistry? podRegistry = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -84,6 +87,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _pipeline = pipeline;
         _scopeFactory = scopeFactory;
         _serviceProvider = serviceProvider;
+        _podRegistry = podRegistry;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;

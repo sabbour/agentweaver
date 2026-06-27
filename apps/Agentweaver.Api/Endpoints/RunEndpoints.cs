@@ -14,6 +14,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
@@ -556,6 +557,7 @@ app.MapGet("/api/runs/{id}/graph", async (
     SqliteRunStore runStore,
     RunWorkflowFactory workflowFactory,
     CoordinatorRunService coordinator,
+    IPodNameRegistry podRegistry,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -583,13 +585,27 @@ app.MapGet("/api/runs/{id}/graph", async (
     {
         var plan = await coordinator.GetWorkPlanAsync(id, ct);
         return Results.Ok(plan is not null
-            ? CoordinatorGraphDescriptor.Build(plan)
+            ? CoordinatorGraphDescriptor.Build(plan, podRegistry)
             : CoordinatorGraphDescriptor.BuildEmpty(id));
     }
 
     try
     {
         var descriptor = await workflowFactory.GetGraphDescriptorAsync(run, ct);
+
+        // Per-run graph: all workflow steps execute in the same run's pod.
+        // Populate executionPodName on every node when the pod is registered (today: sandbox claim
+        // bound by KubernetesSandboxExecutor). Post-P1/P3 the registry will hold the worker pod for
+        // every dispatched run, so this field starts carrying the correct per-pod value automatically.
+        var runPodName = podRegistry.TryGet(id);
+        if (runPodName is not null)
+        {
+            var patchedNodes = descriptor.Nodes
+                .Select(n => n with { ExecutionPodName = runPodName })
+                .ToArray();
+            descriptor = descriptor with { Nodes = patchedNodes };
+        }
+
         return Results.Ok(descriptor);
     }
     catch (ReviewPolicyCompositionException ex)
