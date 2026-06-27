@@ -3,9 +3,13 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 COPY ["apps/Agentweaver.Api/Agentweaver.Api.csproj", "apps/Agentweaver.Api/"]
+COPY ["apps/Agentweaver.Api.Data/Agentweaver.Api.Data.csproj", "apps/Agentweaver.Api.Data/"]
+COPY ["apps/Agentweaver.Api.Migrations.Postgres/Agentweaver.Api.Migrations.Postgres.csproj", "apps/Agentweaver.Api.Migrations.Postgres/"]
 COPY ["packages/", "packages/"]
 
 COPY apps/Agentweaver.Api/ apps/Agentweaver.Api/
+COPY apps/Agentweaver.Api.Data/ apps/Agentweaver.Api.Data/
+COPY apps/Agentweaver.Api.Migrations.Postgres/ apps/Agentweaver.Api.Migrations.Postgres/
 COPY packages/ packages/
 
 RUN dotnet restore "apps/Agentweaver.Api/Agentweaver.Api.csproj"
