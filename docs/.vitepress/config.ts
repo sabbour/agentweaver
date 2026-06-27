@@ -20,6 +20,7 @@ export default withMermaid({
       { text: 'Reference', link: '/reference/api' },
       { text: 'Architecture', link: '/architecture/overview' },
       { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
+      { text: 'Experience', link: '/experience/' },
     ],
     sidebar: {
       '/guide/': [
@@ -66,6 +67,23 @@ export default withMermaid({
             { text: 'Sandbox', link: '/architecture/sandbox' },
             { text: 'Events', link: '/architecture/events' },
             { text: 'AKS Architecture', link: '/architecture-aks' },
+          ],
+        },
+      ],
+      '/experience/': [
+        {
+          text: 'Experience',
+          items: [
+            { text: 'Overview', link: '/experience/00-overview' },
+            { text: 'Onboarding & auth', link: '/experience/onboarding-auth' },
+            { text: 'Projects', link: '/experience/projects' },
+            { text: 'Runs, board & watch', link: '/experience/runs-board-watch' },
+            { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
+            { text: 'Review, workspace & merge', link: '/experience/review-workspace-merge' },
+            { text: 'Team, casting & memory', link: '/experience/team-casting-memory' },
+            { text: 'Workflows & backlog', link: '/experience/workflows-backlog' },
+            { text: 'Operations', link: '/experience/operations' },
+            { text: 'MCP client', link: '/experience/mcp-client' },
           ],
         },
       ],
