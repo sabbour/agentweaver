@@ -157,7 +157,11 @@ public sealed class McpRefreshTokenStore
             return false;
 
         var now = DateTimeOffset.UtcNow;
-        return await _db.McpRevokedJtis.AnyAsync(j => j.Jti == jti && j.ExpiresAt > now, ct).ConfigureAwait(false);
+        // Jti is unique+indexed; the EF Core SQLite provider cannot translate
+        // DateTimeOffset ordering comparisons (>, <), so fetch by Jti and compare expiry in memory.
+        var entry = await _db.McpRevokedJtis
+            .FirstOrDefaultAsync(j => j.Jti == jti, ct).ConfigureAwait(false);
+        return entry is not null && entry.ExpiresAt > now;
     }
 
     private async Task RevokeChainAsync(string chainId, DateTimeOffset at, CancellationToken ct)
