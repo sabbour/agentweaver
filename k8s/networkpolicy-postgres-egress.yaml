@@ -1,0 +1,31 @@
+# NetworkPolicy — Allow API and MCP pods to reach the PostgreSQL Flexible Server on port 5432.
+#
+# The Flexible Server is VNet-integrated into the aks-postgres delegated subnet (10.225.0.0/28).
+# Without this rule, the default-deny-egress-apps policy blocks port 5432 from the API pod.
+#
+# Scope: only the API pod needs direct Postgres access (reads/writes via EF Core).
+# MCP and frontend pods do NOT connect to Postgres directly.
+#
+# NOTE: The CIDR 10.225.0.0/28 is the delegated subnet for the Flexible Server.
+#       If the subnet address changes, update this ipBlock.cidr accordingly.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-postgres-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-api
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.225.0.0/28
+      ports:
+        - protocol: TCP
+          port: 5432

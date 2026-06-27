@@ -1,6 +1,7 @@
 using System.Text.Encodings.Web;
 using k8s;
 using LibGit2Sharp;
+using Agentweaver.Api;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.SandboxExec;
 using Microsoft.EntityFrameworkCore;
@@ -25,6 +26,8 @@ using Agentweaver.Squad.Squad;
 using Agentweaver.Squad.Analysis;
 using Agentweaver.Squad.Sync;
 using Agentweaver.Api.Endpoints;
+using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.Tools;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Api.ReviewPolicies;
 
@@ -42,6 +45,9 @@ Agentweaver.Api.Security.TestingBypassGuard.EnsureNotEnabledInProduction(
 Agentweaver.Api.Security.OAuthConfigGuard.EnsureProductionIssuerAudiencePinned(
     builder.Environment, builder.Configuration);
 
+var appRole = AppRole.Resolve(builder.Configuration);
+var isWorker = appRole == AppRole.Worker;
+
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -49,27 +55,32 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 // CORS
-var allowedOrigins = builder.Configuration
-    .GetSection("Cors:AllowedOrigins")
-    .Get<string[]>() ?? [];
+if (!isWorker)
+{
+    var allowedOrigins = builder.Configuration
+        .GetSection("Cors:AllowedOrigins")
+        .Get<string[]>() ?? [];
 
-builder.Services.AddCors(options =>
-    options.AddDefaultPolicy(policy =>
-        policy.WithOrigins(allowedOrigins)
-              .AllowAnyHeader()
-              .AllowAnyMethod()));
+    builder.Services.AddCors(options =>
+        options.AddDefaultPolicy(policy =>
+            policy.WithOrigins(allowedOrigins)
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()));
+}
 
 // Infrastructure
+// For the Postgres provider, SQLite stores are replaced by EF-backed stores registered below.
+// SqliteDb is still registered so SQLite-dependent singletons that aren't yet migrated compile fine;
+// it is harmless when Postgres is used (the DB is simply never opened).
 builder.Services.AddSingleton<SqliteDb>();
 builder.Services.AddSingleton<SqliteRunStore>();
+builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<SqliteRunStore>());
 builder.Services.AddSingleton<SqliteRunRevisionStore>();
 builder.Services.AddSingleton<SqliteWorkflowRunStore>();
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
-// Durable, pub/sub run event log (016-run-event-stream). Two-layer: synchronous SQLite
-// write-through for durability + an in-process Channel<RunEvent> per run for low-latency
-// tailing. RunStreamStore is retained as the live fan-out path pending 016-us2/us3 migration.
-builder.Services.AddSingleton<IRunEventStream, SqliteRunEventStream>();
+// IRunEventStream is registered conditionally in the Database:Provider block below.
+// SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + serializable tx).
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
 
@@ -136,27 +147,43 @@ builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpClientStore>();
 // /oauth/token can be probed at volume, so apply a fixed-window limiter (20 req/min per client IP).
 // Scoped to the "oauth" policy below — the .well-known metadata and JWKS are intentionally NOT
 // limited so discovery stays cheap and never throttles conformant clients.
-builder.Services.AddRateLimiter(options =>
+if (!isWorker)
 {
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy(OAuthServerEndpoints.RateLimitPolicy, httpContext =>
+    builder.Services.AddRateLimiter(options =>
     {
-        var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey,
-            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 20,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst,
-            });
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        options.AddPolicy(OAuthServerEndpoints.RateLimitPolicy, httpContext =>
+        {
+            var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey,
+                _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 20,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst,
+                });
+        });
     });
-});
+}
 
 // Project infrastructure (must be before AddAgentRuntime)
-builder.Services.AddSingleton<SqliteProjectStore>();
-builder.Services.AddSingleton<IProjectStore>(sp => sp.GetRequiredService<SqliteProjectStore>());
+// Provider-aware: Postgres uses EF stores; SQLite uses raw ADO.NET stores.
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    var _isPostgres = _provider is "postgres" or "postgresql";
+    if (_isPostgres)
+    {
+        builder.Services.AddSingleton<EfProjectStore>();
+        builder.Services.AddSingleton<IProjectStore>(sp => sp.GetRequiredService<EfProjectStore>());
+    }
+    else
+    {
+        builder.Services.AddSingleton<SqliteProjectStore>();
+        builder.Services.AddSingleton<IProjectStore>(sp => sp.GetRequiredService<SqliteProjectStore>());
+    }
+}
 builder.Services.AddSingleton<LocalFilesystemWorkspaceProvider>();
 builder.Services.AddSingleton<PersistentVolumeWorkspaceProvider>();
 builder.Services.AddSingleton<IProjectWorkspaceProvider>(sp =>
@@ -173,8 +200,21 @@ builder.Services.AddSingleton<ProjectGitInitializer>();
 builder.Services.AddSingleton<ProjectService>();
 
 // Backlog & Kanban board (Feature 009)
-builder.Services.AddSingleton<SqliteBacklogTaskStore>();
-builder.Services.AddSingleton<IBacklogTaskStore>(sp => sp.GetRequiredService<SqliteBacklogTaskStore>());
+// Provider-aware: Postgres uses EfBacklogTaskStore; SQLite uses SqliteBacklogTaskStore.
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    var _isPostgres = _provider is "postgres" or "postgresql";
+    if (_isPostgres)
+    {
+        builder.Services.AddSingleton<EfBacklogTaskStore>();
+        builder.Services.AddSingleton<IBacklogTaskStore>(sp => sp.GetRequiredService<EfBacklogTaskStore>());
+    }
+    else
+    {
+        builder.Services.AddSingleton<SqliteBacklogTaskStore>();
+        builder.Services.AddSingleton<IBacklogTaskStore>(sp => sp.GetRequiredService<SqliteBacklogTaskStore>());
+    }
+}
 builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
     sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
@@ -289,31 +329,77 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
 
 // Memory database (EF Core, separate file from main SQLite DB).
 // Database:Provider controls the backend: sqlite (default), sqlserver/azuresql, postgres/postgresql.
-builder.Services.AddDbContext<MemoryDbContext>(opts =>
+// For postgres: use AddDbContextFactory (thread-safe, per-call contexts) with migrations assembly
+// Agentweaver.Api.Migrations.Postgres. For other providers: use AddDbContext (scoped).
 {
-    var provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
-    switch (provider)
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    var _isPostgres = _provider is "postgres" or "postgresql";
+
+    void ConfigureOpts(DbContextOptionsBuilder opts)
     {
-        case "sqlserver":
-        case "azuresql":
-            opts.UseSqlServer(builder.Configuration.GetConnectionString("MemoryDb")
-                ?? builder.Configuration["Database:ConnectionString"]
-                ?? throw new InvalidOperationException("Database:ConnectionString is required for SQL Server provider."));
-            break;
-        case "postgres":
-        case "postgresql":
-            opts.UseNpgsql(builder.Configuration.GetConnectionString("MemoryDb")
-                ?? builder.Configuration["Database:ConnectionString"]
-                ?? throw new InvalidOperationException("Database:ConnectionString is required for PostgreSQL provider."));
-            break;
-        default: // sqlite
-            var basePath = builder.Configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
-                ? Path.GetDirectoryName(Path.GetFullPath(p))!
-                : AppPaths.DataDirectory;
-            opts.UseSqlite($"Data Source={Path.Combine(basePath, "memory.db")}");
-            break;
+        switch (_provider)
+        {
+            case "sqlserver":
+            case "azuresql":
+                opts.UseSqlServer(builder.Configuration.GetConnectionString("MemoryDb")
+                    ?? builder.Configuration["Database:ConnectionString"]
+                    ?? throw new InvalidOperationException("Database:ConnectionString is required for SQL Server provider."));
+                break;
+            case "postgres":
+            case "postgresql":
+                opts.UseNpgsql(
+                    builder.Configuration.GetConnectionString("Postgres")
+                        ?? builder.Configuration.GetConnectionString("MemoryDb")
+                        ?? builder.Configuration["Database:ConnectionString"]
+                        ?? throw new InvalidOperationException("ConnectionStrings:Postgres (or MemoryDb / Database:ConnectionString) is required for PostgreSQL provider."),
+                    npg => npg.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres"));
+                break;
+            default: // sqlite
+                var basePath = builder.Configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
+                    ? Path.GetDirectoryName(Path.GetFullPath(p))!
+                    : AppPaths.DataDirectory;
+                opts.UseSqlite($"Data Source={Path.Combine(basePath, "memory.db")}");
+                break;
+        }
     }
-});
+
+    if (_isPostgres)
+    {
+        // Factory pattern: each store call gets a fresh DbContext — required for concurrent access
+        // from singleton stores (EfRunStore, EfProjectStore, etc.)
+        builder.Services.AddDbContextFactory<MemoryDbContext>(ConfigureOpts);
+        // Also register a scoped DbContext for scoped services (McpRefreshTokenStore etc.)
+        builder.Services.AddDbContext<MemoryDbContext>(ConfigureOpts);
+
+        // EF-backed singleton stores (provider-independent, use IDbContextFactory)
+        builder.Services.AddSingleton<EfRunStore>();
+        builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<EfRunStore>());
+        builder.Services.AddSingleton<EfRunRevisionStore>();
+        builder.Services.AddSingleton<EfWorkflowRunStore>();
+        builder.Services.AddSingleton<EfCastProposalStore>();
+
+        // Durable pub/sub event stream backed by EF + Postgres (two-layer: serializable tx + channel)
+        builder.Services.AddSingleton<IRunEventStream, EfRunEventStream>();
+
+        // Data migrator (SQLite → Postgres)
+        builder.Services.AddSingleton<SqliteToPostgresMigrator>();
+    }
+    else
+    {
+        builder.Services.AddDbContext<MemoryDbContext>(ConfigureOpts);
+        // Durable pub/sub event stream backed by raw SQLite WAL write-through + channel
+        builder.Services.AddSingleton<IRunEventStream, SqliteRunEventStream>();
+    }
+}
+
+// Run lease store: Postgres CAS-based for multi-replica; no-op for SQLite (single-replica safe).
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    if (_provider is "postgres" or "postgresql")
+        builder.Services.AddSingleton<IRunLeaseStore, PostgresRunLeaseStore>();
+    else
+        builder.Services.AddSingleton<IRunLeaseStore, NoOpRunLeaseStore>();
+}
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
 builder.Services.AddSingleton<Agentweaver.Api.Projects.ProjectWorkspaceService>();
@@ -322,8 +408,22 @@ builder.Services.AddSingleton<Agentweaver.Api.Projects.ProjectWorkspaceService>(
 builder.Services.AddHostedService<CheckpointGcService>();
 
 // Casting
+// Provider-aware: Postgres uses EfCastProposalStore; SQLite uses CastProposalStore.
+// Both implement ICastProposalStore.
 builder.Services.AddSingleton<CatalogReader>();
-builder.Services.AddSingleton<CastProposalStore>();
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    if (_provider is "postgres" or "postgresql")
+    {
+        // EfCastProposalStore already registered in the Postgres block above.
+        builder.Services.AddSingleton<ICastProposalStore>(sp => sp.GetRequiredService<EfCastProposalStore>());
+    }
+    else
+    {
+        builder.Services.AddSingleton<CastProposalStore>();
+        builder.Services.AddSingleton<ICastProposalStore>(sp => sp.GetRequiredService<CastProposalStore>());
+    }
+}
 builder.Services.AddSingleton<ProjectSignalScanner>();
 builder.Services.AddSingleton<CastingService>();
 
@@ -339,7 +439,13 @@ builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>()
 
 var app = builder.Build();
 
-await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
+// For Postgres, skip SqliteDb.EnsureCreatedAsync (agentweaver.db tables are in MemoryDbContext).
+// For SQLite/other providers, run EnsureCreatedAsync as before.
+var _startupProvider = app.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+if (_startupProvider is not ("postgres" or "postgresql"))
+{
+    await app.Services.GetRequiredService<SqliteDb>().EnsureCreatedAsync();
+}
 
 using (var scope = app.Services.CreateScope())
 {
@@ -400,6 +506,21 @@ using (var scope = app.Services.CreateScope())
     // On a fresh install or an already-migrated DB this is the normal migration path.
     await memoryDb.Database.MigrateAsync();
 }
+
+// --migrate-data: run SQLite → Postgres data migration then exit.
+if (args.Contains("--migrate-data"))
+{
+    var migrator = app.Services.GetService<SqliteToPostgresMigrator>();
+    if (migrator is null)
+    {
+        Console.Error.WriteLine("--migrate-data requires Database:Provider=postgres.");
+        Environment.Exit(1);
+        return;
+    }
+    await migrator.RunAsync(CancellationToken.None);
+    Environment.Exit(0);
+    return;
+}
 await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
 
 // Startup mount-health warning: log early if the persistent-volume root is missing or read-only.
@@ -427,36 +548,44 @@ await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorRun
 await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorReconciler>()
     .SweepAsync(CancellationToken.None);
 
-app.UseExceptionHandler(err => err.Run(async context =>
+if (isWorker)
 {
-    context.Response.StatusCode = 500;
-    context.Response.ContentType = "application/json";
-    await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred." });
-}));
+    app.MapGet("/healthz", () => Results.Ok(new { status = "ok", role = AppRole.Worker }));
+    app.MapGet("/readyz", () => Results.Ok(new { status = "ready", role = AppRole.Worker }));
+}
+else
+{
+    app.UseExceptionHandler(err => err.Run(async context =>
+    {
+        context.Response.StatusCode = 500;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred." });
+    }));
 
-app.UseCors();
-app.UseRateLimiter();
-app.UseMiddleware<GitHubTokenAuthMiddleware>();
-app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
+    app.UseCors();
+    app.UseRateLimiter();
+    app.UseMiddleware<GitHubTokenAuthMiddleware>();
+    app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
 
-app.MapRunEndpoints();
-app.MapProjectEndpoints();
-app.MapProjectWorkspaceEndpoints();
-app.MapBacklogEndpoints();
-app.MapBacklogDecomposeEndpoints();
-app.MapCoordinatorEndpoints();
-app.MapCastingEndpoints();
-app.MapBlueprintEndpoints();
-app.MapTeamEndpoints();
-app.MapAuthEndpoints();
-app.MapOAuthServerEndpoints();
-app.MapDecisionsEndpoints();
-app.MapMemoryEndpoints();
-app.MapWorkflowDefinitionEndpoints();
-app.MapReviewPolicyEndpoints();
-app.MapDiagnosticsEndpoints();
-app.MapMetricsEndpoints();
-app.MapSandboxEndpoints();
+    app.MapRunEndpoints();
+    app.MapProjectEndpoints();
+    app.MapProjectWorkspaceEndpoints();
+    app.MapBacklogEndpoints();
+    app.MapBacklogDecomposeEndpoints();
+    app.MapCoordinatorEndpoints();
+    app.MapCastingEndpoints();
+    app.MapBlueprintEndpoints();
+    app.MapTeamEndpoints();
+    app.MapAuthEndpoints();
+    app.MapOAuthServerEndpoints();
+    app.MapDecisionsEndpoints();
+    app.MapMemoryEndpoints();
+    app.MapWorkflowDefinitionEndpoints();
+    app.MapReviewPolicyEndpoints();
+    app.MapDiagnosticsEndpoints();
+    app.MapMetricsEndpoints();
+    app.MapSandboxEndpoints();
+}
 
 app.Run();
 

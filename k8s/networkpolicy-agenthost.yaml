@@ -1,8 +1,15 @@
 # NetworkPolicy — A2A ingress to AgentHost (sandbox) pods.
 #
 # H2 (spec-018): scoped INGRESS to agentweaver-sandbox pods on ONLY the A2A
-# port (8088), from ONLY agentweaver-api (worker/API) pods — label-selector
-# scoped.  No other source may reach the A2A listener.
+# port (8088), from the worker and API pods — label-selector scoped.
+# No other source may reach the A2A listener.
+#
+# Sources:
+#   - agentweaver-worker: primary dispatcher (worker role owns RunWatchLoopService +
+#     KubernetesSandboxExecutor — calls sandbox agent pods over A2A mTLS after claiming a run)
+#   - agentweaver-api: fallback dispatcher (in-api / default mode where the web pod
+#     runs the orchestration loop directly — keeps working during Postgres cutover and
+#     as a rollback path per platform-deployment.md §5 rollback note)
 #
 # Relationship to existing policies:
 #   - networkpolicy-sandbox.yaml `sandbox-deny-ingress` provides the default
@@ -27,12 +34,15 @@ spec:
     - Ingress
   ingress:
     - from:
-        # Only pods labelled app: agentweaver-api (the worker/API tier).
-        # All other sources remain blocked by the default-deny base policy.
+        # agentweaver-worker: primary A2A caller (spec-018 P3 worker role).
+        - podSelector:
+            matchLabels:
+              app: agentweaver-worker
+        # agentweaver-api: retained for in-api/default dispatch mode and rollback.
         - podSelector:
             matchLabels:
               app: agentweaver-api
       ports:
-        # A2A HTTPS listener only.  No other port is opened.
+        # A2A HTTPS/mTLS listener only.  No other port is opened.
         - protocol: TCP
           port: 8088

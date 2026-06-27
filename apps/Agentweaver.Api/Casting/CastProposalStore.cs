@@ -13,7 +13,7 @@ namespace Agentweaver.Api.Casting;
 /// Proposals expire after 30 minutes. An in-memory index provides fast path reads
 /// while SQLite provides durability across restarts.
 /// </summary>
-public sealed class CastProposalStore
+public sealed class CastProposalStore : ICastProposalStore
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(30);
 

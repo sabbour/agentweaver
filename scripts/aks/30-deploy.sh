@@ -109,6 +109,10 @@ apply_rendered networkpolicy-sandbox.yaml
 apply_rendered networkpolicy-agenthost.yaml
 apply_rendered cilium-network-policy-sandbox.yaml
 apply_rendered serviceentry-telemetry.yaml
+# spec-018 P2: Allow API pods to reach PostgreSQL Flexible Server on port 5432.
+apply_rendered networkpolicy-postgres-egress.yaml
+# spec-018 P3: Worker-tier egress policies (DNS, HTTPS, internal, Postgres, OTEL).
+apply_rendered networkpolicy-worker.yaml
 
 echo ""
 echo "Applying services, gateway, routes, and backup jobs..."
@@ -154,6 +158,17 @@ apply_rendered frontend-deployment.yaml
 apply_rendered mcp-deployment.yaml
 
 echo ""
+# spec-018 P3: Worker Deployment + autoscaling.
+# ORDERING NOTE: Apply worker AFTER api-deployment so the agentweaver-api service
+# (Agentweaver__ApiBaseUrl target) is already present. The worker init container
+# runs EF migrations against Postgres; it will restart until Tank's Postgres migration
+# set is merged + the image is rebuilt. This is safe — web tier (api-deployment) keeps
+# serving on SQLite in the meantime.
+echo "Applying worker deployment and HPA (spec-018 P3)..."
+apply_rendered worker-deployment.yaml
+apply_rendered worker-hpa.yaml
+
+echo ""
 echo "Waiting for API deployment rollout..."
 kubectl rollout status deployment/agentweaver-api --namespace "${NAMESPACE}" --timeout=180s
 
@@ -162,6 +177,13 @@ kubectl rollout status deployment/agentweaver-frontend --namespace "${NAMESPACE}
 
 echo "Waiting for MCP deployment rollout..."
 kubectl rollout status deployment/agentweaver-mcp --namespace "${NAMESPACE}" --timeout=120s
+
+echo "Waiting for Worker deployment rollout..."
+# Worker init container runs EF Postgres migrations — allow extra time.
+# If Tank's Postgres migration set is not yet merged, this will timeout but is non-fatal
+# (web tier is healthy; worker will come up once migrations are applied).
+kubectl rollout status deployment/agentweaver-worker --namespace "${NAMESPACE}" --timeout=300s || \
+  echo "  WARNING: Worker rollout did not complete within 300s. Check: kubectl logs -n ${NAMESPACE} -l app=agentweaver-worker --all-containers"
 
 echo ""
 echo "==================================================="

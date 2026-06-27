@@ -147,7 +147,7 @@ app.MapPost("/api/projects/{id}/casting/proposals", async (
 // GET /api/projects/{id}/casting/proposals — list active proposals for a project
 app.MapGet("/api/projects/{id}/casting/proposals", (
     string id,
-    CastProposalStore proposalStore) =>
+    ICastProposalStore proposalStore) =>
 {
     var proposals = proposalStore.ListByProject(id);
     return Results.Ok(proposals.Select(p => CastingMappings.ToDto(p.Proposal)));
@@ -157,7 +157,7 @@ app.MapGet("/api/projects/{id}/casting/proposals", (
 app.MapGet("/api/projects/{id}/casting/proposals/{proposalId}", (
     string id,
     string proposalId,
-    CastProposalStore proposalStore) =>
+    ICastProposalStore proposalStore) =>
 {
     var (proposal, _) = proposalStore.Get(id, proposalId);
     if (proposal is null) return Results.NotFound();

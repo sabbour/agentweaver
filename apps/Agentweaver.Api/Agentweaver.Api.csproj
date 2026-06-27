@@ -1,10 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
+    <ProjectReference Include="..\Agentweaver.Api.Data\Agentweaver.Api.Data.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.Domain\Agentweaver.Domain.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.SandboxFs\Agentweaver.SandboxFs.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.Squad\Agentweaver.Squad.csproj" />
+    <!-- spec-018 P2: Postgres migrations assembly. Referenced so the DLL is copied to output
+         and can be loaded at runtime via MigrationsAssembly("Agentweaver.Api.Migrations.Postgres"). -->
+    <ProjectReference Include="..\Agentweaver.Api.Migrations.Postgres\Agentweaver.Api.Migrations.Postgres.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -349,6 +349,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new TestHostApplicationLifetime(),
             config,
             scopeFactory,
+            new NoOpRunLeaseStore(),
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
         return new WorkflowRestartService(

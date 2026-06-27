@@ -1,0 +1,128 @@
+# worker-hpa.yaml — Autoscaling for the agentweaver-worker Deployment.
+#
+# CURRENT: CPU-based HPA (min 1 / max 3, target 70% CPU utilization).
+# This is the fallback per platform-deployment.md §2.3: "if KEDA is unavailable,
+# fall back to an HPA on a custom 'queued runs' metric exported via OTEL/Prometheus".
+#
+# RECOMMENDED UPGRADE PATH (when KEDA is confirmed available on the cluster):
+# Replace this HPA with a KEDA ScaledObject using a PostgreSQL scaler:
+#
+#   apiVersion: keda.sh/v1alpha1
+#   kind: ScaledObject
+#   metadata:
+#     name: agentweaver-worker-keda
+#     namespace: agentweaver
+#   spec:
+#     scaleTargetRef:
+#       name: agentweaver-worker
+#     minReplicaCount: 1
+#     maxReplicaCount: 5
+#     pollingInterval: 15
+#     cooldownPeriod: 60
+#     triggers:
+#       - type: postgresql
+#         metadata:
+#           targetQueryValue: "5"         # scale out when >5 unleased queued runs per replica
+#           activationTargetQueryValue: "1"
+#           query: >
+#             SELECT count(*) FROM runs
+#             WHERE state = 'queued' AND lease_id IS NULL
+#           connectionFromEnv: ConnectionStrings__Postgres
+#
+# The exact query/threshold is a contract with Tank's lease schema (data-postgres-migration.md §3).
+# Coordinate with Tank before enabling KEDA scaling.
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agentweaver-worker-hpa
+  namespace: agentweaver
+  labels:
+    app: agentweaver-worker
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agentweaver-worker
+  # min 1: workers must always be running to drain leases (never scale-to-zero).
+  # max 3: conservative ceiling for staging; raise once quota.yaml ceilings are adjusted
+  #        (platform-deployment.md §3.2) and KEDA/lease-depth scaling is validated.
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Worker is I/O-bound (DB + K8s API + sandbox dispatch), not CPU-bound.
+          # 70% target is conservative to trigger scale-out before queues back up.
+          # Replace with queue-depth KEDA trigger once the lease schema is stable.
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 120  # Don't thrash scale-down during bursty workloads.
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30
+---
+# PDB — allow at most one worker pod to be unavailable at a time.
+# Ensures lease drain happens one pod at a time; avoids simultaneous lease expiry
+# across all replicas during node maintenance (platform-deployment.md §2.4).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentweaver-worker-pdb
+  namespace: agentweaver
+  labels:
+    app: agentweaver-worker
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: agentweaver-worker
+---
+# Web-tier scaling note (post-Postgres-cutover):
+#
+# Once Database__Provider=Postgres is active on the web tier (api-deployment.yaml):
+#   1. Remove the agentweaver-data PVC mount + pvc-data.yaml from 30-deploy.sh.
+#   2. Change api-deployment.yaml strategy: Recreate → RollingUpdate.
+#   3. Set api-deployment.yaml replicas: 2 (or wire a web HPA, example below).
+#   4. The web tier is then CPU/request-rate scalable with no single-writer constraint.
+#
+# Example web HPA (apply after cutover):
+#
+#   apiVersion: autoscaling/v2
+#   kind: HorizontalPodAutoscaler
+#   metadata:
+#     name: agentweaver-web-hpa
+#     namespace: agentweaver
+#   spec:
+#     scaleTargetRef:
+#       apiVersion: apps/v1
+#       kind: Deployment
+#       name: agentweaver-api
+#     minReplicas: 2
+#     maxReplicas: 5
+#     metrics:
+#       - type: Resource
+#         resource:
+#           name: cpu
+#           target:
+#             type: Utilization
+#             averageUtilization: 70

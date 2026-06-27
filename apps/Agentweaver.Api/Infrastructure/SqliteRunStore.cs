@@ -5,7 +5,7 @@ using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Infrastructure;
 
-public sealed class SqliteRunStore
+public sealed class SqliteRunStore : IRunStore
 {
     private readonly SqliteDb _db;
     private readonly ILogger<SqliteRunStore>? _logger;

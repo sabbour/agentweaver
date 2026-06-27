@@ -1,37 +1,50 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentweaver-api
+  name: agentweaver-worker
   namespace: agentweaver
   labels:
-    app: agentweaver-api
+    app: agentweaver-worker
     app.kubernetes.io/part-of: agentweaver
 spec:
-  # Single replica: SQLite is single-writer (RWO PVC). Recreate ensures the old
-  # pod releases the disk before the new one attaches (no multi-attach).
+  # Worker is Postgres-backed and stateless w.r.t. storage → safe RollingUpdate.
+  # Min 1 for availability; scale via worker-hpa.yaml.
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
-      app: agentweaver-api
+      app: agentweaver-worker
   template:
     metadata:
       labels:
-        app: agentweaver-api
+        app: agentweaver-worker
         app.kubernetes.io/part-of: agentweaver
         # Required by the Azure Workload Identity webhook to inject the OIDC token volume.
         azure.workload.identity/use: "true"
       annotations:
         secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
     spec:
+      # TODO(spec-018 §2.2): Split to a dedicated 'agentweaver-worker' ServiceAccount
+      # with its own federated credential and least-priv RBAC (sandbox Role only).
+      # Using agentweaver-api SA for now — it already has sandbox RBAC + workload identity.
       serviceAccountName: agentweaver-api
+      # Allow enough time for in-flight runs to checkpoint + release leases before pod exit.
+      # Must exceed the lease TTL (coordinate with Tank's lease schema).
+      terminationGracePeriodSeconds: 120
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
       initContainers:
+        # Run EF migrations against Postgres before the worker starts processing runs.
+        # The worker always uses Postgres (App__Role=worker implies Database__Provider=Postgres).
+        # If Tank's Postgres migration set is not yet generated, this init container will fail;
+        # the pod will restart until the migration set is merged and the image is rebuilt.
         - name: migrate-memory-db
           image: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}
           imagePullPolicy: Always
@@ -42,38 +55,30 @@ spec:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
             - name: HOME
-              value: /data
-            - name: Database__Path
-              value: /data/agentweaver.db
+              value: /tmp
             - name: TMPDIR
               value: /tmp
             - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
               value: /tmp/.net
-            # EF design-time host build runs Program.Main, which trips OAuthConfigGuard.
-            # Pin Issuer/Audience here too so `efbundle` migrations pass the Production guard.
-            - name: Auth__OAuth__Issuer
-              value: https://${HOST}
-            - name: Auth__OAuth__Audience
-              value: https://${HOST}/mcp
-            # spec-018 P2: Postgres connection for efbundle when Database__Provider=Postgres.
-            # Keep optional: true so efbundle continues to work against SQLite today.
+            # Worker runs efbundle against Postgres, not SQLite.
             - name: Database__Provider
-              value: "sqlite"
+              value: "Postgres"
             - name: ConnectionStrings__MemoryDb
               valueFrom:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-                  optional: true
             - name: ConnectionStrings__Postgres
               valueFrom:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-                  optional: true
+            # OAuthConfigGuard fires in Production during efbundle host build.
+            - name: Auth__OAuth__Issuer
+              value: https://${HOST}
+            - name: Auth__OAuth__Audience
+              value: https://${HOST}/mcp
           volumeMounts:
-            - name: data
-              mountPath: /data
             - name: tmp
               mountPath: /tmp
           securityContext:
@@ -83,7 +88,7 @@ spec:
               drop:
                 - ALL
       containers:
-        - name: api
+        - name: worker
           image: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}
           imagePullPolicy: Always
           command:
@@ -91,64 +96,74 @@ spec:
             - -c
             - |
               set -eu
-              export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
-              export Mcp__ApiKey="${Auth__ApiKey}"
+              # Worker needs GitHub credentials for repo operations (clone, worktree, PR).
+              # OAuth signing key and MCP API key are web-tier concerns — not read here.
               export GitHub__ClientId="$(cat /mnt/secrets-store/github-client-id)"
               export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
               export Auth__GitHub__ClientId="${GitHub__ClientId}"
               export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
-              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
-            - name: http
-              containerPort: 8080
+            - name: http-worker
+              containerPort: 8081
               protocol: TCP
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
-            - name: HOME
-              value: /data
-            - name: Database__Path
-              value: /data/agentweaver.db
+            # Role flag — selects worker code path (claim runs, run MAF, dispatch sandboxes).
+            # App__Role is the contract key per platform-deployment.md §2; Tank matches this.
+            - name: App__Role
+              value: worker
+            # Worker listens on 8081 (dedicated port, no external ingress via gateway).
+            - name: ASPNETCORE_URLS
+              value: http://+:8081
+            # Workspace shared with sandbox pods via RWX PVC.
             - name: Workspace__Path
               value: /workspace
-            # In-process loopback base URL for agent decision/memory/inbox tools and Scribe.
-            # The API binds 8080 (ASPNETCORE_URLS); without this they default to the dead :5000
-            # port → connection refused → "Tool execution failed". Explicit override of the
-            # code-level binding-derivation fallback.
-            - name: Agentweaver__ApiBaseUrl
-              value: http://localhost:8080
             - name: Workspace__Provider
               value: persistent-volume
             - name: Workspace__PersistentVolume__MountRoot
               value: /workspace
+            # Worker calls API (web tier) for intra-cluster lookups — route via ClusterIP service.
+            - name: Agentweaver__ApiBaseUrl
+              value: http://agentweaver-api:8080
+            # Sandbox dispatch (KubernetesSandboxExecutor path — kube-exec-stdio).
             - name: Sandbox__Backend
               value: kubernetes
             - name: Sandbox__Kubernetes__Namespace
               value: agentweaver
             - name: Sandbox__Kubernetes__TemplateRef
               value: agentweaver-sandbox
-            - name: Auth__User
-              value: agentweaver-mcp
+            # GitHub OAuth metadata (callback/frontend for any per-run GitHub auth flows).
             - name: Auth__GitHub__AllowedOrg
               value: microsoft
             - name: Auth__GitHub__CallbackUrl
               value: https://${HOST}/auth/github/callback
             - name: Auth__GitHub__FrontendUrl
               value: https://${HOST}/
-            # OAuth 2.1 Authorization Server config (RFC 8414 / RFC 9728)
-            # Issuer must match the public host so iss claim == AS metadata URL.
+            # OAuth AS metadata — worker may need to validate inbound tokens.
             - name: Auth__OAuth__Issuer
               value: https://${HOST}
-            # Audience bound to the MCP resource (RFC 8707); RS validates aud on every request.
             - name: Auth__OAuth__Audience
               value: https://${HOST}/mcp
-            # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
-            # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
-            - name: Auth__Mcp__AllowGitHubPassthrough
-              value: "true"
+            # Postgres (worker always uses Postgres — it is the run-state owner).
+            # Flip Database__Provider to "sqlite" ONLY as an emergency rollback; doing so
+            # will break run leasing since the lease schema is Postgres-specific.
+            - name: Database__Provider
+              value: "Postgres"
+            - name: ConnectionStrings__MemoryDb
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+            - name: ConnectionStrings__Postgres
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+            # OTEL telemetry — same endpoint as the web tier.
             - name: OTEL_SERVICE_NAME
-              value: agentweaver-api
+              value: agentweaver-worker
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: service.namespace=agentweaver,deployment.environment=production
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -157,42 +172,23 @@ spec:
               value: grpc
             - name: TMPDIR
               value: /tmp
-            # H1 (spec-018): paths for worker mTLS client cert used by RemoteAgentProxy
-            # when dialing the AgentHost A2A endpoint.  Morpheus wires these into
-            # the HttpClientHandler that backs the A2AAgent / IA2AClient.
+            # A2A mTLS client cert (spec-018 H1) — the worker connects to each sandbox agent pod
+            # over A2A on TCP 8088 using mutual TLS.  The worker presents tls.crt/tls.key as the
+            # client certificate; ca.crt is the trust anchor for the AgentHost server cert.
+            # Transport: direct HTTPS/mTLS to the sandbox pod's A2A listener on port 8088
+            # (NOT kube-exec-stdio — that option was rejected; A2A over TCP 8088 is the transport).
+            # Egress to port 8088 is opened in networkpolicy-worker.yaml (allow-worker-agenthost-egress).
+            # Ingress to sandbox pods is opened in networkpolicy-agenthost.yaml (from agentweaver-worker).
             - name: Sandbox__A2A__ClientCertPath
               value: /mnt/a2a-client-tls/tls.crt
             - name: Sandbox__A2A__ClientKeyPath
               value: /mnt/a2a-client-tls/tls.key
             - name: Sandbox__A2A__CACertPath
               value: /mnt/a2a-client-tls/ca.crt
-            # H4: A2A port — must match the Kestrel endpoint in configmap-agenthost.yaml.
             - name: Sandbox__A2A__Port
               value: "8088"
-            # spec-018 P2: PostgreSQL Flexible Server connection config.
-            # Database__Provider=Postgres activates the Npgsql provider in Program.cs:303-307.
-            # Set to "sqlite" (default) until Tank completes the EF Postgres migration set
-            # and the cutover is authorized — flip to "Postgres" to switch.
-            # ConnectionStrings:MemoryDb is the key the current app code reads (Program.cs:305).
-            # ConnectionStrings:Postgres is Tank's planned rename (data-postgres-migration.md §5).
-            # Both point to the same secret value so either key works after the rename.
-            - name: Database__Provider
-              value: "sqlite"
-            - name: ConnectionStrings__MemoryDb
-              valueFrom:
-                secretKeyRef:
-                  name: agentweaver-postgres
-                  key: connectionstring
-                  optional: true
-            - name: ConnectionStrings__Postgres
-              valueFrom:
-                secretKeyRef:
-                  name: agentweaver-postgres
-                  key: connectionstring
-                  optional: true
           volumeMounts:
-            - name: data
-              mountPath: /data
+            # No /data PVC — worker does not use SQLite.
             - name: workspace
               mountPath: /workspace
             - name: tmp
@@ -202,9 +198,6 @@ spec:
             - name: secrets-store
               mountPath: /mnt/secrets-store
               readOnly: true
-            # H1 (spec-018): worker mTLS client cert + CA cert for A2A transport.
-            # RemoteAgentProxy must load tls.crt / tls.key as the client certificate
-            # and ca.crt as the trust anchor when dialing the AgentHost A2A endpoint.
             - name: a2a-client-tls
               mountPath: /mnt/a2a-client-tls
               readOnly: true
@@ -216,32 +209,36 @@ spec:
               cpu: "2"
               memory: 4Gi
           livenessProbe:
+            # Tank: ensure /api/ping responds on port 8081 when App__Role=worker.
             httpGet:
               path: /api/ping
-              port: 8080
-            initialDelaySeconds: 15
-            periodSeconds: 15
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 20
             failureThreshold: 3
           readinessProbe:
+            # Tank: ensure /api/health responds on port 8081 when App__Role=worker.
             httpGet:
               path: /api/health
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 10
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 15
             failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Give in-flight run loops time to checkpoint before the pod is removed from
+                # service endpoints.  30s buffer; terminationGracePeriodSeconds (120s) covers
+                # the full lease-drain window after SIGTERM.
+                command: ["/bin/sh", "-c", "sleep 30"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
-        # TODO(a7-aks-013): production preview sessions require a dedicated preview proxy
-        # service/gateway in front of sandbox pod port-forwards; the API image includes kubectl
-        # only for creating pod-level port-forward sessions.
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: agentweaver-data
+        # No data PVC — worker is SQLite-free by design.
         - name: workspace
           persistentVolumeClaim:
             claimName: agentweaver-workspace
@@ -255,8 +252,6 @@ spec:
             readOnly: true
             volumeAttributes:
               secretProviderClass: agentweaver-secrets
-        # H1 (spec-018): worker mTLS client cert for A2A transport (spec-018).
-        # Secret created by scripts/aks/gen-a2a-mtls-certs.sh.
         - name: a2a-client-tls
           secret:
             secretName: agentweaver-a2a-client-tls

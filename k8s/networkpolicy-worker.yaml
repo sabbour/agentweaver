@@ -1,0 +1,178 @@
+# NetworkPolicy — Egress and ingress rules for agentweaver-worker pods.
+#
+# Worker role owns run leasing, MAF execution, and sandbox dispatch.
+# Egress requirements:
+#   - DNS (port 53) — resolve service names + private Postgres FQDN
+#   - Postgres (port 5432) — run state reads/writes via EF Core/Npgsql
+#   - Internal (port 8080) — call agentweaver-api web service for lookups
+#   - External HTTPS (port 443) — GitHub API, Azure Key Vault, Azure Workload Identity
+#                                   OIDC endpoint, Kubernetes API server (CREATE sandbox pods)
+#   - A2A TCP 8088 — direct mTLS connection to each sandbox agent pod (A2A transport)
+#   - OTEL collector (port 4317) — telemetry export (intra-cluster)
+# Ingress:
+#   - Kubelet health probes on port 8081 bypass NetworkPolicy (Cilium default) — no rule needed.
+#   - No external ingress (worker has no gateway route; internal access via agentweaver-api service).
+---
+# Default-deny egress for the worker pod.
+# Mirrors default-deny-egress-apps in networkpolicy-default-deny.yaml; separate object
+# so it can be applied/removed independently from the web-tier policies.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress-worker
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-worker
+  policyTypes:
+    - Egress
+---
+# DNS egress — needed to resolve internal services, Postgres FQDN, and external hostnames.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-dns-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Internal egress — worker → web API service on port 8080 (lookups, health checks).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-internal-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: agentweaver
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# External HTTPS egress — GitHub API, Azure Key Vault, Workload Identity OIDC endpoint,
+# Azure Postgres AAD auth, and the Kubernetes API server (HTTPS/443 to CREATE sandbox pods
+# via the K8s API — distinct from the A2A TCP 8088 path used to CALL sandbox pods).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-external-https-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-worker
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# A2A egress — worker → sandbox agent pods on TCP 8088 (mTLS).
+# The worker (RunWatchLoopService / KubernetesSandboxExecutor) connects directly to each
+# sandbox agent pod over A2A after claiming a run.  Transport is HTTPS/mTLS on port 8088;
+# the worker presents the client cert from agentweaver-a2a-client-tls.
+# Paired with the ingress rule in networkpolicy-agenthost.yaml (allow-worker-to-agenthost-a2a).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-agenthost-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: agentweaver-sandbox
+      ports:
+        - protocol: TCP
+          port: 8088
+---
+# PostgreSQL egress — worker → Flexible Server private subnet on port 5432.
+# The Flexible Server is VNet-integrated into subnet 10.225.0.0/28 (aks-postgres).
+# If the subnet address changes, update ipBlock.cidr accordingly.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-postgres-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.225.0.0/28
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# OTEL collector egress — worker → OTEL gRPC collector on port 4317 (in-cluster).
+# The observability namespace is separate from agentweaver; target by namespace label.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-otel-egress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 4317

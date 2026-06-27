@@ -21,7 +21,7 @@ public sealed class CastingService
 {
     private readonly IProjectStore _projectStore;
     private readonly CatalogReader _catalog;
-    private readonly CastProposalStore _proposalStore;
+    private readonly ICastProposalStore _proposalStore;
     private readonly IAgentRunner _agentRunner;
     private readonly ProjectSignalScanner _signalScanner;
     private readonly ILogger<CastingService> _logger;
@@ -31,7 +31,7 @@ public sealed class CastingService
     public CastingService(
         IProjectStore projectStore,
         CatalogReader catalog,
-        CastProposalStore proposalStore,
+        ICastProposalStore proposalStore,
         IAgentRunner agentRunner,
         ProjectSignalScanner signalScanner,
         ILogger<CastingService> logger,

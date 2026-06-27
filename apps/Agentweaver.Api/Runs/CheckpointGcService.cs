@@ -14,12 +14,12 @@ public sealed class CheckpointGcService : BackgroundService
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(30);
 
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunWorkflowFactory _factory;
     private readonly ILogger<CheckpointGcService> _logger;
 
     public CheckpointGcService(
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunWorkflowFactory factory,
         ILogger<CheckpointGcService> logger)
     {

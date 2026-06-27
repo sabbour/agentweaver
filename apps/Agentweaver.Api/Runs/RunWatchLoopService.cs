@@ -19,22 +19,26 @@ namespace Agentweaver.Api.Runs;
 /// </summary>
 public sealed class RunWatchLoopService
 {
-    private readonly SqliteRunStore _runStore;
+    private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
     private readonly PendingRequestStore _pendingStore;
     private readonly RunWorkflowFactory _factory;
     private readonly IWorktreeOperations _worktreeOps;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRunLeaseStore _leaseStore;
     private readonly ILogger<RunWatchLoopService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _watchLoopTimeout;
+    private static readonly TimeSpan LeaseTtl = TimeSpan.FromMinutes(5);
+    private readonly string _workerId = $"{Environment.MachineName}/{Guid.NewGuid():N}";
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string OwnerId, long FencingToken)> _activeLeases = new();
     // Pod-per-run lifecycle — null when AgentExecutionMode=in-api or not in Kubernetes.
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
 
     public RunWatchLoopService(
-        SqliteRunStore runStore,
+        IRunStore runStore,
         RunStreamStore streamStore,
         RunWorkflowRegistry registry,
         PendingRequestStore pendingStore,
@@ -43,6 +47,7 @@ public sealed class RunWatchLoopService
         IHostApplicationLifetime lifetime,
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
+        IRunLeaseStore leaseStore,
         ILogger<RunWatchLoopService> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
@@ -54,6 +59,7 @@ public sealed class RunWatchLoopService
         _factory = factory;
         _worktreeOps = worktreeOps;
         _scopeFactory = scopeFactory;
+        _leaseStore = leaseStore;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         _watchLoopTimeout = ResolveWatchLoopTimeout(configuration);
@@ -74,6 +80,34 @@ public sealed class RunWatchLoopService
     {
         _ = Task.Run(async () =>
         {
+            var (claimed, fencingToken) = await _leaseStore.TryClaimAsync(
+                runId, _workerId, LeaseTtl, _appStopping).ConfigureAwait(false);
+            if (!claimed)
+            {
+                _logger.LogInformation(
+                    "Run {RunId}: lease already held by another worker; skipping (multi-replica dedup)", runId);
+                return;
+            }
+
+            _activeLeases[runId] = (_workerId, fencingToken);
+
+            using var renewCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
+            _ = Task.Run(async () =>
+            {
+                var interval = TimeSpan.FromMilliseconds(LeaseTtl.TotalMilliseconds / 2);
+                while (!renewCts.Token.IsCancellationRequested)
+                {
+                    try { await Task.Delay(interval, renewCts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                    var renewed = await _leaseStore.TryRenewAsync(
+                        runId, _workerId, fencingToken, LeaseTtl, CancellationToken.None).ConfigureAwait(false);
+                    if (!renewed)
+                        _logger.LogWarning(
+                            "Lease renewal failed for run {RunId} (token={Token}); lease may have been stolen",
+                            runId, fencingToken);
+                }
+            }, renewCts.Token);
+
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
             linkedCts.CancelAfter(_watchLoopTimeout);
             try
@@ -99,6 +133,12 @@ public sealed class RunWatchLoopService
             {
                 _logger.LogError(ex, "Watch loop failed for run {RunId}; transitioning to Failed", runId);
                 await FailRunSafeAsync(runId, entry, "watch_loop_error").ConfigureAwait(false);
+            }
+            finally
+            {
+                renewCts.Cancel();
+                _activeLeases.TryRemove(runId, out _);
+                await _leaseStore.ReleaseAsync(runId, _workerId, fencingToken, CancellationToken.None).ConfigureAwait(false);
             }
         }, _appStopping);
     }
@@ -286,6 +326,18 @@ public sealed class RunWatchLoopService
         CancellationToken ct)
     {
         var parsedRunId = RunId.Parse(runId);
+
+        if (_activeLeases.TryGetValue(runId, out var activeLease))
+        {
+            var isOwner = await _leaseStore.IsLeaseOwnerAsync(
+                runId, activeLease.OwnerId, activeLease.FencingToken, CancellationToken.None).ConfigureAwait(false);
+            if (!isOwner)
+            {
+                _logger.LogWarning(
+                    "Terminal handler skipped for {RunId}: lease stolen (fencing token mismatch)", runId);
+                return false;
+            }
+        }
 
         if (woe.Is<MergeOutput>(out var mergeOutput))
         {
@@ -482,6 +534,18 @@ public sealed class RunWatchLoopService
 
     private async Task FailRunSafeAsync(string runId, RunStreamEntry entry, string reason)
     {
+        if (_activeLeases.TryGetValue(runId, out var lease))
+        {
+            var isOwner = await _leaseStore.IsLeaseOwnerAsync(
+                runId, lease.OwnerId, lease.FencingToken, CancellationToken.None).ConfigureAwait(false);
+            if (!isOwner)
+            {
+                _logger.LogWarning(
+                    "FailRun skipped for {RunId}: lease no longer owned by this worker (fencing token mismatch)", runId);
+                return;
+            }
+        }
+
         try
         {
             await _runStore.TrySetTerminalStatusAsync(
