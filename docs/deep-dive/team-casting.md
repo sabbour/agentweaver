@@ -192,11 +192,11 @@ The model chooses roles; deterministic code chooses names, charters, and persist
 
 Analysis casting first scans the repository for coarse project signals: languages, frameworks, test presence, documentation presence, CI presence, and rough project size. It avoids raw source transfer; the prompt receives only a summary. Sensitive filenames and common bulky directories are skipped, and scanning is bounded.
 
-Those signals influence **role selection only**. For example, TypeScript plus React may justify a frontend engineer; tests missing may justify QA; docs present or absent may justify a docs writer. Signals do not currently influence universe choice.
+Those signals influence **role selection only**. For example, TypeScript plus React may justify a frontend engineer; tests missing may justify QA; docs present or absent may justify a docs writer.
 
 If no signals are found, the model is asked for a small general-purpose starting team and the proposal includes a warning.
 
-Universe selection is deterministic from policy, history, optional override, and seed. Project signals feed only the role-selection prompt; they never influence which universe a team draws its names from.
+Universe selection remains deterministic from policy, history, optional override, and seed. Project signals feed only the role-selection prompt; they never influence which universe a team draws its names from.
 
 ```mermaid
 flowchart TD
@@ -493,9 +493,9 @@ To rebuild cast history, parse each cast snapshot event. Universe usage history 
 
 ### Canonical and alternate layouts
 
-The reader prefers canonical `.squad/casting/` state. It can fall back to an older, flat casting layout when the canonical files do not exist. If both the canonical and the flat state exist with different contents, the reader reports a layout conflict instead of guessing.
+The reader prefers canonical `.squad/casting/` state. It can fall back to the alternate flat casting layout when canonical files do not exist. If both canonical and flat state exist with different contents, the reader reports a layout conflict instead of guessing.
 
-This is an important migration invariant: silent conflict resolution would risk corrupting identity state.
+This conflict invariant protects identity state: silent resolution could retire, rename, or resurrect the wrong agent.
 
 ### Path safety
 
@@ -610,7 +610,7 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 11. Write `.squad/` human files and append registry/history events.
 12. Regenerate canonical JSON from event sidecars.
 13. Seed memory/session after confirmation as best effort.
-14. Implement reader conflict detection between the canonical and the older flat layouts.
+14. Implement reader conflict detection between the canonical and alternate flat layouts.
 15. Implement git sync that reviews and commits only `.squad/` changes with expected-hash protection.
 16. Implement DTO-based memory import/export so database state and file ledgers stay synchronized.
 
@@ -626,6 +626,6 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 - Existing teams require explicit confirmation intent.
 - Built-ins are automatic and are not part of user proposals.
 - Registry/history events must be followed by canonical JSON regeneration.
-- Conflicts between canonical and older flat casting state should block reads/writes until resolved.
+- Conflicts between canonical and alternate flat casting state should block reads/writes until resolved.
 - Git sync stages only `.squad/`; it does not commit `.agentweaver/context/*`.
 - Memory import/export is DTO-based so the squad package remains database-agnostic.

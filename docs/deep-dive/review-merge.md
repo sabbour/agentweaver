@@ -56,7 +56,7 @@ The supported step kinds are:
 - **Rubberduck** — automated peer/sanity review. It can pass or request changes.
 - **Human review** — explicit human approval. It can approve, request changes, or decline.
 
-Policies are discovered from the project workspace under `.agentweaver/review-policies/`, with a code-embedded built-in default available when nothing valid is configured. Current runtime source uses a built-in default of **RAI + human-review**. Project-authored policy files are loaded server-side, validated, and resolved by name. A project file with the same name as the built-in default replaces the built-in for that project. Duplicate project policy names are deterministic: the first valid file wins and later duplicates are reported invalid.
+Policies are discovered from the project workspace under `.agentweaver/review-policies/`, with a built-in default available when nothing valid is configured. The built-in default is **RAI + human-review**. Project-authored policy files are loaded server-side, validated, and resolved by name. A project file with the same name as the built-in default replaces the built-in for that project. Duplicate project policy names are deterministic: the first valid file wins and later duplicates are reported invalid.
 
 The policy composer performs a graph transform:
 

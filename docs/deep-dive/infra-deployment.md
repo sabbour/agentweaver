@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This guide explains the deployment logic behind Agentweaver's AKS infrastructure. It is intentionally not a manifest walkthrough. The goal is that an engineer who has never seen this repository could rebuild an equivalent deployment by understanding the responsibilities, boundaries, and operational trade-offs.
+Agentweaver's AKS infrastructure is organized around deployment logic rather than manifest order. An equivalent deployment follows from understanding the responsibilities, boundaries, and operational trade-offs.
 
 The deployment is built around five ideas:
 
@@ -12,7 +12,7 @@ The deployment is built around five ideas:
 4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets through the CSI driver.
 5. **Networking starts closed**: default deny policies are opened only for the paths each component actually needs.
 
-Default names used by the checked-in scripts are `agentweaver-rg`, `agentweaver-aks-2`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied.
+The deployment scripts default to `agentweaver-rg`, `agentweaver-aks-2`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied.
 
 ## Rebuild mental model
 
@@ -62,7 +62,7 @@ Agentweaver needs public HTTPS, path-based routing, TLS certificate management, 
 - **HTTPRoutes** say “these paths go to these services”.
 - Services remain ordinary internal Kubernetes load-balancing points.
 
-The checked-in cluster creation enables AKS app routing with the Istio variant, Gateway API, and the managed default domain. That means the cluster can provision the gateway implementation and certificate plumbing without hand-maintaining an ingress controller, public load balancer, and TLS cert chain separately.
+Cluster creation enables AKS app routing with the Istio variant, Gateway API, and the managed default domain. That means the cluster can provision the gateway implementation and certificate plumbing without hand-maintaining an ingress controller, public load balancer, and TLS cert chain separately.
 
 The trade-off is platform coupling: this deployment assumes AKS app routing behavior, the `approuting-istio` GatewayClass, and the managed default-domain certificate resource. A rebuild on another Kubernetes distribution would need an equivalent GatewayClass and certificate issuer.
 
@@ -72,7 +72,7 @@ The network model uses both Kubernetes NetworkPolicy and Cilium FQDN-aware polic
 
 That is why the cluster is created with Azure CNI overlay, the Cilium dataplane, and ACNS. Overlay networking avoids consuming a VNet IP for every pod, while Cilium provides the dataplane features needed for DNS-aware egress controls.
 
-The operational gotcha is that the manifests are not merely “generic Kubernetes networking”. If Cilium/ACNS is missing, the Cilium FQDN allowlists will not enforce as intended and sandbox/app egress behavior will differ.
+The operational constraint is that the manifests are not merely “generic Kubernetes networking”. If Cilium/ACNS is missing, the Cilium FQDN allowlists will not enforce as intended and sandbox/app egress behavior will differ.
 
 ### Why workload identity and Key Vault CSI?
 
@@ -103,7 +103,7 @@ Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-iden
 
 The API is the authoritative backend. It handles orchestration, project/workspace operations, authentication/OAuth authorization-server endpoints, memory/decision data, sandbox lifecycle calls, and durable run state.
 
-It runs as **one replica** with a **Recreate** deployment strategy because the checked-in deployment uses SQLite on a ReadWriteOnce disk. The core problem is multi-attach and single-writer safety: two API pods writing the same SQLite files on an RWO volume would be unsafe and often impossible to mount. Recreate forces the old pod to release the disk before a new pod attaches it.
+It runs as **one replica** with a **Recreate** deployment strategy because the deployment uses SQLite on a ReadWriteOnce disk. The core problem is multi-attach and single-writer safety: two API pods writing the same SQLite files on an RWO volume would be unsafe and often impossible to mount. Recreate forces the old pod to release the disk before a new pod attaches it.
 
 Before the API starts, an init container runs the EF migration bundle for the memory database. This keeps schema migration close to deployment and ensures the database is upgraded before the application accepts traffic. The API container itself uses a read-only root filesystem, drops Linux capabilities, and mounts writable locations explicitly for data, workspace, logs, and scratch space.
 
@@ -116,7 +116,7 @@ The frontend image contains two things:
 
 Both are served by a small ASP.NET Core static-file host. The frontend is safe to run with two replicas because it does not own writable application state. Runtime configuration is injected through a generated `env-config.js`, so the browser can call the API through the public `/api` path rather than a baked build-time URL.
 
-**Docs-build-in-frontend gotcha:** documentation is built into the frontend container image. Updating Markdown under `docs` does not update the deployed site until the frontend image is rebuilt and rolled out. Conversely, the frontend Docker build context must include `docs`; excluding it would produce an image without the published docs site.
+**Docs are built into the frontend:** documentation is part of the frontend container image. Updating Markdown under `docs` does not update the deployed site until the frontend image is rebuilt and rolled out. Conversely, the frontend Docker build context must include `docs`; excluding it would produce an image without the published docs site.
 
 ### MCP workload
 
@@ -208,9 +208,9 @@ The rebuild rule is: applications should not know Azure credentials. They should
 
 The API reads the MCP API key, GitHub OAuth client settings, and OAuth signing key. The MCP server reads its auth user and MCP-related keys. Both use the same workload identity service account, but separate SecretProviderClasses define which Key Vault objects are mounted for each workload.
 
-Rotation caveat: the CSI driver can refresh mounted files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
+Rotation constraint: the CSI driver can refresh mounted files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
-OAuth signing-key caveat: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens.
+OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens.
 
 Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-oauth-signing-key.sh`, `k8s/serviceaccount-api.yaml`, `k8s/secret-provider-class.yaml`, `k8s/secretprovider-mcp.yaml`.
 
@@ -230,11 +230,11 @@ The workspace PVC is an Azure Files share mounted ReadWriteMany. The API and san
 
 The custom StorageClass exists because ownership matters. Containers run as uid/gid 1000 with locked-down filesystems. A default Azure Files mount can appear root-owned and ignore pod `fsGroup`, causing ordinary workspace writes to fail. The repo-owned StorageClass pins mount options so files are usable by the non-root containers.
 
-StorageClass gotcha: mount options are immutable. Do not patch a cluster-managed built-in class and hope existing PVCs change. Define the desired class, create/recreate the PVC as needed, and keep the storage behavior under version control.
+StorageClass constraint: mount options are immutable. Do not patch a cluster-managed built-in class and hope existing PVCs change. Define the desired class, create/recreate the PVC as needed, and keep the storage behavior under version control.
 
 ### Backups
 
-The checked-in backup job runs a SQLite online backup for `agentweaver.db`, writes timestamped files under the same data PVC, and prunes old matching backups.
+The backup job runs a SQLite online backup for `agentweaver.db`, writes timestamped files under the same data PVC, and prunes old matching backups.
 
 `memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the CronJob. The job backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables. No external volume snapshot, cloud backup policy, or off-cluster backup captures `memory.db` either, so it is not separately backed up.
 
@@ -268,7 +268,7 @@ Application pods are default-denied for egress and then granted:
 
 Sandbox pods are even narrower. They get DNS, a limited GitHub IP allowance, and Cilium FQDN-based egress for GitHub API, npm registry domains, and Azure AI/model endpoints. They also run without a service account token, so a compromised sandbox has less ambient Kubernetes authority.
 
-### Operational gotchas
+### Operational constraints
 
 - DNS must be allowed for FQDN policies to work; blocking DNS breaks name-based egress.
 - FQDN allowlists depend on Cilium. Rebuilding on a non-Cilium dataplane requires a different egress-control strategy.
@@ -300,7 +300,7 @@ The API, MCP, frontend, and sandbox images are developed together. A single tag 
 
 ### Build changed images
 
-When code changes affect a service, build that image and push it to ACR with the release tag. The checked-in build script uses ACR remote builds, so the operator does not need a local Docker daemon. API, frontend, and MCP use the repo root as their build context because their Dockerfiles depend on shared repository content. The sandbox image has a narrower context because it is self-contained.
+When code changes affect a service, build that image and push it to ACR with the release tag. The build script uses ACR remote builds, so the operator does not need a local Docker daemon. API, frontend, and MCP use the repo root as their build context because their Dockerfiles depend on shared repository content. The sandbox image has a narrower context because it is self-contained.
 
 For the API specifically, the image is more than the web host: it also carries the EF migration bundle used by the init container. That is why “build API” and “roll out API” are coupled to database migration behavior.
 
@@ -308,7 +308,7 @@ For the API specifically, the image is more than the web host: it also carries t
 
 Conceptually, unchanged services still need the release tag. The clean registry pattern is to retag/import the previous known-good image digest to the new release tag instead of rebuilding it. That keeps all deployment manifests on one tag while avoiding unnecessary builds.
 
-Today the AKS scripts do not include this retag-unchanged optimization. The `20-build-push-images.sh` script rebuilds and pushes all four images with `az acr build`. A pipeline that adds `az acr import`/retag logic should preserve the invariant that every deployed image exists under the same `IMAGE_TAG` before manifests are applied.
+The AKS scripts do not include this retag-unchanged optimization. The `20-build-push-images.sh` script rebuilds and pushes all four images with `az acr build`. A pipeline that adds `az acr import`/retag logic should preserve the invariant that every deployed image exists under the same `IMAGE_TAG` before manifests are applied.
 
 ### Render and apply manifests
 

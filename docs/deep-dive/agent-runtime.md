@@ -2,14 +2,14 @@
 
 ## Purpose and scope
 
-The runtime turns a human request into an agent turn, makes tools available safely, selects providers, and records what happened. This deep dive explains that logic for an engineer who wants to rebuild the runtime from first principles, not for someone trying to follow source files line by line.
+The runtime turns a human request into an agent turn, makes tools available safely, selects providers, and records what happened. The goal is to explain the logic well enough for an engineer to rebuild the runtime from first principles, not to trace source files line by line.
 
 Primary scope:
 
 - `Agentweaver.AgentRuntime`: the turn loop, provider seams, workflow agents, governance, RAI/Scribe touchpoints, and event emission.
 - `Agentweaver.AgentTools`: the model-callable tool catalog and the per-run context that makes tools safe and reproducible.
 
-`Agentweaver.Squad` is only a runtime input here. For casting, roster management, `.squad/` serialization, naming, and memory import/export, see [Team Casting — Deep Dive](team-casting.md).
+`Agentweaver.Squad` is only a runtime input here. For casting, roster management, `.squad/` serialization, naming, and memory import/export, see [Team Casting — Deep Dive](./team-casting.md).
 
 ## The runtime mental model
 
@@ -177,15 +177,15 @@ Agentweaver has two provider seams that are easy to confuse.
 - `MicrosoftFoundry` routes to the Foundry runner.
 - unknown providers fail fast.
 
-This seam serves one-shot, model-assisted tasks. The casting service is its primary caller: roster generation and other single-prompt operations run through this dispatcher. Foundry is plumbed here and runs whenever a caller reaches the dispatcher with `MicrosoftFoundry`.
+This seam serves one-shot, model-assisted tasks. The casting service is its primary caller: roster generation and other single-prompt operations run through this dispatcher. Foundry is wired here and runs whenever a caller reaches the dispatcher with `MicrosoftFoundry`.
 
 ### Seam 2: the live workflow turn-agent seam
 
-Project and coordinator runs are Microsoft Agents Framework workflows. The worker node is created through the workflow agent factory as a Copilot-backed workflow turn agent. The workflow executor calls `SetupAsync` and `RunTurnAsync` on that worker; it does not dispatch on `AgentTurnInput.ModelSource` to select Foundry.
+Project and coordinator runs are Microsoft Agents Framework workflows. The app-level live path is `RunWorkflowFactory` → `AgentTurnExecutor` → `CopilotAIAgent`: the workflow factory builds a Copilot-backed workflow turn agent, and the executor calls `SetupAsync` and `RunTurnAsync` on that worker. This path does not dispatch on `AgentTurnInput.ModelSource` to select Foundry.
 
 This is the key nuance:
 
-> The dispatcher can route to Foundry, but the live project/coordinator run path currently builds the Copilot workflow agent. Foundry is plumbed behind the dispatcher, but it is not active on the live run path.
+> The dispatcher can route to Foundry, but the live project/coordinator run path builds the Copilot workflow agent. Foundry is wired behind the dispatcher, not selected by the app-level live workflow factory.
 
 ```mermaid
 flowchart TD
@@ -198,8 +198,8 @@ flowchart TD
     D -->|Unknown| G[Fail fast]
 
     B -->|Live project/coordinator workflow| H[RunWorkflowFactory]
-    H --> I[IWorkflowAgentFactory]
-    I --> J[Copilot workflow turn agent]
+    H --> I[AgentTurnExecutor]
+    I --> J[CopilotAIAgent]
     J --> K[SetupAsync + RunTurnAsync]
 
     L[Casting / model-assisted generation] --> C
@@ -210,7 +210,7 @@ flowchart TD
 
 - The dispatcher is simple and provider-neutral. It is a good adapter for operations that only need "prompt plus workspace plus result."
 - The workflow turn-agent seam supports checkpointing, structured workflow edges, review loops, RAI/Scribe nodes, and provider session state.
-- Keeping Foundry behind the dispatcher lets the project evolve toward provider choice without forcing the live workflow to support all provider-specific session behavior immediately.
+- Keeping Foundry behind the dispatcher allows provider choice for one-shot operations without forcing live workflows to support all provider-specific session behavior.
 
 ### Foundry's conceptual loop
 
@@ -427,7 +427,7 @@ The runtime consumes Squad data as context and routing input:
 - project decisions and memories are compiled into prompt context;
 - coordinator planning can assign work to real team members and dispatch child runs through the same runtime path.
 
-The runtime should not know how to cast a team, name agents, or serialize the `.squad/` directory beyond consuming the artifacts it needs. Keep that domain in Squad. See [Team Casting — Deep Dive](team-casting.md).
+The runtime should not know how to cast a team, name agents, or serialize the `.squad/` directory beyond consuming the artifacts it needs. Keep that domain in Squad. See [Team Casting — Deep Dive](./team-casting.md).
 
 Where this lives:
 

@@ -114,7 +114,7 @@ A GitHub project is a project whose base workspace is cloned from GitHub. Concep
 
 The token is used to perform the clone; it is not meant to become project metadata. The project stores repository identity and defaults, not the user's secret. This keeps long-lived project state safer and lets token refresh/sign-in remain an authentication concern rather than a project-storage concern.
 
-A subtle current behavior: the lower-level Git initializer can normalize `owner/repo` into a GitHub URL, but project creation currently validates the API input as a full `https://github.com/...` URL before it reaches that initializer. If a caller sends only `owner/repo`, the creation path should fail validation rather than clone.
+Project creation requires the API input to be a full `https://github.com/...` URL. Although the lower-level Git initializer can normalize `owner/repo` into a GitHub URL, service-level validation happens first, so `owner/repo` fails validation rather than cloning.
 
 Failure during clone rolls back the workspace directory created for that attempt. Failure after clone but before database insert also removes the newly-created checkout. The intended user-facing invariant is simple: after a failed create, there should be no usable project record and no misleading partial project workspace.
 
@@ -289,9 +289,9 @@ Reasoning model: authentication is a precondition of materializing a GitHub-orig
 
 ### GitHub URL shape mismatch
 
-Current creation validation expects a full HTTPS GitHub URL beginning with `https://github.com/`. Although lower-level clone logic can understand `owner/repo`, the service-level validation happens first. A UI or client that submits `owner/repo` should expect request validation failure.
+Creation validation expects a full HTTPS GitHub URL beginning with `https://github.com/`. Although lower-level clone logic can understand `owner/repo`, service-level validation happens first. A UI or client that submits `owner/repo` should expect request validation failure.
 
-Reasoning model: normalize client behavior to the API contract, not to an implementation detail deeper in the Git helper.
+Reasoning model: normalize client behavior to the API contract rather than relying on deeper Git-helper normalization.
 
 ### Workspace unavailable
 

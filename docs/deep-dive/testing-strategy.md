@@ -82,7 +82,7 @@ This approach is important because middleware order and DI wiring are part of th
 
 There are several specialized factories because different subsystems need different seams:
 
-- **General API factory**: temp SQLite, temp worktrees, known API key, provider placeholders.
+- **General API factory**: temp SQLite, temp worktrees, known API key, and test provider values.
 - **Projects factory**: in-memory GitHub token store and no-op project git initializer so project CRUD does not touch the OS credential store or clone real repositories.
 - **Review factory**: two API keys so owner and non-owner review paths can be tested without mocking identity.
 - **Workflow factory**: deterministic file-editing agent and fake workflow agent factory so the real workflow graph can run without GitHub Copilot.
@@ -144,7 +144,7 @@ Auth tests are split between pure protocol rules and hosted middleware behavior:
 - MCP bearer middleware keeps backward-compatible static API-key behavior while protecting `/mcp`;
 - discovery and metadata routes are checked through in-process or staging smoke paths.
 
-Some OAuth tests are intentionally present as skipped acceptance tests for not-yet-live protocol pieces. They still document the contract the implementation is expected to satisfy.
+Some OAuth lifecycle scenarios are represented as skipped acceptance tests. They document the contract the implementation is expected to satisfy as protocol support and staging coverage expand.
 
 Rebuilder rule: test OAuth as a state machine, not just as JSON metadata. Codes, verifiers, redirect URIs, `aud` claims, refresh rotation, and revocation are security invariants, so each should have a positive and negative test.
 
@@ -273,15 +273,15 @@ Examples:
 
 This rule is what a rebuild should preserve. The exact class names can change; the boundary logic should not.
 
-## What is not fully tested
+## Deliberate test boundaries
 
 The suite is strong around control-plane invariants, but there are deliberate gaps:
 
 - Live model-provider behavior is not part of the default suite. Provider-backed sandbox escape tests exist, but they are opt-in through environment configuration.
 - Staging Playwright tests are smoke tests, not full workflow coverage.
-- Several OAuth lifecycle scenarios exist as skipped acceptance tests, pending implementation and environment availability.
-- Kubernetes sandbox execution is not proven by a default live-cluster E2E in the surveyed tests. The default coverage focuses on command construction, policy behavior, and API-side sandbox contracts.
-- Frontend behavior is not deeply unit-tested in the surveyed backend test project. The visible E2E coverage checks major deployed pages and auth redirects.
+- Several OAuth lifecycle scenarios are skipped acceptance tests; they define the intended contract but do not run in the default suite.
+- Kubernetes sandbox execution is not proven by a default live-cluster E2E. The default coverage focuses on command construction, policy behavior, and API-side sandbox contracts.
+- Frontend behavior is not deeply unit-tested in `tests/Agentweaver.Tests`. The E2E coverage checks major deployed pages and auth redirects.
 - Performance, load, and long-running multi-agent soak behavior are not represented as a normal test layer.
 
 The documented test scope covers `tests/Agentweaver.Tests` and `tests/e2e`. Any additional deployment, load, or live AKS sandbox stages that a CI pipeline might run sit outside this scope.
@@ -318,4 +318,3 @@ Start with the contracts, then choose the lightest dependency that can prove eac
 8. **Keep E2E narrow and honest.** Use it for deployment wiring, browser redirects, and staging smoke; keep detailed behavior in hermetic integration tests.
 
 The rebuild target is not identical file names. It is the same confidence model: deterministic tests around nondeterministic agents, real persistence for durable claims, real git for repository claims, adversarial tests for security boundaries, and small opt-in live checks for everything that cannot be proven offline.
-

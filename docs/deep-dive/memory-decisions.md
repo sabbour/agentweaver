@@ -84,7 +84,7 @@ The ledger also creates auditability. A rejected item is still useful because it
 
 ## Data model as governance state
 
-The memory database is an EF Core-backed store separate from the older operational database. It contains more than human memory, but for governance the central tables are decisions, decision inbox entries, agent memory, and session context.
+The memory database is an EF Core-backed store separate from the operational database. It contains more than human memory, but for governance the central tables are decisions, decision inbox entries, agent memory, and session context.
 
 ```mermaid
 erDiagram

@@ -22,7 +22,7 @@ The persistence design optimizes for a single Agentweaver API instance coordinat
 - **Safe isolation**: unapproved agent changes should live outside the main branch until review and merge.
 - **Low operational burden**: SQLite avoids running an external database for the default deployment.
 - **Clear write ownership**: the Kubernetes deployment uses one API replica and a ReadWriteOnce data volume, matching SQLite’s single-writer model.
-- **Evolvable memory schema**: the memory/orchestration model changes faster than the original operational schema, so it uses EF Core migrations rather than hand-written SQL everywhere.
+- **Evolvable memory schema**: the memory/orchestration model changes faster than the control-plane schema, so it uses EF Core migrations rather than hand-written SQL everywhere.
 
 The main trade-off is deliberate: simple local durability and easy deployment are favored over horizontal write scaling. If Agentweaver needed active-active API replicas, the SQLite/RWO assumptions would need to be revisited.
 
@@ -181,7 +181,7 @@ Agentweaver uses two SQLite-backed stores by default:
 1. **`agentweaver.db`** for stable operational state.
 2. **`memory.db`** for memory, orchestration, run events, and OAuth state.
 
-This split is intentional. The original control-plane store is hand-written SQL and is conservative: it owns the core lifecycle facts that must be updated predictably during run orchestration. The newer memory/orchestration plane evolves more quickly and benefits from EF Core’s model relationships and migrations. Keeping it in a separate file avoids coupling new EF migrations to the older ADO.NET store.
+This split is intentional. The control-plane store is hand-written SQL and conservative: it owns the core lifecycle facts that must be updated predictably during run orchestration. The memory/orchestration plane evolves more quickly and benefits from EF Core’s model relationships and migrations. Keeping it in a separate file avoids coupling EF migrations to the ADO.NET store.
 
 SQLite is a good fit for the current deployment because:
 
@@ -249,7 +249,7 @@ The memory schema is relational and evolves frequently. EF Core gives this side 
 - explicit entity relationships;
 - indexes for common project/status/agent lookups;
 - migrations with history;
-- a path to SQL Server or PostgreSQL for this database if needed later;
+- a path to SQL Server or PostgreSQL for this database when deployment needs outgrow SQLite;
 - simpler transactional code for inbox promotion and planning updates.
 
 SQLite remains the default provider. SQL Server and PostgreSQL support are configuration options for the EF-backed store, but the production Kubernetes deployment still uses SQLite.
@@ -271,7 +271,7 @@ A rebuild should preserve these rules:
 
 The EF database uses normal EF migrations. In production, an init container runs the migration bundle before the API container starts, and the API also runs migrations during startup. This gives two safety nets: schema is prepared before normal serving, and an already-started API can still apply any pending migrations in development or nonstandard deployments.
 
-There is also a transition guard for older databases that predate EF migrations. Its job is to detect a database that already had early memory tables but no EF migration history, seed the expected history marker, create the missing run-event table, and then let normal migrations continue.
+A migration-history guard keeps EF startup deterministic when a database already has memory tables but lacks the expected EF history marker. It seeds the marker, creates the missing run-event table, and then lets normal migrations continue.
 
 Where this lives: `apps/Agentweaver.Api/Memory`, `apps/Agentweaver.Api/Migrations`, `apps/Agentweaver.Api/Program.cs`.
 
@@ -456,4 +456,4 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 - Child coordinator runs intentionally receive a narrower context than full agents: team boundaries and task-specific instructions matter more than bloating every child prompt with all memory layers.
 - A missing worktree directory is recoverable only if the database metadata and git branch still exist.
 - Successful merges clean up worktrees; conflicted merges preserve them for inspection.
-- The current backup job covers `agentweaver.db` only.
+- The backup CronJob covers `agentweaver.db` only.

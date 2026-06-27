@@ -29,7 +29,7 @@ A useful rebuilding rule is: **the coordinator owns intent and coordination; wor
 
 Casting and Blueprints feed orchestration with team shape, role charters, workflow defaults, and review-policy defaults. They are summarized here only; the detailed explanation lives in [team-casting.md](team-casting.md).
 
-Verified current-runtime gap: live workflow execution is effectively Copilot-backed. Some non-workflow single-prompt paths can dispatch through other model runners, but the live workflow worker path does not currently switch worker implementation based on the run's model source. Rebuilds that need Foundry-backed live workflows should add that dispatch point explicitly.
+Live workflow execution is Copilot-backed. Some non-workflow single-prompt paths dispatch through other model runners, but the live workflow worker path does not switch worker implementation based on the run's model source. Rebuilds that need Foundry-backed live workflows add that dispatch point explicitly.
 
 ## Core Design Invariants
 
@@ -490,11 +490,11 @@ Where this lives:
 
 Workflows define the shape of execution. Review policies define which review gates must be present for a project.
 
-This separation is useful because teams may want the same workflow structure but different gate requirements. For example, one project may require only Responsible AI plus human review; another may add a rubberduck review before human approval.
+This separation is useful because teams often need the same workflow structure with different gate requirements. For example, one project requires only Responsible AI plus human review; another adds a rubberduck review before human approval.
 
 A review policy is an ordered list of review steps. Conceptually common steps are:
 
-- **Responsible AI review** — checks safety and may pass, request revision, or fail terminally.
+- **Responsible AI review** — checks safety and returns pass, revision request, or terminal failure.
 - **Rubberduck review** — an automated sanity or explanation pass.
 - **Human review** — asks a person to approve, request changes, or decline.
 
@@ -545,7 +545,7 @@ This design keeps review durable and externally controllable. A browser tab can 
 
 ### Merge Gate
 
-Merge is a gate because generated work can be correct but not mergeable. The merge step may discover conflicts, blocked policies, or repository constraints.
+Merge is a gate because generated work can be correct but not mergeable. The merge step surfaces conflicts, blocked policies, or repository constraints.
 
 A healthy merge gate should distinguish:
 

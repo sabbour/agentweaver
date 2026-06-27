@@ -117,7 +117,7 @@ After bootstrap, protected API calls use `Authorization: Bearer ...`. The API tr
 2. **Raw GitHub bearer token.** Otherwise, ask GitHub `/user` whether the token is valid and which login owns it.
 3. **Development-only bypass.** A configured bypass can map tokens to users only in Development; production refuses to start if bypass flags are enabled.
 
-The `Agentweaver.Api` API-key registry reports no configured keys in normal operation. Hosted MCP retains a configured API-key fast path for machine-to-machine automation callers, but normal end-to-end identity should be either a raw GitHub token or an Agentweaver OAuth JWT that the backend can validate.
+The API does not normally accept automation keys directly. Hosted MCP keeps the automation-key fast path for machine-to-machine callers, then forwards accepted bearer tokens to the API so normal end-to-end identity remains a raw GitHub token or an Agentweaver JWT that the backend can validate.
 
 ```mermaid
 flowchart TD

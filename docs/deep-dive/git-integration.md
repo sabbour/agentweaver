@@ -224,40 +224,11 @@ flowchart TD
 
 The coordinator assembly rule is "no partial assembly." If any eligible child branch conflicts while building the integration branch, assembly stops and reports the conflicting branch/files instead of producing a partly assembled result.
 
-## Push and pull request lifecycle
+## Remote boundary
 
-The current API implements local Git operations only — branch creation, commits, tree/diff inspection, review, and merge — and uses GitHub tokens for clone, repository listing, account listing, and user identity. Pushing run branches to a remote and opening pull requests are out of scope. If added later, they would be treated as remote-sync failures distinct from local candidate-content failures.
+The current API implements local Git operations only — branch creation, commits, tree/diff inspection, review, and merge. Pushing run branches to a remote and opening pull requests are out of scope. GitHub tokens are used for clone, repository listing, account listing, and user identity, not for publishing candidate branches.
 
-If rebuilding a remote PR lifecycle on top of the current design, the natural extension would be:
-
-```mermaid
-sequenceDiagram
-  participant Run as Run worktree
-  participant Git as Local git repo
-  participant Store as Run store
-  participant GH as GitHub API
-  participant Human as Reviewer
-
-  Run->>Git: commit candidate on agentweaver/{runId}
-  Git->>Store: persist tree hash + diff
-  Git-->>GH: push branch with scoped token
-  GH-->>Store: record remote branch/push result
-  Store->>GH: create PR base=originating branch head=agentweaver/{runId}
-  GH-->>Store: record PR number/url/state
-  Human->>GH: review PR
-  GH-->>Store: webhook or polling updates PR state
-  Human->>Store: approve merge in Agentweaver or merge PR in GitHub
-  Store->>Git: verify tree hash before local/remote merge
-```
-
-That extension should preserve the current invariants:
-
-- push only the deterministic run branch, never arbitrary local refs;
-- use the same GitHub token provider that clone and repository listing use;
-- record the remote branch and PR identity on the run before surfacing it as durable state;
-- bind approval to the reviewed tree hash, not merely to a branch name;
-- treat a PR as a remote review surface, not as the only source of the candidate content;
-- keep local merge and remote PR merge semantics explicit so users understand which branch is authoritative.
+This boundary keeps candidate-content reasoning local and deterministic: Agentweaver can always explain a run through its branch, tree hash, and diff without depending on remote synchronization state.
 
 ## GitHub credentials and API usage
 
@@ -368,10 +339,6 @@ GitHub project creation and GitHub repository/account listing require a valid to
 
 Reasoning model: cloning or listing with ambiguous credentials creates confusing partial state; authentication is a precondition.
 
-### Push or PR creation failures
-
-Pushing and PR creation are out of scope for the current API (see "Push and pull request lifecycle"). If added, they should be treated as remote synchronization failures, not as local candidate-content failures. The local branch, tree hash, and diff should remain inspectable even if GitHub rejects a push or PR creation request.
-
 ## Invariants
 
 A rebuild should preserve these rules:
@@ -389,7 +356,6 @@ A rebuild should preserve these rules:
 11. **Coordinator integration branches are assembled headlessly and all-or-nothing**.
 12. **GitHub tokens are credentials, not project metadata**.
 13. **Raw access tokens are not logged or stored in run/project records**.
-14. **Remote push/PR behavior, if added, must not weaken local tree-hash review semantics**.
 
 ## Trade-offs
 
@@ -397,9 +363,9 @@ A rebuild should preserve these rules:
 
 Git worktrees are more complex than copying a repository directory, but they avoid duplicated object databases and preserve normal branch semantics. A run's result is a branch and tree, not an ad hoc folder snapshot.
 
-### Local merge over always-remote PR
+### Local merge over remote review
 
-The current implementation can complete review and merge locally without requiring a remote. That supports blank/local projects and keeps the default deployment simpler. The trade-off is that GitHub PRs are not the authoritative review surface.
+Agentweaver can complete review and merge locally without requiring a remote. That supports blank/local projects and keeps the default deployment simpler. The trade-off is that remote review systems are not the authoritative review surface.
 
 ### Ref-only fallback
 
@@ -434,7 +400,6 @@ If rebuilding the git integration subsystem, implement it in this order:
 15. Remove worktree and branch after successful merge; preserve them after conflict.
 16. Recover startup states by failing stranded in-progress runs, reverting interrupted committing/merging states, validating review-ready worktrees, and recreating missing worktrees when branch metadata is sufficient.
 17. Add coordinator assembly as a separate headless integration-branch flow if multi-agent fan-out is required.
-18. If remote PRs are required, add push/PR state explicitly after local candidate commit and before remote review, using the same token provider and preserving tree-hash approval semantics.
 
 ## Common gotchas
 

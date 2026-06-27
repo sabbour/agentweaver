@@ -85,7 +85,7 @@ flowchart LR
 
 The loader validates the static shape first: required fields, valid trigger type, valid node type, unique node ids, known edge endpoints, check branches with matching outgoing edges, and valid references from structured node fields.
 
-The binder then validates runtime bindability. This second phase matters because the schema can model future concepts before the live executor graph supports them.
+The binder then validates runtime bindability. This second phase matters because the schema can represent graph concepts before the live executor graph has executor support for them.
 
 ### Node Types
 
@@ -99,11 +99,11 @@ Agentweaver's workflow schema models these conceptual node types:
 - **terminal** — an explicit sink such as done, declined, or safety failed.
 - **fan_out**, **fan_in**, **serial**, **coordinator_composed** — schema-level extension points for richer topologies.
 
-Current runtime binding supports prompt, peer-review, check gates with known gate kinds, merge, scribe, terminal sinks, and a set of sequential / review / direct-completion topologies. Runtime-pending node types must still fail closed until real executor support exists.
+Runtime binding supports prompt, peer-review, check gates with known gate kinds, merge, scribe, terminal sinks, and a set of sequential / review / direct-completion topologies. Extension node types remain explicit schema concepts; until executors bind them, the runtime fails closed.
 
 ### The Default Workflow
 
-The default workflow is the behavior-preserving conversion of the original run pipeline. It is embedded in code and can also be materialized into a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize a copy.
+The default workflow encodes the standard run pipeline. It is embedded in code and can also be materialized into a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize a copy.
 
 ```mermaid
 flowchart LR
@@ -129,7 +129,7 @@ Workflow nodes carry two different kinds of "role" information:
 1. **Workflow role slots** describe the node's place in the graph or UI lane: `agent`, `review`, `merge`, `scribe`, `plumbing`, and similar labels.
 2. **Catalog or bespoke execution roles** identify who should perform a node when a real agent identity is needed.
 
-Do not collapse these into one concept. A node with `role: review` is in a review lane; it is not automatically a catalog role named `review`. A peer-review node may name a concrete reviewer with `agent: qa-engineer`. A generated or project-authored node may carry an inline `charter` when no catalog role fits.
+Do not collapse these into one concept. A node with `role: review` is in a review lane; it is not automatically a catalog role named `review`. A peer-review node names a concrete reviewer with `agent: qa-engineer` when it needs that agent. A generated or project-authored node carries an inline `charter` when no catalog role fits.
 
 ```mermaid
 flowchart TD
@@ -151,7 +151,7 @@ flowchart TD
 
 The runtime uses explicit node fields and run context to build the agent prompt. Catalog roles are preferred because their charters are already known to the casting system. Bespoke charters are a controlled escape hatch for generated workflows whose process needs a role outside the catalog.
 
-Execution hints resolve in a clear order. The `agent` and `charter` fields are the reliable workflow-level execution hints: `agent` binds the node to a known catalog role, and `charter` supplies a bespoke role inline. A prompt node's `role` and `kind` are primarily graph metadata that classify the node and describe its place in the flow; they shape selection and presentation rather than directly choosing the executing agent. When a node carries both an execution hint and metadata, the runtime drives execution from `agent`/`charter` and the run's assigned `AgentName`, using `role`/`kind` for context.
+Execution hints resolve in a clear order. The `agent` and `charter` fields are the reliable workflow-level execution hints: `agent` binds the node to a known catalog role, and `charter` supplies a bespoke role inline. When neither is present, the run's assigned `AgentName` remains the executing agent. A prompt node's `role` and `kind` are graph metadata: they classify the node and describe its place in the flow, but they do not override `agent`, `charter`, or `AgentName`.
 
 ## Discovery, Validation, and Registry
 
@@ -232,7 +232,7 @@ The evaluator maps:
 - `Manual` invocation → only `manual` workflows.
 - `Heartbeat` invocation → `heartbeat` workflows plus `event` workflows whose event is `task-added-to-ready`.
 
-A backlog task may carry a workflow override. The override is honored only if the workflow exists, is valid, and is eligible for the invocation. Otherwise the system logs the mismatch and continues with eligible selection or safe fallback behavior.
+A backlog task can carry a workflow override. The override is honored only if the workflow exists, is valid, and is eligible for the invocation. Otherwise the system logs the mismatch and continues with eligible selection or safe fallback behavior.
 
 ```mermaid
 flowchart TD

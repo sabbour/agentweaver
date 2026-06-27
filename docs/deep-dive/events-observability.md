@@ -181,7 +181,7 @@ The boundary guarantees are:
 
 ## SSE Streaming to Clients
 
-The browser consumes run liveness through Server-Sent Events. In current code, the live SSE endpoint is:
+The browser consumes run liveness through Server-Sent Events. The live SSE endpoint is:
 
 ```text
 GET /api/runs/{id}/stream
@@ -272,7 +272,7 @@ The rebuild principle is simple: producers append facts; consumers project facts
 
 Diagnostics answer "is the system healthy enough to operate?" They are read-only, executed checks over live state. They do not fabricate success values.
 
-There are three diagnostic surfaces:
+There are four diagnostic surfaces:
 
 1. **Reachability probes**: `/health`, `/api/health`, and `/api/ping` answer basic liveness/readiness questions.
 2. **System diagnostics**: `/api/diagnostics` runs global checks and returns API version, process start time, uptime, project/run counts, total duration, and per-check results.
@@ -361,7 +361,7 @@ flowchart TD
 
 ### OTEL export
 
-The checked-in AKS deployment configures OTEL environment variables for the API pod: service name, resource attributes, OTLP endpoint, and OTLP protocol. The system overview describes the API pod sending telemetry to an OTLP collector.
+The AKS deployment configures OTEL environment variables for the API pod: service name, resource attributes, OTLP endpoint, and OTLP protocol. The system overview describes the API pod sending telemetry to an OTLP collector.
 
 The application-level metrics are HTTP/JSON aggregations: the dashboard and diagnostics endpoints compute and return DTO values directly, rather than emitting them as OpenTelemetry metric instruments. The deployment points the API pod at an OTLP collector for telemetry export. The exact runtime instrumentation that flows to that collector depends on deployment configuration outside the metrics service itself.
 
@@ -442,7 +442,7 @@ Snapshot + stream costs more client merge logic, but it handles refreshes, compl
 
 ### Application metrics endpoints vs OTEL instruments
 
-HTTP JSON metrics are easy for the product UI and MCP parity surfaces to consume. OTEL metrics are better for fleet dashboards and alerting. The current application metrics model should not be confused with automatic OTEL time series unless explicit instrumentation is added.
+HTTP JSON metrics are easy for the product UI and MCP parity surfaces to consume. OTEL metrics are better for fleet dashboards and alerting. Application metrics should not be confused with automatic OTEL time series unless explicit instrumentation is added.
 
 ## Rebuild Blueprint
 

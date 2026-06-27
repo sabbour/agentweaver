@@ -112,7 +112,7 @@ stateDiagram-v2
     AssemblyFailed --> [*]
 ```
 
-`RaiBlocked` and `NeedsResolution` are parked or terminal states in the current implementation. Operators can recover some parked states through steering or full run retry, but the coordinator does not silently continue past them.
+`RaiBlocked` and `NeedsResolution` are parked or terminal states. Operators can recover some parked states through steering or full run retry, but the coordinator does not silently continue past them.
 
 ## OutcomeSpec drafting logic
 
@@ -227,7 +227,7 @@ If no valid decomposition is available, the coordinator falls back to one determ
 
 The dependency graph must be acyclic. If the model creates a cycle, the coordinator traverses dependencies in stable order and drops the back-edge that closes the cycle. It records a note in the plan's isolation summary rather than dispatching a deadlocked graph.
 
-This is a pragmatic trade-off: it preserves progress for most accidental cycles, but it may weaken an intended ordering constraint. A stricter rebuild could fail and ask for clarification instead.
+This is a pragmatic trade-off: it preserves progress for most accidental cycles while treating the removed edge as lower confidence than the rest of the ordering constraint. A stricter rebuild can fail and ask for clarification instead.
 
 ### Assignment and model selection
 
@@ -316,7 +316,7 @@ Observation includes stall handling. If a child emits no events within the confi
 
 ## Collective assembly
 
-When all subtasks settle, dispatch moves the WorkPlan to `awaiting_assembly` and hands off to the assembly service. Assembly is service-driven rather than a MAF workflow because it starts from already-produced git state, has a coordinator-owned review gate, and may route back to re-dispatch rather than back to one model turn.
+When all subtasks settle, dispatch moves the WorkPlan to `awaiting_assembly` and hands off to the assembly service. Assembly is service-driven rather than a MAF workflow because it starts from already-produced git state, has a coordinator-owned review gate, and routes review changes back to re-dispatch rather than back to one model turn.
 
 ```mermaid
 flowchart TD
@@ -369,7 +369,7 @@ Eligible child branches are merged into one integration branch in dependency ord
 
 ### Collective RAI
 
-The production pipeline reuses the existing RAI executor over the aggregate diff. Current service behavior treats a collective RAI safety flag as a hard stop: the WorkPlan is marked `rai_blocked`, the coordinator run is failed, and a human override/recovery path is required. This is stricter than the pipeline interface comment that describes the flag as advisory.
+The production pipeline reuses the existing RAI executor over the aggregate diff. A collective RAI safety flag is a hard stop: the WorkPlan is marked `rai_blocked`, the coordinator run is failed, and a human override/recovery path is required.
 
 ### One collective review
 
@@ -488,7 +488,7 @@ An invalid OutcomeSpec means the system has not established intent. Fabricating 
 
 ### Why no partial assembly?
 
-Partial assembly could ship an inconsistent subset of a team plan. The coordinator instead requires every subtask to be eligible, then assembles the whole result once.
+Partial assembly risks shipping an inconsistent subset of a team plan. The coordinator instead requires every subtask to be eligible, then assembles the whole result once.
 
 ### Why conservative file conflict rules?
 

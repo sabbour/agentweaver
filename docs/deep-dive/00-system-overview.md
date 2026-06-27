@@ -411,7 +411,7 @@ Where this lives: `k8s`, `scripts/aks`, `apps/agentweaver-sandbox`.
 | --- | --- | --- |
 | Backend services | .NET / ASP.NET Core | Strong fit for long-lived services, dependency injection, streaming endpoints, hosted recovery jobs, and typed domain models. |
 | Workflow runtime | Microsoft Agents / MAF-style workflows | Provides a resumable graph model for agent turns, request ports, gates, and streaming execution. |
-| Model providers | GitHub Copilot SDK and Microsoft Foundry-related abstractions | Allows GitHub-native agent work today while leaving a provider abstraction for alternate enterprise model backends. |
+| Model providers | GitHub Copilot SDK and Microsoft Foundry-related abstractions | Allows GitHub-native agent work while leaving a provider abstraction for alternate enterprise model backends. |
 | Persistence | SQLite plus EF Core-backed memory store options | SQLite keeps self-hosted/local deployment simple; the memory layer is structured enough to evolve toward server databases. |
 | Git operations | LibGit2Sharp-style repository APIs | Enables programmatic worktree, branch, diff, and merge operations without shelling out for every repository action. |
 | Web UI | React, TypeScript, Vite, Fluent UI | Good fit for a live operational UI with review forms, timelines, project screens, and reusable Microsoft-style components. |
@@ -451,6 +451,6 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 
 ## Known limitations and scope
 
-- Foundry is wired into direct runner dispatch, while the coordinator path is Copilot-oriented. Coordinator turns currently run through the Copilot-backed workflow agent.
+- Foundry is wired into direct runner dispatch, while the coordinator path is Copilot-oriented. Coordinator turns run through the Copilot-backed workflow agent.
 - Agentweaver ships a default embedded workflow and loads additional catalog and project workflows separately. The workflow model and the default pipeline are documented here; individual embedded catalog workflow resources are defined alongside their projects.
 - The control plane is a single authoritative backend even though AKS deploys API, MCP, and frontend as separate processes. API and run orchestration remain the single source of truth; MCP and frontend are thin client-facing processes that render and forward backend state.

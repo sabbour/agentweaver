@@ -4,7 +4,7 @@
 
 The Agentweaver API host is the composition shell for the product. It does not own every domain algorithm; instead, it makes the system runnable and observable by wiring services together, enforcing cross-cutting policy, exposing HTTP capabilities, and preparing durable state before traffic is accepted.
 
-This deep dive explains the concepts behind the API host so a competent engineer could rebuild the same architecture without reading the implementation. It focuses on:
+The API core architecture centers on:
 
 - host bootstrap and readiness;
 - dependency injection and service lifetimes;
@@ -15,7 +15,7 @@ This deep dive explains the concepts behind the API host so a competent engineer
 - diagnostics and metrics;
 - host-level invariants and extension seams.
 
-Domain internals are intentionally out of scope. Auth/security, orchestration, sandboxing, memory/persistence, migrations, and Git workflows have their own deep dives. This file explains how the API core composes those domains, not how each domain works internally.
+Domain internals are covered by the focused deep dives for [Auth & security](./auth-security.md), [orchestration](./orchestration.md), [sandboxing](./sandbox.md), [memory and decisions](./memory-decisions.md), [data persistence](./data-persistence.md), and [Git integration](./git-integration.md). The API core composes those domains rather than reimplementing their internal logic.
 
 ## The Host in One Picture
 
@@ -182,7 +182,7 @@ The second custom gate runs after token validation. It checks whether the caller
 
 The rate limiter middleware is globally installed, but rate limiting is applied only to endpoints that opt into the named policy. OAuth protocol endpoints opt in because they are public and abuse-sensitive. Ordinary API endpoints are protected by bearer/org authorization and are not automatically limited just because the middleware exists.
 
-### Gotchas
+### Middleware rules
 
 - Endpoint metadata such as `AllowAnonymous` does not bypass custom middleware by itself. Public behavior must be represented in the middleware's path exemptions.
 - The root banner route is non-API, so it passes token auth, but it is not one of the organization-gate exempt prefixes. Unauthenticated callers should not assume it is public.

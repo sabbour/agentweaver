@@ -162,9 +162,9 @@ The MCP HTTP boundary accepts bearer credentials through a layered strategy. The
 
 If there is no bearer token, MCP returns a discovery challenge. It does not redirect, start GitHub login itself, or invent a local login flow. Resource Servers should tell the client how to discover authorization; clients decide how to run the flow.
 
-### 4.2 Static Agentweaver API keys: automation compatibility
+### 4.2 Automation keys: machine-to-machine compatibility
 
-A configured API key can authenticate automation and CI callers. This path is a fast in-memory lookup and predates the OAuth flow. It remains useful for controlled service contexts, but it is not the preferred user identity model for interactive MCP clients.
+A configured automation key can authenticate automation and CI callers. This pre-shared-key path is a fast in-memory lookup for controlled service contexts, but it is not the preferred user identity model for interactive MCP clients.
 
 ### 4.3 Agentweaver OAuth access tokens: the primary standards path
 
@@ -332,6 +332,6 @@ If you were recreating Agentweaver's MCP server from scratch, build in this orde
 | Token validates locally but fails in cluster | One service derived issuer/audience from an internal host. | Pin issuer and audience to public values in Production. |
 | API sees every tool call as the MCP service | MCP used a shared backend key instead of the caller's token. | Forward the accepted bearer token to the API. |
 | Revoked access token still passes MCP JWT validation | Offline JWT validation cannot see a central denylist by itself. | API performs authoritative `jti` denylist checks on forwarded tokens. |
-| Existing automation breaks during OAuth rollout | Only OAuth JWTs are accepted. | Keep static API-key support as an explicit compatibility path. |
+| Existing automation cannot call MCP | Only OAuth JWTs are accepted. | Keep automation keys as an explicit machine-to-machine path. |
 | Raw GitHub tokens become permanent architecture | Migration path is left enabled without a sunset. | Gate GitHub passthrough by configuration and prefer Agentweaver-minted audience-bound tokens. |
 | Future local MCP tool bypasses authorization | Tool performs sensitive work without calling the API. | Either keep tools as API proxies or add equivalent local authorization and revocation checks. |
