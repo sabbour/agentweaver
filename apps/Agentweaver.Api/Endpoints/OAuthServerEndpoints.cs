@@ -26,7 +26,8 @@ public static class OAuthServerEndpoints
     public static void MapOAuthServerEndpoints(this WebApplication app)
     {
         // ---- T1: Authorization Server Metadata (RFC 8414) ----------------------------------------
-        app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx, IConfiguration config) =>
+        // Shared builder so all well-known routes return identical JSON.
+        IResult BuildAsMetadata(HttpContext ctx, IConfiguration config)
         {
             var issuer = OAuthServerConfig.ResolveIssuer(ctx, config);
             return Results.Json(new
@@ -43,7 +44,14 @@ public static class OAuthServerEndpoints
                 code_challenge_methods_supported = new[] { "S256" }, // S256 only — plain is rejected
                 token_endpoint_auth_methods_supported = new[] { "none" },
             });
-        }).AllowAnonymous();
+        }
+
+        // RFC 8414 canonical path — path-aware clients probe the suffixed form first (/{resource-path}).
+        app.MapGet("/.well-known/oauth-authorization-server", BuildAsMetadata).AllowAnonymous();
+        app.MapGet("/.well-known/oauth-authorization-server/mcp", BuildAsMetadata).AllowAnonymous();
+        // OIDC discovery paths — many clients (e.g. Copilot CLI) also try the OIDC well-known URL.
+        app.MapGet("/.well-known/openid-configuration", BuildAsMetadata).AllowAnonymous();
+        app.MapGet("/.well-known/openid-configuration/mcp", BuildAsMetadata).AllowAnonymous();
 
         // ---- T1: JWKS — public signing key ------------------------------------------------------
         app.MapGet("/oauth/jwks", (McpTokenService tokenService) =>

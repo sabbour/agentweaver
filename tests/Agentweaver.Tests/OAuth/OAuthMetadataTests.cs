@@ -113,6 +113,53 @@ public sealed class OAuthMetadataTests : IClassFixture<OAuthWebApplicationFactor
     }
 
     // =========================================================================
+    // S1-AS-04 — GET /.well-known/oauth-authorization-server/mcp → 200, application/json
+    // RFC 8414 path-aware clients probe the suffixed form first; it must not fall through to the SPA.
+    // =========================================================================
+    [Fact]
+    public async Task AsMetadata_SuffixedMcpPath_ReturnsOk_WithJson()
+    {
+        var client = _factory.CreateUnauthenticatedClient();
+        var response = await client.GetAsync("/.well-known/oauth-authorization-server/mcp");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "the /mcp-suffixed AS metadata path must return 200 (RFC 8414 path-aware discovery)");
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/json");
+    }
+
+    // =========================================================================
+    // S1-AS-05 — /.well-known/oauth-authorization-server/mcp contains required fields
+    // =========================================================================
+    [Fact]
+    public async Task AsMetadata_SuffixedMcpPath_ContainsRequiredFields()
+    {
+        var client = _factory.CreateUnauthenticatedClient();
+        var doc = await client.GetFromJsonAsync<JsonDocument>("/.well-known/oauth-authorization-server/mcp");
+
+        doc.Should().NotBeNull();
+        var root = doc!.RootElement;
+        root.GetProperty("issuer").GetString().Should().NotBeNullOrEmpty();
+        root.GetProperty("authorization_endpoint").GetString().Should().EndWith("/oauth/authorize");
+        root.GetProperty("token_endpoint").GetString().Should().EndWith("/oauth/token");
+        root.GetProperty("jwks_uri").GetString().Should().EndWith("/oauth/jwks");
+    }
+
+    // =========================================================================
+    // S1-AS-06 — GET /.well-known/openid-configuration → 200, application/json
+    // Many clients also probe the OIDC discovery URL; must return AS metadata (not SPA HTML).
+    // =========================================================================
+    [Fact]
+    public async Task OidcConfiguration_ReturnsOk_WithJson()
+    {
+        var client = _factory.CreateUnauthenticatedClient();
+        var response = await client.GetAsync("/.well-known/openid-configuration");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "OIDC discovery path must return 200 with AS metadata");
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/json");
+    }
+
+    // =========================================================================
     // S1-PR-01 (STUB — requires Tank T6)
     // GET /.well-known/oauth-protected-resource (root form) on MCP RS → 200, unauthenticated
     // =========================================================================
