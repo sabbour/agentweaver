@@ -1,0 +1,91 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sqlite-to-postgres-migrator
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+    spec018: c3-data-migration
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sqlite-to-postgres-migrator
+        app.kubernetes.io/part-of: agentweaver
+    spec:
+      restartPolicy: Never
+      serviceAccountName: agentweaver-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: migrator
+          image: agentweaverregistry.azurecr.io/agentweaver-api:92e4d74c
+          imagePullPolicy: Always
+          command:
+            - dotnet
+            - Agentweaver.Api.dll
+            - --migrate-data
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: HOME
+              value: /data
+            - name: TMPDIR
+              value: /tmp
+            - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
+              value: /tmp/.net
+            - name: Auth__OAuth__Issuer
+              value: "https://agentweaver.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io"
+            - name: Auth__OAuth__Audience
+              value: "https://agentweaver.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io/mcp"
+            # Postgres provider so SqliteToPostgresMigrator is registered
+            - name: Database__Provider
+              value: "Postgres"
+            # SQLite source paths (reads agentweaver.db from the data PVC)
+            - name: Database__Path
+              value: "/data/agentweaver.db"
+            - name: Database__MemoryPath
+              value: "/data/memory.db"
+            - name: ConnectionStrings__Postgres
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+            - name: ConnectionStrings__MemoryDb
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: agentweaver-data
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: agentweaver-workspace
+        - name: tmp
+          emptyDir: {}

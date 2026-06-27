@@ -259,9 +259,61 @@ kubectl api-resources --api-group=keda.sh | grep ScaledObject
 
 See KEDA upgrade path in `k8s/worker-hpa.yaml` comments for the `ScaledObject` manifest.
 
+## ACTIVATED — P2/P3 Live (2026-06-27)
+
+> Executed by: Link (asabbour@microsoft.com)
+
+### Live state post-activation
+
+| Item | Value |
+|------|-------|
+| **Date** | 2026-06-27 |
+| **API image tag** | `92e4d74c-fix2` |
+| **Worker image tag** | `92e4d74c-fix2` |
+| **Database** | `Database__Provider=Postgres` — primary is `agentweaver-pg.postgres.database.azure.com` |
+| **API replicas** | 2 / RollingUpdate (SQLite single-writer constraint lifted) |
+| **Worker** | `agentweaver-worker` 1/1 Running (min 1, max 3 via HPA) |
+| **Sandbox mode** | `in-api` (pod-per-run held for P1.5) |
+| **Data migrated** | Projects 3/3, Runs 31/31, BacklogTasks 19/19 (C3 one-shot Job) |
+| **EF schema** | `20260627000000_InitialPostgres` applied (C2 one-shot Job) |
+
+### Code fixes applied (included in 92e4d74c-fix2)
+
+| Fix | File | Details |
+|-----|------|---------|
+| fix1 | `apps/Agentweaver.Api/Endpoints/BacklogDecomposeEndpoints.cs:90` | Concrete `SqliteBacklogTaskStore` → `IBacklogTaskStore` |
+| fix1 | `packages/Agentweaver.Domain/IBacklogTaskStore.cs` | Added `GetExistingTitlesFromSourceAsync` to interface |
+| fix2 | `apps/Agentweaver.Api/Runs/WorkflowRestartService.cs` + 13 other files | `SqliteRunStore` → `IRunStore` everywhere (DI was failing in Postgres mode) |
+| fix2 | `k8s/api-deployment.yaml` | `HOME=/tmp` + `Database__Path=/tmp/agentweaver.db` in main container |
+| fix2 | `k8s/worker-deployment.yaml` | `HOME=/tmp` + probe paths `/healthz`/`/readyz` |
+
+### Applied manifests (C4–C6)
+
+| Manifest | Result |
+|----------|--------|
+| `k8s/api-deployment.yaml` | `Database__Provider=Postgres`, `replicas:2`, `RollingUpdate` |
+| `k8s/networkpolicy-worker.yaml` | 7 worker network policies created |
+| `k8s/worker-deployment.yaml` | Worker `1/1 Running` on port 8081 |
+| `k8s/worker-hpa.yaml` | HPA (min1/max3/CPU 70%) + PDB created |
+
+### Health gates (all passed)
+
+```
+API:    2/2 Running — GET /api/health → {"status":"ok"}
+Worker: 1/1 Running — GET :8081/healthz → {"status":"ok","role":"worker"}
+                      GET :8081/readyz  → {"status":"ready","role":"worker"}
+```
+
+### Remaining held steps
+
+- **P1.5 pod-per-run**: `Sandbox__AgentExecutionMode=in-api` on both API and worker. Activate after P1.5 A2A gaps resolved.
+- **Web HPA**: Apply `agentweaver-api-hpa` (min 2 / max 5) once web is confirmed stateless under load.
+- **KEDA upgrade**: Replace CPU HPA on worker with PostgreSQL queue-depth scaler (see C8 above).
+- **Worker ServiceAccount**: Split `agentweaver-worker` SA with least-priv sandbox RBAC (tracked in worker-deployment.yaml TODO comment).
+
 ---
 
-## Infrastructure Reference
+
 
 | Resource | Details |
 |----------|---------|

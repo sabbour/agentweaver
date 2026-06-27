@@ -110,6 +110,11 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
+            # spec-018: HOME uses /tmp; worker has readOnlyRootFilesystem + no /data mount.
+            - name: HOME
+              value: /tmp
+            - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
+              value: /tmp/.net
             # Role flag — selects worker code path (claim runs, run MAF, dispatch sandboxes).
             # App__Role is the contract key per platform-deployment.md §2; Tank matches this.
             - name: App__Role
@@ -130,6 +135,10 @@ spec:
             # Sandbox dispatch (KubernetesSandboxExecutor path — kube-exec-stdio).
             - name: Sandbox__Backend
               value: kubernetes
+            # spec-018 P1.5: Keep in-api mode until pod-per-run gaps resolved.
+            # Override explicitly to prevent any future default change from activating pod-per-run.
+            - name: Sandbox__AgentExecutionMode
+              value: in-api
             - name: Sandbox__Kubernetes__Namespace
               value: agentweaver
             - name: Sandbox__Kubernetes__TemplateRef
@@ -209,17 +218,15 @@ spec:
               cpu: "2"
               memory: 4Gi
           livenessProbe:
-            # Tank: ensure /api/ping responds on port 8081 when App__Role=worker.
             httpGet:
-              path: /api/ping
+              path: /healthz
               port: 8081
             initialDelaySeconds: 30
             periodSeconds: 20
             failureThreshold: 3
           readinessProbe:
-            # Tank: ensure /api/health responds on port 8081 when App__Role=worker.
             httpGet:
-              path: /api/health
+              path: /readyz
               port: 8081
             initialDelaySeconds: 20
             periodSeconds: 15
