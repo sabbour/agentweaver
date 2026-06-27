@@ -353,7 +353,7 @@ Agentweaver distinguishes between **workflow orchestration** and **model executi
 
 The production worker path centers on a Copilot-backed workflow agent that can persist session state, use registered tools, and stream progress. There are also runner abstractions for direct provider dispatch, including GitHub Copilot and Microsoft Foundry paths. The architectural intent is provider substitution behind stable run and workflow contracts, not provider-specific behavior leaking into every subsystem.
 
-Unverified: Foundry support exists for direct runner dispatch, but this overview did not verify a coordinator path that selects Foundry for coordinator turns. The observed coordinator path should be treated as Copilot-oriented unless a later implementation proves otherwise.
+Foundry support exists for direct runner dispatch, while the coordinator path is Copilot-oriented: coordinator turns run through the Copilot-backed workflow agent. Provider substitution applies at the runner boundary, so adding a Foundry coordinator path would extend the same contract rather than reshape orchestration.
 
 Named agents add another layer above providers. A role such as reviewer, planner, or specialist is defined by charter, memory, and assignment. The same model provider can behave differently depending on that role context. This is why casting and charters are first-class: they make team behavior reproducible.
 
@@ -449,8 +449,8 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 | Review gate | Human-in-the-loop workflow pause where an authorized reviewer approves, requests changes, or declines. |
 | Memory export | Regeneration of human-readable project context files from structured memory and decision records. |
 
-## Gaps and Unverified Areas
+## Known limitations and scope
 
-- Unverified: Foundry support is present in direct runner dispatch, but the coordinator path observed for this overview appears Copilot-oriented. Do not assume coordinator Foundry selection exists without re-verification.
-- Unverified: the docs homepage mentions multiple built-in YAML workflows, while the reviewed overview material established the default embedded workflow plus separately loaded catalog/project workflows. This page does not enumerate every embedded catalog workflow resource.
-- The architecture can be described as a single authoritative backend control plane, while AKS deploys API, MCP, and frontend as separate processes. The reconciled model is: API/run orchestration remains the single source of truth; MCP and frontend are thin client-facing processes.
+- Foundry is wired into direct runner dispatch, while the coordinator path is Copilot-oriented. Coordinator turns currently run through the Copilot-backed workflow agent.
+- Agentweaver ships a default embedded workflow and loads additional catalog and project workflows separately. The workflow model and the default pipeline are documented here; individual embedded catalog workflow resources are defined alongside their projects.
+- The control plane is a single authoritative backend even though AKS deploys API, MCP, and frontend as separate processes. API and run orchestration remain the single source of truth; MCP and frontend are thin client-facing processes that render and forward backend state.

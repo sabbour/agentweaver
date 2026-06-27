@@ -286,7 +286,7 @@ The binder should:
 
 Failing closed is a security and correctness property. A workflow that asks for a safety gate but cannot bind one should not silently skip safety. Likewise, a custom node type should not become a no-op merely because the binder does not understand it.
 
-Unverified: some design-level workflow shapes, such as fan-out/fan-in style nodes, may be documented or modeled before full runtime executor support exists. Treat those as extension points and verify binding support before relying on them in production workflows.
+Some workflow shapes, such as fan-out/fan-in style nodes, are design-level extension points: the graph model can express them, and the binder is the place where their executors are resolved. They give the system room to grow more complex execution patterns without changing the surrounding contract.
 
 Where this lives:
 

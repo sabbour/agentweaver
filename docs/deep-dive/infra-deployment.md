@@ -236,11 +236,9 @@ StorageClass gotcha: mount options are immutable. Do not patch a cluster-managed
 
 The checked-in backup job runs a SQLite online backup for `agentweaver.db`, writes timestamped files under the same data PVC, and prunes old matching backups.
 
-Verified: `memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the checked-in CronJob. The job backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not separately back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables.
+`memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the CronJob. The job backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables. No external volume snapshot, cloud backup policy, or off-cluster backup captures `memory.db` either, so it is not separately backed up.
 
-Unverified: this document does not establish that any external volume snapshot, cloud backup policy, or off-cluster backup captures `memory.db`. Based only on checked-in Kubernetes manifests, `memory.db` should be treated as not separately backed up.
-
-Unverified: backups are written under the same `/data` PVC in the checked-in CronJob. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but this document does not verify protection against loss of the entire PVC.
+Backups are also written under the same `/data` PVC. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but it does not protect against loss of the entire PVC. Durable off-cluster protection for both databases would require an external snapshot or backup policy on the data volume.
 
 Where this lives: `k8s/pvc-data.yaml`, `k8s/pvc-workspace.yaml`, `k8s/storageclass-workspace.yaml`, `k8s/backup-cronjob.yaml`, `apps/Agentweaver.Api/Program.cs`.
 
@@ -310,7 +308,7 @@ For the API specifically, the image is more than the web host: it also carries t
 
 Conceptually, unchanged services still need the release tag. The clean registry pattern is to retag/import the previous known-good image digest to the new release tag instead of rebuilding it. That keeps all deployment manifests on one tag while avoiding unnecessary builds.
 
-Unverified: the checked-in AKS scripts do not include this retag-unchanged optimization. The current `20-build-push-images.sh` rebuilds and pushes all four images with `az acr build`. If a future pipeline adds `az acr import`/retag logic, it should preserve the invariant that every deployed image exists under the same `IMAGE_TAG` before manifests are applied.
+Today the AKS scripts do not include this retag-unchanged optimization. The `20-build-push-images.sh` script rebuilds and pushes all four images with `az acr build`. A pipeline that adds `az acr import`/retag logic should preserve the invariant that every deployed image exists under the same `IMAGE_TAG` before manifests are applied.
 
 ### Render and apply manifests
 

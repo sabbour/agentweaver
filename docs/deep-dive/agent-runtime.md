@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-This document explains the runtime logic behind Agentweaver: how a human request becomes an agent turn, how tools are made available safely, how providers are selected, and how the system records what happened. It is written for an engineer who wants to rebuild the runtime from first principles, not for someone trying to follow source files line by line.
+The runtime turns a human request into an agent turn, makes tools available safely, selects providers, and records what happened. This deep dive explains that logic for an engineer who wants to rebuild the runtime from first principles, not for someone trying to follow source files line by line.
 
 Primary scope:
 
@@ -169,7 +169,7 @@ Where this lives:
 
 Agentweaver has two provider seams that are easy to confuse.
 
-### Seam 1: the legacy/one-shot runner dispatcher
+### Seam 1: the one-shot runner dispatcher
 
 `IAgentRunner` is a provider-neutral interface for "execute this task in this directory with this model source." The dispatcher chooses a concrete runner from `ModelSource`:
 
@@ -177,7 +177,7 @@ Agentweaver has two provider seams that are easy to confuse.
 - `MicrosoftFoundry` routes to the Foundry runner.
 - unknown providers fail fast.
 
-This seam is useful for one-shot model-assisted tasks and older runtime paths. Foundry is plumbed here and can run if a caller reaches this dispatcher with `MicrosoftFoundry`.
+This seam serves one-shot, model-assisted tasks. The casting service is its primary caller: roster generation and other single-prompt operations run through this dispatcher. Foundry is plumbed here and runs whenever a caller reaches the dispatcher with `MicrosoftFoundry`.
 
 ### Seam 2: the live workflow turn-agent seam
 
@@ -224,7 +224,7 @@ Foundry does not use the Copilot SDK's native permission callback. Its runner ow
 
 This makes Foundry easier to reason about as a classic tool-calling loop, but it means the runner must implement details that Copilot delegates to its SDK.
 
-Unverified: no inspected app-level live run path currently selects Foundry through the workflow factory. External callers that directly use `IAgentRunner` could still exercise the Foundry dispatcher path.
+No app-level live run path selects Foundry through the workflow factory: the live project and coordinator path always builds the Copilot workflow turn agent. External callers that invoke `IAgentRunner` directly can still exercise the Foundry dispatcher path.
 
 Where this lives:
 

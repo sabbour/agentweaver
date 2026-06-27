@@ -4,7 +4,7 @@
 
 The Agentweaver API host is the composition shell for the product. It does not own every domain algorithm; instead, it makes the system runnable and observable by wiring services together, enforcing cross-cutting policy, exposing HTTP capabilities, and preparing durable state before traffic is accepted.
 
-This document explains the concepts behind the API host so a competent engineer could rebuild the same architecture without reading the implementation. It focuses on:
+This deep dive explains the concepts behind the API host so a competent engineer could rebuild the same architecture without reading the implementation. It focuses on:
 
 - host bootstrap and readiness;
 - dependency injection and service lifetimes;

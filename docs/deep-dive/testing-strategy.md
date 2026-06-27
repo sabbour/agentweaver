@@ -279,12 +279,12 @@ The suite is strong around control-plane invariants, but there are deliberate ga
 
 - Live model-provider behavior is not part of the default suite. Provider-backed sandbox escape tests exist, but they are opt-in through environment configuration.
 - Staging Playwright tests are smoke tests, not full workflow coverage.
-- Several OAuth lifecycle scenarios are present as skipped acceptance tests while implementation/deployment work is incomplete or environment-dependent.
+- Several OAuth lifecycle scenarios exist as skipped acceptance tests, pending implementation and environment availability.
 - Kubernetes sandbox execution is not proven by a default live-cluster E2E in the surveyed tests. The default coverage focuses on command construction, policy behavior, and API-side sandbox contracts.
 - Frontend behavior is not deeply unit-tested in the surveyed backend test project. The visible E2E coverage checks major deployed pages and auth redirects.
 - Performance, load, and long-running multi-agent soak behavior are not represented as a normal test layer.
 
-Unverified: whether a separate CI pipeline runs additional deployment, load, or live AKS sandbox tests outside `tests/Agentweaver.Tests` and `tests/e2e`.
+The documented test scope covers `tests/Agentweaver.Tests` and `tests/e2e`. Any additional deployment, load, or live AKS sandbox stages that a CI pipeline might run sit outside this scope.
 
 These gaps are acceptable only if they are explicit. The default suite should remain hermetic, but release gates should add opt-in live checks for the boundaries that cannot be proven locally.
 

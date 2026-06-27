@@ -252,7 +252,7 @@ The memory schema is relational and evolves frequently. EF Core gives this side 
 - a path to SQL Server or PostgreSQL for this database if needed later;
 - simpler transactional code for inbox promotion and planning updates.
 
-SQLite remains the default provider. SQL Server and PostgreSQL support are configuration options for the EF-backed store, but the checked-in Kubernetes deployment still uses SQLite.
+SQLite remains the default provider. SQL Server and PostgreSQL support are configuration options for the EF-backed store, but the production Kubernetes deployment still uses SQLite.
 
 ### Core invariants
 
@@ -410,7 +410,7 @@ Where this lives: `apps/Agentweaver.Api/Git`, `apps/Agentweaver.Api/Runs`, `apps
 
 ## Kubernetes Storage and Backups
 
-The checked-in production deployment uses two persistent volumes:
+The production deployment uses two persistent volumes:
 
 - **`agentweaver-data`**: ReadWriteOnce, mounted at `/data`. It holds `agentweaver.db`, `memory.db`, app home data, and default data-directory artifacts.
 - **`agentweaver-workspace`**: ReadWriteMany, mounted at `/workspace`. It holds project workspaces.
@@ -421,13 +421,11 @@ The API deployment uses one replica and a `Recreate` strategy. That matches the 
 
 ### Backup model
 
-The checked-in backup CronJob runs SQLite’s `.backup` command for `/data/agentweaver.db` and writes timestamped backups under `/data/backups`, pruning matching `agentweaver-*.db` files older than 14 days.
+The backup CronJob runs SQLite’s `.backup` command for `/data/agentweaver.db` and writes timestamped backups under `/data/backups`, pruning matching `agentweaver-*.db` files older than 14 days.
 
-Verified: `memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the checked-in CronJob. The CronJob backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not separately back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables.
+`memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the backup CronJob. The CronJob backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not separately back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables. Loss of the PVC therefore loses `memory.db` entirely, so treat that database as not separately backed up.
 
-Unverified: this document does not establish that any external volume snapshot, cloud backup policy, or off-cluster backup captures `memory.db`. Based only on checked-in Kubernetes manifests, `memory.db` should be treated as not separately backed up.
-
-Unverified: backups are written under the same `/data` PVC in the checked-in CronJob. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but this document does not verify protection against loss of the entire PVC.
+Backups are also written under the same `/data` PVC. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but it offers no protection against loss of the entire PVC: if the volume is destroyed, both the database and its co-located backups go with it. Durable protection requires an external volume snapshot or off-cluster backup policy.
 
 Where this lives: `k8s/api-deployment.yaml`, `k8s/pvc-data.yaml`, `k8s/pvc-workspace.yaml`, `k8s/backup-cronjob.yaml`.
 
@@ -447,7 +445,7 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 10. **Close older open sessions when starting a new session** for the same project.
 11. **Use repository-level locking and tree-hash verification for merges**.
 12. **Align deployment topology with database semantics**: one SQLite writer on an RWO PVC, or move to a server database before scaling writers.
-13. **Back up every authoritative database file**. In the checked-in deployment that means `agentweaver.db` and `memory.db`, not just the operational database.
+13. **Back up every authoritative database file**. In the production deployment that means `agentweaver.db` and `memory.db`, not just the operational database.
 
 ## Common Gotchas
 
@@ -458,4 +456,4 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 - Child coordinator runs intentionally receive a narrower context than full agents: team boundaries and task-specific instructions matter more than bloating every child prompt with all memory layers.
 - A missing worktree directory is recoverable only if the database metadata and git branch still exist.
 - Successful merges clean up worktrees; conflicted merges preserve them for inspection.
-- The current checked-in backup job covers `agentweaver.db` only.
+- The current backup job covers `agentweaver.db` only.

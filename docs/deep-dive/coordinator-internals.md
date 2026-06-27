@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-The orchestration overview explains how a goal moves through Agentweaver at a system level. This document zooms in on the coordinator itself: the subsystem that turns one broad request into a confirmed intent contract, a dependency-aware work plan, multiple child runs, and one collective result.
+The orchestration overview explains how a goal moves through Agentweaver at a system level. The focus here is the coordinator itself: the subsystem that turns one broad request into a confirmed intent contract, a dependency-aware work plan, multiple child runs, and one collective result.
 
 The coordinator is best understood as a **durable team manager**. It does not merely ask a model to "do the task." It records what success means, decides how to divide responsibility, starts child workers only when their prerequisites are ready, watches their outcomes, assembles their branches into one candidate result, and routes failure back into retry or terminal states.
 
@@ -14,7 +14,7 @@ Primary scope:
 - collective assembly, review, merge, and scribe;
 - restart recovery and retry semantics.
 
-For the high-level relationship between coordinator orchestration and run workflow orchestration, see [Orchestration Engine — Conceptual Deep Dive](orchestration.md). This document assumes that overview and goes deeper into the coordinator's own internal logic.
+For the high-level relationship between coordinator orchestration and run workflow orchestration, see [Orchestration Engine — Conceptual Deep Dive](orchestration.md). The sections below assume that overview and go deeper into the coordinator's own internal logic.
 
 ## The coordinator mental model
 
@@ -301,7 +301,7 @@ Child runs use the trimmed child workflow. They produce work and pass child-leve
 
 ### Observation and bubbling
 
-The dispatch loop observes child runs through the run event stream. The preferred path is replay-then-tail over durable events; a legacy in-memory stream-store path remains as fallback for tests and older wiring.
+The dispatch loop observes child runs through the durable run event stream. It replays the events already recorded for each child run and then tails new ones as they arrive, so the coordinator sees a complete, ordered history regardless of when it begins observing. This replay-then-tail model means observation is resumable: a coordinator that restarts can reconstruct child progress from the stream rather than depending on in-memory state.
 
 Terminal child events map to coordinator outcomes:
 

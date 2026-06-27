@@ -30,7 +30,7 @@ flowchart TD
 
 A useful rebuilding rule is: **workflows are declarative policy graphs; binding is the safety boundary that turns policy into execution.**
 
-Workflows are one half of run orchestration. The coordinator and run lifecycle are covered in [orchestration.md](orchestration.md); this document focuses on how workflow definitions are authored, generated, selected, and bound.
+Workflows are one half of run orchestration. The coordinator and run lifecycle are covered in [orchestration.md](orchestration.md); the focus here is how workflow definitions are authored, generated, selected, and bound.
 
 ## Core Design Invariants
 
@@ -43,7 +43,7 @@ These invariants are the backbone of the workflow engine:
 - **Selection is bounded model authority.** The selector may choose among already-safe candidates; it may not invent ids or bypass filtering.
 - **Binding fails closed.** A node type, gate, or edge with no known executor mapping aborts the build instead of becoming a no-op.
 - **Runtime policy is composed before execution.** Review-policy gates are merged into the selected workflow before the executable graph is built.
-- **Default behavior is always available for old projects.** The built-in default workflow is embedded in code and remains the fallback for projects without workflow files.
+- **A built-in default is always available.** The default workflow is embedded in code and serves projects that ship no workflow files of their own, so every project has a valid workflow to run.
 
 ## Workflow Template as Policy Graph
 
@@ -151,7 +151,7 @@ flowchart TD
 
 The runtime uses explicit node fields and run context to build the agent prompt. Catalog roles are preferred because their charters are already known to the casting system. Bespoke charters are a controlled escape hatch for generated workflows whose process needs a role outside the catalog.
 
-Unverified: the exact precedence between a prompt node's `role`, the run's assigned `AgentName`, and catalog role resolution is split across runtime and casting code. Treat `agent` and `charter` as the reliable workflow-level execution hints, and treat `role` / `kind` primarily as graph metadata unless verified for a specific path.
+Execution hints resolve in a clear order. The `agent` and `charter` fields are the reliable workflow-level execution hints: `agent` binds the node to a known catalog role, and `charter` supplies a bespoke role inline. A prompt node's `role` and `kind` are primarily graph metadata that classify the node and describe its place in the flow; they shape selection and presentation rather than directly choosing the executing agent. When a node carries both an execution hint and metadata, the runtime drives execution from `agent`/`charter` and the run's assigned `AgentName`, using `role`/`kind` for context.
 
 ## Discovery, Validation, and Registry
 

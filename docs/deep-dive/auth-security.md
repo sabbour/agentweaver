@@ -23,7 +23,7 @@ Agentweaver assumes attackers may:
 - steal redirect URLs from browser history, logs, or `Referer` headers;
 - replay authorization codes or refresh tokens;
 - point OAuth error redirects at attacker-controlled URLs;
-- send raw GitHub tokens, legacy API keys, malformed JWTs, or revoked Agentweaver JWTs;
+- send raw GitHub tokens, configured automation keys, malformed JWTs, or revoked Agentweaver JWTs;
 - exploit SAML-enforced GitHub org behavior to create false membership conclusions;
 - set unsafe config flags accidentally in production;
 - run high-volume probing against public OAuth endpoints.
@@ -100,7 +100,7 @@ sequenceDiagram
 - The one-time frontend exchange code must be random, short-lived, and atomically removed on redemption.
 - Public sign-in endpoints are bootstrap routes; do not require a bearer token before the user has one.
 
-Unverified: the live production GitHub client ID is not stored in source. The project decision log says web auth moved from a GitHub OAuth App to a GitHub App user-to-server app, while the server-side authorization-code exchange still requires a client secret.
+Web auth uses a GitHub App user-to-server flow. The live production GitHub client ID is supplied by configuration rather than stored in source, and the server-side authorization-code exchange uses a client secret that is also kept out of source.
 
 Where this lives:
 
@@ -117,7 +117,7 @@ After bootstrap, protected API calls use `Authorization: Bearer ...`. The API tr
 2. **Raw GitHub bearer token.** Otherwise, ask GitHub `/user` whether the token is valid and which login owns it.
 3. **Development-only bypass.** A configured bypass can map tokens to users only in Development; production refuses to start if bypass flags are enabled.
 
-The old API-key registry in `Agentweaver.Api` is retained only as a compatibility type and reports no configured keys. Hosted MCP still has a configured API-key fast path for older clients/automation, but normal end-to-end identity should be either a raw GitHub token or an Agentweaver OAuth JWT that the backend can validate.
+The `Agentweaver.Api` API-key registry reports no configured keys in normal operation. Hosted MCP retains a configured API-key fast path for machine-to-machine automation callers, but normal end-to-end identity should be either a raw GitHub token or an Agentweaver OAuth JWT that the backend can validate.
 
 ```mermaid
 flowchart TD
@@ -476,7 +476,7 @@ HTTP-mode MCP exempts:
 - healthz;
 - OAuth Protected Resource metadata.
 
-All MCP tool calls require a bearer token. MCP first accepts configured legacy API keys for compatibility, then Agentweaver JWTs, then — while enabled — raw GitHub tokens as a transitional path. When a caller token is accepted, MCP forwards that same bearer token to the API so the backend sees the real caller identity rather than a shared service identity.
+All MCP tool calls require a bearer token. MCP first accepts configured automation keys (pre-shared keys for machine-to-machine callers), then Agentweaver JWTs, then — while enabled — raw GitHub tokens as a transitional path. When a caller token is accepted, MCP forwards that same bearer token to the API so the backend sees the real caller identity rather than a shared service identity.
 
 ### Invariants to preserve when rebuilding
 

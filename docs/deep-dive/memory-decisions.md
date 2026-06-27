@@ -214,7 +214,7 @@ flowchart TD
 
 This prevents a data-loss bug: if the key were only `(project, slug)` with blind upsert semantics, the second agent to propose "use-postgres" could overwrite the first agent's unrelated proposal. If the key were only `(project, agent, slug)`, both entries could survive in the database but export to the same `.squad/decisions/inbox/use-postgres.md` path and one file would win. De-collision preserves both proposals all the way through the file mirror.
 
-Unverified: the endpoint chooses a free de-collided slug before insert. If two different-agent submissions race and choose the same free candidate, the unique project/slug database constraint should prevent duplicate slugs, but the inspected endpoint does not show an explicit retry loop after a uniqueness violation.
+Slug uniqueness is enforced in two layers. The endpoint first selects a free, de-collided slug before insert by probing `requested--agent--N` candidates until one is unused. The unique `(project, slug)` database constraint then guarantees correctness even under concurrency: if two different-agent submissions race and pick the same free candidate, one insert succeeds and the other fails the constraint. The endpoint does not retry after such a uniqueness violation, so a losing concurrent submission surfaces the conflict to the caller rather than transparently re-deriving a new slug.
 
 ## Memory versus decisions
 

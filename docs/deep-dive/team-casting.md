@@ -14,7 +14,7 @@ Think of casting as a controlled compiler:
 
 The design keeps creative choice and persistent state separate. Model-assisted steps may help select roles, but deterministic code owns naming, validation, persistence, and file writes.
 
-Unverified: the older document referenced an orchestration deep dive at `docs/deep-dive/orchestration.md`; that file is not present in this checkout. Runtime workflow execution is intentionally out of scope here.
+Runtime workflow execution is intentionally out of scope here; see [Orchestration](./orchestration.md) for how cast teams are run.
 
 ```mermaid
 flowchart LR
@@ -196,7 +196,7 @@ Those signals influence **role selection only**. For example, TypeScript plus Re
 
 If no signals are found, the model is asked for a small general-purpose starting team and the proposal includes a warning.
 
-Unverified: there is no active "project signals to universe resonance" algorithm in the inspected code. Universe selection is deterministic from policy, history, optional override, and seed; project signals are used for role-selection prompts.
+Universe selection is deterministic from policy, history, optional override, and seed. Project signals feed only the role-selection prompt; they never influence which universe a team draws its names from.
 
 ```mermaid
 flowchart TD
@@ -269,7 +269,7 @@ Applying a blueprint is transactional in spirit:
 
 This design avoids a separate "blueprint writer" and guarantees blueprints produce teams through the same casting path as every other feature.
 
-Unverified: some comments still describe blueprints as catalog-only. The active behavior supports bespoke roles when they are declared in `bespoke_roles` and referenced by the roster.
+Blueprints support bespoke roles: a role is honored when it is declared in `bespoke_roles` and referenced by the roster, alongside the catalog roles a blueprint draws on.
 
 Where this lives:
 
@@ -327,7 +327,7 @@ In plain language:
 
 The important trade-off is determinism over surprise. The same policy, history, and seed should produce the same universe. That makes tests and rebuilds predictable.
 
-Unverified: the casting policy model contains a universe capacity map, but the inspected allocator does not enforce capacity. Exhaustion is handled at the name level with generic overflow names.
+The casting policy model carries a universe capacity map, but the allocator does not enforce it. Exhaustion is handled at the name level: once a universe's pool is used up, allocation falls back to generic overflow names rather than rejecting the request.
 
 ### Name allocation algorithm
 
@@ -491,9 +491,9 @@ This supports simple operations:
 
 To rebuild cast history, parse each cast snapshot event. Universe usage history is derived by sorting snapshots by creation time and keeping the first occurrence of each universe. That derived list feeds future universe selection.
 
-### Legacy layout and conflicts
+### Canonical and alternate layouts
 
-The reader prefers canonical `.squad/casting/` state. It can fall back to older flat casting files when canonical files do not exist. If both canonical and legacy state exist with different contents, the reader reports a layout conflict instead of guessing.
+The reader prefers canonical `.squad/casting/` state. It can fall back to an older, flat casting layout when the canonical files do not exist. If both the canonical and the flat state exist with different contents, the reader reports a layout conflict instead of guessing.
 
 This is an important migration invariant: silent conflict resolution would risk corrupting identity state.
 
@@ -610,7 +610,7 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 11. Write `.squad/` human files and append registry/history events.
 12. Regenerate canonical JSON from event sidecars.
 13. Seed memory/session after confirmation as best effort.
-14. Implement reader conflict detection between canonical and legacy layouts.
+14. Implement reader conflict detection between the canonical and the older flat layouts.
 15. Implement git sync that reviews and commits only `.squad/` changes with expected-hash protection.
 16. Implement DTO-based memory import/export so database state and file ledgers stay synchronized.
 
@@ -626,6 +626,6 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 - Existing teams require explicit confirmation intent.
 - Built-ins are automatic and are not part of user proposals.
 - Registry/history events must be followed by canonical JSON regeneration.
-- Canonical and legacy casting state conflicts should block reads/writes until resolved.
+- Conflicts between canonical and older flat casting state should block reads/writes until resolved.
 - Git sync stages only `.squad/`; it does not commit `.agentweaver/context/*`.
 - Memory import/export is DTO-based so the squad package remains database-agnostic.

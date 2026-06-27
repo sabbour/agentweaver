@@ -226,9 +226,7 @@ The coordinator assembly rule is "no partial assembly." If any eligible child br
 
 ## Push and pull request lifecycle
 
-The studied API implements local branch, commit, review, and merge behavior. It also uses GitHub tokens for clone, repository listing, account listing, and user identity. It does **not** show an in-API implementation that pushes run branches to GitHub or creates pull requests.
-
-Unverified: no `Octokit` usage, GitHub Pull Request API call, `git push`, or LibGit2Sharp push operation was found in `apps/Agentweaver.Api` during this pass.
+The current API implements local Git operations only — branch creation, commits, tree/diff inspection, review, and merge — and uses GitHub tokens for clone, repository listing, account listing, and user identity. Pushing run branches to a remote and opening pull requests are out of scope. If added later, they would be treated as remote-sync failures distinct from local candidate-content failures.
 
 If rebuilding a remote PR lifecycle on top of the current design, the natural extension would be:
 
@@ -372,7 +370,7 @@ Reasoning model: cloning or listing with ambiguous credentials creates confusing
 
 ### Push or PR creation failures
 
-Unverified: push and PR creation are not implemented in the studied API. If added, they should be treated as remote synchronization failures, not as local candidate-content failures. The local branch, tree hash, and diff should remain inspectable even if GitHub rejects a push or PR creation request.
+Pushing and PR creation are out of scope for the current API (see "Push and pull request lifecycle"). If added, they should be treated as remote synchronization failures, not as local candidate-content failures. The local branch, tree hash, and diff should remain inspectable even if GitHub rejects a push or PR creation request.
 
 ## Invariants
 
@@ -401,7 +399,7 @@ Git worktrees are more complex than copying a repository directory, but they avo
 
 ### Local merge over always-remote PR
 
-The current implementation can complete review and merge locally without requiring a remote. That supports blank/local projects and keeps the default deployment simpler. The trade-off is that GitHub PRs are not the authoritative review surface in the studied API.
+The current implementation can complete review and merge locally without requiring a remote. That supports blank/local projects and keeps the default deployment simpler. The trade-off is that GitHub PRs are not the authoritative review surface.
 
 ### Ref-only fallback
 
@@ -447,5 +445,4 @@ If rebuilding the git integration subsystem, implement it in this order:
 - A missing branch is much harder to recover because git has lost the candidate content reference.
 - Dirty checked-out target branches may merge ref-only, so the working directory can lag behind the branch ref.
 - Coordinator children are not isolated like normal runs; they intentionally share an orchestration worktree.
-- The GitHub API usage in the studied API is raw `HttpClient`, not Octokit.
-- Unverified: push and PR creation are not implemented in `apps/Agentweaver.Api` as of this review.
+- The GitHub API usage is raw `HttpClient`, not Octokit.

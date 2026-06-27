@@ -196,7 +196,7 @@ flowchart TD
     Producer -. no merge authority .-> Gate
 ```
 
-Unverified: the current source does **not** show a separate rule that prevents a human requester from approving their own run as a different "original author" concept. Endpoint authorization is owner-scoped: the run's submitting user, or equivalent authenticated identity, owns the review request. If the product intends a strict "author cannot approve own work" rule between two human users, that would need an explicit persisted author/reviewer assignment model beyond the verified source.
+Review authorization is owner-scoped: the run's submitting user, or equivalent authenticated identity, owns the review request. There is no separate rule that prevents a human requester from approving their own run as a distinct "original author." A strict "author cannot approve own work" rule between two human users would require an explicit persisted author/reviewer assignment model in addition to owner-scoped authorization.
 
 ## Coordinator Collective Review
 

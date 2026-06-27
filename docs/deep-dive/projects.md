@@ -237,13 +237,13 @@ Starting a run should be rejected if the project is deleting or if the workspace
 
 Coordinator orchestrations also use the project as their boundary. They need the same basic facts as runs: where the repository is, what branch to start from, and what defaults apply.
 
-Unverified: a dedicated `docs/deep-dive/orchestration.md` document is not present in this checkout.
+See also: [Orchestration](./orchestration.md).
 
 ### Teams and casting
 
 Team behavior is project-relative because team files live in the repository workspace, especially under `.squad`. When a project run targets an agent, Agentweaver can read that agent's charter from the project workspace and reject missing or inactive agents. This makes the repository itself part of the team's durable context.
 
-Unverified: a dedicated `docs/deep-dive/team-casting.md` document is not present in this checkout.
+See also: [Team & casting](./team-casting.md).
 
 ### Sandboxes
 

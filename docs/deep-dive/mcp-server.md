@@ -1,6 +1,6 @@
 # MCP Server — Conceptual Deep Dive
 
-This document explains the MCP server as a set of rebuildable design ideas, not as a line-by-line code tour. The intended reader is an engineer who has never seen Agentweaver but needs to recreate the same behavior: an MCP endpoint that tools can call, that uses standards-based OAuth discovery, and that preserves the caller's identity all the way to the Agentweaver API.
+Agentweaver's MCP server is an endpoint that tools can call, uses standards-based OAuth discovery, and preserves the caller's identity all the way to the Agentweaver API. The sections below explain its design as rebuildable ideas, so an engineer who has never seen Agentweaver could recreate the same behavior.
 
 ## 1. The mental model: MCP is the tool door, the API is the authority
 
@@ -265,7 +265,7 @@ A rebuild should preserve this pattern:
 | Blueprints and catalog | List scenario/role catalogs and generate or validate project blueprints. | `list_blueprints`, `validate_blueprint`, `blueprint_generate`, `catalog_list_roles` |
 | Diagnostics and sandbox policy | Expose operational status and repository sandbox policy settings. | `diagnostics_get`, `heartbeat_status`, `sandbox_policy_get`, `sandbox_policy_set` |
 
-Unverified: protocol-level schema details may include MCP SDK-generated metadata beyond the static tool names and descriptions summarized here.
+Beyond the static tool names and descriptions summarized here, the protocol-level schema may include additional MCP SDK-generated metadata.
 
 **Where this lives**
 
@@ -317,7 +317,7 @@ If you were recreating Agentweaver's MCP server from scratch, build in this orde
 2. **Implement the Authorization Server separately.** Publish RFC 8414 metadata, run authorization code + PKCE, broker GitHub login server-side, enforce org membership before issuing codes, sign short-lived RS256 JWTs, publish JWKS, support refresh and revocation.
 3. **Implement the Resource Server discovery surface.** Serve RFC 9728 protected-resource metadata unauthenticated at both bare and path-suffixed well-known URLs.
 4. **Challenge correctly.** Return `401 WWW-Authenticate: Bearer ... resource_metadata="..."` for unauthenticated MCP requests.
-5. **Validate bearer tokens at MCP.** Accept configured automation keys if needed, validate Agentweaver JWTs offline with JWKS, and gate any transitional legacy token path behind configuration.
+5. **Validate bearer tokens at MCP.** Accept configured automation keys if needed, validate Agentweaver JWTs offline with JWKS, and gate the transitional raw GitHub token path behind configuration.
 6. **Propagate caller identity.** Store the accepted bearer token in request context and forward it to the API for every tool call.
 7. **Keep tools thin.** Use MCP as a protocol adapter, not as a second implementation of Agentweaver's domain logic.
 8. **Pin hosted OAuth identity.** In Production, fail startup if issuer/audience are missing or host-derived. Internal service DNS must not change token identity.

@@ -363,7 +363,7 @@ flowchart TD
 
 The checked-in AKS deployment configures OTEL environment variables for the API pod: service name, resource attributes, OTLP endpoint, and OTLP protocol. The system overview describes the API pod sending telemetry to an OTLP collector.
 
-Unverified: the API project source reviewed for this document does not show explicit custom OpenTelemetry metric instruments that export the dashboard DTO values directly. The verified application-level metrics are HTTP JSON aggregations. The verified deployment-level OTEL configuration points the pod at an OTLP collector for telemetry export, but the exact runtime instrumentation path depends on deployment/runtime configuration outside the metrics service itself.
+The application-level metrics are HTTP/JSON aggregations: the dashboard and diagnostics endpoints compute and return DTO values directly, rather than emitting them as OpenTelemetry metric instruments. The deployment points the API pod at an OTLP collector for telemetry export. The exact runtime instrumentation that flows to that collector depends on deployment configuration outside the metrics service itself.
 
 This distinction is important when rebuilding:
 
@@ -389,9 +389,9 @@ The subscriber replays persisted events. If a terminal event appears, the subscr
 
 Snapshots, REST seeds, and SSE replay can overlap. Clients must deduplicate by sequence. The backend also skips replayed events at the replay/tail handoff.
 
-### Legacy or incomplete event history
+### When event history is incomplete
 
-Some older completed runs may not have persisted `RunEvents` rows. The stream endpoint has a fallback that can emit a final agent message from the run result when no persisted events replay. Treat this as compatibility behavior, not the model to rebuild.
+Some completed runs may not have a full set of persisted `RunEvents` rows. When no persisted events replay, the stream endpoint falls back to emitting a final agent message reconstructed from the run result, so a subscriber still receives a coherent terminal view. This fallback keeps incomplete histories observable; a rebuild should still treat the durable event rows as the primary model and use the run-result reconstruction only as a backstop.
 
 ### Corrupt payload JSON
 
