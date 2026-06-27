@@ -110,9 +110,10 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
-            # spec-018: HOME uses /tmp; worker has readOnlyRootFilesystem + no /data mount.
+            # spec-018 P2: HOME on RWX workspace/.home — shared with API replicas.
+            # AppPaths.DataDirectory → /workspace/.home/.local/share/agentweaver.
             - name: HOME
-              value: /tmp
+              value: /workspace/.home
             - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
               value: /tmp/.net
             # Role flag — selects worker code path (claim runs, run MAF, dispatch sandboxes).

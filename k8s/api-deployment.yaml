@@ -7,11 +7,15 @@ metadata:
     app: agentweaver-api
     app.kubernetes.io/part-of: agentweaver
 spec:
-  # Single replica: SQLite is single-writer (RWO PVC). Recreate ensures the old
-  # pod releases the disk before the new one attaches (no multi-attach).
-  replicas: 1
+  # spec-018 P2 cutover: Postgres primary. RWX workspace (/workspace/.home) replaces RWO data PVC.
+  # Recreate → RollingUpdate now that SQLite single-writer constraint is lifted.
+  # replicas:2 — both pods land on different nodes; RWX Azure Files allows multi-node mount.
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: agentweaver-api
@@ -41,10 +45,9 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
+            # spec-018 P2: HOME on /tmp; no agentweaver-data PVC in Postgres mode.
             - name: HOME
-              value: /data
-            - name: Database__Path
-              value: /data/agentweaver.db
+              value: /tmp
             - name: TMPDIR
               value: /tmp
             - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
@@ -55,25 +58,20 @@ spec:
               value: https://${HOST}
             - name: Auth__OAuth__Audience
               value: https://${HOST}/mcp
-            # spec-018 P2: Postgres connection for efbundle when Database__Provider=Postgres.
-            # Keep optional: true so efbundle continues to work against SQLite today.
+            # spec-018 P2: run efbundle against Postgres.
             - name: Database__Provider
-              value: "sqlite"
+              value: "Postgres"
             - name: ConnectionStrings__MemoryDb
               valueFrom:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-                  optional: true
             - name: ConnectionStrings__Postgres
               valueFrom:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-                  optional: true
           volumeMounts:
-            - name: data
-              mountPath: /data
             - name: tmp
               mountPath: /tmp
           securityContext:
@@ -106,10 +104,14 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
+            # spec-018 P2: HOME on RWX workspace/.home — shared across all replicas + worker.
+            # AppPaths.DataDirectory → $HOME/.local/share/agentweaver (token store, checkpoints, worktrees).
+            # /workspace is RWX (Azure Files); agentweaver-data RWO PVC is dropped.
             - name: HOME
-              value: /data
+              value: /workspace/.home
+            # SQLite path kept for reference; unused when Database__Provider=Postgres.
             - name: Database__Path
-              value: /data/agentweaver.db
+              value: /tmp/agentweaver.db
             - name: Workspace__Path
               value: /workspace
             # In-process loopback base URL for agent decision/memory/inbox tools and Scribe.
@@ -169,30 +171,22 @@ spec:
             # H4: A2A port — must match the Kestrel endpoint in configmap-agenthost.yaml.
             - name: Sandbox__A2A__Port
               value: "8088"
-            # spec-018 P2: PostgreSQL Flexible Server connection config.
-            # Database__Provider=Postgres activates the Npgsql provider in Program.cs:303-307.
-            # Set to "sqlite" (default) until Tank completes the EF Postgres migration set
-            # and the cutover is authorized — flip to "Postgres" to switch.
-            # ConnectionStrings:MemoryDb is the key the current app code reads (Program.cs:305).
-            # ConnectionStrings:Postgres is Tank's planned rename (data-postgres-migration.md §5).
-            # Both point to the same secret value so either key works after the rename.
+            # spec-018 P2: Postgres primary — flip from sqlite.
             - name: Database__Provider
-              value: "sqlite"
+              value: "Postgres"
             - name: ConnectionStrings__MemoryDb
               valueFrom:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-                  optional: true
             - name: ConnectionStrings__Postgres
               valueFrom:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-                  optional: true
           volumeMounts:
-            - name: data
-              mountPath: /data
+            # spec-018 P2: agentweaver-data RWO PVC dropped. /workspace RWX is primary.
+            # HOME=/workspace/.home gives token store + worktrees on shared RWX volume.
             - name: workspace
               mountPath: /workspace
             - name: tmp
@@ -235,13 +229,9 @@ spec:
             capabilities:
               drop:
                 - ALL
-        # TODO(a7-aks-013): production preview sessions require a dedicated preview proxy
-        # service/gateway in front of sandbox pod port-forwards; the API image includes kubectl
-        # only for creating pod-level port-forward sessions.
+      # spec-018 P2: agentweaver-data volume removed; Postgres is primary data store.
+      # The PVC is retained (not deleted) as a safety net for emergency SQLite rollback.
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: agentweaver-data
         - name: workspace
           persistentVolumeClaim:
             claimName: agentweaver-workspace
