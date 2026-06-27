@@ -251,8 +251,11 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     var sandboxAgentOptions = new SandboxAgentOptions
     {
         AgentExecutionMode = agentMode,
-        AgentHostPort = int.TryParse(builder.Configuration["Sandbox:AgentHost:Port"], out var p) ? p : 8080,
-        AgentHostScheme = builder.Configuration["Sandbox:AgentHost:Scheme"] ?? "https",
+        AgentHostPort = int.TryParse(builder.Configuration["Sandbox:AgentHost:Port"], out var p) ? p : 8088,
+        // RequireMtls (default true) drives AgentHostScheme (https/http) via AgentHostEndpoint.
+        // Set Sandbox:AgentHost:RequireMtls=false ONLY for the PoC env (plain http, no client cert).
+        RequireMtls = !string.Equals(
+            builder.Configuration["Sandbox:AgentHost:RequireMtls"], "false", StringComparison.OrdinalIgnoreCase),
         AgentHostA2APath = builder.Configuration["Sandbox:AgentHost:A2APath"] ?? "/a2a/agent",
     };
     builder.Services.AddSingleton(sandboxAgentOptions);
@@ -282,7 +285,10 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     });
 
     // Named HttpClient for A2A sandbox pod connections.
-    // In production, configure client certificate / bearer handler here per H1 (mTLS/TLS).
+    // When RequireMtls=true (production, H1), attach the client-certificate handler here so the
+    // worker presents its workload-bound cert on every pod connection (wiring owned by Link via
+    // a mounted secret — left as the documented hook). When RequireMtls=false (PoC), no client
+    // cert is configured and the worker connects over plain http.
     builder.Services.AddHttpClient("a2a-sandbox-pod")
         .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(30));
 

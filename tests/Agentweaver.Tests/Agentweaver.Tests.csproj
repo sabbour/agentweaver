@@ -37,6 +37,10 @@
     <ProjectReference Include="..\..\packages\Agentweaver.SandboxFs\Agentweaver.SandboxFs.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
     <ProjectReference Include="..\..\apps\Agentweaver.Api\Agentweaver.Api.csproj" />
+    <ProjectReference Include="..\..\apps\Agentweaver.AgentHost\Agentweaver.AgentHost.csproj">
+      <!-- Alias avoids CS0433: AgentHost and Api both emit a top-level 'Program' type. -->
+      <Aliases>agenthost</Aliases>
+    </ProjectReference>
     <ProjectReference Include="..\..\apps\Agentweaver.Mcp\Agentweaver.Mcp.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.Squad\Agentweaver.Squad.csproj" />
     <ProjectReference Include="..\..\apps\Agentweaver.Api.Migrations.Postgres\Agentweaver.Api.Migrations.Postgres.csproj" />

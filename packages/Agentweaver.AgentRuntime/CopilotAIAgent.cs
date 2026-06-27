@@ -82,6 +82,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// <summary>The run-event channel writer for the current run (null when no stream attached).</summary>
     public ChannelWriter<RunEvent>? StreamWriter { get; private set; }
 
+    /// <summary>
+    /// Attaches (or, with <see langword="null"/>, detaches) the run-event side-channel writer for
+    /// the current turn <b>without</b> re-running the expensive <see cref="SetupAsync"/>.
+    ///
+    /// <para>
+    /// Used by the pod-side A2A bridge (spec-018 P1.5, <c>A2ATurnBridgeAgent</c>): the bridge
+    /// installs a per-turn channel before calling <see cref="RunTurnAsync"/> so every emitted
+    /// <see cref="RunEvent"/> is forwarded back to the worker as an A2A <c>DataPart</c>, then
+    /// clears it at end of turn. One run per pod and turns are serialized, so swapping the writer
+    /// on this singleton is race-free in the pod host.
+    /// </para>
+    /// </summary>
+    public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) => StreamWriter = streamWriter;
+
     // --- Runtime objects created during SetupAsync — kept alive for serialize/deserialize ---
     private CopilotClient? _client;
     private AIAgent? _inner; // the GitHubCopilotAgent

@@ -71,11 +71,14 @@ spec:
             claimName: agentweaver-workspace
         - name: tmp
           emptyDir: {}
-        # H1: workload-bound server cert secret (created by gen-a2a-mtls-certs.sh).
+        # H1 (spec-018): workload-bound server cert secret (created by gen-a2a-mtls-certs.sh).
+        # PoC NOTE (P1.5): optional=true so the pod still starts when RequireMtls=false and the
+        # cert secret is absent. PRODUCTION (RequireMtls=true) requires this secret to exist.
         - name: a2a-tls
           secret:
             secretName: agentweaver-a2a-server-tls
             defaultMode: 0400
+            optional: true
         # H4/H3: Kestrel + card-authz configuration.
         - name: agenthost-config
           configMap:

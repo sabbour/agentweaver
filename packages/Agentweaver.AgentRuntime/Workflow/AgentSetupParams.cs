@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.AI;
 
 namespace Agentweaver.AgentRuntime.Workflow;
 
@@ -31,6 +32,35 @@ public sealed class AgentSetupParams
     public string? ApiKey { get; init; }
     public string? UserId { get; init; }
     public bool IsRevision { get; init; }
+
+    /// <summary>
+    /// Tries to decode a <see cref="DataContent"/> item (sent as the first content part of the
+    /// A2A turn message by <see cref="RemoteAgentProxy"/>) back into an
+    /// <see cref="AgentSetupParams"/>. Returns <see langword="null"/> when the media type does
+    /// not match or the payload cannot be parsed. Exposed as a public helper so the pod-side
+    /// bridge can read per-turn setup (esp. <see cref="IsRevision"/>) while the source-generated
+    /// <see cref="AgentSetupParamsJsonContext"/> stays internal.
+    /// </summary>
+    public static AgentSetupParams? TryDecode(DataContent content)
+    {
+        if (!string.Equals(content.MediaType, MediaType, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        ReadOnlyMemory<byte>? dataBytes = content.Data;
+        if (dataBytes is null || dataBytes.Value.IsEmpty)
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize(
+                dataBytes.Value.Span,
+                AgentSetupParamsJsonContext.Default.AgentSetupParams);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 [JsonSerializable(typeof(AgentSetupParams))]

@@ -6,6 +6,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Expose internals (A2ATurnBridgeAgent) to the test project for P1.5 wrapper tests. -->
+    <InternalsVisibleTo Include="Agentweaver.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       A2A server hosting packages — pinned to the same preview stamp as
       Microsoft.Agents.AI.GitHub.Copilot (1.9.0-preview.260603.1) per spec §4.7.1 / H7.

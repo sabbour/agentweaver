@@ -39,16 +39,6 @@ data:
   appsettings.k8s.json: |
     {
       "Kestrel": {
-        "Endpoints": {
-          "A2A": {
-            "Url": "https://0.0.0.0:8088",
-            "Certificate": {
-              "Path": "/mnt/a2a-tls/tls.crt",
-              "KeyPath": "/mnt/a2a-tls/tls.key"
-            },
-            "ClientCertificateMode": "RequireCertificate"
-          }
-        },
         "Limits": {
           "MaxConcurrentConnections": 50,
           "MaxConcurrentUpgradedConnections": 50,
@@ -58,14 +48,32 @@ data:
         }
       },
       "AgentHost": {
-        "A2APort": 8088,
+        "RequireMtls": false,
+        "Port": 8088,
+        "A2APath": "/a2a/agent",
         "ClientCACertPath": "/mnt/a2a-tls/ca.crt",
         "HeartbeatIntervalSeconds": 15,
         "Security": {
           "GateCardEndpoint": true,
-          "RequireClientCertificate": true,
+          "RequireClientCertificate": false,
           "ClientCertSubjectCN": "agentweaver-worker",
           "SkipTlsHostnameVerification": true
         }
       }
     }
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PoC NOTE (spec-018 P1.5): RequireMtls=false makes the AgentHost listen on PLAIN
+    # HTTP at :8088 (no Kestrel:Endpoints, no server/client cert). This is for the PoC
+    # ONLY. PRODUCTION MUST set RequireMtls=true and restore the mTLS Kestrel endpoint:
+    #
+    #   "Kestrel": {
+    #     "Endpoints": {
+    #       "A2A": {
+    #         "Url": "https://0.0.0.0:8088",
+    #         "Certificate": { "Path": "/mnt/a2a-tls/tls.crt", "KeyPath": "/mnt/a2a-tls/tls.key" },
+    #         "ClientCertificateMode": "RequireCertificate"
+    #       }
+    #     }, "Limits": { ... }
+    #   }
+    #   and "AgentHost": { "RequireMtls": true, "Security": { "RequireClientCertificate": true } }
+    # ─────────────────────────────────────────────────────────────────────────────

@@ -34,6 +34,17 @@ public static class RunEventDataPartCodec
     /// <summary>A2A DataContent media type that identifies a forwarded RunEvent.</summary>
     public const string MediaType = "application/x-agentweaver-run-event+json";
 
+    // RunEvent.Payload is an arbitrary object (typically an anonymous type emitted by
+    // CopilotAIAgent.Emit, e.g. `new { task }`). Source-generated metadata cannot serialize
+    // those, so the encoder uses reflection-based serialization — the same proven pattern as the
+    // in-API SSE persistence path (SqliteRunEventStream.Serialize(evt.Payload)). The explicit
+    // [JsonPropertyName] attributes on RunEventDto keep the wire shape identical to what the
+    // source-generated decoder (TryDecodeRunEvent) expects.
+    private static readonly JsonSerializerOptions s_encodeOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     /// <summary>
     /// Tries to decode a <see cref="DataContent"/> item as a <see cref="RunEvent"/>.
     /// Returns <see langword="null"/> if the content's media type does not match or the
@@ -79,7 +90,7 @@ public static class RunEventDataPartCodec
             Payload = runEvent.Payload,
         };
 
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(dto, RunEventDtoJsonContext.Default.RunEventDto);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(dto, s_encodeOptions);
         return new DataContent(new ReadOnlyMemory<byte>(bytes), MediaType);
     }
 

@@ -67,6 +67,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 ServiceCidr = _config["Sandbox:Kubernetes:ServiceCidr"]
                     ?? _config["Sandbox:Kubernetes:ClusterServiceCidr"],
                 SandboxEgressCidrExclusions = ReadSandboxEgressCidrExclusions(),
+                RequireMtls = !string.Equals(
+                    _config["Sandbox:AgentHost:RequireMtls"], "false", StringComparison.OrdinalIgnoreCase),
             };
             var k8sLogger = _loggerFactory.CreateLogger<KubernetesSandboxExecutor>();
             WarnIfServiceCidrNotExcluded(sandboxOptions, logger);

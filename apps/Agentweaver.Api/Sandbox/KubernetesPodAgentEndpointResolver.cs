@@ -73,7 +73,8 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             }
 
             var endpoint = new Uri(
-                $"{_options.AgentHostScheme}://{podIp}:{_options.AgentHostPort}{_options.AgentHostA2APath}");
+                AgentHostEndpoint.Build(
+                    _options.RequireMtls, podIp, _options.AgentHostPort, _options.AgentHostA2APath));
 
             _logger.LogDebug(
                 "KubernetesPodAgentEndpointResolver: run={RunId}, pod={PodName}, endpoint={Endpoint}",

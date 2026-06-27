@@ -17,6 +17,22 @@ public sealed class AgentHostOptions
     public string A2APath { get; init; } = "/a2a/agent";
 
     /// <summary>
+    /// When <see langword="true"/> (default, production) the pod's A2A listener requires TLS and a
+    /// client certificate (mTLS, H1) via the mounted <c>appsettings.k8s.json</c> Kestrel endpoint.
+    /// When <see langword="false"/> (PoC only) the listener serves plain HTTP on <see cref="Port"/>
+    /// with no server/client certificate. Config key: <c>AgentHost:RequireMtls</c>.
+    /// MUST be <see langword="true"/> in production.
+    /// </summary>
+    public bool RequireMtls { get; init; } = true;
+
+    /// <summary>
+    /// Port the Kestrel A2A listener binds to when <see cref="RequireMtls"/> is <see langword="false"/>
+    /// (the PoC plain-HTTP path). In the mTLS path the port comes from the Kestrel endpoint config.
+    /// Config key: <c>AgentHost:Port</c>. Default: <c>8088</c>.
+    /// </summary>
+    public int Port { get; init; } = 8088;
+
+    /// <summary>
     /// Bearer token required to access the A2A agent-card endpoint (H3 — authz-gated
     /// discovery). Callers must supply <c>Authorization: Bearer {CardBearerToken}</c>.
     /// If empty, the card endpoint is accessible without authentication (not recommended

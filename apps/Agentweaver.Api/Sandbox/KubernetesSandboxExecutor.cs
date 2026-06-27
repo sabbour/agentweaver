@@ -49,10 +49,12 @@ public sealed class KubernetesSandboxOptions
     public string AgentHostA2APath { get; init; } = "/a2a/agent";
 
     /// <summary>
-    /// URL scheme for the AgentHost A2A endpoint. <c>http</c> for plain; <c>https</c>
-    /// when Link's TLS cert wiring (H1) is active. Default: <c>http</c>.
+    /// When <see langword="true"/> (default) the AgentHost A2A endpoint uses <c>https</c> with
+    /// mTLS (H1). When <see langword="false"/> (PoC only) it uses plain <c>http</c>. Drives the
+    /// scheme via <see cref="AgentHostEndpoint"/> and is injected into the pod as
+    /// <c>AgentHost__RequireMtls</c>. Config key: <c>Sandbox:AgentHost:RequireMtls</c>.
     /// </summary>
-    public string AgentHostScheme { get; init; } = "https";
+    public bool RequireMtls { get; init; } = true;
 }
 
 /// <summary>
@@ -247,8 +249,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
         var podIp = await GetPodIpAsync(podName, ct).ConfigureAwait(false);
 
-        var endpointUrl =
-            $"{_options.AgentHostScheme}://{podIp}:{_options.AgentHostPort}{_options.AgentHostA2APath}";
+        var endpointUrl = AgentHostEndpoint.Build(
+            _options.RequireMtls, podIp, _options.AgentHostPort, _options.AgentHostA2APath);
 
         _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
 
@@ -303,6 +305,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     new { name = "AgentHost__WorkingDirectory", value = _options.WorkspaceMountPath },
                     new { name = "AgentHost__RepositoryPath", value = _options.WorkspaceMountPath },
                     new { name = "AgentHost__A2APath", value = _options.AgentHostA2APath },
+                    new { name = "AgentHost__RequireMtls", value = _options.RequireMtls ? "true" : "false" },
+                    new { name = "AgentHost__Port", value = _options.AgentHostPort.ToString(System.Globalization.CultureInfo.InvariantCulture) },
                 },
             },
         };

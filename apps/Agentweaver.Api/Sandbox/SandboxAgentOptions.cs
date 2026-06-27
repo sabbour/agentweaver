@@ -57,11 +57,19 @@ public sealed class SandboxAgentOptions
     public int AgentHostPort { get; init; } = 8088;
 
     /// <summary>
-    /// URI scheme for the pod A2A endpoint (<c>https</c> or <c>http</c>).
-    /// MUST be <c>https</c> in production (H1: TLS required).
-    /// Config key: <c>Sandbox:AgentHost:Scheme</c>. Default: <c>https</c>.
+    /// When <see langword="true"/> (default) the worker connects to the pod A2A endpoint over
+    /// <c>https</c> with a client certificate (mTLS, H1). When <see langword="false"/> (PoC only)
+    /// it connects over plain <c>http</c> with no client cert. Config key:
+    /// <c>Sandbox:AgentHost:RequireMtls</c>. MUST be <see langword="true"/> in production.
     /// </summary>
-    public string AgentHostScheme { get; init; } = "https";
+    public bool RequireMtls { get; init; } = true;
+
+    /// <summary>
+    /// URI scheme for the pod A2A endpoint, derived from <see cref="RequireMtls"/>
+    /// (<c>https</c> when true, <c>http</c> when false). Kept as a convenience accessor so the
+    /// endpoint builders share one rule via <see cref="AgentHostEndpoint"/>.
+    /// </summary>
+    public string AgentHostScheme => AgentHostEndpoint.Scheme(RequireMtls);
 
     /// <summary>
     /// A2A path on the pod where <c>MapA2A</c> is mounted.

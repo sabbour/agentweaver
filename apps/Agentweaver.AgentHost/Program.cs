@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
@@ -16,6 +17,29 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Load AgentHost options (per-run config injected as env vars / config at pod launch).
 builder.Services.Configure<AgentHostOptions>(builder.Configuration.GetSection("AgentHost"));
+
+// ── A2A listener: mTLS (production default) vs plain HTTP (PoC) ─────────────────
+// Sandbox:AgentHost:RequireMtls maps here as AgentHost:RequireMtls. Default TRUE keeps the
+// secure path (H1): the mounted appsettings.k8s.json (at /app/config) drives
+// Kestrel:Endpoints:A2A with the workload-bound server cert + RequireCertificate. When FALSE
+// (PoC only), no Kestrel:Endpoints are configured and the listener falls back to plain HTTP on
+// AgentHost:Port. The SandboxTemplate sets envVarsInjectionPolicy=Disallowed, so this config is
+// read from the mounted ConfigMap, not per-run env vars.
+builder.Configuration.AddJsonFile("/app/config/appsettings.k8s.json", optional: true);
+
+var requireMtls = !string.Equals(
+    builder.Configuration["AgentHost:RequireMtls"], "false", StringComparison.OrdinalIgnoreCase);
+var a2aPort = int.TryParse(builder.Configuration["AgentHost:Port"], out var parsedPort)
+    ? parsedPort
+    : 8088;
+var kestrelEndpointsConfigured = builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any();
+
+if (!requireMtls && !kestrelEndpointsConfigured)
+{
+    // PoC path: no explicit Kestrel endpoint config → bind plain HTTP on the A2A port.
+    // MUST NOT be used in production (set AgentHost:RequireMtls=true + provide Kestrel:Endpoints).
+    builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenAnyIP(a2aPort));
+}
 
 // ── GitHub credential chain ────────────────────────────────────────────────────
 // The token is expected in Providers:GitHubCopilot:GitHubToken (set at pod launch).
@@ -42,13 +66,19 @@ builder.Services.AddSingleton<AgentHostStartupService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentHostStartupService>());
 
 // ── A2A server registration ────────────────────────────────────────────────────
-// AddAIAgent registers CopilotAIAgent with the MAF hosting infrastructure (returns
+// AddAIAgent registers the MAF-exposed agent with the hosting infrastructure (returns
 // IHostedAgentBuilder); AddA2AServer adds the A2A HTTP streaming server layer on top.
 // MapA2AHttpJson (below, after Build) mounts the actual SSE/card endpoints.
+// We expose A2ATurnBridgeAgent (NOT CopilotAIAgent directly) so the standard MAF streaming
+// entrypoint decodes per-turn AgentSetupParams (isRevision) and forwards CopilotAIAgent's
+// RunEvents back over A2A as DataParts (spec-018 P1.5). The bridge wraps the same
+// CopilotAIAgent singleton that AgentHostStartupService runs SetupAsync on.
 // Preview packages pinned to 1.9.0-preview.260603.1 per spec H7.
 var agentHostedBuilder = builder.AddAIAgent(
     "agentweaver-pod",
-    (sp, _) => sp.GetRequiredService<CopilotAIAgent>(),
+    (sp, _) => new A2ATurnBridgeAgent(
+        sp.GetRequiredService<CopilotAIAgent>(),
+        sp.GetRequiredService<ILogger<A2ATurnBridgeAgent>>()),
     Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton);
 
 agentHostedBuilder.AddA2AServer(options =>
