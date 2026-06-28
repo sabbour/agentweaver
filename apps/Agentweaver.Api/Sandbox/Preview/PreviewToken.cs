@@ -25,6 +25,13 @@ public static class PreviewToken
     public static readonly IReadOnlySet<string> Reserved =
         new HashSet<string>(StringComparer.Ordinal) { "agentweaver", "mcp", "api", "frontend" };
 
+    /// <summary>
+    /// Literal suffix appended to the token to form the self-identifying host label
+    /// (<c>{token}-preview</c>). It is part of the SAME leftmost DNS label — not a new level —
+    /// so the host stays covered by the <c>*.{zone}</c> wildcard cert.
+    /// </summary>
+    public const string HostSuffix = "-preview";
+
     /// <summary>128 bits of CSPRNG entropy (16 bytes) → 26 base32 chars. Floor is 64 bits (13 chars).</summary>
     private const int SuffixEntropyBytes = 16;
 
@@ -71,10 +78,18 @@ public static class PreviewToken
             sb.Append('-').Append(NewSuffix());
 
             var token = sb.ToString();
-            if (IsValidLabel(token))
+            // The token must be a valid label on its own AND remain valid once the "-preview"
+            // host suffix is appended (the leftmost host label is {token}-preview, still <= 63).
+            if (IsValidLabel(token) && IsValidLabel(HostLabel(token)))
                 return token;
         }
     }
+
+    /// <summary>
+    /// Builds the self-identifying host label for <paramref name="token"/> by appending
+    /// <see cref="HostSuffix"/>: <c>{token}-preview</c>. Still a single DNS label.
+    /// </summary>
+    public static string HostLabel(string token) => token + HostSuffix;
 
     /// <summary>
     /// Produces a base32-encoded suffix carrying <see cref="SuffixEntropyBytes"/> CSPRNG bytes

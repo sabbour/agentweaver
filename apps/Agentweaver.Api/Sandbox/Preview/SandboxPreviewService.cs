@@ -103,7 +103,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         var token = PreviewToken.Generate();
         var now = _clock.GetUtcNow();
         var serviceName = PreviewReaper.ServiceName(token);
-        var hostname = $"{token}.{_options.ZoneSuffix}";
+        var hostname = $"{PreviewToken.HostLabel(token)}.{_options.ZoneSuffix}";
         var previewUrl = $"https://{hostname}";
 
         var client = _client!;

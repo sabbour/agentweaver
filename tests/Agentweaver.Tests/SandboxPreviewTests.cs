@@ -10,6 +10,40 @@ namespace Agentweaver.Tests;
 /// </summary>
 public class SandboxPreviewTests
 {
+    [Fact]
+    public void HostLabel_appends_preview_suffix_as_single_dns_label()
+    {
+        for (var i = 0; i < 500; i++)
+        {
+            var token = PreviewToken.Generate();
+            var hostLabel = PreviewToken.HostLabel(token);
+
+            hostLabel.Should().Be($"{token}-preview");
+            hostLabel.Should().EndWith("-preview");
+            hostLabel.Length.Should().BeLessThanOrEqualTo(63, "host label must fit the DNS label limit");
+            // Still a single valid DNS-1123 label (covered by the *.{zone} wildcard cert).
+            PreviewToken.IsValidLabel(hostLabel).Should().BeTrue();
+            hostLabel.Should().MatchRegex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$");
+        }
+    }
+
+    [Fact]
+    public void Host_and_preview_url_both_carry_the_preview_suffix()
+    {
+        // Mirror exactly how SandboxPreviewService builds the HTTPRoute hostname and preview_url
+        // (both derive from PreviewToken.HostLabel(token)) to lock the self-identifying format.
+        const string zone = "6a3de4fe60529400010f3fba.westus2.staging.aksapp.io";
+        var token = PreviewToken.Generate();
+
+        var hostname = $"{PreviewToken.HostLabel(token)}.{zone}";
+        var previewUrl = $"https://{hostname}";
+
+        hostname.Should().StartWith($"{token}-preview.");
+        hostname.Should().Be($"{token}-preview.{zone}");
+        previewUrl.Should().Be($"https://{token}-preview.{zone}");
+        previewUrl.Should().StartWith("https://").And.Contain("-preview.");
+    }
+
     // ── Preview port range (mirrors k8s NetworkPolicy gateway-only ingress) ───────
 
     [Theory]

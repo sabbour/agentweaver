@@ -23,7 +23,7 @@ public sealed class SandboxPreviewOptions
     /// <summary>
     /// DNS zone suffix appended to the per-preview capability token to build the hostname,
     /// e.g. <c>preview.&lt;cluster&gt;.westus2.staging.aksapp.io</c>. Provided by deploy.
-    /// The preview URL is <c>https://{token}.{ZoneSuffix}</c>.
+    /// The preview URL is <c>https://{token}-preview.{ZoneSuffix}</c>.
     /// </summary>
     public string ZoneSuffix { get; init; } = "";
 
