@@ -112,75 +112,93 @@ public static class CoordinatorSteeringEvent
 }
 
 /// <summary>
-/// Cross-thread seam between the steering surface (an HTTP-thread call to
+/// Cross-pod seam between the steering surface (an HTTP-thread call to
 /// <see cref="CoordinatorSteeringService.SteerAsync"/>) and the dispatch loop that owns child-run
-/// control. A <c>redirect</c>/<c>amend</c> directive is enqueued here; the dispatch loop drains it at
-/// the target child's next turn boundary and injects a revised task turn. <c>stop</c> never goes
-/// through this queue — it is an immediate cancel. Registered as a singleton so the same instance is
-/// shared by every coordinator run.
+/// control. A <c>redirect</c>/<c>amend</c> directive is persisted as a <c>queued</c>
+/// <see cref="SteeringDirective"/> row by the steering surface; the dispatch loop on the pod that
+/// owns the coordinator run drains it from Postgres at the target child's next turn boundary and
+/// injects a revised task turn. <c>stop</c> never goes through this queue — it is an immediate cancel.
+///
+/// <para>This is REPLICA-SAFE: the queue is backed entirely by the <c>SteeringDirectives</c> table,
+/// so a <c>/steer</c> request that lands on a different pod than the one running the dispatch loop is
+/// never lost (the previous in-memory <see cref="Dictionary{TKey,TValue}"/> singleton silently
+/// dropped such requests at <c>replicas:2</c>). Each take CLAIMS a directive atomically via a
+/// conditional <c>queued -&gt; relayed</c> update, so a directive is applied AT MOST ONCE even when
+/// the loop polls repeatedly or two pods race. FIFO ordering within a coordinator run is preserved by
+/// claiming in ascending <see cref="SteeringDirective.Id"/> order.</para>
+///
+/// Registered as a singleton; it holds no per-run state — every operation opens a scoped
+/// <see cref="MemoryDbContext"/>.
 /// </summary>
-public sealed class CoordinatorSteeringQueue
+public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
 {
-    private readonly object _gate = new();
-    private readonly Dictionary<string, List<QueuedSteering>> _pending = new();
-
-    public void Enqueue(string coordinatorRunId, QueuedSteering directive)
-    {
-        lock (_gate)
-        {
-            if (!_pending.TryGetValue(coordinatorRunId, out var list))
-                _pending[coordinatorRunId] = list = [];
-            list.Add(directive);
-        }
-    }
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
     /// <summary>
-    /// Removes and returns the oldest queued directive that targets <paramref name="childRunId"/>
-    /// (an exact <c>TargetChildRunId</c> match, or a broadcast with a null target), or null when
-    /// none is pending for that child. FIFO within the coordinator run.
+    /// Atomically claims and returns the oldest <c>queued</c> directive that targets
+    /// <paramref name="childRunId"/> (an exact <c>TargetChildRunId</c> match, or a broadcast with a
+    /// null target), transitioning it <c>queued -&gt; relayed</c> so it can never be claimed twice;
+    /// returns null when none is queued for that child. FIFO within the coordinator run.
     /// </summary>
-    public QueuedSteering? TryTakeForChild(string coordinatorRunId, string childRunId)
-    {
-        lock (_gate)
-        {
-            if (!_pending.TryGetValue(coordinatorRunId, out var list) || list.Count == 0)
-                return null;
-
-            var idx = list.FindIndex(d =>
-                d.TargetChildRunId is null ||
-                string.Equals(d.TargetChildRunId, childRunId, StringComparison.Ordinal));
-            if (idx < 0)
-                return null;
-
-            var directive = list[idx];
-            list.RemoveAt(idx);
-            return directive;
-        }
-    }
+    public Task<QueuedSteering?> TryTakeForChildAsync(
+        string coordinatorRunId, string childRunId, CancellationToken ct = default) =>
+        ClaimAsync(coordinatorRunId, childRunId, redirectOnly: false, ct);
 
     /// <summary>
-    /// Like <see cref="TryTakeForChild"/> but only dequeues a <see cref="SteeringKind.Redirect"/>
+    /// Like <see cref="TryTakeForChildAsync"/> but only claims a <see cref="SteeringKind.Redirect"/>
     /// directive. Used by the dispatch loop when a child has failed (rather than completed normally)
     /// and the caller needs to apply only a redirect — not an amend — as a re-dispatch override.
     /// </summary>
-    public QueuedSteering? TryTakeRedirectForChild(string coordinatorRunId, string childRunId)
+    public Task<QueuedSteering?> TryTakeRedirectForChildAsync(
+        string coordinatorRunId, string childRunId, CancellationToken ct = default) =>
+        ClaimAsync(coordinatorRunId, childRunId, redirectOnly: true, ct);
+
+    /// <summary>
+    /// Finds the oldest matching <c>queued</c> directive and claims it with a conditional
+    /// <c>queued -&gt; relayed</c> <see cref="EntityFrameworkQueryableExtensions"/> update. Only one
+    /// caller (across all pods) can win that update; a loser retries against the next candidate. This
+    /// is the at-most-once mechanism that makes the queue replica-safe.
+    /// </summary>
+    private async Task<QueuedSteering?> ClaimAsync(
+        string coordinatorRunId, string childRunId, bool redirectOnly, CancellationToken ct)
     {
-        lock (_gate)
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        while (!ct.IsCancellationRequested)
         {
-            if (!_pending.TryGetValue(coordinatorRunId, out var list) || list.Count == 0)
+            var query = db.SteeringDirectives.AsNoTracking()
+                .Where(d => d.CoordinatorRunId == coordinatorRunId
+                    && d.Status == SteeringStatus.Queued
+                    && (d.TargetChildRunId == null || d.TargetChildRunId == childRunId));
+            if (redirectOnly)
+                query = query.Where(d => d.Kind == SteeringKind.Redirect);
+
+            var candidate = await query
+                .OrderBy(d => d.Id)
+                .FirstOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            if (candidate is null)
                 return null;
 
-            var idx = list.FindIndex(d =>
-                d.Kind == SteeringKind.Redirect &&
-                (d.TargetChildRunId is null ||
-                    string.Equals(d.TargetChildRunId, childRunId, StringComparison.Ordinal)));
-            if (idx < 0)
-                return null;
+            // Atomic claim: only one writer (any pod) can flip this row queued -> relayed. The
+            // conditional WHERE Status == queued is the gate that guarantees at-most-once delivery.
+            DateTimeOffset? relayedAt = DateTimeOffset.UtcNow;
+            var claimed = await db.SteeringDirectives
+                .Where(d => d.Id == candidate.Id && d.Status == SteeringStatus.Queued)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(d => d.Status, SteeringStatus.Relayed)
+                    .SetProperty(d => d.RelayedAt, relayedAt), ct)
+                .ConfigureAwait(false);
 
-            var directive = list[idx];
-            list.RemoveAt(idx);
-            return directive;
+            if (claimed == 1)
+                return new QueuedSteering(
+                    candidate.Id, candidate.Kind, candidate.TargetChildRunId, candidate.Instruction);
+
+            // Lost the race (another pod/iteration claimed it) — try the next candidate.
         }
+
+        return null;
     }
 }
 
@@ -216,7 +234,6 @@ public sealed class CoordinatorSteeringService
 {
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
-    private readonly CoordinatorSteeringQueue _queue;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RunWorkflowFactory? _runWorkflowFactory;
     private readonly IRunStore? _runStore;
@@ -225,7 +242,6 @@ public sealed class CoordinatorSteeringService
     public CoordinatorSteeringService(
         RunStreamStore streamStore,
         RunWorkflowRegistry registry,
-        CoordinatorSteeringQueue queue,
         IServiceScopeFactory scopeFactory,
         ILogger<CoordinatorSteeringService> logger,
         RunWorkflowFactory? runWorkflowFactory = null,
@@ -233,7 +249,6 @@ public sealed class CoordinatorSteeringService
     {
         _streamStore = streamStore;
         _registry = registry;
-        _queue = queue;
         _scopeFactory = scopeFactory;
         _runStore = runStore;
         _logger = logger;
@@ -435,8 +450,10 @@ public sealed class CoordinatorSteeringService
         string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string instruction,
         string createdBy, DateTimeOffset createdAt, CancellationToken ct)
     {
+        // Persist the directive as queued; the durable SteeringDirectives row IS the queue. The
+        // dispatch loop on the pod owning this coordinator run drains it from Postgres at the target
+        // child's next turn boundary (replica-safe — no in-memory hand-off that a second pod misses).
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Queued, relayedAt: null, ct).ConfigureAwait(false);
-        _queue.Enqueue(coordinatorRunId, new QueuedSteering(directiveId, kind, targetChildRunId, instruction));
         EmitSteering(coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Queued, instruction);
 
         // For redirect targeting a specific in-progress child: force-complete that child's stream so
@@ -457,7 +474,7 @@ public sealed class CoordinatorSteeringService
     /// <summary>
     /// For a redirect directive targeting a specific in-progress child, force-completes the child's
     /// stream with <c>run.cancelled</c> so the dispatch loop's observer resolves the child as failed
-    /// and immediately picks up the queued redirect directive (via <see cref="CoordinatorSteeringQueue.TryTakeRedirectForChild"/>).
+    /// and immediately picks up the queued redirect directive (via <see cref="CoordinatorSteeringQueue.TryTakeRedirectForChildAsync"/>).
     /// Only acts when the child stream entry exists and is not already completed. Does not cancel the
     /// workflow token (that is <see cref="ApplyStopAsync"/>'s job) — this is a stream-level signal.
     /// </summary>
