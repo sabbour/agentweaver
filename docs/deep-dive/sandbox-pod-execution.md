@@ -297,6 +297,48 @@ transitions to `Failed`. The fix is defense-in-depth:
   `/healthz` gate is the reliable wait, and the probe is a supplementary defense only. *(Manifest change owned
   by the cluster/infra side, not the API.)*
 
+### Node topology: the dedicated kata user pool
+
+Sandbox/AgentHost pods require **Kata VM isolation**, which on AKS is the `workloadRuntime:
+KataVmIsolation` node-pool property (nodes get the `kubernetes.azure.com/kata-vm-isolation=true`
+label and a Kata-capable gen2 image). Two facts constrain where these pods can land:
+
+- **NAP cannot provision Kata nodes.** This cluster runs Node Auto Provisioning
+  (`nodeProvisioningProfile.mode: Auto`). NAP rejects Kata VM-isolation
+  (`label kubernetes.azure.com/kata-vm-isolation does not have known values`), so Kata capacity
+  must come from a **fixed (manually-sized) node pool**, never from NAP.
+- **NAP forbids per-pool cluster-autoscaler.** A NAP cluster refuses any agent pool with
+  `enableAutoScaling: true`, so the Kata pool is created with a fixed `--node-count` (no
+  `--min/--max`); resize it declaratively with `az aks nodepool update/scale`.
+
+To stop sandbox pods from depending on the **System** pool (`nodepool1`), a dedicated **Kata USER
+pool** carries them:
+
+```bash
+az aks nodepool add -g agentweaver-rg --cluster-name agentweaver-aks-2 \
+  --name katapool --mode User --os-sku AzureLinux \
+  --workload-runtime KataVmIsolation --node-vm-size Standard_D4s_v3 \
+  --node-count 1 --ssh-access disabled \
+  --node-taints sandbox=kata:NoSchedule --labels agentweaver.io/kata=true
+```
+
+| Pool        | Mode   | workloadRuntime   | Taint                      | Label                       | Purpose                          |
+|-------------|--------|-------------------|----------------------------|-----------------------------|----------------------------------|
+| `nodepool1` | System | KataVmIsolation   | *(none)*                   | —                           | System workloads (+ Kata fallback) |
+| `katapool`  | User   | KataVmIsolation   | `sandbox=kata:NoSchedule`  | `agentweaver.io/kata=true`  | Dedicated sandbox/AgentHost pods |
+
+The Kata `SandboxTemplate` pod specs (`k8s/sandbox-template-agenthost.yaml`,
+`k8s/sandbox-template.yaml`) wire pods to this pool — the CRD `podTemplate.spec` is a full PodSpec,
+so `tolerations`/`affinity` pass straight through to the rendered pod:
+
+- a **toleration** for `sandbox=kata:NoSchedule` admits pods onto the tainted `katapool`; and
+- a **preferred** (not required) `nodeAffinity` for `agentweaver.io/kata=true` *biases* pods onto
+  `katapool` while still allowing them to fall back to any other Kata-capable node (e.g.
+  `nodepool1`'s Kata nodes) when `katapool` is full — pods are **never stranded**.
+
+The taint lives only on the dedicated pool; `nodepool1` stays untainted so it can absorb both system
+workloads and Kata fallback.
+
 ## The hybrid pod-granularity model
 
 How long should a run hold a pod? Two naive answers both fail:
