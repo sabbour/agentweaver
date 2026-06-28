@@ -9,30 +9,22 @@
 #   gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway
 # NetworkPolicy (networkpolicy-sandbox.yaml) allows ingress from exactly those pods.
 #
-# TLS: Two provisioning paths — the deploy script (30-deploy.sh) probes whether AKS
-# App Routing can issue a nested wildcard cert; it sets env vars accordingly:
+# TLS — CONFIRMED 2026-06-28 by live spike:
+#   AKS App Routing DefaultDomainCertificate does NOT support nested wildcards.
+#   The DDC CRD has no spec.hostname field; it always issues *.{zone} into the named
+#   secret regardless of DDC object name.  Therefore PREVIEW_TLS_SECRET is always
+#   "agentweaver-tls" (the existing zone wildcard) and PREVIEW_HOSTNAME is always
+#   "*.{zone}".  Preview subdomains take the form {runid}.{zone}.
+#   (If AKS adds nested DDC support in the future, the deploy script sets these vars
+#    and this manifest renders correctly without changes.)
 #
-#   Nested cert path (preferred, if *.preview.<zone> DDC becomes Available):
-#     PREVIEW_HOSTNAME    = *.preview.<zone>
-#     PREVIEW_TLS_SECRET  = agentweaver-preview-tls
+# OPEN QUESTION (a) — RESOLVED LOW RISK:
+#   approuting-istio accepts multiple Gateway objects per namespace (standard Gateway API).
+#   The main gateway uses exact hostname agentweaver.{zone}; this gateway uses *.{zone}.
+#   Istio selects the most-specific match (exact > wildcard) so the main host routes
+#   correctly. Smoke-test on first deploy to confirm add-on version handles this cleanly.
 #
-#   Fallback single-label path (when nested DDC is unsupported or times out):
-#     PREVIEW_HOSTNAME    = *.<zone>
-#     PREVIEW_TLS_SECRET  = agentweaver-tls  (existing wildcard cert)
-#
-# OPEN QUESTIONS (see 30-deploy.sh and link-preview-gateway-wiring.md):
-#   (a) approuting-istio does accept multiple Gateway objects per namespace (standard
-#       Gateway API behaviour). Whether the wildcard listener overlaps the main
-#       exact-host listener without conflict depends on listener merging behaviour
-#       in the specific Istio release bundled with the add-on. Flag: unconfirmed
-#       from repo alone; the non-overlapping fallback is that the main gateway uses
-#       an exact hostname and this gateway uses a wildcard, which Istio handles by
-#       selecting the more-specific match first — risk is LOW but worth smoke-testing.
-#   (b) Whether App Routing can issue a nested *.preview.<zone> DefaultDomainCertificate
-#       is UNCONFIRMED. The probe in 30-deploy.sh handles the unsupported case via the
-#       fully-wired fallback, so the feature ships regardless.
-#
-# The deploy script uses envsubst to render this manifest before applying.
+# The deploy script (30-deploy.sh) uses envsubst to render this manifest before applying.
 # allowedRoutes: Same — per-preview HTTPRoutes must be in namespace agentweaver.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -51,8 +43,8 @@ spec:
       tls:
         mode: Terminate
         certificateRefs:
-          # Managed cert Secret — either agentweaver-preview-tls (nested wildcard)
-          # or agentweaver-tls (existing zone wildcard, fallback). Resolved at deploy.
+          # Managed cert Secret. Currently always agentweaver-tls (*.zone wildcard);
+          # set by 30-deploy.sh. Quoted to allow future nested wildcard substitution.
           - kind: Secret
             name: ${PREVIEW_TLS_SECRET}
       allowedRoutes:

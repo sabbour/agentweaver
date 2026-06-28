@@ -73,71 +73,22 @@ export HOST="agentweaver.${DOMAIN#\*.}"
 echo "  Managed domain: ${DOMAIN}"
 echo "  Ingress host:   ${HOST}"
 
-# --- Preview gateway cert probe ---
-# Attempt to provision a managed nested wildcard cert for *.preview.<zone>.
-# If AKS App Routing supports nested subdomain certs the probe succeeds and we
-# use the narrower *.preview.<zone> hostname (preferred). Otherwise we fall back
-# to the existing *.{zone} wildcard cert so the feature ships regardless.
-# NOTE: DefaultDomainCertificate status.domain determines the actual issued hostname;
-# we inspect it to confirm the cert really covers a nested subdomain, not just *.{zone}.
+# --- Preview gateway cert path (CONFIRMED 2026-06-28 by live spike) ---
+# AKS App Routing DefaultDomainCertificate does NOT support nested wildcards.
+# The DDC CRD has no spec.hostname field — it always issues *.{zone} regardless
+# of object name or target secret name.  status.domain is always *.{zone}.
+# Spike evidence: cert-preview-spike DDC issued CN=*.6a3de4fe60529400010f3fba.
+# westus2.staging.aksapp.io (not *.preview.{zone}); secret SAN confirmed same.
+#
+# Therefore we always take the single-label fallback path and reuse agentweaver-tls.
+# Preview hostnames: {runid}.{zone}  (e.g. run-abc.6a3de4fe...aksapp.io)
+# If AKS adds nested DDC support in the future, restore the probe below and update
+# PREVIEW_TLS_SECRET to a new cert-preview DDC secret + add the cert-preview DDC object.
 echo ""
-echo "Probing for nested preview wildcard cert (*.preview.<zone>)..."
+echo "Setting preview gateway hostname (single-label fallback — AKS nested DDC not supported)..."
 ZONE="${DOMAIN#\*.}"
-PREVIEW_CERT_READY=false
-
-if kubectl get defaultdomaincertificate cert-preview --namespace "${NAMESPACE}" &>/dev/null; then
-  echo "  [OK] DefaultDomainCertificate 'cert-preview' already exists — checking status..."
-  PREVIEW_DOMAIN=$(kubectl get defaultdomaincertificate cert-preview \
-    --namespace "${NAMESPACE}" \
-    --output jsonpath='{.status.domain}' 2>/dev/null || true)
-  if kubectl wait \
-       --for=condition=Available \
-       defaultdomaincertificate/cert-preview \
-       --namespace "${NAMESPACE}" \
-       --timeout=30s 2>/dev/null && \
-     [[ "${PREVIEW_DOMAIN}" == *"preview."* ]]; then
-    PREVIEW_CERT_READY=true
-  fi
-else
-  echo "  Creating DefaultDomainCertificate 'cert-preview' (target secret: agentweaver-preview-tls)..."
-  cat <<EOF | kubectl apply -f - || true
-apiVersion: approuting.kubernetes.azure.com/v1alpha1
-kind: DefaultDomainCertificate
-metadata:
-  name: cert-preview
-  namespace: ${NAMESPACE}
-spec:
-  target:
-    secret: agentweaver-preview-tls
-EOF
-  # Wait up to 120s; suppress error since nested certs may be unsupported.
-  if kubectl wait \
-       --for=condition=Available \
-       defaultdomaincertificate/cert-preview \
-       --namespace "${NAMESPACE}" \
-       --timeout=120s 2>/dev/null; then
-    PREVIEW_DOMAIN=$(kubectl get defaultdomaincertificate cert-preview \
-      --namespace "${NAMESPACE}" \
-      --output jsonpath='{.status.domain}' 2>/dev/null || true)
-    if [[ "${PREVIEW_DOMAIN}" == *"preview."* ]]; then
-      PREVIEW_CERT_READY=true
-    else
-      echo "  [INFO] cert-preview became Available but domain '${PREVIEW_DOMAIN}' is not nested."
-      echo "         App Routing issued *.{zone} — falling back to single-label path."
-    fi
-  fi
-fi
-
-if [[ "${PREVIEW_CERT_READY}" == "true" ]]; then
-  echo "  [NESTED PATH] Nested wildcard cert Ready — preview hostname: *.preview.${ZONE}"
-  ZONE_SUFFIX="preview.${ZONE}"
-  PREVIEW_TLS_SECRET="agentweaver-preview-tls"
-else
-  echo "  [FALLBACK PATH] Nested cert unavailable — using *.${ZONE} with existing agentweaver-tls"
-  echo "                  Preview subdomains will be {runid}.${ZONE} (same label as main zone)."
-  ZONE_SUFFIX="${ZONE}"
-  PREVIEW_TLS_SECRET="agentweaver-tls"
-fi
+ZONE_SUFFIX="${ZONE}"
+PREVIEW_TLS_SECRET="agentweaver-tls"
 
 export PREVIEW_HOSTNAME="*.${ZONE_SUFFIX}"
 export PREVIEW_TLS_SECRET
