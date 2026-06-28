@@ -77,7 +77,16 @@ Because all of these are the same primitive, the suspend/resume plumbing is writ
 
 ## Checkpointing & durable resume
 
-MAF persists workflow state through a checkpoint store. Agentweaver uses MAF's `FileSystemJsonCheckpointStore`, wrapped by a `ResilientCheckpointStore` that hardens startup: it creates the checkpoint directory, sanitizes the checkpoint index (dropping blank or corrupt lines and backing up the original), and quarantines an unrecoverable index instead of crash-looping the API. The wrapped store is handed to a `CheckpointManager`, and the manager checkpoints around every suspension.
+MAF persists workflow state through a checkpoint store. Agentweaver uses MAF's `FileSystemJsonCheckpointStore`, wrapped by a `ResilientCheckpointStore` that hardens startup so the API **always boots**. It guards against two distinct hazards (`apps/Agentweaver.Api/Infrastructure/ResilientCheckpointStore.cs`):
+
+- **Corrupt index.** MAF parses the store's `index.jsonl` one JSON object per line at construction, so a single blank or partially-written line throws and would brick startup. The factory creates the checkpoint directory, sanitizes the index (dropping blank/unparseable lines after backing up the original), and quarantines an unrecoverable index instead of crash-looping.
+- **Multi-writer lock contention.** `FileSystemJsonCheckpointStore` takes an **exclusive process lock** on the checkpoint directory. The API runs `replicas: 2` with `HOME` on a shared RWX Azure Files volume, so the checkpoint directory is shared — only one pod can hold the lock, and the second pod's constructor throws `"already in use by another process"`. `ResilientCheckpointStore` detects this (it is *not* corruption, so the index is never quarantined), retries the shared open a few times with short backoff to ride out transient mid-write locks during a rolling update, then falls back to a **per-pod checkpoint sub-directory** under the same volume — `{checkpoints}/replicas/{POD_NAME}` (pod identity from the `POD_NAME` downward-API env var, else `HOSTNAME`, else a GUID) — so the replica gets its own writable store and goes Ready. The absolute last resort is a unique per-pod temp directory; `Create` is guaranteed never to throw.
+
+The wrapped store is handed to a `CheckpointManager`, and the manager checkpoints around every suspension.
+
+::: warning Shared cross-replica resume is a follow-up
+The per-pod fallback means each replica checkpoints to its own directory, so a run suspended on pod A is resumed from pod A's checkpoints. Cross-replica resume was never actually available under the single-writer file lock (only one pod could ever open the shared store). The durable long-term fix is a **DB-backed checkpoint store** (the same brokered store the A2A/distributed design already assumes); the file store stays per-pod until then.
+:::
 
 Two facts make resume robust:
 
@@ -146,6 +155,6 @@ This is why the MAF-centric design here stays intact under distribution: no MAF 
 - The leaf is an `AIAgent`; production uses `CopilotAIAgent`, whose Copilot session the checkpoint manager serializes into the checkpoint.
 - MAF lifecycle events (`ExecutorInvoked/Completed/Failed`) are translated by the watch loop into `workflow.step` events that drive the live topology graph.
 - Every human gate is a `RequestPort`; reaching it emits a `RequestInfoEvent`, the workflow status becomes `PendingRequests`, and it suspends until a human responds.
-- Checkpoints use `FileSystemJsonCheckpointStore` wrapped by `ResilientCheckpointStore`; runId is the MAF session id; restart recovery resumes a suspended run from its latest checkpoint at the gate.
+- Checkpoints use `FileSystemJsonCheckpointStore` wrapped by `ResilientCheckpointStore`; runId is the MAF session id; restart recovery resumes a suspended run from its latest checkpoint at the gate. The store ctor takes an exclusive lock, so under `replicas: 2` on the shared volume the losing replica falls back to a per-pod checkpoint dir (`{checkpoints}/replicas/{POD_NAME}`) rather than crash-looping — a DB-backed store is the follow-up for true cross-replica resume.
 - The coordinator's spec/confirm phase is MAF; dispatch and collective assembly (D3) are service-driven over DB rows, with no MAF graph and a `NoOpWorkflowContext` for direct executor calls.
 - A2A remotes only the `AIAgent` leaf; the MAF graph and all `WorkflowEvent`/`RequestPort` logic stay in the worker.
