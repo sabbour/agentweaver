@@ -10,6 +10,54 @@ This feature adds sandboxed shell execution by adopting Microsoft's `mxc` sandbo
 
 The general principle: the system confirms real isolation is available before permitting any shell command. When confirmation fails, shell remains denied — unless the operator explicitly opts into unsandboxed `direct` execution (`direct: true` in `.agentweaver/settings.yml`), which relies on deployment-level isolation instead. No command runs unsandboxed by default.
 
+Once a backend is selected (see [sandbox.md](./sandbox.md#how-a-run-gets-its-sandbox)), a `run_command` invocation flows through the triple-layer governance gate, into the chosen executor, and back out as redacted output events:
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+  Model("Model requests run_command"):::client
+  Gov["Triple-layer governance gate"]:::svc
+  Exec["ISandboxExecutor.ExecuteAsync"]:::core
+  Model --> Gov --> Exec
+  Exec --> Branch{{"Selected backend?"}}:::svc
+  Work[("Run worktree / workspace")]:::data
+
+  subgraph mxc["MXC executor — processcontainer"]
+    direction TB
+    Branch -->|"processcontainer"| Wxc("wxc-exec probe → tier"):::runtime
+    Wxc --> Spawn("MxcSdk.SpawnSandboxAsync<br/>AppContainer, policy 0.5.0-alpha"):::runtime
+  end
+
+  subgraph k8s["Kubernetes sandbox-claim"]
+    direction TB
+    Branch -->|"kubernetes-sandbox-claim"| Pool[("SandboxWarmPool<br/>pre-warmed pods")]:::data
+    Pool --> Claim("Per-run SandboxClaim"):::runtime
+    Claim --> Bound{{"phase == Bound?"}}:::svc
+    Bound -->|"pod name"| Kata("Kata VM pod<br/>pod-exec /bin/sh"):::runtime
+  end
+
+  Branch -->|"bwrap / wsl / direct"| Local("Local isolated process"):::runtime
+
+  Work --> Spawn
+  Work --> Kata
+  Work --> Local
+
+  Spawn --> Out["stdout / stderr / exit code"]:::svc
+  Kata --> Out
+  Local --> Out
+  Out --> Redact("SandboxOutputRedactor"):::svc
+  Redact --> Events("tool.result + output events"):::evt
+  Events --> Model
+
+  classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+  classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+  classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+  classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+  classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+  classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+  classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+```
+
 ## Executor selection
 
 Executor selection happens at startup via `SandboxExecutorFactory.Create`. The factory probes the host in order and returns the first available executor:

@@ -13,6 +13,64 @@ Think of the data layer as four cooperating persistence systems:
 
 A rebuild should preserve the same separation of concerns: databases answer “what is the system state?”, git answers “what file state did this run produce?”, and exported `.squad` / `.agentweaver` files make selected memory visible to humans and agents.
 
+## Architecture at a glance
+
+A single API instance is the only writer. The operational control plane lives in the hand-written `SqliteDb` (projects, runs, backlog tasks, revisions). The memory and orchestration plane lives in EF Core (`MemoryDbContext`), whose provider is selectable — Postgres for hosted deployments, SQLite by default — and is evolved with EF Core migrations. Run worktrees and MAF JSON checkpoints live on the workspace volume.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+    API["Agentweaver API (single writer)"]
+    Migrations{{"EF Core migrations + startup ALTERs"}}
+    subgraph cp["Control plane — SqliteDb"]
+        Projects[("projects / workspaces")]
+        Runs[("runs")]
+        Backlog[("backlog_tasks")]
+        Revisions[("run revisions")]
+    end
+    subgraph mem["Memory & orchestration — EF Core MemoryDbContext (Postgres / SQLite)"]
+        Decisions[("decisions + decision_inbox")]
+        AgentMem[("agent_memory + session_context")]
+        Plans[("outcome_spec → work_plan → subtask → dependency")]
+        Steering[("steering_directives")]
+        OAuthState[("mcp refresh tokens + jti + client registrations")]
+        RunEvents[("RunEvents")]
+    end
+    subgraph vol["Workspace volume"]
+        Worktrees["git worktrees / branches"]
+        Checkpoints[("FileSystem JSON checkpoint store")]
+    end
+
+    API --> Projects
+    API --> Decisions
+    API --> AgentMem
+    API --> Plans
+    API --> OAuthState
+    API --> Worktrees
+    Migrations --> RunEvents
+    Migrations --> Decisions
+    Projects --> Runs
+    Projects --> Backlog
+    Runs --> Revisions
+    Runs --> RunEvents
+    Runs --> Worktrees
+    Runs --> Checkpoints
+    Plans --> Steering
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class API core;
+    class Migrations svc;
+    class Worktrees runtime;
+    class Projects,Runs,Backlog,Revisions,Decisions,AgentMem,Plans,Steering,OAuthState,RunEvents,Checkpoints data;
+```
+
 ## Design Goals
 
 The persistence design optimizes for a single Agentweaver API instance coordinating many durable workflows:
@@ -40,6 +98,7 @@ Agentweaver’s durable domain has two halves: **work execution** and **team mem
 - **Run event**: an ordered event in a run’s stream. Events power live UI updates and restart-safe replay.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 classDiagram
     class Project {
       ProjectId Id
@@ -106,6 +165,7 @@ classDiagram
 - **MCP OAuth state**: refresh tokens, revoked JWT IDs, and dynamic client registrations needed for MCP authentication flows.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 erDiagram
     PROJECT ||--o{ DECISION : owns
     PROJECT ||--o{ DECISION_INBOX : reviews
@@ -312,6 +372,7 @@ The compiler builds context in this order:
 This ordering is the most important conceptual rule. Decisions are first because they constrain all work. Session context is last because it is useful but should not override boundaries or durable agent knowledge.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     A[Accepted architectural/scope decisions] --> B[Agent core context]
     B --> C[High-importance learnings and patterns]
@@ -320,6 +381,18 @@ flowchart TD
 
     A -.highest priority.-> E
     D -.lowest priority.-> E
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class A,C,D data;
+    class B svc;
+    class E core;
 ```
 
 ### Decision inbox logic

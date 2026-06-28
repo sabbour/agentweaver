@@ -2,6 +2,52 @@
 
 The agent can act only inside its assigned per-run git worktree. Enforcement is in the backend, not in the model prompt, so the same rules apply regardless of which client starts the run and regardless of whether the provider is GitHub Copilot or Microsoft Foundry.
 
+## How a run gets its sandbox
+
+Every run is bound to an isolated execution environment. The `SandboxExecutorRouter` first checks for an in-cluster deployment; otherwise `SandboxExecutorFactory` probes the host and returns the first available backend. The selected backend's `IsRealIsolation` flag gates whether shell commands run at all, and the choice is published as a `sandbox.selected` event.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+  Run("Agent run begins"):::client
+  Router["SandboxExecutorRouter"]:::svc
+  Run --> Router
+  Router --> InCluster{{"In Kubernetes?"}}:::svc
+  InCluster -->|Yes| K8s("kubernetes-sandbox-claim"):::runtime
+  InCluster -->|No| Factory["SandboxExecutorFactory"]:::core
+
+  subgraph ladder["Backend selection ladder — first available wins"]
+    direction TB
+    Factory --> WinQ{{"Windows host?"}}:::svc
+    WinQ -->|"wxc-exec + Mxc support"| PC("processcontainer"):::runtime
+    WinQ -->|"WSL2 + bubblewrap"| WslB("wsl-bwrap"):::runtime
+    WinQ -->|"WSL2 + unshare"| WslU("wsl-unshare"):::runtime
+    Factory --> LinQ{{"Linux host?"}}:::svc
+    LinQ -->|"bubblewrap"| Bwrap("linux-bwrap"):::runtime
+    LinQ -->|"lxc-exec only"| Lxc("lxc-native-linux"):::runtime
+    Factory --> Direct("direct / passthrough"):::runtime
+  end
+
+  K8s --> Gate{{"IsRealIsolation?"}}:::svc
+  PC --> Gate
+  WslB --> Gate
+  WslU --> Gate
+  Bwrap --> Gate
+  Lxc --> Gate
+  Direct --> Gate
+  Gate -->|"true — shell allowed"| Sel("sandbox.selected"):::evt
+  Gate -->|"false — shell denied unless direct opt-in"| Sel
+  Sel --> WS[("Run worktree mounted into backend")]:::data
+
+  classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+  classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+  classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+  classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+  classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+  classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+  classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+```
+
 ## Governance middleware
 
 Every tool call the agent attempts is evaluated by a per-run governance kernel from the Agent Governance Toolkit (AGT) before it can execute. The kernel is constructed at run start and disposed when the run ends. It loads a deny-by-default containment policy and registers a path-containment backend. If the loaded policy's default action is not Deny, the backend refuses to start the run.

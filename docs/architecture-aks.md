@@ -13,47 +13,82 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 ## Component diagram
 
 ```mermaid
-graph TB
-    Client["🌐 Browser / AI client<br/>HTTPS :443"]
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+    client(["Browser / AI client<br/>HTTPS :443"])
 
-    subgraph AKS["AKS Cluster (westus2)"]
-        subgraph ns["namespace: agentweaver"]
-            GW["Gateway: agentweaver-gateway<br/>gatewayClassName: approuting-istio<br/>HTTPS :443 · TLS Terminate<br/>DefaultDomainCertificate"]
+    gw{{"Gateway<br/>agentweaver-gateway<br/>approuting-istio · TLS :443"}}
 
-            subgraph routing["HTTPRoutes"]
-                R_API["/api/* + /auth/*"]
-                R_MCP["/mcp/*"]
-                R_FE["/ (catch-all)"]
-            end
-
-            subgraph workloads["Workloads"]
-                API["API Pod<br/>.NET 10 · :8080<br/>replicas: 1 · Recreate"]
-                MCP["MCP Pod<br/>.NET 10 · :8080<br/>replicas: 1"]
-                FE["Frontend Pods ×2<br/>ASP.NET Core · :8080"]
-            end
-
-            subgraph sandbox_pool["SandboxWarmPool (×3)"]
-                SB["Sandbox Pod<br/>kata-vm-isolation<br/>non-root · read-only rootfs"]
-            end
-
-            DATA[("agentweaver-data<br/>Azure Disk · RWO<br/>10 Gi · /data")]
-            WS[("agentweaver-workspace<br/>Azure Files · RWX<br/>50 Gi · /workspace")]
-        end
-
-        ACR["ACR: agentweaverregistry.azurecr.io<br/>agentweaver-api:&lt;sha&gt; · agentweaver-frontend:&lt;sha&gt;<br/>agentweaver-mcp:&lt;sha&gt; · agentweaver-sandbox:&lt;sha&gt;"]
+    subgraph routes["HTTPRoutes"]
+        rApi(["/api · /auth · /oauth<br/>+ AS metadata"])
+        rMcp(["/mcp · /.well-known<br/>protected-resource"])
+        rFe(["/ catch-all"])
     end
 
-    KV["🔑 Azure Key Vault<br/>agentweaver-kv"]
+    subgraph ns["namespace: agentweaver"]
+        feSvc(["frontend Service :80"])
+        fe(["frontend Deploy ×2<br/>:8080"])
+        apiSvc(["api Service :8080"])
+        api(["api Deploy ×1<br/>.NET 10 · Recreate"])
+        mcpSvc(["mcp Service :8080"])
+        mcp(["mcp Deploy ×1<br/>:8080"])
 
-    Client -->|HTTPS :443| GW
-    GW --> R_API --> API
-    GW --> R_MCP --> MCP
-    GW --> R_FE --> FE
-    MCP -->|"http :8080"| API
-    API --- DATA
-    API --- WS
-    API -->|"pods/exec"| SB
-    API & MCP -->|"CSI + Workload Identity"| KV
+        subgraph execpool["Sandbox execution"]
+            warm(["SandboxWarmPool ×3"])
+            claim(["SandboxClaim<br/>run-{id} · ttl 600s"])
+            sb(["Sandbox pods<br/>Kata VM · non-root"])
+        end
+
+        appdb[("agentweaver-data<br/>Azure Disk RWO · /data<br/>SQLite")]
+        ws[("agentweaver-workspace<br/>Azure Files RWX · /workspace")]
+
+        subgraph netpol["NetworkPolicies"]
+            pDeny{{"default-deny<br/>ingress + egress"}}
+            pMcp{{"allow mcp→api :8080"}}
+            pSb{{"sandbox egress<br/>DNS + :443 allowlist"}}
+        end
+    end
+
+    kv(["Azure Key Vault<br/>CSI + Workload Identity"])
+    gh(["GitHub<br/>OAuth · api.github.com"])
+    ai(["Azure AI Foundry<br/>npmjs · Copilot"])
+
+    client -->|"HTTPS :443"| gw
+    gw --> rApi --> apiSvc --> api
+    gw --> rMcp --> mcpSvc --> mcp
+    gw --> rFe --> feSvc --> fe
+    mcp -->|":8080 JWKS / calls"| apiSvc
+    api -->|"SandboxClaim"| claim
+    warm --> claim --> sb
+    api -->|"pods/exec"| sb
+    api --- appdb
+    api --- ws
+    sb --- ws
+    api -->|"CSI"| kv
+    mcp -->|"CSI"| kv
+    api -->|"OAuth · REST"| gh
+    sb -->|"egress allowlist"| gh
+    sb -->|"egress allowlist"| ai
+
+    pDeny -. enforces .-> api
+    pMcp -. allows .-> mcp
+    pSb -. restricts .-> sb
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class client client;
+    class gw,rApi,rMcp,rFe,feSvc,fe,mcpSvc,mcp,apiSvc svc;
+    class api core;
+    class warm,claim,sb runtime;
+    class appdb,ws data;
+    class pDeny,pMcp,pSb evt;
+    class kv,gh,ai ext;
 ```
 
 ---
@@ -63,6 +98,7 @@ graph TB
 ### Inbound request path
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Client["🌐 Client<br/>HTTPS :443"]
     LB["Public LoadBalancer IP<br/>provisioned by approuting-istio"]
@@ -80,6 +116,18 @@ flowchart TD
     GW -->|"PathPrefix /api<br/>PathPrefix /auth"| API_SVC --> API_POD
     GW -->|"PathPrefix /mcp<br/>/mcp/health → /healthz"| MCP_SVC --> MCP_POD
     GW -->|"PathPrefix /<br/>(catch-all)"| FE_SVC --> FE_POD
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Client client;
+    class LB,GW,API_SVC,MCP_SVC,FE_SVC,MCP_POD,FE_POD svc;
+    class API_POD core;
 ```
 
 Route specificity: `/api` and `/mcp` (longer prefixes) win over `/` — no conflict.
@@ -87,6 +135,7 @@ Route specificity: `/api` and `/mcp` (longer prefixes) win over `/` — no confl
 ### Gateway API resource relationships
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 graph LR
     GW["Gateway<br/>agentweaver-gateway<br/>gatewayClassName: approuting-istio<br/>listener https :443<br/>allowedRoutes.from: Same"]
 
@@ -101,6 +150,17 @@ graph LR
     GW -->|parentRef| R1 --> B1
     GW -->|parentRef| R2 --> B2
     GW -->|parentRef| R3 --> B3
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class GW,R1,R2,R3,B2,B3 svc;
+    class B1 core;
 ```
 
 ---
@@ -118,6 +178,7 @@ The `approuting-istio` gateway class means the Application Routing add-on uses a
 #### Network traffic diagram
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     GW["Gateway Pod<br/>label: gateway.networking.k8s.io/<br/>gateway-name: agentweaver-gateway"]
 
@@ -141,6 +202,19 @@ flowchart LR
 
     SB -->|":443 FQDN only<br/>api.github.com<br/>npmjs.org<br/>Azure AI"| EXT["External Services"]
     SB -->|"UDP/TCP :53"| DNS
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class GW,MCP,FE,DNS svc;
+    class API core;
+    class SB runtime;
+    class GH,KV,EXT ext;
 ```
 
 #### NetworkPolicy rules
@@ -186,6 +260,7 @@ See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
 Secrets are delivered from **Azure Key Vault** via the **Secrets Store CSI driver** and **Azure Workload Identity** — there are no static credentials in any manifest.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     MI["Managed Identity<br/>agentweaver-api-identity<br/>Key Vault Secrets User"]
     SA["ServiceAccount<br/>agentweaver-api<br/>azure.workload.identity/client-id"]
@@ -202,6 +277,18 @@ flowchart LR
     MI -->|"Key Vault Secrets User"| KV
     KV --> SPC -->|"CSI volume mount"| API
     KV --> SPCM -->|"CSI volume mount"| MCP
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class SA,SPC,SPCM,MCP svc;
+    class API core;
+    class MI,OIDC,KV ext;
 ```
 
 The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. Two `SecretProviderClass` objects sync secrets from Key Vault into pod volumes:
