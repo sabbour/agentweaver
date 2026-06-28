@@ -68,6 +68,7 @@ export default withMermaid({
           items: [
             { text: 'API', link: '/reference/api' },
             { text: 'MCP server', link: '/reference/mcp' },
+            { text: 'Agent definition', link: '/reference/agent-definition' },
             { text: 'Web UI', link: '/reference/web' },
             { text: 'Events', link: '/reference/events' },
             { text: 'Coordinator', link: '/reference/coordinator' },
@@ -88,6 +89,7 @@ export default withMermaid({
             { text: 'Overview', link: '/experience/00-overview' },
             { text: 'Onboarding & auth', link: '/experience/onboarding-auth' },
             { text: 'Projects', link: '/experience/projects' },
+            { text: 'Agent definition', link: '/experience/agent-definition' },
             { text: 'Runs board & watch', link: '/experience/runs-board-watch' },
             { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
             { text: 'Review workspace & merge', link: '/experience/review-workspace-merge' },
@@ -140,6 +142,7 @@ export default withMermaid({
             { text: 'A2A bridge', link: '/deep-dive/a2a-bridge' },
             { text: 'Git integration', link: '/deep-dive/git-integration' },
             { text: 'MCP server', link: '/deep-dive/mcp-server' },
+            { text: 'Agent definition', link: '/deep-dive/agent-definition' },
             { text: 'Projects & workspaces', link: '/deep-dive/projects' },
           ],
         },

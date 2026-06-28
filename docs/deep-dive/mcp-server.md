@@ -339,3 +339,8 @@ If you were recreating Agentweaver's MCP server from scratch, build in this orde
 | Existing automation cannot call MCP | Only OAuth JWTs are accepted. | Keep automation keys as an explicit machine-to-machine path. |
 | Raw GitHub tokens become permanent architecture | Migration path is left enabled without a sunset. | Gate GitHub passthrough by configuration and prefer Agentweaver-minted audience-bound tokens. |
 | Future local MCP tool bypasses authorization | Tool performs sensitive work without calling the API. | Either keep tools as API proxies or add equivalent local authorization and revocation checks. |
+
+## See also
+
+- [Agent definition — Deep Dive](./agent-definition.md) — the GitHub Copilot agent whose Tool map is generated from these MCP tools.
+- [MCP tool index](../reference/mcp-tools.md) — the generated list of every `agentweaver-*` tool.
