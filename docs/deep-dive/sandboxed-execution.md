@@ -32,7 +32,7 @@ flowchart TB
     direction TB
     Branch -->|"kubernetes-sandbox-claim"| Pool[("SandboxWarmPool<br/>pre-warmed pods")]:::data
     Pool --> Claim("Per-run SandboxClaim"):::runtime
-    Claim --> Bound{{"phase == Bound?"}}:::svc
+    Claim --> Bound{{"Ready condition True?"}}:::svc
     Bound -->|"pod name"| Kata("Kata VM pod<br/>pod-exec /bin/sh"):::runtime
   end
 

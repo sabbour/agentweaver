@@ -157,7 +157,7 @@ The ladder, top to bottom:
 - **`linux-bwrap` (bubblewrap)** — the preferred Linux backend, a selective-mount namespace sandbox.
 - **`lxc-native-linux`** — the Linux fallback when bubblewrap is absent but `lxc-exec` is present.
 - **`kubernetes-sandbox-claim` (K8s)** — selected automatically in-cluster. Each command runs in a warm
-  pod obtained through a `SandboxClaim` custom resource (`extensions.agents.x-k8s.io/v1alpha1`), with Kata
+  pod obtained through a `SandboxClaim` custom resource (`extensions.agents.x-k8s.io/v1beta1`), with Kata
   VM isolation and a NetworkPolicy egress allowlist. This is provisioned by the upstream **agent-sandbox
   controller**, a distinct runtime from MXC — see [The agent-sandbox controller (MXC vs. the
   controller)](#the-agent-sandbox-controller-mxc-vs-the-controller) below.
@@ -219,15 +219,17 @@ whole agent turn) runs in a pod the agent-sandbox controller bound for the run. 
 
 ### How the controller provisions a run's pod
 
-The three CRDs (all `extensions.agents.x-k8s.io/v1alpha1`) Agentweaver applies are:
+The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecutor` targets the `v1beta1` storage version — [`SandboxClaimConventions.cs:23`](#source)) Agentweaver applies are:
 
 - **`SandboxTemplate`** (`k8s/sandbox-template.yaml`, `agentweaver-sandbox`) — the pod shape and hardening:
   `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, read-only root
   filesystem, `/workspace` PVC, and the A2A listener on container port `8088`.
-- **`SandboxWarmPool`** (`k8s/sandbox-warmpool.yaml`, `replicas: 3`) — keeps warm pods pre-built from that
-  template so a claim binds without a cold start.
-- **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.templateRef` and
-  `spec.ttl`. The controller adopts a warm pod and reports binding in the claim's `status`.
+- **`SandboxWarmPool`** — keeps warm pods pre-built from a template so a claim binds without a cold
+  start. Two pools ship: generic `agentweaver-sandbox` (`k8s/sandbox-warmpool.yaml`, `replicas: 3`)
+  and pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 1`).
+- **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.warmPoolRef.name`
+  (the pool to bind), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and
+  `spec.env[]`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -238,15 +240,15 @@ sequenceDiagram
     participant Pool as SandboxWarmPool
     participant Pod as Kata sandbox pod
     participant Reg as PodNameRegistry
-    Exec->>Claim: CreateClaimAsync(templateRef, ttl)
+    Exec->>Claim: CreateClaimAsync(warmPoolRef, lifecycle)
     Claim->>Ctrl: reconcile new claim
     Ctrl->>Pool: adopt a warm pod
     Pool-->>Pod: pod assigned to claim
-    Ctrl-->>Claim: status.phase = Bound,<br/>status.sandbox.name = pod
+    Ctrl-->>Claim: Ready condition = True,<br/>status.sandbox.name = pod
     loop poll every 2s
         Exec->>Claim: WaitForBoundAsync (read status)
     end
-    Claim-->>Exec: phase Bound → pod name
+    Claim-->>Exec: Ready True → pod name
     Exec->>Reg: Register(runId, podName)
     opt AgentHost pod-per-run
         Exec->>Pod: GetPodIpAsync → status.podIP
@@ -255,8 +257,8 @@ sequenceDiagram
     Note over Exec,Ctrl: claim delete (ad-hoc) or TTL →<br/>controller GCs pod + service
 ```
 
-The executor reads the pod name from `status.sandbox.name` (the agent-sandbox controller's shape) and
-falls back to `status.podName`. For pod-per-run AgentHost pods it then polls the pod's `status.podIP` to
+The executor reads the pod name from `status.sandbox.name` (the agent-sandbox controller's shape) once the
+claim's `Ready` condition is `True`. For pod-per-run AgentHost pods it then polls the pod's `status.podIP` to
 build the A2A endpoint. Agentweaver never deletes pods itself — it deletes the *claim* (or lets the TTL
 expire) and the controller garbage-collects the pod and its service. Anything not visible in these
 manifests or the executor code (controller replica count, leader election, image, RBAC of the controller

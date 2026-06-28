@@ -147,7 +147,7 @@ sequenceDiagram
 A run's executing pod name is tracked so the UI can show *where* a run is running.
 
 - **`PodNameRegistry`** is an in-memory map from **run id → bound pod name**. It is populated by the
-  Kubernetes sandbox executor once a `SandboxClaim` transitions to `phase: Bound`, and the entry is
+  Kubernetes sandbox executor once a `SandboxClaim` reports its `Ready` condition `True`, and the entry is
   removed when the claim is deleted (e.g. on run cleanup or release).
 - The registry is consumed in two places:
   - the **system runtime endpoint** (`GET /api/system/runtime`) returns `{ kubernetes, podName }`,

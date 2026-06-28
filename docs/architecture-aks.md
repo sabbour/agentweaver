@@ -34,8 +34,8 @@ flowchart TB
         mcp(["mcp Deploy ×1<br/>:8080"])
 
         subgraph execpool["Sandbox execution"]
-            warm(["SandboxWarmPool ×3"])
-            claim(["SandboxClaim<br/>run-{id} · ttl 600s"])
+            warm(["SandboxWarmPool<br/>sandbox ×3 · agent-host ×1"])
+            claim(["SandboxClaim<br/>run-{id} · warmPoolRef"])
             sb(["Sandbox pods<br/>Kata VM · non-root"])
         end
 
@@ -250,7 +250,7 @@ Both the API and Frontend containers run as UID 1000 (`runAsNonRoot: true`, `run
 
 Agent runs execute shell commands in per-run Kata VM isolated sandbox pods
 (`runtimeClassName: kata-vm-isolation`), claimed from a pre-warmed `SandboxWarmPool`
-via a `SandboxClaim` (`extensions.agents.x-k8s.io/v1alpha1`). This provides VM-grade
+via a `SandboxClaim` (`extensions.agents.x-k8s.io/v1beta1`). This provides VM-grade
 isolation. The API selects the `KubernetesSandboxExecutor` automatically when it detects
 the in-cluster environment (`KUBERNETES_SERVICE_HOST` is set).
 See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.

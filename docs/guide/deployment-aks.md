@@ -388,8 +388,10 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 | File | Kind | Purpose |
 |------|------|---------|
 | `sandbox-template.yaml` | SandboxTemplate | Template for isolated pods — `kata-vm-isolation` runtime, non-root, read-only rootfs, workspace PVC |
-| `sandbox-warmpool.yaml` | SandboxWarmPool | Keeps 3 pre-warmed sandbox pods ready |
-| `sandbox-claim-template.yaml` | (template) | Reference template for SandboxClaim objects |
+| `sandbox-template-agenthost.yaml` | SandboxTemplate | AgentHost (pod-per-run) template — allows per-run env injection; image `${AGENTHOST_IMAGE_TAG}` |
+| `sandbox-warmpool.yaml` | SandboxWarmPool | Keeps 3 pre-warmed generic sandbox pods ready (`agentweaver-sandbox`) |
+| `sandbox-warmpool-agenthost.yaml` | SandboxWarmPool | Keeps 1 pre-warmed AgentHost pod ready (`agentweaver-agent-host`, backs pod-per-run claims) |
+| `sandbox-claim-template.yaml` | (template) | Reference v1beta1 SandboxClaim shape — `spec.warmPoolRef.name` + `spec.lifecycle` |
 
 ### Maintenance
 

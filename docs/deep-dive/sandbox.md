@@ -205,12 +205,12 @@ sequenceDiagram
     API->>API: choose claim name from run ID or random ID
     API->>API: clamp command timeout below claim TTL
     API->>API: verify workdir is under /workspace
-    API->>Claim: create SandboxClaim(templateRef, ttl)
+    API->>Claim: create SandboxClaim(warmPoolRef, lifecycle)
     Claim->>Controller: request sandbox instance
     Controller->>Pool: assign warm sandbox
     Pool-->>Pod: bound pod is ready
-    Controller-->>Claim: status.phase = Bound, pod name
-    API->>Claim: poll until Bound
+    Controller-->>Claim: Ready condition = True, status.sandbox.name
+    API->>Claim: poll until Ready condition True
     API->>Registry: remember pod name for run previews
     API->>Pod: exec /bin/sh -c command
     Pod-->>API: stdout/stderr/status streams
@@ -229,16 +229,16 @@ The "Sandbox controller" above is the upstream [`kubernetes-sigs/agent-sandbox`]
 - **MXC** (`Sabbour.Mxc.Sdk` / `wxc-exec.exe`) is the **local-host** command isolation runtime behind the Windows `processcontainer`, WSL, and Linux `lxc-exec` executors. It runs on a developer or non-cluster host and has no Kubernetes presence.
 - The **agent-sandbox controller** is the **in-cluster** runtime that turns a `SandboxClaim` into a bound, Kata-isolated pod. `KubernetesSandboxExecutor` talks only to this controller's CRDs; no MXC binary exists in the cluster.
 
-Agentweaver installs the controller and its three CRDs (all API group `extensions.agents.x-k8s.io/v1alpha1`) in `scripts/aks/10-create-cluster.sh` (default version `v0.4.6`):
+Agentweaver installs the controller and its three CRDs (API group `extensions.agents.x-k8s.io`) in `scripts/aks/10-create-cluster.sh` (install default `SANDBOX_CONTROLLER_VERSION=v0.4.6` at `10-create-cluster.sh:24` — production clusters run **agent-sandbox v0.5.0**). The installed controller serves both `v1beta1` (the **storage** version) and the deprecated-but-served `v1alpha1`; `KubernetesSandboxExecutor` targets **`v1beta1`** ([`SandboxClaimConventions.cs:23`](#source)):
 
 - **`SandboxTemplate`** (`k8s/sandbox-template.yaml`, `agentweaver-sandbox`) defines the pod shape and hardening: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, read-only root filesystem, the `/workspace` PVC, and the A2A listener port `8088`.
-- **`SandboxWarmPool`** (`k8s/sandbox-warmpool.yaml`, `replicas: 3`) keeps pre-built warm pods from that template so claims bind without a cold pod start.
-- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/sandbox-claim-template.yaml`) carries `spec.templateRef` and `spec.ttl`. The controller adopts a warm pod, then writes `status.phase: Bound` and the pod name into `status.sandbox.name` (preferred) or `status.podName`.
+- **`SandboxWarmPool`** keeps pre-built warm pods from a template so claims bind without a cold pod start. Two pools ship: the generic `agentweaver-sandbox` (`k8s/sandbox-warmpool.yaml`, `replicas: 3`) and the pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 1`) backed by the AgentHost template.
+- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (the pool the claim binds to — `agentweaver-sandbox` for generic claims, `agentweaver-agent-host` for AgentHost claims), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and `spec.env[]`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
 
 The executor's provisioning loop is the concrete contract with the controller:
 
-1. `CreateClaimAsync` POSTs the `SandboxClaim` custom object into the namespace.
-2. `WaitForBoundAsync` polls the claim every 2 s until `status.phase == "Bound"`, then returns `status.sandbox.name` (falling back to `status.podName`).
+1. `CreateClaimAsync` / `CreateAgentHostClaimAsync` POSTs the v1beta1 `SandboxClaim` custom object into the namespace ([`KubernetesSandboxExecutor.cs:354`, `:294`](#source)).
+2. `WaitForBoundAsync` polls the claim every 2 s until its `Ready` condition is `True`, then returns `status.sandbox.name` ([`SandboxClaimConventions.cs:53`](#source)).
 3. For pod-per-run AgentHost pods, `GetPodIpAsync` then polls the pod's `status.podIP` so the worker can build the A2A endpoint `http[s]://<podIP>:<port><a2aPath>`.
 4. On claim deletion (ad-hoc command) or TTL expiry, the controller garbage-collects the pod and its service — Agentweaver never deletes pods directly.
 
@@ -254,7 +254,7 @@ Run-scoped commands may need preview/debug support. When a command belongs to an
 
 Ad-hoc commands have no reason to keep a sandbox alive after the command returns, so the claim is deleted immediately. Run-scoped commands may keep the claim until cleanup or TTL so preview remains available. That improves developer experience but consumes warm-pool/quota capacity for longer, so operators must size quotas and warm pools accordingly.
 
-Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/PortForwardService.cs`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`, `k8s/sandbox-claim-template.yaml`
+Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs`, `apps/Agentweaver.Api/Sandbox/PortForwardService.cs`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`, `k8s/sandbox-claim-template.yaml`
 
 ## Production pod isolation and hardening
 
