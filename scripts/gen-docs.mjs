@@ -1,24 +1,44 @@
 #!/usr/bin/env node
 // gen-docs.mjs — Regenerate auto-derivable reference docs from source.
 //
-// Currently generates: docs/reference/mcp-tools.md  (the MCP tool index)
-// Source of truth:      apps/Agentweaver.Mcp/Tools/*.cs  ([McpServerTool] attributes)
+// Generates, from the single source of truth apps/Agentweaver.Mcp/Tools/*.cs:
+//   1. docs/reference/mcp-tools.md                       — the full MCP tool index.
+//   2. .github/agents/agentweaver.agent.md               — only the "## Tool map"
+//      block (delimited by <!-- BEGIN/END GENERATED:tool-map -->); ALL other prose
+//      in that file is hand-written and preserved verbatim.
+//   3. apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md — a byte-for-byte
+//      copy of (2), embedded into Agentweaver.Api and materialized into each new
+//      project's .github/agents/ at creation time. Keeping it a generated copy means
+//      the repo file and the per-project template can never drift.
 //
 // Usage:
 //   node scripts/gen-docs.mjs            # write the generated file(s)
-//   node scripts/gen-docs.mjs --check    # exit 1 if the committed file is stale (CI)
+//   node scripts/gen-docs.mjs --check    # exit 1 if any committed file is stale (CI)
 //
 // This is intentionally dependency-free (no npm install) so it runs anywhere
 // Node is available, including in CI before `npm ci` in docs/.
 
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
 const toolsDir = join(repoRoot, "apps", "Agentweaver.Mcp", "Tools");
-const outFile = join(repoRoot, "docs", "reference", "mcp-tools.md");
+const toolsDocFile = join(repoRoot, "docs", "reference", "mcp-tools.md");
+const agentFile = join(repoRoot, ".github", "agents", "agentweaver.agent.md");
+const agentTemplateCopy = join(
+  repoRoot,
+  "apps",
+  "Agentweaver.Api",
+  "Projects",
+  "Templates",
+  "agentweaver.agent.md"
+);
+
+// Markers delimiting the only generated region inside the hand-written agent file.
+const TOOL_MAP_BEGIN = "<!-- BEGIN GENERATED:tool-map -->";
+const TOOL_MAP_END = "<!-- END GENERATED:tool-map -->";
 
 // ── C# string-literal helpers ────────────────────────────────────────────────
 
@@ -80,9 +100,9 @@ function normalize(s) {
   return s.replace(/\s+/g, " ").trim().replace(/\|/g, "\\|");
 }
 
-// ── Build the generated markdown ─────────────────────────────────────────────
+// ── Shared parse: the canonical category groups (source of truth) ─────────────
 
-function build() {
+function parseGroups() {
   const files = readdirSync(toolsDir)
     .filter((f) => f.endsWith("Tools.cs"))
     .sort();
@@ -92,8 +112,17 @@ function build() {
     .filter((g) => g.tools.length > 0)
     .sort((a, b) => a.category.localeCompare(b.category));
 
-  const total = groups.reduce((n, g) => n + g.tools.length, 0);
+  for (const g of groups) {
+    g.tools.sort((a, b) => a.name.localeCompare(b.name));
+  }
 
+  const total = groups.reduce((n, g) => n + g.tools.length, 0);
+  return { groups, total };
+}
+
+// ── Build the generated mcp-tools.md ─────────────────────────────────────────
+
+function buildToolsDoc(groups, total) {
   const lines = [];
   lines.push("<!--");
   lines.push("  GENERATED FILE — DO NOT EDIT BY HAND.");
@@ -121,7 +150,7 @@ function build() {
     lines.push("");
     lines.push("| Tool | Description |");
     lines.push("| --- | --- |");
-    for (const t of g.tools.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const t of g.tools) {
       lines.push(`| \`${t.name}\` | ${t.description} |`);
     }
     lines.push("");
@@ -130,27 +159,112 @@ function build() {
   return lines.join("\n") + "\n";
 }
 
+// ── Build the generated "## Tool map" block for the agent definition ──────────
+//
+// Compact, name-only listing grouped by the SAME categories as mcp-tools.md, so
+// the agent file and the reference doc never disagree about the tool set.
+
+function buildToolMapBlock(groups, total) {
+  const lines = [];
+  lines.push(TOOL_MAP_BEGIN);
+  lines.push("<!--");
+  lines.push("  GENERATED BLOCK — DO NOT EDIT BY HAND.");
+  lines.push("  Source: apps/Agentweaver.Mcp/Tools/*.cs ([McpServerTool] attributes)");
+  lines.push("  Regenerate: node scripts/gen-docs.mjs");
+  lines.push("  Everything outside the BEGIN/END markers is hand-written and preserved.");
+  lines.push("-->");
+  lines.push("");
+  lines.push(
+    `The Agentweaver MCP server exposes **${total} tools** across **${groups.length} categories**. Tool names below are the stable identifiers to call (each is the \`agentweaver-*\` MCP tool); one-line descriptions live in \`docs/reference/mcp-tools.md\`.`
+  );
+  lines.push("");
+  for (const g of groups) {
+    const names = g.tools.map((t) => `\`${t.name}\``).join(", ");
+    lines.push(`- **${g.category}:** ${names}`);
+  }
+  lines.push("");
+  lines.push(TOOL_MAP_END);
+  return lines.join("\n");
+}
+
+// Replace the region between the markers (inclusive) with a freshly built block,
+// preserving every other byte of the hand-written template verbatim.
+function applyToolMapBlock(templateText, block) {
+  const beginIdx = templateText.indexOf(TOOL_MAP_BEGIN);
+  const endIdx = templateText.indexOf(TOOL_MAP_END);
+  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) {
+    throw new Error(
+      `Agent template ${relative(repoRoot, agentFile).replace(/\\/g, "/")} is missing the ` +
+        `'${TOOL_MAP_BEGIN}' / '${TOOL_MAP_END}' markers around the Tool map section.`
+    );
+  }
+  const before = templateText.slice(0, beginIdx);
+  const after = templateText.slice(endIdx + TOOL_MAP_END.length);
+  return before + block + after;
+}
+
+// ── Targets ──────────────────────────────────────────────────────────────────
+
+function computeTargets() {
+  const { groups, total } = parseGroups();
+
+  // 1. mcp-tools.md
+  const toolsDoc = buildToolsDoc(groups, total);
+
+  // 2. agent file: regenerate ONLY the tool-map block from the current (committed)
+  //    template, so hand-written prose is the live template and stays verbatim.
+  let agentTemplate = "";
+  try {
+    agentTemplate = readFileSync(agentFile, "utf8");
+  } catch {
+    throw new Error(
+      `Missing agent template ${relative(repoRoot, agentFile).replace(/\\/g, "/")}; ` +
+        `it must exist with the tool-map markers.`
+    );
+  }
+  // Normalize CRLF so generated output is deterministic regardless of git autocrlf.
+  agentTemplate = agentTemplate.replace(/\r\n/g, "\n");
+  const block = buildToolMapBlock(groups, total);
+  const agentContent = applyToolMapBlock(agentTemplate, block);
+
+  // 3. API embedded copy: identical bytes to the agent file.
+  return [
+    { file: toolsDocFile, content: toolsDoc },
+    { file: agentFile, content: agentContent },
+    { file: agentTemplateCopy, content: agentContent },
+  ];
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 const check = process.argv.includes("--check");
-const generated = build();
-const rel = relative(repoRoot, outFile).replace(/\\/g, "/");
+const targets = computeTargets();
 
 if (check) {
-  let current = "";
-  try {
-    current = readFileSync(outFile, "utf8");
-  } catch {
-    /* missing file counts as drift */
+  let drift = false;
+  for (const { file, content } of targets) {
+    const rel = relative(repoRoot, file).replace(/\\/g, "/");
+    let current = "";
+    try {
+      current = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+    } catch {
+      /* missing file counts as drift */
+    }
+    if (current !== content) {
+      console.error(
+        `DRIFT: ${rel} is out of date. Run 'node scripts/gen-docs.mjs' and commit the result.`
+      );
+      drift = true;
+    } else {
+      console.log(`OK: ${rel} is in sync.`);
+    }
   }
-  if (current !== generated) {
-    console.error(
-      `DRIFT: ${rel} is out of date. Run 'node scripts/gen-docs.mjs' and commit the result.`
-    );
-    process.exit(1);
-  }
-  console.log(`OK: ${rel} is in sync.`);
+  if (drift) process.exit(1);
 } else {
-  writeFileSync(outFile, generated);
-  console.log(`Wrote ${rel}`);
+  for (const { file, content } of targets) {
+    const rel = relative(repoRoot, file).replace(/\\/g, "/");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, content);
+    console.log(`Wrote ${rel}`);
+  }
 }

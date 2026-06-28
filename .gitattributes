@@ -17,3 +17,9 @@ apps/web/docker-entrypoint.sh text eol=lf
 
 # Shell scripts: always LF (bash fails to parse CRLF line endings)
 *.sh text eol=lf
+
+# Generated docs/templates: always LF so `node scripts/gen-docs.mjs` output is
+# byte-stable across platforms and the API embedded copy matches the .github file.
+docs/reference/mcp-tools.md text eol=lf
+.github/agents/agentweaver.agent.md text eol=lf
+apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md text eol=lf

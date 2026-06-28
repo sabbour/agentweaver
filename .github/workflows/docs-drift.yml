@@ -38,6 +38,14 @@ jobs:
         run: |
           node scripts/gen-docs.mjs --check
 
+      # Belt-and-suspenders: the same --check above already validates the agent
+      # definition and its embedded API copy. This step makes the agent-file guard
+      # explicit so failures are easy to attribute. It will no-op if everything is
+      # in sync (the previous step would have already failed otherwise).
+      - name: Verify generated agent definition is up to date
+        run: |
+          node scripts/gen-docs.mjs --check
+
   curated-drift-nudge:
     name: Curated docs drift (warn only)
     runs-on: ubuntu-latest

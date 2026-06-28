@@ -243,6 +243,28 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         defaultEntries[0].IsBuiltIn.Should().BeTrue("the single default entry must be the built-in");
     }
 
+    // =========================================================================
+    // PC-11: CreateBlankAsync materializes the GitHub Copilot agent definition
+    //   into .github/agents/agentweaver.agent.md (agent-file-gen)
+    // =========================================================================
+    [Fact]
+    public async Task CreateBlankAsync_MaterializesAgentDefinition()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store   = new SqliteProjectStore(testDb.Db);
+        var service = BuildService(store);
+        var dir     = NewDir();
+
+        var project = await service.CreateBlankAsync("Agent Def Check", dir, null, null, null, "user");
+
+        var agentFile = Path.Combine(project.WorkingDirectory, ".github", "agents", "agentweaver.agent.md");
+        File.Exists(agentFile).Should().BeTrue(
+            "the agent definition must be materialized into every new project's .github/agents/");
+        File.ReadAllText(agentFile).Should().Be(
+            Agentweaver.Api.Projects.AgentDefinitionTemplate.Content,
+            "the materialized copy must match the embedded template");
+    }
+
     /// <summary>Stub git initializer: creates directories without real git operations.</summary>
     private sealed class NoOpGitInitializer : ProjectGitInitializer
     {

@@ -85,6 +85,10 @@ public sealed class ProjectService
         // at runtime. A blank project is empty, so this always writes the default policy.
         TryMaterializeDefaultReviewPolicy(workingDir);
 
+        // Materialize the GitHub Copilot agent definition into the new project (agent-file-gen). Best-effort
+        // and non-clobbering: the embedded template is a generated copy of .github/agents/agentweaver.agent.md.
+        TryMaterializeAgentDefinition(workingDir);
+
         var project = new Project
         {
             Id = id,
@@ -172,6 +176,11 @@ public sealed class ProjectService
         // ships its own review policies is never overwritten. Never fails creation; the loader
         // regenerates the default from DefaultReviewPolicyTemplate at runtime.
         TryMaterializeDefaultReviewPolicy(workingDir);
+
+        // Materialize the GitHub Copilot agent definition into the cloned project (agent-file-gen). Best-effort
+        // and non-clobbering: a repo that already ships its own .github/agents/agentweaver.agent.md is never
+        // overwritten. Never fails creation.
+        TryMaterializeAgentDefinition(workingDir);
 
         var project = new Project
         {
@@ -464,5 +473,25 @@ public sealed class ProjectService
             _logger.LogInformation(
                 "Materialized the default review policy into {Path}.",
                 Path.Combine(workingDir, ReviewPolicies.DefaultReviewPolicyTemplate.RelativeFilePath));
+    }
+
+    /// <summary>
+    /// Best-effort materialization of the GitHub Copilot agent definition into the project's working
+    /// directory at <c>.github/agents/agentweaver.agent.md</c> (agent-file-gen). Non-clobbering and never
+    /// throws: project creation must not fail if this write fails. The embedded template is a generated,
+    /// byte-identical copy of the repo's <c>.github/agents/agentweaver.agent.md</c>, whose "## Tool map"
+    /// block is derived from the MCP server source via <c>scripts/gen-docs.mjs</c>.
+    /// </summary>
+    private void TryMaterializeAgentDefinition(string workingDir)
+    {
+        var written = AgentDefinitionTemplate.TryMaterialize(workingDir, out var error);
+        if (error is not null)
+            _logger.LogWarning(
+                "Failed to materialize the agent definition into {Path} ({Error}).",
+                Path.Combine(workingDir, AgentDefinitionTemplate.RelativeFilePath), error);
+        else if (written)
+            _logger.LogInformation(
+                "Materialized the agent definition into {Path}.",
+                Path.Combine(workingDir, AgentDefinitionTemplate.RelativeFilePath));
     }
 }
