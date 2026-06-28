@@ -14,17 +14,23 @@ spec:
   policyTypes:
     - Ingress
 ---
-# Allow Istio ingress data-plane (preview gateway) to reach the sandbox browser preview port range.
+# Allow the Istio ingress data-plane (preview gateway) to reach the sandbox browser preview port range.
 #
 # Ports 3000-9000 are the allowed sandbox dev-server preview ports. This range MUST mirror
 # Sandbox:Preview:AllowedPortMin/Max (the preview endpoint rejects out-of-range target_port,
 # so we never provision a preview the NetworkPolicy would black-hole). target_port is
 # user-supplied (default 3000) — coordinate with Morpheus (backend) before changing the range.
 #
-# The approuting-istio add-on creates data-plane pods in the same namespace (agentweaver)
+# The approuting-istio add-on creates the preview gateway's data-plane pods in the SAME namespace
+# as this policy (agentweaver) — CONFIRMED on the live cluster (agentweaver-aks-2). They are
 # labelled gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway.
-# The aks-istio-ingress namespace selector covers the shared Istio control-plane pods
-# (confirmed from existing allow-gateway-to-api policy in networkpolicy-default-deny.yaml).
+#
+# A NetworkPolicy `from` peer with only a podSelector (and NO namespaceSelector) matches pods
+# carrying that label in the SAME namespace as the policy (agentweaver) — exactly where the
+# preview-gateway pods run. The gateway-name label scopes ingress to ONLY the preview gateway's
+# pods, which is tight and correct. (An earlier revision required namespaceSelector
+# aks-istio-ingress; that was wrong for this add-on topology and would have black-holed all
+# preview traffic, since the gateway pods are not in aks-istio-ingress.)
 #
 # Egress is NOT touched — all egress rules remain in sandbox-egress-allowlist below.
 apiVersion: networking.k8s.io/v1
@@ -42,17 +48,11 @@ spec:
     - Ingress
   ingress:
     - from:
-        # Single peer = podSelector AND namespaceSelector (both must match the SAME source pod):
-        # only the preview gateway data-plane pods, and only when they live in the
-        # aks-istio-ingress namespace, are admitted. Listing these as two separate `from` items
-        # would be an OR (any pod in aks-istio-ingress, or any matching pod in any namespace),
-        # widening ingress well beyond the preview gateway.
+        # Same-namespace (agentweaver) podSelector only — admits only the preview gateway
+        # data-plane pods. No namespaceSelector: the gateway pods live in this namespace.
         - podSelector:
             matchLabels:
               gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway
-          namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: aks-istio-ingress
       ports:
         # Range mirrors Sandbox:Preview:AllowedPortMin/Max (gateway-sourced ingress only).
         - protocol: TCP

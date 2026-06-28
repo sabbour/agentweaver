@@ -120,16 +120,17 @@ replica-safe.
 - **Capability URL.** The URL is unauthenticated — possession grants access. All security entropy is the
   128-bit CSPRNG suffix ([`PreviewToken.cs:35`](#source)); the cosmetic words add none. Reserved labels
   (`agentweaver`, `mcp`, `api`, `frontend`) are denied and regenerated ([`PreviewToken.cs:25`](#source)).
-- **NetworkPolicy.** `sandbox-allow-preview-ingress` ([`networkpolicy-sandbox.yaml:30`](#source)) admits
-  TCP `3000-9000` from a **single** `from` peer combining `podSelector` (the preview gateway pods) **and**
-  `namespaceSelector` (`aks-istio-ingress`) — an AND, not an OR — so only the preview gateway data-plane can
-  reach the sandbox preview ports. Out-of-range ports are rejected by the endpoint, so we never provision a
-  preview the policy would black-hole.
-- **No token in gateway logs.** The token rides in the Host header and keepalive path. App code only ever
-  logs a non-reversible fingerprint (`SHA-256[0..4]+token`), never the raw token. An Istio `Telemetry`
-  resource ([`gateway-preview.yaml:69`](#source)) **disables access logging** on the preview gateway's
-  data-plane so Envoy can't persist the Host/path. Residual risk (TLS SNI, browser history) is inherent to
-  capability URLs and mitigated by short-lived previews, 128-bit entropy, and `no-referrer`.
+- **NetworkPolicy.** `sandbox-allow-preview-ingress` ([`networkpolicy-sandbox.yaml`](#source)) admits
+  TCP `3000-9000` from a single `from` peer with a `podSelector` matching the preview gateway pods
+  (`gateway.networking.k8s.io/gateway-name=agentweaver-preview-gateway`). With no `namespaceSelector`, the
+  peer matches those pods in the policy's own namespace (`agentweaver`) — exactly where the
+  approuting-istio preview gateway data-plane runs — so only the preview gateway can reach the sandbox
+  preview ports. Out-of-range ports are rejected by the endpoint, so we never provision a preview the
+  policy would black-hole.
+- **Capability token in the URL.** The 128-bit token rides in the preview URL and therefore the Host header
+  (and keepalive path). This is expected and inherent to an unguessable capability URL: app code only ever
+  logs a non-reversible fingerprint (`SHA-256[0..4]+token`), never the raw token, and the URL is unguessable
+  and short-lived (idle + hard-cap reaper) with `no-referrer` on preview pages.
 - **RBAC.** The API ServiceAccount can read `sandboxclaims` and create/delete the per-preview `services` and
   `httproutes` ([`rbac-api.yaml`](#source)).
 
@@ -153,7 +154,7 @@ tool** — preview start is always user-initiated from the UI. When disabled, th
 | SandboxClaim CRD coordinates + bound-pod parsing | `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs` |
 | HTTP endpoints (start / keepalive / stop / list) | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
 | Agent capability note injection | `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` |
-| Shared preview Gateway + access-log Telemetry | `k8s/gateway-preview.yaml` |
+| Shared preview Gateway | `k8s/gateway-preview.yaml` |
 | Sandbox NetworkPolicy (preview ingress range) | `k8s/networkpolicy-sandbox.yaml` |
 | API RBAC (claims read, service/route write) | `k8s/rbac-api.yaml` |
 | Preview button, iframe, keepalive ping | `apps/web/src/pages/WorkflowRunPage.tsx` |
