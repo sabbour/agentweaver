@@ -74,6 +74,7 @@ export default withMermaid({
             { text: 'Memory', link: '/reference/memory' },
             { text: 'Agent communication', link: '/reference/agent-communication' },
             { text: 'Sandbox pods', link: '/reference/sandbox-pods' },
+            { text: 'Sandbox browser preview', link: '/reference/sandbox-browser-preview' },
             { text: 'Sandbox setup', link: '/reference/sandbox-setup' },
             { text: 'A2A transport', link: '/reference/a2a' },
             { text: 'Scaling & data layer', link: '/reference/scaling-data-layer' },
@@ -109,6 +110,7 @@ export default withMermaid({
             { text: 'Workflows & backlog', link: '/experience/workflows-backlog' },
             { text: 'Operations', link: '/experience/operations' },
             { text: 'Sandbox pod execution', link: '/experience/sandbox-pod-execution' },
+            { text: 'Sandbox browser preview', link: '/experience/sandbox-browser-preview' },
             { text: 'Distributed agents (A2A)', link: '/experience/a2a-distributed-agents' },
             { text: 'Scaling & operations', link: '/experience/scaling-operations' },
             { text: 'Agent communication', link: '/experience/agent-communication' },
@@ -144,6 +146,7 @@ export default withMermaid({
           items: [
             { text: 'Sandbox', link: '/deep-dive/sandbox' },
             { text: 'Sandbox pod execution', link: '/deep-dive/sandbox-pod-execution' },
+            { text: 'Sandbox browser preview', link: '/deep-dive/sandbox-browser-preview' },
             { text: 'A2A bridge', link: '/deep-dive/a2a-bridge' },
             { text: 'Git integration', link: '/deep-dive/git-integration' },
             { text: 'MCP server', link: '/deep-dive/mcp-server' },

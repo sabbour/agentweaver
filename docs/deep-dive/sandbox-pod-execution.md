@@ -359,3 +359,5 @@ To rebuild pod-per-run from these ideas:
   see and feel.
 - [A2A bridge](./a2a-bridge.md) and [A2A reference](../reference/a2a.md) — the `-preview` transport that
   carries agent turns to the pod.
+- [Sandbox browser preview](./sandbox-browser-preview.md) — exposing a server running inside the run's pod
+  to the user over a public HTTPS reverse proxy.
