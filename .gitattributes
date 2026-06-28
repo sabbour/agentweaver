@@ -14,3 +14,6 @@ apps/web/**/*.css text eol=lf
 apps/web/**/*.json text eol=lf
 
 apps/web/docker-entrypoint.sh text eol=lf
+
+# Shell scripts: always LF (bash fails to parse CRLF line endings)
+*.sh text eol=lf
