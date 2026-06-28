@@ -1176,6 +1176,4 @@ export interface PortForwardSessionDto {
   previewUrl?: string | null;
   keepalive_url?: string | null;
   keepaliveUrl?: string | null;
-  keepalive_url?: string | null;
-  keepaliveUrl?: string | null;
 }
