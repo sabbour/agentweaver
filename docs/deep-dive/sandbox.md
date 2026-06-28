@@ -256,6 +256,23 @@ Ad-hoc commands have no reason to keep a sandbox alive after the command returns
 
 Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs`, `apps/Agentweaver.Api/Sandbox/PortForwardService.cs`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`, `k8s/sandbox-claim-template.yaml`
 
+### Agent-host per-run env contract (and why the user identity must be injected)
+
+When the executor launches a pod-per-run agent-host, it injects per-run configuration as `spec.env` on the SandboxClaim. The pod reads these as the `AgentHost` config section (env prefix `AgentHost__`, bound to `AgentHostOptions`):
+
+| Env var | Purpose |
+| --- | --- |
+| `AgentHost__RunId` | The Agentweaver run this pod executes (required; pod refuses to start without it). |
+| `AgentHost__WorkingDirectory` / `AgentHost__RepositoryPath` | Workspace + repo paths inside the mounted PVC. |
+| `AgentHost__A2APath` | URL prefix where the A2A endpoints are mounted. |
+| `AgentHost__RequireMtls` | Whether the A2A listener requires mTLS (production default true). |
+| `AgentHost__Port` | A2A listener port (default 8088). |
+| `AgentHost__UserId` | **The run's submitting user.** Scopes the pod's GitHub Copilot auth to that user's signed-in token. |
+
+`AgentHost__UserId` is critical for GitHub Copilot auth. On the shared-token path (`AgentHost__UseSharedTokenStore=true`), the pod's `SharedUserScopeProvider` uses this id to resolve the per-user token scope (`user:<id>` → `user_<id>.json` on the shared auth volume) — the user's signed-in, **Copilot-entitled** token. If the id is **absent**, the in-pod `CopilotAIAgent` logs "No submitting user was available" and falls back to the installation token, which carries no Copilot entitlement; the first model turn then fails inside the Copilot SDK ("Session was not created with authentication info or custom provider"). The executor therefore resolves the run's `SubmittingUser` (via `IRunSubmittingUserResolver` over `IRunStore`) and injects `AgentHost__UserId` at claim time. When no Copilot-capable identity is available the run now fails with a clear, actionable error ("run X has no Copilot-entitled credentials") instead of the opaque SDK message.
+
+Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs`, `apps/Agentweaver.AgentHost/Program.cs`, `apps/Agentweaver.AgentHost/SharedUserScopeProvider.cs`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+
 ## Production pod isolation and hardening
 
 The sandbox pod is intentionally boring. It contains common build/runtime tools so agents can run normal project commands, but it is not privileged and should not receive cluster credentials.

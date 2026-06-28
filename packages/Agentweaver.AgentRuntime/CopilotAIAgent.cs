@@ -371,12 +371,35 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (string.IsNullOrWhiteSpace(userId))
         {
             _logger.LogWarning(
-                "No submitting user was available for run {RunId}; falling back to installation GitHub Copilot credentials.",
+                "No submitting user was available for run {RunId}; falling back to non-Copilot installation " +
+                "GitHub credentials. If this run needs Copilot, ensure AgentHost__UserId is injected.",
                 _runId);
             return _scopeProvider.Resolve(userId: null);
         }
 
         return _scopeProvider.Resolve(userId);
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any inner exception) is the GitHub Copilot SDK's
+    /// "Session was not created with authentication info or custom provider" error — i.e. the
+    /// resolved token has no usable Copilot authentication. Used to surface a clear, actionable
+    /// failure instead of the opaque SDK message.
+    /// </summary>
+    internal static bool IsMissingCopilotAuth(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            var message = e.Message;
+            if (!string.IsNullOrEmpty(message) &&
+                (message.Contains("was not created with authentication info", StringComparison.OrdinalIgnoreCase) ||
+                 message.Contains("authentication info or custom provider", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -441,6 +464,30 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 rateLimitRetryAttempt++;
                 _factory.LogAiRetry(ex, rateLimitRetryAttempt, delay, "HTTP 429/rate limit");
                 await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsMissingCopilotAuth(ex))
+            {
+                // Deliverable: replace the opaque SDK "Session was not created with authentication
+                // info or custom provider" with a clear, actionable failure. This happens when the
+                // pod resolved a non-Copilot token (typically the installation fallback because no
+                // submitting user / AgentHost__UserId was available).
+                _logger.LogError(
+                    ex,
+                    "Run {RunId} could not authenticate to GitHub Copilot: the resolved GitHub token " +
+                    "is not Copilot-entitled (likely the installation fallback). Ensure the submitting " +
+                    "user is signed in and AgentHost__UserId is injected into the pod.",
+                    _runId);
+                Emit("run.failed", new
+                {
+                    message = $"Run {_runId} has no Copilot-entitled credentials: the GitHub token available " +
+                              "to the agent is not authorized for GitHub Copilot. Sign in the submitting user " +
+                              "and ensure their identity is propagated to the run.",
+                });
+                throw new InvalidOperationException(
+                    $"Run {_runId} has no Copilot-entitled credentials: the resolved GitHub token is not " +
+                    "authorized for GitHub Copilot. Ensure the submitting user is signed in and " +
+                    "AgentHost__UserId is injected into the pod.",
+                    ex);
             }
             catch (Exception ex)
             {

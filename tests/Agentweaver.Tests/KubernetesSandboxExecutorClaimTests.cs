@@ -37,6 +37,19 @@ public sealed class KubernetesSandboxExecutorClaimTests
     private static KubernetesSandboxExecutor NewExecutor(FakeKubeHandler handler) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance, podRegistry: null);
 
+    private static KubernetesSandboxExecutor NewExecutor(
+        FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver) =>
+        new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            podRegistry: null, readinessProbe: null, submittingUserResolver: submittingUserResolver);
+
+    private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
+    {
+        private readonly string? _user;
+        public StubSubmittingUserResolver(string? user) => _user = user;
+        public Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(_user);
+    }
+
     private static JsonElement SpecOf(string body)
     {
         using var doc = JsonDocument.Parse(body);
@@ -110,5 +123,59 @@ public sealed class KubernetesSandboxExecutorClaimTests
         spec.GetProperty("lifecycle").GetProperty("shutdownPolicy").GetString().Should().Be("Delete");
         spec.TryGetProperty("templateRef", out _).Should().BeFalse();
         spec.TryGetProperty("ttl", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_injects_AgentHost__UserId_from_submitting_user()
+    {
+        const string runId = "run-claim-user";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"));
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        var post = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path.EndsWith("/sandboxclaims")).Subject;
+
+        var env = SpecOf(post.Body!).GetProperty("env");
+        env.EnumerateArray().Should().Contain(e =>
+            e.GetProperty("name").GetString() == "AgentHost__UserId" &&
+            e.GetProperty("value").GetString() == "sabbour",
+            "the run's submitting user must be injected so the pod loads the user's Copilot token");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_omits_AgentHost__UserId_when_no_submitting_user()
+    {
+        const string runId = "run-claim-nouser";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        // No resolver configured at all → no AgentHost__UserId.
+        var executor = NewExecutor(handler);
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        var post = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path.EndsWith("/sandboxclaims")).Subject;
+
+        var env = SpecOf(post.Body!).GetProperty("env");
+        env.EnumerateArray().Should().NotContain(e =>
+            e.GetProperty("name").GetString() == "AgentHost__UserId",
+            "without a resolved submitting user, AgentHost__UserId must be omitted (not blank)");
     }
 }

@@ -146,6 +146,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // A2A cold-start race (pod Running ~20-30s before Kestrel binds :8088). Null in unit tests
     // that only assert the claim body → readiness gate is skipped.
     private readonly IAgentHostReadinessProbe? _readinessProbe;
+    // Resolves the run's submitting user so AgentHost__UserId can be injected into the pod, letting
+    // the in-pod CopilotAIAgent load the user's Copilot-entitled token instead of falling back to the
+    // installation token (no Copilot). Null when the run→user lookup is unavailable.
+    private readonly IRunSubmittingUserResolver? _submittingUserResolver;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -159,13 +163,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         KubernetesSandboxOptions options,
         ILogger<KubernetesSandboxExecutor> logger,
         IPodNameRegistry? podRegistry = null,
-        IAgentHostReadinessProbe? readinessProbe = null)
+        IAgentHostReadinessProbe? readinessProbe = null,
+        IRunSubmittingUserResolver? submittingUserResolver = null)
     {
         _client = client;
         _options = options;
         _logger = logger;
         _podRegistry = podRegistry;
         _readinessProbe = readinessProbe;
+        _submittingUserResolver = submittingUserResolver;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -272,7 +278,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
             runId, claimName);
 
-        await CreateAgentHostClaimAsync(claimName, runId, ct).ConfigureAwait(false);
+        // Resolve the run's submitting user so the pod can scope GitHub Copilot auth to that user's
+        // signed-in token. A null result degrades to the installation token in-pod (no Copilot) — we
+        // log it loudly so the cause of an auth failure is visible.
+        var submittingUser = await ResolveSubmittingUserAsync(runId, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(submittingUser))
+        {
+            _logger.LogWarning(
+                "KubernetesSandboxExecutor: no submitting user resolved for run {RunId}; AgentHost__UserId " +
+                "will be omitted and the pod may fall back to non-Copilot installation credentials.",
+                runId);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: injecting AgentHost__UserId for run {RunId}.", runId);
+        }
+
+        await CreateAgentHostClaimAsync(claimName, runId, submittingUser, ct).ConfigureAwait(false);
 
         var podName = await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
         _logger.LogInformation(
@@ -341,13 +364,57 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
+    /// Resolves the submitting user for <paramref name="runId"/> via the injected resolver, never
+    /// throwing (a lookup failure must not fail the launch — it degrades to omitting the user id).
+    /// </summary>
+    private async Task<string?> ResolveSubmittingUserAsync(string runId, CancellationToken ct)
+    {
+        if (_submittingUserResolver is null)
+            return null;
+
+        try
+        {
+            return await _submittingUserResolver.GetSubmittingUserAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "KubernetesSandboxExecutor: failed to resolve submitting user for run {RunId}; " +
+                "AgentHost__UserId will be omitted.",
+                runId);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Creates a <c>SandboxClaim</c> that provisions an AgentHost pod by binding to the
     /// <c>AgentHostWarmPoolRef</c> warm pool (which references the AgentHost template).
     /// Injects per-run env vars into the spec so the pod's <c>AgentHost</c> process can read
-    /// its <c>AgentHost:RunId</c>, etc.
+    /// its <c>AgentHost:RunId</c>, etc. When <paramref name="submittingUser"/> is non-empty, also
+    /// injects <c>AgentHost__UserId</c> so the pod scopes GitHub Copilot auth to that user's token.
     /// </summary>
-    private Task CreateAgentHostClaimAsync(string claimName, string runId, CancellationToken ct)
+    private Task CreateAgentHostClaimAsync(
+        string claimName, string runId, string? submittingUser, CancellationToken ct)
     {
+        var env = new List<object>
+        {
+            new { name = "AgentHost__RunId", value = runId },
+            new { name = "AgentHost__WorkingDirectory", value = _options.WorkspaceMountPath },
+            new { name = "AgentHost__RepositoryPath", value = _options.WorkspaceMountPath },
+            new { name = "AgentHost__A2APath", value = _options.AgentHostA2APath },
+            new { name = "AgentHost__RequireMtls", value = _options.RequireMtls ? "true" : "false" },
+            new { name = "AgentHost__Port", value = _options.AgentHostPort.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+        };
+
+        // AgentHost__UserId drives per-user GitHub Copilot token scoping in the pod (the in-pod
+        // SharedUserScopeProvider resolves user_<id>.json). Without it the pod falls back to the
+        // installation token, which has no Copilot entitlement, and the first model turn fails.
+        if (!string.IsNullOrWhiteSpace(submittingUser))
+        {
+            env.Add(new { name = "AgentHost__UserId", value = submittingUser });
+        }
+
         var manifest = new
         {
             apiVersion = $"{ApiGroup}/{ApiVersion}",
@@ -361,15 +428,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 // by the sandbox controller if it supports the `env` field; otherwise the
                 // template or a mounted ConfigMap carries the static config and the runId
                 // is derived from the claim name by convention).
-                env = new[]
-                {
-                    new { name = "AgentHost__RunId", value = runId },
-                    new { name = "AgentHost__WorkingDirectory", value = _options.WorkspaceMountPath },
-                    new { name = "AgentHost__RepositoryPath", value = _options.WorkspaceMountPath },
-                    new { name = "AgentHost__A2APath", value = _options.AgentHostA2APath },
-                    new { name = "AgentHost__RequireMtls", value = _options.RequireMtls ? "true" : "false" },
-                    new { name = "AgentHost__Port", value = _options.AgentHostPort.ToString(System.Globalization.CultureInfo.InvariantCulture) },
-                },
+                env = env.ToArray(),
             },
         };
 
