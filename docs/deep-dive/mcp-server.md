@@ -1,5 +1,9 @@
 # MCP Server — Conceptual Deep Dive
 
+::: warning Experimental
+The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
+:::
+
 Agentweaver's MCP server is an endpoint that tools can call, uses standards-based OAuth discovery, and preserves the caller's identity all the way to the Agentweaver API. The sections below explain its design as rebuildable ideas, so an engineer who has never seen Agentweaver could recreate the same behavior.
 
 ## 1. The mental model: MCP is the tool door, the API is the authority

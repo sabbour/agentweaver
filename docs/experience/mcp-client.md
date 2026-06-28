@@ -1,5 +1,9 @@
 # End-to-end MCP client experience
 
+::: warning Experimental
+The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
+:::
+
 Agentweaver's MCP server turns the whole product into tools an AI assistant can call for you. Instead of driving only the web UI, you can connect Claude Desktop, GitHub Copilot, or any MCP-capable assistant and ask it to create projects, cast teams, manage backlog, start coordinator work, watch runs, review artifacts, and approve outcomes. This doc explains the experience first, then gives a complete tool catalog for assistant-driven use.
 
 Related context: [Overview](./00-overview.md), [Onboarding & auth](./onboarding-auth.md), [Projects](../guide/projects.md), [Teams](../guide/teams.md), [Board](../guide/board.md), [Runs](../guide/runs.md), [Review](../guide/review.md), [Workflows](../guide/workflows.md), [Coordinator reference](../reference/coordinator.md), [MCP reference](../reference/mcp.md), and [MCP OAuth](../mcp-oauth.md).

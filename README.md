@@ -1,5 +1,7 @@
 # Agentweaver
 
+> ⚠️ **Alpha software.** Agentweaver is under active development. Expect breaking changes, incomplete features, and rough edges. Not intended for production use.
+
 Agentweaver runs an AI agent on a task inside a sandboxed git worktree, streams every step live, and waits for human review before anything merges.
 
 Read the docs: [docs/index.md](docs/index.md)

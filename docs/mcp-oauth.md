@@ -1,5 +1,9 @@
 # MCP OAuth 2.1 Authorization Server (Option C)
 
+::: warning Experimental
+The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
+:::
+
 > Feature: `mcp-oauth` · Tasks T1-T3 (metadata + JWKS, token service, authorize/token)
 
 Agentweaver hosts a thin OAuth 2.1 Authorization Server (AS) inside `Agentweaver.Api`. It lets MCP

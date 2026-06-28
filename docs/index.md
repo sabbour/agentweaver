@@ -36,6 +36,10 @@ features:
     details: Self-hosted. Runs with GitHub Copilot or Microsoft Foundry. Drive it from the web UI or any MCP-compatible client, including Copilot CLI.
 ---
 
+::: warning Alpha software
+Agentweaver is **alpha software** under active development. Expect breaking changes, incomplete features, and rough edges. Do not rely on it for production workloads.
+:::
+
 ## How it works
 
 ```mermaid
