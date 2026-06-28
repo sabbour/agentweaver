@@ -47,4 +47,21 @@ public sealed class SandboxPreviewOptions
 
     /// <summary>Kubernetes namespace where the per-preview Service / HTTPRoute / pod live.</summary>
     public string Namespace { get; init; } = "agentweaver";
+
+    /// <summary>
+    /// Lowest target port a preview may expose (inclusive). Mirrors the gateway-only ingress
+    /// range allowed by <c>k8s/networkpolicy-sandbox.yaml</c>; ports outside the range are
+    /// rejected by the preview endpoint so we never provision a preview the NetworkPolicy blocks.
+    /// </summary>
+    public int AllowedPortMin { get; init; } = 3000;
+
+    /// <summary>Highest target port a preview may expose (inclusive). See <see cref="AllowedPortMin"/>.</summary>
+    public int AllowedPortMax { get; init; } = 9000;
+
+    /// <summary>
+    /// Pure check: is <paramref name="port"/> within the inclusive preview port range
+    /// [<paramref name="min"/>, <paramref name="max"/>]? Used by the preview endpoint to reject
+    /// out-of-range ports the NetworkPolicy would black-hole. Kept static/pure for unit testing.
+    /// </summary>
+    public static bool IsPortInRange(int port, int min, int max) => port >= min && port <= max;
 }

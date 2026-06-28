@@ -10,6 +10,34 @@ namespace Agentweaver.Tests;
 /// </summary>
 public class SandboxPreviewTests
 {
+    // ── Preview port range (mirrors k8s NetworkPolicy gateway-only ingress) ───────
+
+    [Theory]
+    [InlineData(3000)]   // min boundary
+    [InlineData(9000)]   // max boundary
+    [InlineData(5173)]   // Vite
+    [InlineData(8080)]   // generic dev server
+    public void IsPortInRange_accepts_ports_within_allowed_range(int port) =>
+        SandboxPreviewOptions.IsPortInRange(port, 3000, 9000).Should().BeTrue();
+
+    [Theory]
+    [InlineData(2999)]   // just below min
+    [InlineData(9001)]   // just above max
+    [InlineData(80)]
+    [InlineData(443)]
+    [InlineData(65535)]
+    [InlineData(0)]
+    public void IsPortInRange_rejects_ports_outside_allowed_range(int port) =>
+        SandboxPreviewOptions.IsPortInRange(port, 3000, 9000).Should().BeFalse();
+
+    [Fact]
+    public void Options_default_port_range_is_3000_to_9000()
+    {
+        var options = new SandboxPreviewOptions();
+        options.AllowedPortMin.Should().Be(3000);
+        options.AllowedPortMax.Should().Be(9000);
+    }
+
     // ── PreviewToken ─────────────────────────────────────────────────────────────
 
     [Fact]

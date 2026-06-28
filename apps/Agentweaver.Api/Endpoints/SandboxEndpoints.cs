@@ -41,6 +41,19 @@ public static class SandboxEndpoints
             // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
             if (previewService.Enabled)
             {
+                // Preview ports are constrained to the gateway-only ingress range allowed by
+                // k8s/networkpolicy-sandbox.yaml (Sandbox:Preview:AllowedPortMin/Max) so we never
+                // provision a preview the NetworkPolicy would black-hole. The legacy kubectl
+                // fallback below is unaffected (still 1-65535).
+                if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
+                        request.TargetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = $"preview port must be between {previewService.AllowedPortMin} and {previewService.AllowedPortMax}.",
+                    });
+                }
+
                 try
                 {
                     var preview = await previewService.StartPreviewAsync(

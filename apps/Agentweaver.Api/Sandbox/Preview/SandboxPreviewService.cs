@@ -28,6 +28,12 @@ public interface ISandboxPreviewService
     /// <summary>Whether the Gateway preview path is enabled (Sandbox:Preview:Enabled).</summary>
     bool Enabled { get; }
 
+    /// <summary>Lowest target port a preview may expose (Sandbox:Preview:AllowedPortMin).</summary>
+    int AllowedPortMin { get; }
+
+    /// <summary>Highest target port a preview may expose (Sandbox:Preview:AllowedPortMax).</summary>
+    int AllowedPortMax { get; }
+
     /// <summary>
     /// Provisions a preview for <paramref name="runId"/> targeting <paramref name="targetPort"/>
     /// on the bound sandbox pod. Throws <see cref="InvalidOperationException"/> when no pod is
@@ -76,6 +82,10 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     }
 
     public bool Enabled => _options.Enabled && _client is not null;
+
+    public int AllowedPortMin => _options.AllowedPortMin;
+
+    public int AllowedPortMax => _options.AllowedPortMax;
 
     public async Task<PreviewSession> StartPreviewAsync(
         string runId, int targetPort, string ownerUserId, CancellationToken ct = default)
