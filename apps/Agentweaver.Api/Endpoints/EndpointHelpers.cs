@@ -28,6 +28,26 @@ internal static class EndpointHelpers
 internal static bool IsOwner(HttpContext context, Run run) =>
     ApiKeyAuthMiddleware.GetCaller(context).Owns(run.SubmittingUser);
 
+/// <summary>
+/// Authorizes either a human OWNER of the run (<see cref="IsOwner"/>) OR the run's own agent
+/// callback channel, which authenticates with the shared service API key and therefore resolves
+/// to the configured <c>Auth:User</c> identity (not the human owner). The agent-callback write
+/// endpoints (memory/decision/backlog) rely on the global auth middleware only; this helper lets
+/// the run's own agent reach a run-scoped action (e.g. <c>start_preview</c>) without weakening
+/// security: the runId is server-bound in the tool closure, so a service-identity caller can only
+/// act on the run the agent is actually executing, never another user's run via a different runId.
+/// </summary>
+internal static bool IsOwnerOrServiceCaller(HttpContext context, Run run, IConfiguration configuration)
+{
+    if (IsOwner(context, run)) return true;
+
+    var serviceUser = configuration["Auth:User"];
+    if (string.IsNullOrEmpty(serviceUser)) return false;
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(context);
+    return string.Equals(caller.User, serviceUser, StringComparison.Ordinal);
+}
+
 internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)
 {
     var json = System.Text.Json.JsonSerializer.Serialize(evt.Payload,

@@ -2,6 +2,7 @@ using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -38,80 +39,54 @@ public static class SandboxEndpoints
             if (!EndpointHelpers.IsOwner(httpContext, run))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-            // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
-            if (previewService.Enabled)
-            {
-                // Preview ports are constrained to the gateway-only ingress range allowed by
-                // k8s/networkpolicy-sandbox.yaml (Sandbox:Preview:AllowedPortMin/Max) so we never
-                // provision a preview the NetworkPolicy would black-hole. The legacy kubectl
-                // fallback below is unaffected (still 1-65535).
-                if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
-                        request.TargetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
-                {
-                    return Results.BadRequest(new
-                    {
-                        error = $"preview port must be between {previewService.AllowedPortMin} and {previewService.AllowedPortMax}.",
-                    });
-                }
+            return await StartPreviewForRunAsync(
+                runId, request.TargetPort, run, previewService, portForwardService, logger, ct);
+        });
 
-                try
-                {
-                    var preview = await previewService.StartPreviewAsync(
-                        runId, request.TargetPort, run.SubmittingUser, ct);
+        // POST /api/runs/{runId}/sandbox/preview
+        // Agent-initiated preview. A running agent (inside its sandbox, mid-workflow) calls the
+        // start_preview(port) tool which POSTs here. The request routes through a human-in-the-loop
+        // approval gate (AgentPreviewGate); on approval it runs the SAME preview-start path as the
+        // operator-driven port-forward endpoint above and returns preview_url to the agent.
+        //
+        // Authorization accepts the run's OWN agent callback (service identity) OR a human owner.
+        // The runId is server-bound in the agent's tool closure, so the agent can only ever target
+        // its own run. Approval is auto-grantable via SANDBOX_PREVIEW_AUTO_APPROVE / the per-run
+        // AutoApproveTools option so an automated demo can run unattended; prod stays human-gated.
+        // Body: { "target_port": 3000 } (snake_case).
+        app.MapPost("/api/runs/{runId}/sandbox/preview", async (
+            HttpContext httpContext,
+            string runId,
+            StartPreviewRequest request,
+            AgentPreviewGate previewGate,
+            PortForwardService portForwardService,
+            ISandboxPreviewService previewService,
+            IRunStore runStore,
+            IConfiguration configuration,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
+        {
+            if (request.TargetPort is <= 0 or > 65535)
+                return Results.BadRequest(new { error = "target_port must be between 1 and 65535." });
 
-                    return Results.Ok(new
-                    {
-                        session_id    = preview.Token,
-                        local_port    = 0,
-                        target_port   = preview.TargetPort,
-                        pod_name      = preview.PodName,
-                        started_at    = preview.StartedAt,
-                        preview_url   = preview.PreviewUrl,
-                        keepalive_url = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive",
-                    });
-                }
-                catch (InvalidOperationException ex)
-                {
-                    logger.LogWarning(ex, "Preview start failed for run {RunId}", runId);
-                    return Results.Conflict(new { error = ex.Message });
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Preview start error for run {RunId}", runId);
-                    return Results.Problem("Failed to start preview.", statusCode: 500);
-                }
-            }
+            if (!Agentweaver.Domain.RunId.TryParse(runId, out var parsedRunId))
+                return Results.BadRequest(new { error = "Invalid run id." });
 
-            // ── Legacy kubectl port-forward fallback (local dev) ─────────────────────────
-            PortForwardSession session;
-            try
+            var run = await runStore.GetAsync(parsedRunId, ct);
+            if (run is null) return Results.NotFound();
+            if (!EndpointHelpers.IsOwnerOrServiceCaller(httpContext, run, configuration))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+            var outcome = await previewGate.RequestApprovalAsync(runId, request.TargetPort, ct);
+            if (outcome != PreviewApprovalOutcome.Approved)
             {
-                session = await portForwardService.StartAsync(runId, request.TargetPort, ct);
-            }
-            catch (PortForwardLimitExceededException ex)
-            {
-                logger.LogWarning(ex, "PortForward session limit exceeded for run {RunId}", runId);
-                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status429TooManyRequests);
-            }
-            catch (InvalidOperationException ex)
-            {
-                logger.LogWarning(ex, "PortForward start failed for run {RunId}", runId);
-                return Results.Conflict(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "PortForward start error for run {RunId}", runId);
-                return Results.Problem("Failed to start port-forward.", statusCode: 500);
+                return Results.Json(
+                    new { error = "Preview approval was denied or timed out." },
+                    statusCode: StatusCodes.Status403Forbidden);
             }
 
-            return Results.Ok(new
-            {
-                session_id  = session.SessionId,
-                local_port  = session.LocalPort,
-                target_port = session.TargetPort,
-                pod_name    = session.PodName,
-                started_at  = session.StartedAt,
-            });
+            return await StartPreviewForRunAsync(
+                runId, request.TargetPort, run, previewService, portForwardService, logger, ct);
         });
 
         // POST /api/runs/{runId}/sandbox/preview/{token}/keepalive
@@ -230,7 +205,111 @@ public static class SandboxEndpoints
             return Results.Ok(sessions);
         });
     }
+
+    /// <summary>
+    /// Shared preview-start path used by BOTH the operator port-forward endpoint and the
+    /// agent-initiated preview endpoint. When the Gateway-direct preview service is enabled
+    /// (in-cluster) it provisions a replica-safe preview and returns preview_url; otherwise it
+    /// falls back to the legacy kubectl port-forward (local-dev). Authorization and the HITL
+    /// approval gate are the caller's responsibility — by the time this runs the request is
+    /// already authorized/approved.
+    /// </summary>
+    private static async Task<IResult> StartPreviewForRunAsync(
+        string runId,
+        int targetPort,
+        Run run,
+        ISandboxPreviewService previewService,
+        PortForwardService portForwardService,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
+        if (previewService.Enabled)
+        {
+            // Preview ports are constrained to the gateway-only ingress range allowed by
+            // k8s/networkpolicy-sandbox.yaml (Sandbox:Preview:AllowedPortMin/Max) so we never
+            // provision a preview the NetworkPolicy would black-hole. The legacy kubectl
+            // fallback below is unaffected (still 1-65535).
+            if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
+                    targetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
+            {
+                return Results.BadRequest(new
+                {
+                    error = $"preview port must be between {previewService.AllowedPortMin} and {previewService.AllowedPortMax}.",
+                });
+            }
+
+            try
+            {
+                var preview = await previewService.StartPreviewAsync(
+                    runId, targetPort, run.SubmittingUser, ct);
+
+                return Results.Ok(new
+                {
+                    session_id    = preview.Token,
+                    local_port    = 0,
+                    target_port   = preview.TargetPort,
+                    pod_name      = preview.PodName,
+                    started_at    = preview.StartedAt,
+                    preview_url   = preview.PreviewUrl,
+                    keepalive_url = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive",
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                logger.LogWarning(ex, "Preview start failed for run {RunId}", runId);
+                return Results.Conflict(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Preview start error for run {RunId}", runId);
+                return Results.Problem("Failed to start preview.", statusCode: 500);
+            }
+        }
+
+        // ── Legacy kubectl port-forward fallback (local dev) ─────────────────────────
+        PortForwardSession session;
+        try
+        {
+            session = await portForwardService.StartAsync(runId, targetPort, ct);
+        }
+        catch (PortForwardLimitExceededException ex)
+        {
+            logger.LogWarning(ex, "PortForward session limit exceeded for run {RunId}", runId);
+            return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "PortForward start failed for run {RunId}", runId);
+            return Results.Conflict(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "PortForward start error for run {RunId}", runId);
+            return Results.Problem("Failed to start port-forward.", statusCode: 500);
+        }
+
+        return Results.Ok(new
+        {
+            session_id  = session.SessionId,
+            local_port  = session.LocalPort,
+            target_port = session.TargetPort,
+            pod_name    = session.PodName,
+            started_at  = session.StartedAt,
+        });
+    }
 }
 
 /// <summary>Request body for starting a port-forward session.</summary>
 public sealed record PortForwardRequest(int TargetPort);
+
+/// <summary>
+/// Request body for the agent-initiated preview endpoint. Uses the snake_case DTO convention
+/// (explicit <see cref="JsonPropertyNameAttribute"/>) — unlike the legacy <see cref="PortForwardRequest"/>
+/// which binds camelCase <c>targetPort</c>.
+/// </summary>
+public sealed record StartPreviewRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("target_port")]
+    public int TargetPort { get; init; }
+}

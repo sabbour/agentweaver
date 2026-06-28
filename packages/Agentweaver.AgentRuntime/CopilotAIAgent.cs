@@ -1067,7 +1067,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
         {
             var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
-            tools.AddRange(AgentweaverApiTools.Build(projectId, agentName, effectiveBaseUrl, apiKey));
+            tools.AddRange(AgentweaverApiTools.Build(projectId, agentName, effectiveBaseUrl, apiKey, runId: context.RunId));
         }
 
         return tools;

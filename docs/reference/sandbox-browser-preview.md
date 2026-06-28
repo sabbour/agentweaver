@@ -14,13 +14,51 @@ exists and the caller owns it (`404`/`403`). Source:
 
 | Method & path | Body | Returns | Notes |
 |---|---|---|---|
-| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path: provisions Service + HTTPRoute, returns `preview_url` + `keepalive_url`. `target_port` must be within `AllowedPortMin..AllowedPortMax`. |
+| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path: provisions Service + HTTPRoute, returns `preview_url` + `keepalive_url`. `target_port` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
+| `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:57`](#source)). |
 | `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview's idle expiry to now + `IdleTimeoutMinutes`. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
 | `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Explicit stop. For the preview path `sessionId` is the capability token; deletes the HTTPRoute then the Service. Verifies run↔token first. |
 | `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists active legacy port-forward sessions for the run. |
 
 The relative `keepalive_url` returned by `POST …/port-forward` is
 `/api/runs/{runId}/sandbox/preview/{token}/keepalive` ([`SandboxEndpoints.cs:70`](#source)).
+
+## Agent-initiated preview (`start_preview`)
+
+A running agent can expose a server it started **without a human typing a port in the UI**, via the
+`start_preview` tool. The model calls `start_preview(port: int)`; the tool POSTs
+`{ "target_port": <port> }` to `POST /api/runs/{runId}/sandbox/preview` and returns the resulting
+`preview_url` string back to the agent. The tool is **run-scoped**: the `runId` is captured server-side in
+the tool closure ([`AgentweaverApiTools.cs:245`](#source)), so the model supplies only the port and can
+never target another run.
+
+The request routes through a **human-in-the-loop approval gate** before any preview is provisioned
+([`AgentPreviewGate.RequestApprovalAsync`, `AgentPreviewGate.cs:85`](#source)):
+
+- If an auto-approve source is on (see below) the request is **auto-granted** immediately.
+- Otherwise a `tool.approval_required` event is emitted onto the run timeline
+  ([`AgentPreviewGate.cs:103`](#source)) and the call **suspends** until an operator grants it via
+  `POST /api/runs/{runId}/tool-approvals` (with the emitted `request_id`) or the 5-minute window times out.
+
+`StartPreviewRequest` ([`SandboxEndpoints.cs:311`](#source)) uses the snake_case DTO convention — the wire
+field is `target_port` via `[JsonPropertyName("target_port")]`, unlike the legacy `PortForwardRequest` which
+binds camelCase `targetPort`.
+
+### Auto-approve sources
+
+Any one being true auto-grants the preview (production default is human-gated):
+
+| Source | Where | Default |
+|---|---|---|
+| `Sandbox:Preview:AutoApprove` config / env `SANDBOX_PREVIEW_AUTO_APPROVE` | [`AgentPreviewGate.cs:125`](#source) | `false` |
+| Per-run `AutoApproveTools` operator option | `IRunOptionsStore.Get(runId)` | `false` |
+| An existing run/always-scoped allow policy on the shared gate | `IToolApprovalGate.IsAutoApproved` | none |
+
+The env var `SANDBOX_PREVIEW_AUTO_APPROVE` is read directly (not via the ASP.NET `__` hierarchy separator),
+so the exact name works as an environment variable. It exists so an automated demo can run the preview flow
+end-to-end unattended; leave it `false` in production.
+
+The relative `keepalive_url` example below is for the operator route.
 
 ## `PortForwardSessionDto`
 
@@ -52,6 +90,7 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:KeepAfterRun` | `true` | Retain the preview after the run completes / pod is released; only the reaper or an explicit stop removes it. |
 | `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range. |
 | `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). |
+| `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:125`](#source). Keep `false` in production. |
 
 ## Status codes
 
@@ -59,7 +98,7 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 |---|---|
 | `200 OK` | Preview started (`POST`), kept alive (`keepalive`), stopped (`DELETE`), or listed (`GET`). |
 | `400 Bad Request` | `target_port` outside `1..65535`, outside `AllowedPortMin..AllowedPortMax` (preview path), or `runId` not parseable. |
-| `403 Forbidden` | Caller does not own the run. |
+| `403 Forbidden` | Caller does not own the run (operator route); or — on the agent route — the caller is neither the owner nor the run's own agent callback, **or** the agent-preview approval was denied / timed out at the HITL gate. |
 | `404 Not Found` | Run does not exist; or (keepalive/`DELETE`, preview path) the token's HTTPRoute does not carry the matching run (run↔token binding). |
 | `409 Conflict` | No bound sandbox pod for the run (the `SandboxClaim` is missing or not yet `Bound`), or the Gateway preview is not enabled on the keepalive path. |
 | `429 Too Many Requests` | A session cap was hit on the legacy port-forward fallback. |
@@ -98,7 +137,10 @@ DELETE /api/runs/run_01HXYZ/sandbox/port-forward/swift-falcon-amber-k7m2q9x4n8b3
 
 | Concern | File |
 |---|---|
-| Endpoints (start / keepalive / stop / list) | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
+| Endpoints (start / agent-start / keepalive / stop / list) | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
+| Agent-initiated approval gate (HITL + auto-approve) | `apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs` |
+| `start_preview` agent tool (run-scoped HTTP callback) | `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs` |
+| Owner-or-agent-callback authorization | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
 | Preview provisioning, keepalive, stop, reap | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |
 | Config defaults & port-range check | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewOptions.cs` |
 | Capability token | `apps/Agentweaver.Api/Sandbox/Preview/PreviewToken.cs` |

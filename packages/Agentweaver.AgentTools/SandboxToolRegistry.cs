@@ -40,6 +40,6 @@ public static class SandboxToolRegistry
     /// <summary>Returns the canonical tool names for AvailableTools construction.</summary>
     public static string[] GetToolNames(bool includeShell) =>
         includeShell
-            ? ["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent", "report_outcome", "ask_question"]
-            : ["read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent", "report_outcome", "ask_question"];
+            ? ["run_command", "read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent", "report_outcome", "ask_question", "start_preview"]
+            : ["read_file", "grep_search", "file_search", "str_replace_editor", "apply_patch", "create_file", "write_file", "report_intent", "report_outcome", "ask_question", "start_preview"];
 }

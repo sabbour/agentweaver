@@ -252,6 +252,9 @@ sequenceDiagram
     Exec->>Reg: Register(runId, podName)
     opt AgentHost pod-per-run
         Exec->>Pod: GetPodIpAsync → status.podIP
+        loop poll /healthz until 200 (≤90s)
+            Exec->>Pod: GET http[s]://podIP:8088/healthz
+        end
         Exec->>Reg: RegisterAgentEndpoint(http[s]://podIP:8088/a2a/agent)
     end
     Note over Exec,Ctrl: claim delete (ad-hoc) or TTL →<br/>controller GCs pod + service
@@ -263,6 +266,36 @@ build the A2A endpoint. Agentweaver never deletes pods itself — it deletes the
 expire) and the controller garbage-collects the pod and its service. Anything not visible in these
 manifests or the executor code (controller replica count, leader election, image, RBAC of the controller
 itself) is **operationally configured by the agent-sandbox release**, not specified by Agentweaver.
+
+### Cold-start readiness gate (AgentHost)
+
+A bound claim only means the **pod** is `Running` — the in-pod **AgentHost** Kestrel listener takes a further
+~20–30 s to bind `:8088`. With the agent-host warm pool at `replicas: 0`
+([`k8s/sandbox-warmpool-agenthost.yaml`](#source)), **every** run cold-starts a pod, so without a gate the
+worker's first A2A turn races that boot window and gets `Connection refused (podIP:8088)` → the run
+transitions to `Failed`. The fix is defense-in-depth:
+
+- **Executor readiness gate (authoritative).** After the claim binds and the endpoint is built,
+  `LaunchAgentHostPodAsync` polls `GET {scheme}://{podIP}:8088/healthz` until it returns `200` before it
+  registers the endpoint and returns ([`KubernetesSandboxExecutor.cs`](#source) — `IAgentHostReadinessProbe` /
+  `HttpAgentHostReadinessProbe`). The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt
+  timeout) and honors the launch cancellation token. On timeout the launch fails *deterministically*
+  (`InvalidOperationException`) instead of letting a turn refuse mid-run. It reuses the **same
+  `a2a-sandbox-pod` HttpClient** that serves real turns (so it carries the mTLS client cert in production).
+  Config keys: `Sandbox:Kubernetes:AgentHostHealthzPath` (`/healthz`), `…:AgentHostReadyTimeoutSeconds`
+  (`90`), `…:AgentHostReadyPollIntervalMs` (`1000`).
+- **Connect-refused retry (defense).** The `a2a-sandbox-pod` client carries a `ConnectRefusedRetryHandler`
+  that retries **only** a refused TCP connect (`SocketError.ConnectionRefused` /
+  `HttpRequestError.ConnectionError`) — safe even for non-idempotent streaming sends because a refused
+  connect delivers no bytes — so any send that still races boot rides through
+  ([`ConnectRefusedRetryHandler.cs`](#source), wired in [`Program.cs`](#source)).
+- **tcpSocket probe (recommended, k8s-level defense).** A `startupProbe` / `readinessProbe` on port `8088`
+  on the agent-host `SandboxTemplate` (`k8s/sandbox-template-agenthost.yaml`) would keep the pod out of
+  Service endpoints until the port is open. Use `tcpSocket` (not `httpGet`) so it works under both
+  plain-http (PoC) and mTLS (prod). **Note:** the agent-sandbox v1beta1 controller binds the claim on pod
+  `Running` regardless of container readiness, so this probe alone does **not** close the race — the executor
+  `/healthz` gate is the reliable wait, and the probe is a supplementary defense only. *(Manifest change owned
+  by the cluster/infra side, not the API.)*
 
 ## The hybrid pod-granularity model
 

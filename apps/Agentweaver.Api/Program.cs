@@ -94,6 +94,7 @@ builder.Services.AddSingleton<SqliteDb>();
 }
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
+builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>();
 // IRunEventStream is registered conditionally in the Database:Provider block below.
 // SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + serializable tx).
 builder.Services.AddSingleton<WorktreeManager>();
@@ -327,7 +328,12 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     // a mounted secret — left as the documented hook). When RequireMtls=false (PoC), no client
     // cert is configured and the worker connects over plain http.
     builder.Services.AddHttpClient("a2a-sandbox-pod")
-        .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(30));
+        .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(30))
+        // Defense-in-depth for the A2A cold-start race: retry ONLY connection-refused (the AgentHost
+        // Kestrel listener has not bound :8088 yet). Safe for streaming sends — a refused connect
+        // delivers no bytes, so there is no duplicate side effect. See ConnectRefusedRetryHandler.
+        .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
+            logger: sp.GetRequiredService<ILoggerFactory>().CreateLogger<ConnectRefusedRetryHandler>()));
 
     // RemoteWorkflowAgentFactory registered as an alternative to WorkflowAgentFactory.
     builder.Services.AddSingleton<RemoteWorkflowAgentFactory>();
