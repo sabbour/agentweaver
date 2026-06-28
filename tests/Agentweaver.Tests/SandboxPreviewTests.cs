@@ -252,4 +252,66 @@ public class SandboxPreviewTests
         longName.Length.Should().BeLessThanOrEqualTo(63);
         longName.Should().NotEndWith("-");
     }
+
+    // ── PreviewReaper.PerRunLabel (M3 — collision-resistant per-run selector) ─────
+
+    [Fact]
+    public void PerRunLabel_is_a_valid_label_with_stable_hash_suffix()
+    {
+        var label = PreviewReaper.PerRunLabel("run-abc-123");
+        label.Should().StartWith("run-abc-123-");
+        label.Should().MatchRegex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$");
+        label.Length.Should().BeLessThanOrEqualTo(63);
+        // Deterministic for the same run.
+        label.Should().Be(PreviewReaper.PerRunLabel("run-abc-123"));
+    }
+
+    [Fact]
+    public void PerRunLabel_disambiguates_run_ids_that_sanitize_to_the_same_value()
+    {
+        // Both sanitize to "a-b" but must NOT share a per-run selector label.
+        var a = PreviewReaper.PerRunLabel("a/b");
+        var b = PreviewReaper.PerRunLabel("a.b");
+        PreviewReaper.SanitizeLabel("a/b").Should().Be(PreviewReaper.SanitizeLabel("a.b"));
+        a.Should().NotBe(b, "distinct run IDs must get distinct selector labels to avoid cross-run Service selectors");
+    }
+
+    [Fact]
+    public void PerRunLabel_stays_within_63_chars_for_long_run_ids()
+    {
+        var label = PreviewReaper.PerRunLabel(new string('a', 200));
+        label.Length.Should().BeLessThanOrEqualTo(63);
+        label.Should().MatchRegex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$");
+    }
+
+    // ── PreviewReaper.FindOrphanServiceNames (S1 — orphan ClusterIP sweep) ────────
+
+    [Fact]
+    public void FindOrphanServiceNames_returns_services_without_a_matching_route()
+    {
+        var services = new[] { "preview-alive", "preview-orphan-1", "preview-orphan-2" };
+        var routes = new[] { "preview-alive" };
+
+        PreviewReaper.FindOrphanServiceNames(services, routes)
+            .Should().BeEquivalentTo(new[] { "preview-orphan-1", "preview-orphan-2" });
+    }
+
+    [Fact]
+    public void FindOrphanServiceNames_returns_empty_when_every_service_has_a_route()
+    {
+        var both = new[] { "preview-a", "preview-b" };
+        PreviewReaper.FindOrphanServiceNames(both, both).Should().BeEmpty();
+    }
+
+    // ── PreviewReaper.RunMatches (M1 — run<->token binding) ───────────────────────
+
+    [Fact]
+    public void RunMatches_true_only_for_the_owning_run()
+    {
+        var annotation = PreviewReaper.PerRunLabel("run-owner");
+        PreviewReaper.RunMatches(annotation, "run-owner").Should().BeTrue();
+        PreviewReaper.RunMatches(annotation, "run-impostor").Should().BeFalse();
+        PreviewReaper.RunMatches(null, "run-owner").Should().BeFalse();
+        PreviewReaper.RunMatches("", "run-owner").Should().BeFalse();
+    }
 }

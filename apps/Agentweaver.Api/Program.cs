@@ -374,7 +374,6 @@ builder.Services.AddSingleton<PortForwardService>();
 
     builder.Services.AddSingleton<ISandboxPreviewService>(sp =>
     {
-        var podRegistry = sp.GetRequiredService<IPodNameRegistry>();
         var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SandboxPreviewService>();
 
         // Build an in-cluster client only when enabled AND in-cluster; otherwise pass null so the
@@ -393,7 +392,7 @@ builder.Services.AddSingleton<PortForwardService>();
             }
         }
 
-        return new SandboxPreviewService(k8sClient, podRegistry, previewOptions, logger);
+        return new SandboxPreviewService(k8sClient, previewOptions, logger);
     });
 
     // Replica-safe annotation-driven reaper. No-ops when preview disabled.

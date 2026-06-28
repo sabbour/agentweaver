@@ -81,7 +81,7 @@ echo "  Ingress host:   ${HOST}"
 # westus2.staging.aksapp.io (not *.preview.{zone}); secret SAN confirmed same.
 #
 # Therefore we always take the single-label fallback path and reuse agentweaver-tls.
-# Preview hostnames: {runid}.{zone}  (e.g. run-abc.6a3de4fe...aksapp.io)
+# Preview hostnames: {token}-preview.{zone}  (e.g. swift-falcon-amber-k7m2...-preview.6a3de4fe...aksapp.io)
 # If AKS adds nested DDC support in the future, restore the probe below and update
 # PREVIEW_TLS_SECRET to a new cert-preview DDC secret + add the cert-preview DDC object.
 echo ""

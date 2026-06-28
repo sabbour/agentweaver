@@ -6,7 +6,7 @@ namespace Agentweaver.Api.Sandbox.Preview;
 
 /// <summary>
 /// Generates and validates per-preview <b>capability tokens</b>. The preview URL
-/// (<c>https://{token}.{zone}</c>) is UNAUTHENTICATED — possession of the URL grants access —
+/// (<c>https://{token}-preview.{ZoneSuffix}</c>) is UNAUTHENTICATED — possession of the URL grants access —
 /// so the token must be unguessable. All security entropy comes from a 128-bit CSPRNG base32
 /// suffix; the leading words are a cosmetic, human-friendly prefix only and contribute NO
 /// security entropy (Seraph requirement).

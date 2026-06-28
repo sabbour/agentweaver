@@ -42,10 +42,15 @@ spec:
     - Ingress
   ingress:
     - from:
+        # Single peer = podSelector AND namespaceSelector (both must match the SAME source pod):
+        # only the preview gateway data-plane pods, and only when they live in the
+        # aks-istio-ingress namespace, are admitted. Listing these as two separate `from` items
+        # would be an OR (any pod in aks-istio-ingress, or any matching pod in any namespace),
+        # widening ingress well beyond the preview gateway.
         - podSelector:
             matchLabels:
               gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway
-        - namespaceSelector:
+          namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: aks-istio-ingress
       ports:

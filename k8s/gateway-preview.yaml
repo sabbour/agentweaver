@@ -14,7 +14,7 @@
 #   The DDC CRD has no spec.hostname field; it always issues *.{zone} into the named
 #   secret regardless of DDC object name.  Therefore PREVIEW_TLS_SECRET is always
 #   "agentweaver-tls" (the existing zone wildcard) and PREVIEW_HOSTNAME is always
-#   "*.{zone}".  Preview subdomains take the form {runid}.{zone}.
+#   "*.{zone}".  Preview subdomains take the single-label form {token}-preview.{zone}.
 #   (If AKS adds nested DDC support in the future, the deploy script sets these vars
 #    and this manifest renders correctly without changes.)
 #
@@ -50,3 +50,34 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
+---
+# S2 — token confidentiality at the gateway edge.
+#
+# The preview host is a CAPABILITY URL: the 128-bit token lives in the leftmost DNS label
+# ({token}-preview.{zone}) and therefore appears in the HTTP Host header (and, for keepalive,
+# the request path). Istio/Envoy access logs would capture Host + path, persisting the secret
+# token into log sinks. App code never logs the raw token (it logs only a SHA-256 fingerprint),
+# but the data-plane proxy is outside the app's control — so we disable access logging on the
+# preview gateway's workload below.
+#
+# Residual / accepted risk (capability URLs are inherently URL-bearing secrets):
+#   * The token is still present in TLS SNI and in the browser/user's own history. This is
+#     intrinsic to capability URLs and is mitigated by: short-lived previews (idle + hard-cap
+#     reaper), 128-bit entropy (unguessable), and Referrer-Policy: no-referrer on preview pages.
+#   * If a future mesh-wide Telemetry default re-enables access logs, this resource still wins
+#     for the preview gateway because it is workload-scoped via the selector below.
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: agentweaver-preview-gateway-no-accesslog
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  # Scopes to the preview gateway data-plane pods only (auto-labelled by the approuting-istio
+  # add-on), leaving access logging on every other workload untouched.
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway
+  accessLogging:
+    - disabled: true

@@ -137,6 +137,12 @@ public static class SandboxEndpoints
             if (!previewService.Enabled)
                 return Results.Conflict(new { error = "Gateway preview is not enabled." });
 
+            // M1: verify the capability token actually belongs to THIS run (replica-safe — reads the
+            // HTTPRoute's run annotation from the cluster) so a caller cannot keep alive another
+            // run's preview by presenting its own runId with a guessed/foreign token.
+            if (!await previewService.VerifyTokenForRunAsync(token, runId, ct))
+                return Results.NotFound(new { error = "Preview not found for this run." });
+
             try
             {
                 await previewService.KeepAliveAsync(token, ct);
@@ -177,6 +183,11 @@ public static class SandboxEndpoints
 
             if (previewService.Enabled)
             {
+                // M1: bind the token to THIS run before deleting so one run cannot delete another
+                // run's preview by presenting a foreign token (replica-safe annotation check).
+                if (!await previewService.VerifyTokenForRunAsync(sessionId, runId, ct))
+                    return Results.NotFound(new { error = "Preview not found for this run." });
+
                 // Idempotent (404 ignored inside the service); treat sessionId as the preview token.
                 await previewService.StopPreviewAsync(sessionId, ct);
                 return Results.Ok(new { session_id = sessionId, stopped = true });

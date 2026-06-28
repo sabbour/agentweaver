@@ -36,13 +36,23 @@ public interface ISandboxPreviewService
 
     /// <summary>
     /// Provisions a preview for <paramref name="runId"/> targeting <paramref name="targetPort"/>
-    /// on the bound sandbox pod. Throws <see cref="InvalidOperationException"/> when no pod is
-    /// registered for the run (preview is only available after a pod is bound).
+    /// on the bound sandbox pod. The pod is resolved from the run's SandboxClaim status in the
+    /// cluster (replica-safe), not from any in-process registry. Throws
+    /// <see cref="InvalidOperationException"/> when the claim is missing or not yet bound.
     /// </summary>
     Task<PreviewSession> StartPreviewAsync(string runId, int targetPort, string ownerUserId, CancellationToken ct = default);
 
     /// <summary>Bumps the preview's idle expiry to now + IdleTimeoutMinutes. Idempotent (404 ignored).</summary>
     Task KeepAliveAsync(string token, CancellationToken ct = default);
+
+    /// <summary>
+    /// Replica-safe ownership binding: returns <see langword="true"/> only when an HTTPRoute named
+    /// for <paramref name="token"/> exists AND its <c>preview-run</c> annotation matches
+    /// <paramref name="runId"/>. Reads cluster annotations, so either replica answers identically.
+    /// Callers (keepalive/stop) must reject the request (404) when this is <see langword="false"/>
+    /// so one run cannot keep alive or delete another run's preview by guessing the route name.
+    /// </summary>
+    Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default);
 
     /// <summary>Deletes the HTTPRoute then the Service for the preview. Idempotent (404 ignored).</summary>
     Task StopPreviewAsync(string token, CancellationToken ct = default);
@@ -61,21 +71,21 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     private const string HttpRouteVersion = "v1";
     private const string HttpRoutePlural = "httproutes";
 
+    /// <summary>Minimum age before a route-less preview Service is treated as a leaked orphan.</summary>
+    private static readonly TimeSpan OrphanGrace = TimeSpan.FromMinutes(2);
+
     private readonly IKubernetes? _client;
-    private readonly IPodNameRegistry _podRegistry;
     private readonly SandboxPreviewOptions _options;
     private readonly ILogger<SandboxPreviewService> _logger;
     private readonly TimeProvider _clock;
 
     public SandboxPreviewService(
         IKubernetes? client,
-        IPodNameRegistry podRegistry,
         SandboxPreviewOptions options,
         ILogger<SandboxPreviewService> logger,
         TimeProvider? clock = null)
     {
         _client = client;
-        _podRegistry = podRegistry;
         _options = options;
         _logger = logger;
         _clock = clock ?? TimeProvider.System;
@@ -94,12 +104,13 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         if (targetPort is <= 0 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(targetPort), "targetPort must be between 1 and 65535.");
 
-        var podName = _podRegistry.TryGet(runId);
+        var podName = await ResolveBoundPodNameAsync(runId, ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(podName))
             throw new InvalidOperationException(
-                $"No sandbox pod registered for run {runId}. A preview is only available after a pod is bound.");
+                $"No bound sandbox pod for run {runId}. A preview is only available after the run's " +
+                "SandboxClaim reports a bound pod (status.phase=Bound).");
 
-        var sanitizedRun = PreviewReaper.SanitizeLabel(runId);
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         var token = PreviewToken.Generate();
         var now = _clock.GetUtcNow();
         var serviceName = PreviewReaper.ServiceName(token);
@@ -169,6 +180,18 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         {
             _logger.LogInformation(
                 "SandboxPreviewService: HTTPRoute already exists for run {RunId} (idempotent)", runId);
+        }
+        catch (Exception ex)
+        {
+            // Any non-Conflict failure leaves the just-created Service orphaned (no HTTPRoute will
+            // ever reference it, and the reaper used to sweep only HTTPRoutes). Best-effort delete
+            // the Service before rethrowing so a retrying caller cannot accumulate leaked ClusterIPs.
+            _logger.LogWarning(ex,
+                "SandboxPreviewService: HTTPRoute create failed for run {RunId}; rolling back orphaned Service {Fingerprint}",
+                runId, Fingerprint(serviceName));
+            // Use None so the rollback still runs even when the original request was cancelled.
+            await DeleteServiceIdempotentAsync(serviceName, CancellationToken.None).ConfigureAwait(false);
+            throw;
         }
 
         // Never log the token or preview URL (the URL is an unauthenticated capability). A short,
@@ -277,7 +300,70 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             }
         }
 
+        // Orphan ClusterIP sweep: a preview Service whose HTTPRoute never got created (e.g. the
+        // process died between Service-create and HTTPRoute-create, before the inline rollback ran)
+        // would otherwise leak forever — the route-driven loop above never sees it. Sweep any
+        // preview-* Service that has no matching HTTPRoute so retries cannot accumulate ClusterIPs.
+        reaped += await SweepOrphanServicesAsync(now, ct).ConfigureAwait(false);
+
         return reaped;
+    }
+
+    /// <summary>
+    /// Deletes <c>preview-*</c> Services that have no matching HTTPRoute (same name). A short
+    /// minimum-age grace window protects a Service whose HTTPRoute is still being created in a
+    /// concurrent <see cref="StartPreviewAsync"/> on either replica.
+    /// </summary>
+    private async Task<int> SweepOrphanServicesAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        var client = _client!;
+
+        V1ServiceList services;
+        object rawRoutes;
+        try
+        {
+            services = await client.CoreV1.ListNamespacedServiceAsync(
+                _options.Namespace,
+                labelSelector: $"{PreviewReaper.LabelPartOf}={PreviewReaper.LabelPartOfValue}",
+                cancellationToken: ct).ConfigureAwait(false);
+
+            rawRoutes = await client.CustomObjects.ListNamespacedCustomObjectAsync(
+                HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural,
+                labelSelector: $"{PreviewReaper.LabelPartOf}={PreviewReaper.LabelPartOfValue}",
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SandboxPreviewService: orphan-Service sweep listing failed (best-effort)");
+            return 0;
+        }
+
+        // Only consider Services that have aged past the grace window, so a Service created moments
+        // ago (HTTPRoute not yet posted) is never mistaken for an orphan.
+        var graceCutoff = now - OrphanGrace;
+        var serviceNames = services.Items
+            .Where(s => s.Metadata?.Name is not null &&
+                        s.Metadata.Name.StartsWith("preview-", StringComparison.Ordinal) &&
+                        (s.Metadata.CreationTimestamp is null ||
+                         s.Metadata.CreationTimestamp <= graceCutoff.UtcDateTime))
+            .Select(s => s.Metadata.Name)
+            .ToList();
+
+        var routeNames = ParsePreviewRouteNames(rawRoutes);
+        var orphans = PreviewReaper.FindOrphanServiceNames(serviceNames, routeNames);
+
+        var swept = 0;
+        foreach (var name in orphans)
+        {
+            ct.ThrowIfCancellationRequested();
+            _logger.LogInformation(
+                "SandboxPreviewService: sweeping orphaned preview Service {Fingerprint} (no HTTPRoute)",
+                Fingerprint(name));
+            await DeleteServiceIdempotentAsync(name, ct).ConfigureAwait(false);
+            swept++;
+        }
+
+        return swept;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────
@@ -288,6 +374,65 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             throw new InvalidOperationException(
                 "SandboxPreviewService is disabled or has no in-cluster Kubernetes client " +
                 "(set Sandbox:Preview:Enabled=true and run in-cluster).");
+    }
+
+    /// <summary>
+    /// Resolves the run's bound sandbox pod name from <b>cluster state</b> (the run's SandboxClaim
+    /// <c>status</c>), NOT from the in-process pod registry. The registry is only populated on the
+    /// replica that launched the pod, so on a multi-replica deployment a preview-start request
+    /// hitting the other replica would otherwise spuriously fail. Reading the claim is replica-safe:
+    /// every replica sees the same claim status. Returns <see langword="null"/> when the claim is
+    /// missing or not yet bound (a correct, deterministic "not ready" for ALL replicas).
+    /// </summary>
+    private async Task<string?> ResolveBoundPodNameAsync(string runId, CancellationToken ct)
+    {
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        try
+        {
+            var raw = await _client!.CustomObjects.GetNamespacedCustomObjectAsync(
+                SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
+                _options.Namespace, SandboxClaimConventions.ClaimPlural, claimName,
+                cancellationToken: ct).ConfigureAwait(false);
+
+            return SandboxClaimConventions.TryGetBoundPodName(raw);
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // No claim for this run yet (or already released) — not ready, deterministically.
+            return null;
+        }
+    }
+
+    public async Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default)
+    {
+        EnsureReady();
+        if (!PreviewToken.IsValidLabel(token) || string.IsNullOrEmpty(runId))
+            return false;
+
+        var routeName = PreviewReaper.ServiceName(token);
+        try
+        {
+            var raw = await _client!.CustomObjects.GetNamespacedCustomObjectAsync(
+                HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural, routeName,
+                cancellationToken: ct).ConfigureAwait(false);
+
+            var annotationRun = ReadRunAnnotation(raw);
+            return PreviewReaper.RunMatches(annotationRun, runId);
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+    }
+
+    private static string? ReadRunAnnotation(object rawRoute)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(rawRoute);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("metadata", out var meta) &&
+               meta.TryGetProperty("annotations", out var ann)
+            ? GetString(ann, PreviewReaper.AnnotationRun)
+            : null;
     }
 
     private object BuildHttpRoute(
@@ -436,6 +581,31 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         }
 
         return result;
+    }
+
+    private static IReadOnlyList<string> ParsePreviewRouteNames(object raw)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(raw);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var names = new List<string>();
+
+        if (!doc.RootElement.TryGetProperty("items", out var items) ||
+            items.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return names;
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.TryGetProperty("metadata", out var meta) &&
+                meta.TryGetProperty("name", out var n) &&
+                n.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                var name = n.GetString();
+                if (!string.IsNullOrEmpty(name))
+                    names.Add(name);
+            }
+        }
+
+        return names;
     }
 
     private static string? GetString(System.Text.Json.JsonElement obj, string key) =>

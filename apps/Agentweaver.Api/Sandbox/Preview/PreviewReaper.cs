@@ -86,6 +86,65 @@ public static class PreviewReaper
             : null;
 
     /// <summary>
+    /// Builds the per-run pod-selector label value for <paramref name="runId"/>: the sanitized run
+    /// (see <see cref="SanitizeLabel"/>) with a short, stable hash suffix appended so that two
+    /// distinct run IDs that sanitize to the same value never collide on the same Service selector.
+    ///
+    /// <para>
+    /// Shape: <c>{sanitized}-{hash8}</c> where <c>hash8</c> is the first 8 hex chars of
+    /// SHA-256(runId). The sanitized portion is truncated so the whole value stays within the
+    /// 63-char DNS-1123 label limit. This single derivation MUST be used everywhere the per-run
+    /// label is produced (pod patch, Service selector, run annotation) AND matched (reaper pod
+    /// probe), or a Service would fail to select its pod.
+    /// </para>
+    /// </summary>
+    public static string PerRunLabel(string runId)
+    {
+        var hash = ShortHash(runId);          // 8 hex chars
+        var baseLabel = SanitizeLabel(runId); // already <= 63, valid, never empty
+
+        // Reserve room for '-' + 8 hex (9 chars); keep a trailing alphanumeric.
+        const int maxBase = 63 - 9;
+        if (baseLabel.Length > maxBase)
+            baseLabel = baseLabel[..maxBase].Trim('-');
+        if (string.IsNullOrEmpty(baseLabel))
+            baseLabel = "run";
+
+        return $"{baseLabel}-{hash}";
+    }
+
+    /// <summary>First 8 lowercase hex chars of SHA-256(<paramref name="value"/>). Stable, collision-resistant.</summary>
+    public static string ShortHash(string value)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(value ?? string.Empty));
+        return Convert.ToHexString(bytes, 0, 4).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Returns the names of <c>preview-*</c> Services that have no matching HTTPRoute (the Service
+    /// and its route share the same name, <see cref="ServiceName"/>). Such Services are orphans —
+    /// e.g. left behind when HTTPRoute creation failed after the Service was created — and the
+    /// reaper sweeps them so a retry loop cannot accumulate leaked ClusterIPs. Pure set difference.
+    /// </summary>
+    public static IReadOnlyList<string> FindOrphanServiceNames(
+        IEnumerable<string> serviceNames, IEnumerable<string> httpRouteNames)
+    {
+        var routes = new HashSet<string>(httpRouteNames, StringComparer.Ordinal);
+        return serviceNames.Where(s => !routes.Contains(s)).ToList();
+    }
+
+    /// <summary>
+    /// Replica-safe ownership check: does the per-run label stored on a preview's HTTPRoute
+    /// (<c>agentweaver.dev/preview-run</c> annotation) match the label derived from
+    /// <paramref name="runId"/>? Used to verify a capability token actually belongs to the run
+    /// presented in the URL before keepalive/stop act on it.
+    /// </summary>
+    public static bool RunMatches(string? annotationRun, string runId) =>
+        !string.IsNullOrEmpty(annotationRun) &&
+        string.Equals(annotationRun, PerRunLabel(runId), StringComparison.Ordinal);
+
+    /// <summary>
     /// Sanitizes an arbitrary run ID into a valid Kubernetes label value: lowercase,
     /// invalid characters replaced with <c>-</c>, trimmed to a leading/trailing alphanumeric,
     /// max 63 chars. Empty input maps to <c>"run"</c>.

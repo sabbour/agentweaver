@@ -101,13 +101,10 @@ public sealed class SandboxRuntimeOptions
 /// </summary>
 internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPodLifecycle
 {
-    private const string ApiGroup = "extensions.agents.x-k8s.io";
-    private const string ApiVersion = "v1alpha1";
-    private const string ClaimPlural = "sandboxclaims";
+    private const string ApiGroup = SandboxClaimConventions.ApiGroup;
+    private const string ApiVersion = SandboxClaimConventions.ApiVersion;
+    private const string ClaimPlural = SandboxClaimConventions.ClaimPlural;
     private const string ContainerName = "agentweaver-sandbox";
-
-    // Prefix for AgentHost SandboxClaim names to distinguish them from per-command claims.
-    private const string AgentHostClaimPrefix = "agent-";
 
     private readonly IKubernetes _client;
     private readonly KubernetesSandboxOptions _options;
@@ -231,9 +228,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// <inheritdoc/>
     public async Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
-        var claimBase = runId.Replace("-", "", StringComparison.Ordinal);
-        claimBase = claimBase[..Math.Min(12, claimBase.Length)];
-        var claimName = $"{AgentHostClaimPrefix}{claimBase}";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
@@ -264,9 +259,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// <inheritdoc/>
     public async Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
-        var claimBase = runId.Replace("-", "", StringComparison.Ordinal);
-        claimBase = claimBase[..Math.Min(12, claimBase.Length)];
-        var claimName = $"{AgentHostClaimPrefix}{claimBase}";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: releasing AgentHost pod for run {RunId} (claim {Claim})",
@@ -381,28 +374,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
             var json = JsonSerializer.Serialize(raw);
             using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
 
-            if (root.TryGetProperty("status", out var status))
-            {
-                var phase = status.TryGetProperty("phase", out var p) ? p.GetString() : null;
-                if (phase == "Bound")
-                {
-                    string? podName = null;
-
-                    // status.sandbox.name is the primary field (agent-sandbox controller shape)
-                    if (status.TryGetProperty("sandbox", out var sandbox) &&
-                        sandbox.TryGetProperty("name", out var sn))
-                        podName = sn.GetString();
-
-                    if (string.IsNullOrEmpty(podName) &&
-                        status.TryGetProperty("podName", out var pn))
-                        podName = pn.GetString();
-
-                    if (!string.IsNullOrEmpty(podName))
-                        return podName;
-                }
-            }
+            var podName = SandboxClaimConventions.TryGetBoundPodName(doc.RootElement);
+            if (!string.IsNullOrEmpty(podName))
+                return podName;
 
             await Task.Delay(2000, ct);
         }
