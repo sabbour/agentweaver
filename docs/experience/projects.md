@@ -447,3 +447,7 @@ Projects work when Agentweaver keeps three promises:
 3. **Start with an operating model.** Blueprints make team roster, workflow, review policy, sandbox, and model defaults part of project setup instead of scattered follow-up tasks.
 
 The result is a concrete project experience: named repositories with visible status, quick creation paths, recoverable workspace links, and repeatable defaults for every run.
+
+## See also
+
+- [Agent definition (User Guide)](./agent-definition.md) — the GitHub Copilot agent file that lands in every project you create.

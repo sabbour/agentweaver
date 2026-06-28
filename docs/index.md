@@ -36,6 +36,8 @@ features:
     details: When an agent starts a dev server inside its isolated Kubernetes sandbox pod, open a live browser preview of it from the run view — a port-forward tunnel scoped to that one run's pod, with no egress widening. <a href="/docs/experience/sandbox-browser-preview">See it in action →</a>
   - title: Works the way you do
     details: Self-hosted. Runs with GitHub Copilot or Microsoft Foundry. Drive it from the web UI or any MCP-compatible client, including Copilot CLI.
+  - title: A Copilot agent in every project
+    details: Each new project ships with a ready-to-use GitHub Copilot agent under <code>.github/agents/</code> that drives Agentweaver through its MCP tools. Its tool map is generated from the live tool set, so it never drifts — and it never overwrites your edits. <a href="/docs/experience/agent-definition">See it in action →</a>
 ---
 
 ::: warning Alpha software

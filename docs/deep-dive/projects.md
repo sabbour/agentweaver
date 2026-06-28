@@ -337,3 +337,7 @@ If you were rebuilding this subsystem from scratch, implement these pieces in th
 8. Gate run/orchestration start on project state and workspace availability.
 9. Use per-run worktrees/branches for concurrent work inside a project.
 10. Make delete a state transition first, then cancel work, release resources, and remove metadata while preserving files by default.
+
+## See also
+
+- [Agent definition — Deep Dive](./agent-definition.md) — the GitHub Copilot agent file materialized into each new project at creation time.
