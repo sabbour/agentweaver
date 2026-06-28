@@ -363,7 +363,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
         while (DateTime.UtcNow < deadline)
         {
-            if (pendingStore.Get(runId) is not null) return;
+            if (await pendingStore.GetAsync(runId) is not null) return;
             await Task.Delay(50);
         }
 

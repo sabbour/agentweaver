@@ -1,4 +1,9 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Diagnostics;
 
@@ -37,6 +42,14 @@ public sealed class HeartbeatStatusStore
     private string? _lastError;
     private readonly object _sync = new();
 
+    // Cross-pod persistence (optional). When a scope factory is supplied, each tick UPSERTs this
+    // pod's row into MemoryDbContext so the diagnostics endpoint can aggregate across replicas.
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly ILogger<HeartbeatStatusStore>? _logger;
+
+    /// <summary>This pod's identity (Kubernetes pod name, falling back to the machine/host name).</summary>
+    public string PodName { get; }
+
     /// <summary>
     /// Whether the coordinator heartbeat is enabled
     /// (<c>Coordinator:HeartbeatEnabled</c> configuration key; default <c>true</c>).
@@ -49,11 +62,19 @@ public sealed class HeartbeatStatusStore
     /// </summary>
     public TimeSpan Interval { get; }
 
-    public HeartbeatStatusStore(IConfiguration configuration)
+    public HeartbeatStatusStore(
+        IConfiguration configuration,
+        IServiceScopeFactory? scopeFactory = null,
+        IKubernetesEnvironment? kubernetesEnvironment = null,
+        ILogger<HeartbeatStatusStore>? logger = null)
     {
         Enabled = configuration.GetValue("Coordinator:HeartbeatEnabled", true);
         var seconds = configuration.GetValue("Coordinator:HeartbeatIntervalSeconds", 10);
         Interval = TimeSpan.FromSeconds(Math.Max(1, seconds));
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+        PodName = kubernetesEnvironment?.PodName
+            ?? (string.IsNullOrWhiteSpace(Environment.MachineName) ? "unknown-pod" : Environment.MachineName);
     }
 
     /// <summary>UTC timestamp of the last completed tick. Null before the first tick.</summary>
@@ -118,6 +139,56 @@ public sealed class HeartbeatStatusStore
             _ringHead = (_ringHead + 1) % RingCapacity;
             if (_ringCount < RingCapacity) _ringCount++;
             if (error is not null) _lastError = error;
+        }
+
+        // Cross-pod source of truth: UPSERT this pod's latest tick. Best-effort and fire-and-forget so
+        // a transient DB hiccup never disrupts the heartbeat loop; the in-memory ring above is always
+        // authoritative for the local pod. No-op when no scope factory was supplied (unit tests).
+        if (_scopeFactory is not null)
+            _ = UpsertPodRowAsync(tickUtc, actedCount, errorCount, durationMs, error);
+    }
+
+    private async Task UpsertPodRowAsync(
+        DateTimeOffset tickUtc, int actedCount, int errorCount, double durationMs, string? error)
+    {
+        try
+        {
+            using var scope = _scopeFactory!.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var existing = await db.HeartbeatStatuses
+                .FirstOrDefaultAsync(h => h.PodName == PodName)
+                .ConfigureAwait(false);
+
+            if (existing is null)
+            {
+                db.HeartbeatStatuses.Add(new HeartbeatStatusRecord
+                {
+                    PodName = PodName,
+                    LastTickUtc = tickUtc,
+                    ActedCount = actedCount,
+                    ErrorCount = errorCount,
+                    DurationMs = (long)durationMs,
+                    Error = error,
+                    Enabled = Enabled,
+                    IntervalSeconds = (int)Interval.TotalSeconds,
+                });
+            }
+            else
+            {
+                existing.LastTickUtc = tickUtc;
+                existing.ActedCount = actedCount;
+                existing.ErrorCount = errorCount;
+                existing.DurationMs = (long)durationMs;
+                existing.Error = error;
+                existing.Enabled = Enabled;
+                existing.IntervalSeconds = (int)Interval.TotalSeconds;
+            }
+
+            await db.SaveChangesAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "Heartbeat: failed to persist pod status row for {PodName}", PodName);
         }
     }
 }

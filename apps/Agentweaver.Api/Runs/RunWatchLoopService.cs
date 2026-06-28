@@ -176,11 +176,11 @@ public sealed class RunWatchLoopService
                     // WorkflowRestartService before this consumer reads the event), skip to
                     // avoid double-processing. WatchStreamAsync is single-consumer per run;
                     // WorkflowRestartService only reads briefly on startup to repopulate.
-                    if (_pendingStore.Get(runId) is not null)
+                    if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is not null)
                         break;
 
                     // Workflow paused at review-gate.
-                    _pendingStore.Set(runId, rie.Request, ownerUser);
+                    await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
 
                     // Update SQLite: InProgress -> AwaitingReview.
                     // Retrieve agent output from the request data for the review-ready update.

@@ -738,7 +738,7 @@ app.MapPost("/api/runs/{id}/review", async (
         return Results.Conflict(new { error = $"Run is in status '{run.Status.ToApiString()}' and cannot be reviewed." });
 
     var streamingRunForReview = workflowRegistry.Get(id);
-    if (streamingRunForReview is not null && pendingStore.Get(id) is null)
+    if (streamingRunForReview is not null && await pendingStore.GetAsync(id, ct) is null)
         return Results.StatusCode(StatusCodes.Status409Conflict);
 
     if (request.Approved)
@@ -763,7 +763,7 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Guardrail 10: Atomic TryRemove for replay/double-POST protection.
-    var pendingEntry = pendingStore.TryRemove(id);
+    var pendingEntry = await pendingStore.TryRemoveAsync(id, ct);
     if (pendingEntry is null)
     {
         // Guardrail 2: On-demand fallback — if pending store is empty (e.g., after restart
@@ -1082,7 +1082,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     // IDOR defense-in-depth: if a pending review request exists, verify the caller owns it.
     // IsOwner above already verified caller.User == run.SubmittingUser; this check mirrors
     // the pattern in the /review endpoint (Guardrail 9).
-    var pendingEntry = pendingStore.Get(id);
+    var pendingEntry = await pendingStore.GetAsync(id, ct);
     if (pendingEntry is not null && !caller.Owns(pendingEntry.OwnerUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
@@ -1125,7 +1125,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     // for cleanup so process shutdown does not leave the run in a partially-cleaned state).
 
     // a. Remove the pending request.
-    pendingStore.TryRemove(id);
+    await pendingStore.TryRemoveAsync(id, CancellationToken.None);
 
     // b. Abandon the old paused workflow: unregister and delete checkpoints.
     workflowRegistry.Abandon(id);

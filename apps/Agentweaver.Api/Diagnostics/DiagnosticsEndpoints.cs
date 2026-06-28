@@ -50,8 +50,8 @@ public static class DiagnosticsEndpoints
 
         // FR-017: Coordinator heartbeat status with ring-buffer activity and automations catalog.
         // Reachable from the MCP server at parity (FR-017a).
-        app.MapGet("/api/diagnostics/heartbeat", (DiagnosticsService service) =>
-            Results.Ok(service.GetHeartbeatStatus()));
+        app.MapGet("/api/diagnostics/heartbeat", async (DiagnosticsService service, CancellationToken ct) =>
+            Results.Ok(await service.GetHeartbeatStatusAsync(ct)));
 
         // FR-016 (project scope): workspace, scaffold directories, and active workflow/policy checks
         // for a single project. Owner-authorized (same pattern as other project endpoints).

@@ -28,11 +28,11 @@ public static class AuthEndpoints
     public static void MapAuthEndpoints(this WebApplication app)
     {
 // GET /auth/github/authorize — begin OAuth redirect flow
-app.MapGet("/auth/github/authorize", (GitHubOAuthRedirectService oauthService) =>
+app.MapGet("/auth/github/authorize", async (GitHubOAuthRedirectService oauthService, CancellationToken ct) =>
 {
     try
     {
-        var url = oauthService.BeginAuthorization();
+        var url = await oauthService.BeginAuthorizationAsync(ct);
         return Results.Redirect(url);
     }
     catch (GitHubNotConfiguredException ex)

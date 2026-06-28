@@ -186,7 +186,7 @@ public sealed class McpOAuthBrokerService
     {
         await PurgeExpiredAsync(ct).ConfigureAwait(false);
 
-        var gitHubAuthorizeUrl = _gitHub.BeginAuthorization();
+        var gitHubAuthorizeUrl = await _gitHub.BeginAuthorizationAsync(ct).ConfigureAwait(false);
         var state = ExtractState(gitHubAuthorizeUrl);
 
         _db.McpPendingAuthorizations.Add(new McpPendingAuthorization

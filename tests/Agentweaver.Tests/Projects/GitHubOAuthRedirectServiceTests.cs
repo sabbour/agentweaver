@@ -1,9 +1,13 @@
 using System.Net;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Projects;
 
@@ -12,9 +16,26 @@ namespace Agentweaver.Tests.Projects;
 /// Specifically verifies the ExpiresAt bug fix: ExpiresAt must come from the access token's
 /// <c>expires_in</c> (TTL ~8h), NOT from <c>refresh_token_expires_in</c> (~6 months).
 /// Uses an offline URL-routing HTTP handler so no real GitHub calls are made.
+///
+/// The CSRF state store is Postgres/SQLite-backed (replica-safe), so these tests open a shared
+/// in-memory SQLite database and exercise BeginAuthorizationAsync/ExchangeCodeAsync against it.
 /// </summary>
-public sealed class GitHubOAuthRedirectServiceTests
+public sealed class GitHubOAuthRedirectServiceTests : IDisposable
 {
+    private readonly SqliteConnection _keepAlive;
+    private readonly string _connectionString;
+
+    public GitHubOAuthRedirectServiceTests()
+    {
+        _connectionString = $"DataSource=file:oauthstate-{Guid.NewGuid():N}?mode=memory&cache=shared";
+        _keepAlive = new SqliteConnection(_connectionString);
+        _keepAlive.Open();
+
+        var options = new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(_connectionString).Options;
+        using var db = new MemoryDbContext(options);
+        db.Database.EnsureCreated();
+    }
+
     // =========================================================================
     // OAR-01: ExchangeCodeAsync sets ExpiresAt from access-token expires_in
     // =========================================================================
@@ -27,7 +48,7 @@ public sealed class GitHubOAuthRedirectServiceTests
             tokenJson: """{"access_token":"ghu_access","refresh_token":"ghr_refresh","expires_in":28800,"refresh_token_expires_in":15897600}""",
             userJson: """{"login":"octocat","avatar_url":"https://avatars/x"}""");
 
-        var state = ExtractState(svc.BeginAuthorization());
+        var state = ExtractState(await svc.BeginAuthorizationAsync());
 
         var before = DateTimeOffset.UtcNow;
         var (login, accessToken) = await svc.ExchangeCodeAsync("the-code", state);
@@ -60,7 +81,7 @@ public sealed class GitHubOAuthRedirectServiceTests
             tokenJson: """{"access_token":"ghp_classic"}""",
             userJson: """{"login":"octocat"}""");
 
-        var state = ExtractState(svc.BeginAuthorization());
+        var state = ExtractState(await svc.BeginAuthorizationAsync());
         await svc.ExchangeCodeAsync("the-code", state);
 
         var token = await store.GetTokenAsync(GitHubTokenScope.Installation);
@@ -80,7 +101,7 @@ public sealed class GitHubOAuthRedirectServiceTests
         return Uri.UnescapeDataString(pair["state=".Length..]);
     }
 
-    private static (GitHubOAuthRedirectService Service, RoutingHttpMessageHandler Handler) BuildService(
+    private (GitHubOAuthRedirectService Service, RoutingHttpMessageHandler Handler) BuildService(
         IGitHubTokenStore store, string tokenJson, string userJson)
     {
         var handler = new RoutingHttpMessageHandler(tokenJson, userJson);
@@ -98,7 +119,8 @@ public sealed class GitHubOAuthRedirectServiceTests
             .Build();
 
         var service = new GitHubOAuthRedirectService(
-            config, store, factory, NullLogger<GitHubOAuthRedirectService>.Instance);
+            config, store, factory, MemoryDbScopeFactory.ForSqlite(_connectionString),
+            NullLogger<GitHubOAuthRedirectService>.Instance);
 
         return (service, handler);
     }
@@ -135,4 +157,6 @@ public sealed class GitHubOAuthRedirectServiceTests
         public SingleClientHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
         public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
     }
+
+    public void Dispose() => _keepAlive.Dispose();
 }

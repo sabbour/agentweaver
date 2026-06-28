@@ -28,6 +28,21 @@ public sealed record AutomationDto
 }
 
 /// <summary>
+/// Per-pod heartbeat detail used to aggregate across replicas. One entry per replica that has
+/// reported at least one tick into the shared store.
+/// </summary>
+public sealed record HeartbeatPodStatusDto
+{
+    [JsonPropertyName("pod_name")]     public required string          PodName     { get; init; }
+    [JsonPropertyName("last_tick_utc")] public required DateTimeOffset LastTickUtc { get; init; }
+    [JsonPropertyName("acted_count")]  public required int             ActedCount  { get; init; }
+    [JsonPropertyName("error_count")]  public required int             ErrorCount  { get; init; }
+    [JsonPropertyName("duration_ms")]  public required long            DurationMs  { get; init; }
+    [JsonPropertyName("error")]        public required string?         Error       { get; init; }
+    [JsonPropertyName("enabled")]      public required bool            Enabled     { get; init; }
+}
+
+/// <summary>
 /// Read-only snapshot of the coordinator heartbeat service's observable state (FR-017).
 /// Returned identically by the REST endpoint and the MCP tool (FR-017a).
 /// </summary>
@@ -40,4 +55,5 @@ public sealed record HeartbeatStatusDto
     [JsonPropertyName("last_error")]       public required string?                     LastError      { get; init; }
     [JsonPropertyName("recent_activity")]  public required IReadOnlyList<TickRecordDto> RecentActivity { get; init; }
     [JsonPropertyName("automations")]      public required IReadOnlyList<AutomationDto> Automations    { get; init; }
+    [JsonPropertyName("pods")]             public required IReadOnlyList<HeartbeatPodStatusDto> Pods   { get; init; }
 }

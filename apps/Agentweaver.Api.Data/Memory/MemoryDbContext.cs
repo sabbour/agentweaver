@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Api.Diagnostics;
 
 namespace Agentweaver.Api.Memory;
 
@@ -21,6 +22,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<McpClientRegistration> McpClientRegistrations => Set<McpClientRegistration>();
     public DbSet<McpPendingAuthorization> McpPendingAuthorizations => Set<McpPendingAuthorization>();
     public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
+    public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
+
+    // Replica-safe per-pod / per-run singleton state moved out of process memory.
+    public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
+    public DbSet<HeartbeatStatusRecord> HeartbeatStatuses => Set<HeartbeatStatusRecord>();
 
     // Entities migrated from agentweaver.db (spec-018 P2)
     public DbSet<RunRecord> Runs => Set<RunRecord>();
@@ -92,6 +98,13 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<McpPendingAuthorization>().HasIndex(p => p.ExpiresAt);
         model.Entity<McpAuthorizationCode>().HasIndex(c => c.Code).IsUnique();
         model.Entity<McpAuthorizationCode>().HasIndex(c => c.ExpiresAt);
+
+        model.Entity<OAuthState>().HasKey(s => s.State);
+        model.Entity<OAuthState>().HasIndex(s => s.ExpiresAt);
+
+        model.Entity<PendingRequestRecord>().HasIndex(p => p.RunId).IsUnique();
+        model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);
+        model.Entity<HeartbeatStatusRecord>().HasKey(h => h.PodName);
 
         // ── agentweaver.db entities (spec-018 P2) ──────────────────────────────────
         // These entities only exist in the Postgres schema (InitialPostgres migration).

@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Reflection;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Diagnostics;
 
@@ -33,6 +36,7 @@ public sealed class DiagnosticsService
     private readonly WorkflowRegistry _workflowRegistry;
     private readonly ReviewPolicyRegistry _reviewPolicyRegistry;
     private readonly IConfiguration _configuration;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public DiagnosticsService(
         SqliteDb db,
@@ -41,7 +45,8 @@ public sealed class DiagnosticsService
         HeartbeatStatusStore heartbeatStore,
         WorkflowRegistry workflowRegistry,
         ReviewPolicyRegistry reviewPolicyRegistry,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IServiceScopeFactory scopeFactory)
     {
         _db = db;
         _projectStore = projectStore;
@@ -50,6 +55,7 @@ public sealed class DiagnosticsService
         _workflowRegistry = workflowRegistry;
         _reviewPolicyRegistry = reviewPolicyRegistry;
         _configuration = configuration;
+        _scopeFactory = scopeFactory;
     }
 
     // -------------------------------------------------------------------------
@@ -137,15 +143,67 @@ public sealed class DiagnosticsService
     // Heartbeat endpoint
     // -------------------------------------------------------------------------
 
-    /// <summary>Returns the enriched coordinator heartbeat status snapshot.</summary>
-    public HeartbeatStatusDto GetHeartbeatStatus()
+    /// <summary>
+    /// Returns the enriched coordinator heartbeat status snapshot, aggregated across all replicas.
+    /// Reads every persisted per-pod row from <see cref="MemoryDbContext"/> so the endpoint is correct
+    /// even when the reader pod differs from the writer pod. Falls back to the local in-memory store
+    /// when the table is empty or unavailable.
+    /// </summary>
+    public async Task<HeartbeatStatusDto> GetHeartbeatStatusAsync(CancellationToken ct = default)
     {
-        var status = _heartbeatStore.Enabled
-            ? (_heartbeatStore.LastTickUtc.HasValue ? "running" : "waiting_first_tick")
-            : "disabled";
-
         var recentActivity = _heartbeatStore.GetRecentActivity();
         var lastRecord = recentActivity.Length > 0 ? recentActivity[0] : (TickRecord?)null;
+
+        // Cross-pod rows (best-effort; fall back to local-only on any failure).
+        List<HeartbeatStatusRecord> podRows = [];
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var memDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            podRows = await memDb.HeartbeatStatuses
+                .AsNoTracking()
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Diagnostics must never throw; degrade gracefully to the local pod's view.
+            podRows = [];
+        }
+
+        // Most-recent tick across all pods, falling back to the local store.
+        DateTimeOffset? lastTickUtc = _heartbeatStore.LastTickUtc;
+        if (podRows.Count > 0)
+        {
+            var maxRow = podRows.Max(r => r.LastTickUtc);
+            if (lastTickUtc is null || maxRow > lastTickUtc.Value)
+                lastTickUtc = maxRow;
+        }
+
+        var status = _heartbeatStore.Enabled
+            ? (lastTickUtc.HasValue ? "running" : "waiting_first_tick")
+            : "disabled";
+
+        // Surface the local sticky error first, otherwise the newest cross-pod error.
+        var lastError = _heartbeatStore.LastError
+            ?? podRows.Where(r => r.Error is not null)
+                      .OrderByDescending(r => r.LastTickUtc)
+                      .Select(r => r.Error)
+                      .FirstOrDefault();
+
+        var pods = podRows
+            .OrderBy(r => r.PodName, StringComparer.Ordinal)
+            .Select(r => new HeartbeatPodStatusDto
+            {
+                PodName     = r.PodName,
+                LastTickUtc = r.LastTickUtc,
+                ActedCount  = r.ActedCount,
+                ErrorCount  = r.ErrorCount,
+                DurationMs  = r.DurationMs,
+                Error       = r.Error,
+                Enabled     = r.Enabled,
+            })
+            .ToList();
 
         var automations = new List<AutomationDto>
         {
@@ -154,7 +212,7 @@ public sealed class DiagnosticsService
                 Name           = "Coordinator Heartbeat",
                 Description    = "Picks up Ready backlog tasks and starts coordinator runs",
                 CadenceSeconds = _heartbeatStore.Interval.TotalSeconds,
-                LastRunUtc     = _heartbeatStore.LastTickUtc,
+                LastRunUtc     = lastTickUtc,
                 LastActedCount = lastRecord?.ActedCount,
                 Status         = status,
             },
@@ -173,9 +231,9 @@ public sealed class DiagnosticsService
         {
             Enabled        = _heartbeatStore.Enabled,
             IntervalSeconds = _heartbeatStore.Interval.TotalSeconds,
-            LastTickUtc    = _heartbeatStore.LastTickUtc,
+            LastTickUtc    = lastTickUtc,
             ServiceStatus  = status,
-            LastError      = _heartbeatStore.LastError,
+            LastError      = lastError,
             RecentActivity = recentActivity.Select(r => new TickRecordDto
             {
                 TimestampUtc = r.TimestampUtc,
@@ -185,6 +243,7 @@ public sealed class DiagnosticsService
                 Error        = r.Error,
             }).ToList(),
             Automations = automations,
+            Pods        = pods,
         };
     }
 

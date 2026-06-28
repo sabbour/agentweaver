@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260628082402_AddPendingRequestAndHeartbeatState")]
+    partial class AddPendingRequestAndHeartbeatState
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
@@ -221,21 +224,6 @@ namespace Agentweaver.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("McpRevokedJtis");
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthState", b =>
-                {
-                    b.Property<string>("State")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("State");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.ToTable("OAuthStates");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Diagnostics.HeartbeatStatusRecord", b =>
