@@ -116,8 +116,9 @@ public static class OAuthServerEndpoints
 
             try
             {
-                var gitHubAuthorizeUrl = broker.BeginAuthorization(
-                    client_id!, redirect_uri!, code_challenge!, state, effectiveScope, resource);
+                var gitHubAuthorizeUrl = await broker.BeginAuthorization(
+                    client_id!, redirect_uri!, code_challenge!, state, effectiveScope, resource, ctx.RequestAborted)
+                    .ConfigureAwait(false);
                 return Results.Redirect(gitHubAuthorizeUrl);
             }
             catch (GitHubNotConfiguredException ex)
@@ -151,8 +152,9 @@ public static class OAuthServerEndpoints
 
             if (string.Equals(grantType, "authorization_code", StringComparison.Ordinal))
             {
-                var (grant, error) = broker.RedeemAuthorizationCode(
-                    form["code"], form["code_verifier"], form["redirect_uri"], form["client_id"]);
+                var (grant, error) = await broker.RedeemAuthorizationCode(
+                    form["code"], form["code_verifier"], form["redirect_uri"], form["client_id"], ctx.RequestAborted)
+                    .ConfigureAwait(false);
 
                 if (error is not null)
                     return BadOAuthRequest(error.Error, error.ErrorDescription);

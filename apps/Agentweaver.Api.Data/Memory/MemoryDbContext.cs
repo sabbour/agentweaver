@@ -19,6 +19,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<McpRefreshToken> McpRefreshTokens => Set<McpRefreshToken>();
     public DbSet<McpRevokedJti> McpRevokedJtis => Set<McpRevokedJti>();
     public DbSet<McpClientRegistration> McpClientRegistrations => Set<McpClientRegistration>();
+    public DbSet<McpPendingAuthorization> McpPendingAuthorizations => Set<McpPendingAuthorization>();
+    public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
 
     // Entities migrated from agentweaver.db (spec-018 P2)
     public DbSet<RunRecord> Runs => Set<RunRecord>();
@@ -86,6 +88,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<McpRevokedJti>().HasIndex(j => j.Jti).IsUnique();
         model.Entity<McpRevokedJti>().HasIndex(j => j.ExpiresAt);
         model.Entity<McpClientRegistration>().HasIndex(c => c.ClientId).IsUnique();
+        model.Entity<McpPendingAuthorization>().HasIndex(p => p.State).IsUnique();
+        model.Entity<McpPendingAuthorization>().HasIndex(p => p.ExpiresAt);
+        model.Entity<McpAuthorizationCode>().HasIndex(c => c.Code).IsUnique();
+        model.Entity<McpAuthorizationCode>().HasIndex(c => c.ExpiresAt);
 
         // ── agentweaver.db entities (spec-018 P2) ──────────────────────────────────
         // These entities only exist in the Postgres schema (InitialPostgres migration).

@@ -1,7 +1,8 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Agentweaver.Api.Auth.OAuth;
@@ -129,7 +130,7 @@ public sealed record AuthorizationCodeGrant(string Subject, string GithubLogin, 
 public sealed record CodeRedemptionError(string Error, string ErrorDescription);
 
 /// <summary>
-/// In-memory broker for the Agentweaver OAuth 2.1 Authorization Server.
+/// EF-backed, replica-safe broker for the Agentweaver OAuth 2.1 Authorization Server.
 ///
 /// It bridges a public MCP client's PKCE authorization-code request to a GitHub login, reusing the
 /// existing <see cref="GitHubOAuthRedirectService"/> (GitHub authorize-URL build, CSRF state, and
@@ -137,12 +138,15 @@ public sealed record CodeRedemptionError(string Error, string ErrorDescription);
 /// The GitHub client_secret and the user's GitHub token never leave the server; the client only ever
 /// receives Agentweaver-minted artifacts (authorization code, then JWT access token).
 ///
-/// State held in memory (single-instance only):
+/// State is persisted in <see cref="MemoryDbContext"/> (Postgres in prod, SQLite in dev) so the flow
+/// survives load-balancing across replicas:
 ///  - pending authorizations keyed by the GitHub CSRF state, correlating the client's PKCE request
 ///    to the brokered GitHub login leg;
 ///  - issued authorization codes (single-use, short TTL) bound to client_id + redirect_uri + PKCE.
 ///
-/// TODO(T4): persist rotating refresh tokens (hashed) + reuse detection + a jti denylist.
+/// Scoped (per-request) because it depends on the scoped <see cref="MemoryDbContext"/>; resolved
+/// directly by the minimal-API OAuth handlers (all call sites are in HTTP request scope).
+///
 /// TODO(T5): replace the implicit "any client_id" acceptance with Dynamic Client Registration.
 /// </summary>
 public sealed class McpOAuthBrokerService
@@ -154,46 +158,57 @@ public sealed class McpOAuthBrokerService
     private readonly GitHubOAuthRedirectService _gitHub;
     private readonly IGitHubOrgAuthorizationService _orgAuth;
     private readonly IGitHubTokenStore _gitHubTokens;
+    private readonly MemoryDbContext _db;
     private readonly ILogger<McpOAuthBrokerService> _logger;
-
-    private readonly ConcurrentDictionary<string, PendingAuthorization> _pending = new();
-    private readonly ConcurrentDictionary<string, IssuedCode> _codes = new();
 
     public McpOAuthBrokerService(
         GitHubOAuthRedirectService gitHub,
         IGitHubOrgAuthorizationService orgAuth,
         IGitHubTokenStore gitHubTokens,
+        MemoryDbContext db,
         ILogger<McpOAuthBrokerService> logger)
     {
         _gitHub = gitHub;
         _orgAuth = orgAuth;
         _gitHubTokens = gitHubTokens;
+        _db = db;
         _logger = logger;
     }
 
     /// <summary>
-    /// Begins an authorization: builds the GitHub authorize URL (with its CSRF state) and records the
+    /// Begins an authorization: builds the GitHub authorize URL (with its CSRF state) and persists the
     /// client's PKCE request keyed by that state, so the brokered GitHub callback can correlate back.
     /// Returns the GitHub authorize URL the user agent should be redirected to.
     /// </summary>
-    public string BeginAuthorization(
-        string clientId, string redirectUri, string codeChallenge, string? clientState, string scope, string? resource)
+    public async Task<string> BeginAuthorization(
+        string clientId, string redirectUri, string codeChallenge, string? clientState, string scope, string? resource,
+        CancellationToken ct = default)
     {
-        PurgeExpired();
+        await PurgeExpiredAsync(ct).ConfigureAwait(false);
 
         var gitHubAuthorizeUrl = _gitHub.BeginAuthorization();
         var state = ExtractState(gitHubAuthorizeUrl);
 
-        _pending[state] = new PendingAuthorization(
-            clientId, redirectUri, codeChallenge, clientState, scope, resource,
-            DateTimeOffset.UtcNow.Add(PendingAuthorizationLifetime));
+        _db.McpPendingAuthorizations.Add(new McpPendingAuthorization
+        {
+            State = state,
+            ClientId = clientId,
+            RedirectUri = redirectUri,
+            CodeChallenge = codeChallenge,
+            ClientState = clientState,
+            Scope = scope,
+            Resource = resource,
+            ExpiresAt = DateTimeOffset.UtcNow.Add(PendingAuthorizationLifetime),
+        });
+        await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         return gitHubAuthorizeUrl;
     }
 
     /// <summary>True when the GitHub CSRF state belongs to a pending MCP authorization (broker leg).</summary>
-    public bool IsPendingState(string? state) =>
-        !string.IsNullOrEmpty(state) && _pending.ContainsKey(state);
+    public async Task<bool> IsPendingState(string? state, CancellationToken ct = default) =>
+        !string.IsNullOrEmpty(state)
+        && await _db.McpPendingAuthorizations.AnyAsync(p => p.State == state, ct).ConfigureAwait(false);
 
     /// <summary>
     /// Handles the brokered GitHub callback: exchanges the GitHub code (via the reused service),
@@ -202,7 +217,19 @@ public sealed class McpOAuthBrokerService
     /// </summary>
     public async Task<BrokerCallbackResult> HandleGitHubCallbackAsync(string code, string state, CancellationToken ct)
     {
-        if (!_pending.TryRemove(state, out var pending) || pending.IsExpired)
+        // Atomically claim the pending authorization: only the caller whose delete affected the row
+        // proceeds, so a replayed/duplicate callback for the same state is rejected as unknown.
+        var pending = await _db.McpPendingAuthorizations
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.State == state, ct)
+            .ConfigureAwait(false);
+
+        var claimed = pending is not null
+            && await _db.McpPendingAuthorizations
+                .Where(p => p.State == state)
+                .ExecuteDeleteAsync(ct).ConfigureAwait(false) > 0;
+
+        if (pending is null || !claimed || DateTimeOffset.UtcNow > pending.ExpiresAt)
             return new BrokerCallbackResult(BrokerOutcome.UnknownState, null, null, null,
                 "invalid_request", "Unknown or expired authorization state.");
 
@@ -234,9 +261,18 @@ public sealed class McpOAuthBrokerService
         }
 
         var authorizationCode = GenerateOpaqueToken();
-        _codes[authorizationCode] = new IssuedCode(
-            login, login, pending.CodeChallenge, pending.RedirectUri, pending.ClientId, pending.Scope,
-            DateTimeOffset.UtcNow.Add(AuthorizationCodeLifetime));
+        _db.McpAuthorizationCodes.Add(new McpAuthorizationCode
+        {
+            Code = authorizationCode,
+            Subject = login,
+            GithubLogin = login,
+            CodeChallenge = pending.CodeChallenge,
+            RedirectUri = pending.RedirectUri,
+            ClientId = pending.ClientId,
+            Scope = pending.Scope,
+            ExpiresAt = DateTimeOffset.UtcNow.Add(AuthorizationCodeLifetime),
+        });
+        await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         // Persist the brokered GitHub token under the per-user scope so the AS can re-check org
         // membership when this user's access token is refreshed (T4). Stored only if no richer token
@@ -268,14 +304,34 @@ public sealed class McpOAuthBrokerService
     /// <summary>
     /// Redeems an authorization code at the token endpoint: enforces single-use, expiry, exact
     /// redirect-URI match, client binding, and PKCE S256 verification. Returns the grant on success.
+    ///
+    /// Single-use is atomic across replicas: the code row is conditionally deleted by its value and a
+    /// zero-rows-affected result (the row was already consumed by a concurrent redemption on this or
+    /// another replica, or never existed) yields <c>invalid_grant</c>. Two concurrent redemptions of
+    /// the same code therefore resolve to exactly one success.
     /// </summary>
-    public (AuthorizationCodeGrant? Grant, CodeRedemptionError? Error) RedeemAuthorizationCode(
-        string? code, string? codeVerifier, string? redirectUri, string? clientId)
+    public async Task<(AuthorizationCodeGrant? Grant, CodeRedemptionError? Error)> RedeemAuthorizationCode(
+        string? code, string? codeVerifier, string? redirectUri, string? clientId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(code) || !_codes.TryRemove(code, out var issued))
+        if (string.IsNullOrWhiteSpace(code))
             return (null, new CodeRedemptionError("invalid_grant", "Authorization code is invalid or already used."));
 
-        if (issued.IsExpired)
+        var issued = await _db.McpAuthorizationCodes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Code == code, ct)
+            .ConfigureAwait(false);
+
+        // Atomic single-use: only the caller whose conditional delete affected the row may proceed.
+        // A concurrent redemption (here or on another replica) sees zero rows affected → invalid_grant.
+        var consumed = issued is not null
+            && await _db.McpAuthorizationCodes
+                .Where(c => c.Code == code)
+                .ExecuteDeleteAsync(ct).ConfigureAwait(false) > 0;
+
+        if (issued is null || !consumed)
+            return (null, new CodeRedemptionError("invalid_grant", "Authorization code is invalid or already used."));
+
+        if (DateTimeOffset.UtcNow > issued.ExpiresAt)
             return (null, new CodeRedemptionError("invalid_grant", "Authorization code has expired."));
 
         if (!string.Equals(issued.RedirectUri, redirectUri, StringComparison.Ordinal))
@@ -311,28 +367,26 @@ public sealed class McpOAuthBrokerService
         return Uri.UnescapeDataString(pair["state=".Length..]);
     }
 
-    private void PurgeExpired()
+    /// <summary>
+    /// Best-effort cleanup of expired pending authorizations and codes. Read-time expiry checks remain
+    /// authoritative for correctness; this just keeps the tables bounded. The DateTimeOffset comparison
+    /// is only translatable on Postgres (prod, where growth matters), so on SQLite/dev it is skipped.
+    /// </summary>
+    private async Task PurgeExpiredAsync(CancellationToken ct)
     {
-        var now = DateTimeOffset.UtcNow;
-        foreach (var kvp in _pending)
-            if (now > kvp.Value.ExpiresAt)
-                _pending.TryRemove(kvp.Key, out _);
-        foreach (var kvp in _codes)
-            if (now > kvp.Value.ExpiresAt)
-                _codes.TryRemove(kvp.Key, out _);
-    }
+        if (!_db.Database.IsNpgsql())
+            return;
 
-    private sealed record PendingAuthorization(
-        string ClientId, string RedirectUri, string CodeChallenge, string? ClientState,
-        string Scope, string? Resource, DateTimeOffset ExpiresAt)
-    {
-        public bool IsExpired => DateTimeOffset.UtcNow > ExpiresAt;
-    }
-
-    private sealed record IssuedCode(
-        string Subject, string GithubLogin, string CodeChallenge, string RedirectUri,
-        string ClientId, string Scope, DateTimeOffset ExpiresAt)
-    {
-        public bool IsExpired => DateTimeOffset.UtcNow > ExpiresAt;
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            await _db.McpPendingAuthorizations.Where(p => p.ExpiresAt < now).ExecuteDeleteAsync(ct).ConfigureAwait(false);
+            await _db.McpAuthorizationCodes.Where(c => c.ExpiresAt < now).ExecuteDeleteAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: expired rows are also rejected at read time.
+            _logger.LogDebug(ex, "Opportunistic purge of expired OAuth broker state failed; continuing.");
+        }
     }
 }

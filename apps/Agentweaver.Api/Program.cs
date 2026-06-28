@@ -167,7 +167,9 @@ builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 //  - McpOAuthBrokerService: brokers GitHub login (reusing GitHubOAuthRedirectService) + enforces
 //    microsoft org membership, then issues PKCE-bound authorization codes.
 builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpTokenService>();
-builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService>();
+// Scoped: backed by the scoped MemoryDbContext so pending authorizations and issued authorization
+// codes are persisted (Postgres in prod) and the OAuth flow is replica-safe.
+builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService>();
 builder.Services.AddSingleton<Agentweaver.Api.Auth.WebSessionExchangeService>();
 // T4: rotating refresh-token store + jti denylist (scoped: backed by the scoped MemoryDbContext).
 builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpRefreshTokenStore>();
@@ -401,7 +403,8 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                 var basePath = builder.Configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
                     ? Path.GetDirectoryName(Path.GetFullPath(p))!
                     : AppPaths.DataDirectory;
-                opts.UseSqlite($"Data Source={Path.Combine(basePath, "memory.db")}");
+                opts.UseSqlite($"Data Source={Path.Combine(basePath, "memory.db")}",
+                    b => b.MigrationsAssembly("Agentweaver.Api"));
                 break;
         }
     }

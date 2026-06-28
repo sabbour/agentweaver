@@ -59,7 +59,7 @@ app.MapGet("/auth/github/callback", async (
     var frontendUrl = (configuration["Auth:GitHub:FrontendUrl"] ?? "http://localhost:8080").TrimEnd('/');
 
     // MCP OAuth broker leg: correlate by the GitHub CSRF state.
-    if (!string.IsNullOrWhiteSpace(state) && oauthBroker.IsPendingState(state))
+    if (!string.IsNullOrWhiteSpace(state) && await oauthBroker.IsPendingState(state, ct).ConfigureAwait(false))
     {
         if (!string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(code))
             return Results.BadRequest(new { error = "access_denied", error_description = error ?? "missing_code" });
