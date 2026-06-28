@@ -35,6 +35,7 @@ internal static class AgentweaverApiTools
         "coordinator_work_plan_get",
         "coordinator_children_get",
         "orchestration_topology",
+        "start_preview",
     };
 
     /// <summary>
@@ -48,9 +49,11 @@ internal static class AgentweaverApiTools
     /// <param name="apiBaseUrl">The Agentweaver API base URL (e.g. <c>http://localhost:5000</c>).</param>
     /// <param name="apiKey">Bearer token for API authentication; may be null for unauthenticated local dev.</param>
     /// <param name="httpClientOverride">Optional pre-configured HttpClient (for testing). If null a new client is created from <paramref name="apiBaseUrl"/>/<paramref name="apiKey"/>.</param>
+    /// <param name="runId">Optional run ID for run-scoped tools (e.g. <c>start_preview</c>). When supplied and non-empty, the run-scoped tools are included; the run ID is captured server-side in the tool closure so the model cannot target another run.</param>
     internal static IEnumerable<AIFunction> Build(
         string projectId, string agentName, string apiBaseUrl, string? apiKey,
-        HttpClient? httpClientOverride = null)
+        HttpClient? httpClientOverride = null,
+        string? runId = null)
     {
         var http = httpClientOverride ?? CreateHttpClient(apiBaseUrl, apiKey);
 
@@ -235,6 +238,46 @@ internal static class AgentweaverApiTools
             "supply 'agent' to fetch one agent's memory specifically. " +
             "Before making a notable implementation choice, call get_memory " +
             "(and list_decisions + list_inbox) to surface patterns, learnings, and gotchas peers have already recorded.");
+
+        // Run-scoped tool, available to ALL agents (placed before the Coordinator-only gate). Only
+        // present when a run ID is captured in the closure. The model supplies ONLY the port; runId
+        // is server-bound here so the agent physically cannot target another run.
+        if (!string.IsNullOrEmpty(runId))
+        {
+            yield return AIFunctionFactory.Create(
+                async (
+                    [Description("The port your web server is listening on inside the sandbox, e.g. 3000")] int port,
+                    CancellationToken ct = default) =>
+                {
+                    var response = await http.PostAsJsonAsync(
+                        $"api/runs/{runId}/sandbox/preview",
+                        new { target_port = port },
+                        ct).ConfigureAwait(false);
+
+                    var body = string.Empty;
+                    try { body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(body);
+                            if (doc.RootElement.TryGetProperty("preview_url", out var urlEl) &&
+                                urlEl.ValueKind == JsonValueKind.String)
+                            {
+                                return $"Preview is live at {urlEl.GetString()} — share this URL with the user.";
+                            }
+                        }
+                        catch (JsonException) { }
+                        return body;
+                    }
+
+                    return $"start_preview failed: HTTP {(int)response.StatusCode} — {body}";
+                },
+                "start_preview",
+                "Expose a web server you started in the sandbox (e.g. on port 3000) so the user can preview it. " +
+                "Returns the public preview URL once approved.");
+        }
 
         if (!string.Equals(agentName, "Coordinator", StringComparison.OrdinalIgnoreCase))
             yield break;
