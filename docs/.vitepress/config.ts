@@ -1,18 +1,5 @@
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
-// Shared group prepended to every sidebar so all top-level documentation
-// sections are reachable from the left table of contents on any page
-// (VitePress sidebars are otherwise scoped to a single path prefix).
-const docSections = {
-  text: 'Documentation',
-  items: [
-    { text: 'Getting Started', link: '/guide/' },
-    { text: 'Reference', link: '/reference/api' },
-    { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
-    { text: 'User Guide', link: '/experience/00-overview' },
-  ],
-}
-
 export default withMermaid({
   title: 'Agentweaver',
   description: 'Orchestrate AI agent teams that build and ship code — with full observability and human oversight at every step.',
@@ -27,22 +14,25 @@ export default withMermaid({
   },
   mermaid: {
     flowchart: {
-      useMaxWidth: false,
+      useMaxWidth: true,
       htmlLabels: true,
       padding: 12,
     },
   },
   themeConfig: {
     logo: '/agentweaver.png',
+    // Top navbar is the section switcher; the right-hand outline/aside is
+    // disabled globally so content and diagrams use the full page width.
+    aside: false,
+    outline: false,
     nav: [
       { text: 'Getting Started', link: '/guide/' },
-      { text: 'Reference', link: '/reference/api' },
-      { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
       { text: 'User Guide', link: '/experience/00-overview' },
+      { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
+      { text: 'Reference', link: '/reference/api' },
     ],
     sidebar: {
       '/guide/': [
-        docSections,
         {
           text: 'Concepts',
           items: [
@@ -78,7 +68,6 @@ export default withMermaid({
         },
       ],
       '/reference/': [
-        docSections,
         {
           text: 'Reference',
           items: [
@@ -97,7 +86,6 @@ export default withMermaid({
         },
       ],
       '/experience/': [
-        docSections,
         {
           text: 'Web',
           items: [
@@ -124,7 +112,6 @@ export default withMermaid({
         },
       ],
       '/deep-dive/': [
-        docSections,
         {
           text: 'Foundations',
           items: [

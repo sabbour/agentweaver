@@ -18,18 +18,41 @@
 /* ----------------------------------------------------------------------- */
 /* 1. Legibility: let wide diagrams scroll instead of shrinking            */
 /* ----------------------------------------------------------------------- */
+/* 1. Legibility: diagrams fit the content column; click to open lightbox   */
+/* ----------------------------------------------------------------------- */
 .vp-doc .mermaid {
-  overflow-x: auto;
-  overflow-y: hidden;
-  /* center narrow diagrams, left-align wide ones that overflow */
   text-align: center;
+  cursor: zoom-in;
 }
 
-.vp-doc .mermaid svg {
-  /* useMaxWidth:false already renders a natural width; make sure VitePress
-     base styles don't force it back to 100% and shrink the text. */
-  max-width: none !important;
+/* ----------------------------------------------------------------------- */
+/* 1b. Lightbox overlay (click-to-zoom for wide diagrams)                   */
+/* ----------------------------------------------------------------------- */
+.mermaid-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5vh 2.5vw;
+  background: rgba(0, 0, 0, 0.8);
+  cursor: zoom-out;
+}
+
+.mermaid-lightbox-overlay svg {
+  max-width: 95vw !important;
+  max-height: 95vh !important;
+  width: auto;
   height: auto;
+  background: var(--vp-c-bg, #fff);
+  border-radius: 8px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  padding: 16px;
+}
+
+html.dark .mermaid-lightbox-overlay svg {
+  background: var(--vp-c-bg, #1b1b1f);
 }
 
 /* ----------------------------------------------------------------------- */
