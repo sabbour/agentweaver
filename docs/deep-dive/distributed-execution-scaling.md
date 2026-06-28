@@ -31,18 +31,35 @@ Separately, each run's tool, shell, and model execution wants its own isolation 
 The key insight is that **memory relief and isolation are the same move**. Relocating the heavy execution — the model SDK session, the in-pod runner, and tool/shell/file execution — into a per-run [sandbox pod](./sandbox-pod-execution.md) simultaneously evicts the dominant per-run footprint from the API process *and* gives each run its own isolated boundary. After the move, the API tier becomes a thin orchestrator: HTTP, event relay, and database. This is the foundation everything else builds on.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
-    subgraph Before["Single API pod (replicas:1, fixed memory)"]
-        H1[HTTP + SSE] --> G1[Orchestration graph]
-        G1 --> S1[Model SDK session + tool exec<br/>HEAVY, in-process]
-        G1 --> D1[(SQLite — single writer)]
+    subgraph Before["Single API pod — replicas:1, fixed memory"]
+        H1["HTTP + SSE"] --> G1["Orchestration graph"]
+        G1 --> S1["Model SDK session + tool exec<br/>HEAVY, in-process"]
+        G1 --> D1[("SQLite — single writer")]
     end
     subgraph After["Thin orchestrator + sandbox pods"]
-        H2[HTTP + SSE] --> G2[Orchestration graph]
-        G2 -. bridge .-> P2[Sandbox pod:<br/>SDK session + tool exec]
-        G2 --> D2[(Postgres — multi-writer)]
+        H2["HTTP + SSE"] --> G2["Orchestration graph"]
+        G2 -. bridge .-> P2["Sandbox pod<br/>SDK session + tool exec"]
+        G2 --> D2[("Postgres — multi-writer")]
     end
     Before ==>|"evict heavy state"| After
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+    class H1 svc;
+    class G1 core;
+    class S1 runtime;
+    class D1 data;
+    class H2 svc;
+    class G2 core;
+    class P2 runtime;
+    class D2 data;
 ```
 
 ## The phased rollout
@@ -50,13 +67,27 @@ flowchart LR
 The scaling story does not land in one release. It is three phases, each independently shippable, each behind a flag that defaults to today's in-process behavior so any step can be reverted instantly.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
-    P1["P1 — Agent execution in pods<br/>(THE OOM fix)<br/>stays on SQLite, replicas:1"]
-    P2["P2 — Azure PostgreSQL<br/>multi-writer data layer<br/>drop RWO PVC, allow replicas > 1"]
+    P1["P1 — Agent execution in pods<br/>THE OOM fix<br/>stays on SQLite, replicas:1"]
+    P2["P2 — Azure PostgreSQL<br/>multi-writer data layer<br/>drop RWO PVC, allow replicas above 1"]
     P3["P3 — Web/worker split + run leasing<br/>horizontal scale of both tiers"]
     P1 --> P2 --> P3
-    P1 -. "OOM relieved here" .-> Done1((stops OOM))
-    P3 -. "scale-out here" .-> Done2((horizontal scale))
+    P1 -. "OOM relieved here" .-> Done1(["stops OOM"])
+    P3 -. "scale-out here" .-> Done2(["horizontal scale"])
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+    class P1 svc;
+    class P2 svc;
+    class P3 core;
+    class Done1 evt;
+    class Done2 evt;
 ```
 
 ### P1 — agent execution in pods (the OOM fix)
@@ -88,23 +119,50 @@ Once SQLite is gone, the orchestrator's two jobs have very different scaling sha
 The division of labor is the important idea: **web pods touch clients but never own runs; worker pods own runs but are not on the request hot path.** A client can connect to any web pod and still observe a run that a completely different worker pod is executing — which is exactly what the event fan-out (below) has to make true.
 
 ```mermaid
-flowchart TD
-    Client[Clients] -->|HTTP + SSE| Web
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+    Client["Clients<br/>browser · API"]
 
-    subgraph WebTier["Web tier (stateless, scales on request load)"]
-        Web[Web pods: REST · auth · SSE relay]
+    subgraph WebTier["Web tier — stateless, scales on request load"]
+        WebA["Web pod A<br/>REST · auth · SSE relay"]
+        WebB["Web pod B<br/>REST · auth · SSE relay"]
     end
-    subgraph WorkerTier["Worker tier (owns runs, scales on backlog depth)"]
-        W1[Worker pod A]
-        W2[Worker pod B]
+    subgraph WorkerTier["Worker tier — owns runs, scales on backlog depth"]
+        W1["Worker pod A<br/>orchestration graph"]
+        W2["Worker pod B<br/>orchestration graph"]
     end
+    subgraph Pods["Sandbox pods — one per run"]
+        Pod1["AgentHost + CopilotAIAgent"]
+        Pod2["AgentHost + CopilotAIAgent"]
+    end
+    DB[("Azure PostgreSQL<br/>runs · run-event log · leases")]
 
-    Web -->|enqueue / read events| DB[(Azure PostgreSQL)]
-    W1 -->|lease · checkpoint · event writes| DB
-    W2 -->|lease · checkpoint · event writes| DB
-    W1 -. agent bridge .-> Pod1[Sandbox pod]
-    W2 -. agent bridge .-> Pod2[Sandbox pod]
-    DB -. events tailed .-> Web
+    Client -->|HTTP + SSE| WebA
+    Client -->|HTTP + SSE| WebB
+    WebA -->|enqueue · read events| DB
+    WebB -->|enqueue · read events| DB
+    W1 -->|claim+reserve · checkpoint · event writes| DB
+    W2 -->|claim+reserve · checkpoint · event writes| DB
+    W1 -. agent bridge — A2A .-> Pod1
+    W2 -. agent bridge — A2A .-> Pod2
+    DB -. events tailed by cursor .-> WebA
+    DB -. events tailed by cursor .-> WebB
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+    class Client client;
+    class WebA svc;
+    class WebB svc;
+    class W1 core;
+    class W2 core;
+    class Pod1 runtime;
+    class Pod2 runtime;
+    class DB data;
 ```
 
 ## Durable run leasing
@@ -121,6 +179,7 @@ Leasing rests on a small set of per-row ideas:
 - **A fencing token** — a number that increments on every successful acquisition. A worker must present its token when it writes; a stale (smaller) token is rejected. This stops a paused or zombie former owner from waking up and clobbering a run that has since been re-leased to someone else.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant A as Worker A
     participant B as Worker B
@@ -153,13 +212,27 @@ The reconstruction principle is *durable-write-through plus cross-replica notifi
 The process-local channel does not disappear; it is retained as a **same-replica fast path** so that a client connected to the worker actually executing a run still gets the lowest-latency stream. The cross-replica notification plus the catch-up poll are the *floor* that guarantees correctness everywhere else.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
-    Prod[Worker producing events] -->|"1. durable write-through"| Log[(Run-event log<br/>unique RunId,Sequence)]
-    Prod -->|"2. notify cursor"| Bus{{cross-replica notify}}
-    Bus --> Sub[Subscriber on another replica]
-    Log -->|"3. cursor read &gt; last seen"| Sub
+    Prod["Worker producing events"] -->|"1. durable write-through"| Log[("Run-event log<br/>unique (RunId, Sequence)")]
+    Prod -->|"2. notify cursor"| Bus{{"cross-replica notify"}}
+    Bus --> Sub["Subscriber on another replica"]
+    Log -->|"3. cursor read after last seen"| Sub
     Sub -. "catch-up poll (backstop)" .-> Log
-    Prod -->|same-replica fast path| LocalSub[Local subscriber]
+    Prod -->|"same-replica fast path"| LocalSub["Local subscriber"]
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+    class Prod core;
+    class Log data;
+    class Bus evt;
+    class Sub svc;
+    class LocalSub svc;
 ```
 
 One subtlety the data layer must handle: **sequence allocation has to stay correct under concurrent writers.** A naive "max sequence + 1" is racy across database snapshots once more than one writer can touch the same run. The unique (run, sequence) index is the durable safety net, backed by a per-run allocation strategy; the reference doc covers the mechanics. If leasing guarantees exactly one writer per run, contention only exists across the rare re-lease boundary, which keeps the allocation cheap.

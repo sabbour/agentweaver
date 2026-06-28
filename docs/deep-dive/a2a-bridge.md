@@ -28,22 +28,40 @@ Agentweaver remotes the **leaf**. This is the decision that makes everything els
 The crux question for any remoting design — "does the transport flatten our rich, typed event stream?" — is **avoided by construction**. Only the leaf agent's `AgentRunResponseUpdate` stream crosses, and that is exactly what A2A's streaming message surface carries natively.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
-    subgraph Worker["Worker process (MAF graph stays here)"]
-        Graph[MAF workflow graph]
-        Watch[Watch loop\nWorkflowEvent + RequestPort/HITL]
-        Proxy[RemoteAgentProxy : AIAgent]
+    subgraph Worker["Worker process — MAF graph stays here"]
+        Graph["MAF workflow graph"]
+        Watch["Watch loop<br/>WorkflowEvent + RequestPort HITL"]
+        Proxy["RemoteAgentProxy : AIAgent<br/>(A2AAgent client)"]
+        Stream["RunStreamStore → SSE"]
         Graph --> Watch
         Graph --> Proxy
+        Proxy --> Stream
     end
-    subgraph Pod["Sandbox pod (Kata-isolated)"]
-        Host[AgentHost\nMapA2A-hosted AIAgent]
-        Copilot[CopilotAIAgent → Copilot SDK]
-        Tools[tool / shell / file exec]
+    subgraph Pod["Sandbox pod — Kata-isolated"]
+        Host["AgentHost<br/>MapA2A-hosted leaf"]
+        Copilot["CopilotAIAgent → Copilot SDK"]
+        Tools["tool / shell / file exec"]
         Host --> Copilot --> Tools
     end
-    Proxy -- "A2A message:stream (leaf turn only)" --> Host
+    Proxy -- "A2A message:stream — leaf turn only" --> Host
     Host -- "updates + token deltas + RunEvent DataParts" --> Proxy
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+    class Graph svc;
+    class Watch svc;
+    class Proxy core;
+    class Stream evt;
+    class Host core;
+    class Copilot runtime;
+    class Tools runtime;
 ```
 
 ## 2. The two halves of the bridge
@@ -74,6 +92,7 @@ There is one subtlety. Agentweaver's agent emits **rich `RunEvent`s** through a 
 This `RunEvent` codec is the **only shim the bridge owns** — and it is required by *any* transport. Even a hand-rolled HTTP/2+SSE design would have to serialize the same side-channel across the process boundary. A2A is not adding a translation tax here; it is supplying a standard envelope (`DataPart`) for a serialization that has to happen regardless. Because Agentweaver owns both ends — same team, same framework, same language — the encoding is lossless.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     autonumber
     participant Graph as MAF graph (worker)
@@ -141,14 +160,30 @@ A2A `message:stream` has **no Last-Event-ID replay**. If the stream drops mid-tu
 Agentweaver's answer is not to ask A2A for replay it cannot give. Instead, on a mid-turn drop the worker **re-drives the whole turn from the last checkpoint**. Because checkpoints are durable and the session blob is serialized, re-driving is well-defined: restore, re-spawn, replay. Re-injection of the side-channel `RunEvent`s is sequence-based and idempotent, so re-driving a turn does not duplicate timeline entries. The turn is the unit of retry; the checkpoint is the recovery point.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
-    Start[Turn starts] --> CK1[Checkpoint: session blob + superstep state]
-    CK1 --> Stream[A2A message:stream in flight]
-    Stream -->|stream completes| Done[Commit turn output]
-    Stream -->|mid-turn drop\nno Last-Event-ID replay| Reclaim[Worker re-claims run]
-    Reclaim --> Restore[Restore latest checkpoint blob]
-    Restore --> Respawn[Re-spawn / re-attach pod, replay session]
+    Start["Turn starts"] --> CK1[("ResilientCheckpointStore<br/>session blob + superstep state")]
+    CK1 --> Stream["A2A message:stream in flight"]
+    Stream -->|"stream completes"| Done["Commit turn output"]
+    Stream -->|"mid-turn drop — no Last-Event-ID replay"| Reclaim["Worker re-claims run"]
+    Reclaim --> Restore["Restore latest checkpoint blob"]
+    Restore --> Respawn["Re-spawn / re-attach pod, replay session"]
     Respawn --> Stream
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+    class Start svc;
+    class CK1 data;
+    class Stream evt;
+    class Done core;
+    class Reclaim runtime;
+    class Restore svc;
+    class Respawn runtime;
 ```
 
 ## 7. The honest cost: a preview library on the hot path

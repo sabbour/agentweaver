@@ -15,17 +15,54 @@ Conceptually, a workflow engine has five jobs:
 5. **Bind** the selected definition to real runtime executors, failing closed if any node or edge cannot run safely.
 
 ```mermaid
-flowchart TD
-    Goal[Run goal or backlog task]
-    Registry[Workflow registry<br/>built-in + catalog + project files]
-    Trigger[Trigger filter<br/>manual, heartbeat, event]
-    Override[Optional override]
-    Selector[Process-fit selector]
-    Policy[Review policy composition]
-    Binder[Runtime graph binder]
-    Run[Executable agent run]
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+    Orch(["RunOrchestrator launches run"])
+    Def(["WorkflowDefinition policy graph"])
+    Factory(["RunWorkflowFactory builds MAF Workflow"])
 
-    Goal --> Registry --> Trigger --> Override --> Selector --> Policy --> Binder --> Run
+    subgraph MAF["MAF Workflow graph"]
+        Agent(["AgentTurnExecutor"])
+        Rai(["RaiTurnExecutor"])
+        Gate{{"RequestPort review-gate"}}
+        Merge(["MergeExecutor"])
+        Scribe(["ScribeTurnExecutor"])
+    end
+
+    Events(["Executor lifecycle events"])
+    Watch(["RunWatchLoopService"])
+    SSE(["SSE stream: workflow.step"])
+    Ckpt[("FileSystemJsonCheckpointStore")]
+    Pending[("PendingRequestStore")]
+    Restart(["WorkflowRestartService"])
+
+    Orch --> Def --> Factory --> MAF
+    Agent --> Rai --> Gate
+    Gate -- approved --> Merge --> Scribe
+    MAF -- "Invoked / Completed / Failed / RequestInfo / WorkflowOutput" --> Events
+    Events --> Watch --> SSE
+    MAF -. checkpoints .-> Ckpt
+    Watch -- pending review --> Pending
+    Gate -. suspend .-> Pending
+    Pending --> Restart
+    Ckpt --> Restart
+    Restart -- ResumeAsync --> MAF
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Orch client;
+    class Def svc;
+    class Factory core;
+    class Agent,Rai,Gate,Merge,Scribe runtime;
+    class Events,SSE evt;
+    class Watch,Restart svc;
+    class Ckpt,Pending data;
 ```
 
 A useful rebuilding rule is: **workflows are declarative policy graphs; binding is the safety boundary that turns policy into execution.**
@@ -63,6 +100,7 @@ A workflow template is a declarative graph with:
 The key abstraction is that a workflow describes **what process should happen**, not the hidden plumbing required to execute it. A single logical edge such as `rai -> review when review` may expand into adapters, state storage, predicates, review ports, and graph outputs when bound to the runtime.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     Template[Workflow YAML]
     Trigger[Trigger]
@@ -81,6 +119,17 @@ flowchart LR
     Start --> Binder
     Nodes --> Binder
     Edges --> Binder
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Template,Trigger,Start,Nodes,Edges,Metadata svc;
+    class Binder core;
 ```
 
 The loader validates the static shape first: required fields, valid trigger type, valid node type, unique node ids, known edge endpoints, check branches with matching outgoing edges, and valid references from structured node fields.
@@ -106,6 +155,7 @@ Runtime binding supports prompt, peer-review, check gates with known gate kinds,
 The default workflow encodes the standard run pipeline. It is embedded in code and can also be materialized into a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize a copy.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     Agent[Agent work] --> Rai[RAI gate]
     Rai -- revise --> Agent
@@ -118,6 +168,17 @@ flowchart LR
     Merge -- blocked --> Human
     Merge -- merged --> Scribe
     Scribe --> Done[Done]
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Agent,Rai,Human,Merge,Scribe runtime;
+    class SafetyFailed,Declined,Done svc;
 ```
 
 This default encodes the minimum complete run lifecycle: produce work, apply Responsible AI safety review, pause for human review when changes exist, merge if approved, and record the outcome. The loops are part of the policy, not exceptional control flow.
@@ -132,6 +193,7 @@ Workflow nodes carry two different kinds of "role" information:
 Do not collapse these into one concept. A node with `role: review` is in a review lane; it is not automatically a catalog role named `review`. A peer-review node names a concrete reviewer with `agent: qa-engineer` when it needs that agent. A generated or project-authored node carries an inline `charter` when no catalog role fits.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Node[Workflow node]
     Lane[role/kind<br/>render lane + node purpose]
@@ -147,6 +209,18 @@ flowchart TD
     Catalog --> Runtime
     Charter --> Runtime
     Lane --> Runtime
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Node,Lane,AgentField,Charter svc;
+    class Catalog data;
+    class Runtime runtime;
 ```
 
 The runtime uses explicit node fields and run context to build the agent prompt. Catalog roles are preferred because their charters are already known to the casting system. Bespoke charters are a controlled escape hatch for generated workflows whose process needs a role outside the catalog.
@@ -166,6 +240,7 @@ For a project, the registry builds a workflow set from:
 The result is cached per project. An explicit sync rebuilds the set from disk. Invalid workflows remain visible in list responses with validation errors, but they are excluded from the available set.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     BuiltIn[Built-in default]
     Catalog[Catalog workflow library]
@@ -180,6 +255,17 @@ flowchart TD
     Catalog --> Load
     ProjectFiles --> Load
     Load --> Validate --> BindDryRun --> Allowed --> Cache
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class BuiltIn,Load,Validate,BindDryRun,Allowed svc;
+    class Catalog,ProjectFiles,Cache data;
 ```
 
 The built-in default is always available. Catalog workflows are available without project-local files. A blueprint may restrict the allowed workflow ids for a project, while still keeping the built-in default as a safety fallback.
@@ -210,6 +296,7 @@ A workflow declares one trigger:
 The invocation context is derived from run origin. A backlog pickup run is treated as `Heartbeat`; other origins are treated as `Manual`.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     RunOrigin[Run origin]
     ManualStart[Manual / interactive / other]
@@ -221,6 +308,17 @@ flowchart TD
 
     RunOrigin --> ManualStart --> ManualKind --> ManualEligible
     RunOrigin --> BacklogPickup --> HeartbeatKind --> HeartbeatEligible
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class RunOrigin,ManualStart,BacklogPickup client;
+    class ManualKind,HeartbeatKind,ManualEligible,HeartbeatEligible svc;
 ```
 
 The important safety property is that trigger filtering happens before model selection. The selector only sees candidates that are eligible for the invocation kind.
@@ -235,6 +333,7 @@ The evaluator maps:
 A backlog task can carry a workflow override. The override is honored only if the workflow exists, is valid, and is eligible for the invocation. Otherwise the system logs the mismatch and continues with eligible selection or safe fallback behavior.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Available[Available valid workflows]
     Kind[Invocation kind]
@@ -252,6 +351,17 @@ flowchart TD
     Override -- no --> None
     None -- yes --> Select
     None -- no --> Fallback
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Available,Kind,Eligible,Override,UseOverride,None,Fallback svc;
+    class Select core;
 ```
 
 Rebuild guidance: treat trigger eligibility as a hard boundary. If a selected id is not eligible, do not "helpfully" run it anyway.
@@ -269,6 +379,7 @@ The library is process-oriented. A workflow is named for what it does, not for t
 Workflow generation turns a natural-language process request into an unsaved YAML draft.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant User
     participant Endpoint
@@ -312,6 +423,7 @@ Blueprint generation can also invoke workflow generation when no library workflo
 Workflow selection chooses a process for a task. It is intentionally conservative: deterministic rules narrow the space first, and the model only chooses among eligible definitions.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Registry[Registry available set]
     DefaultFirst[Order default first]
@@ -332,6 +444,18 @@ flowchart TD
     Count -- many --> Prompt --> Model --> Parse
     Parse -- yes --> Selected
     Parse -- no --> Default
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Registry,DefaultFirst,TriggerFilter,OverrideCheck,Count,Single,Prompt,Parse,Default svc;
+    class Model ext;
+    class Selected core;
 ```
 
 The selector prompt asks for process fit:
@@ -372,6 +496,7 @@ The binder:
 6. fails closed when a node or transition has no mapping.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Def[WorkflowDefinition]
     Classifier[Node classifier<br/>type + gate_kind]
@@ -388,6 +513,17 @@ flowchart TD
     EdgeMap --> Plumbing --> Outputs --> Graph
     Classifier -- unsupported --> Error
     EdgeMap -- no transition mapping --> Error
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Def,Classifier,Factory,EdgeMap,Plumbing,Outputs,Error svc;
+    class Graph core;
 ```
 
 The binder resolves by node type, not by hardcoded ids. A workflow can rename `agent`, `rai`, `review`, `merge`, and `scribe` and still bind if the node types and gate kinds describe the same process. This is what lets library and generated workflows use meaningful node ids while preserving the same runtime semantics.
@@ -424,6 +560,7 @@ Anything outside supported transition families is not "best effort." It is a bin
 Workflow definitions describe the process graph. Review policies describe required gates. Before runtime binding, the system composes the active review policy onto the selected workflow.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     Selected[Selected workflow]
     ReviewPolicy[Active review policy]
@@ -434,6 +571,17 @@ flowchart LR
     Selected --> Compose
     ReviewPolicy --> Compose
     Compose --> Validate --> Bind
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Selected,ReviewPolicy,Compose,Validate svc;
+    class Bind core;
 ```
 
 This lets teams require additional review gates without copying every workflow template. The same fail-closed rule applies: if a required review gate cannot be bound, the run should not start as if the gate were optional.

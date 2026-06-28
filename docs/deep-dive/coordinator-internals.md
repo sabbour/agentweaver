@@ -26,33 +26,58 @@ A coordinator run has two personalities:
 That split is the key to rebuilding the subsystem. The model helps create structured intent and plan data. Durable services then advance that data through deterministic state machines.
 
 ```mermaid
-flowchart TD
-    Goal[Human goal or Ready backlog task]
-    Draft[Draft OutcomeSpec]
-    Gate{Confirmed?}
-    Revise[Revise OutcomeSpec]
-    Select[Select workflow shape]
-    Decompose[Decompose into WorkPlan DAG]
-    Persist[(Persist OutcomeSpec + WorkPlan)]
-    Frontier[Ready subtask frontier]
-    Children[Child runs<br/>trimmed workflow]
-    Observe[Observe child streams]
-    Assembly[Collective assembly]
-    Review{Collective review}
-    Merge[Single merge]
-    Scribe[Single scribe]
-    Recover[Recovery / re-dispatch]
-    Done[Terminal coordinator run]
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+    Goal(["Goal or Ready backlog task"])
 
-    Goal --> Draft --> Gate
-    Gate -- revise --> Revise --> Draft
-    Gate -- confirm --> Select --> Decompose --> Persist --> Frontier
-    Frontier --> Children --> Observe
-    Observe -- more ready work --> Frontier
-    Observe -- all children terminal --> Assembly --> Review
-    Review -- approve --> Merge --> Scribe --> Done
-    Review -- request changes --> Recover --> Frontier
-    Assembly -- blocked / failed --> Recover
+    subgraph P1["Phase 1 — MAF spec workflow (checkpointed)"]
+        Draft(["coordinator-draft"])
+        CGate{{"RequestPort: coordinator-confirmation-gate"}}
+        Revise(["coordinator-revise"])
+        Finalize(["coordinator-finalize"])
+    end
+
+    Spec[("OutcomeSpec")]
+
+    subgraph P2["Phase 2 — Service-driven engine (D3: not a MAF graph)"]
+        Orchestrate(["CoordinatorOrchestratorExecutor"])
+        Plan[("WorkPlan + Subtask DAG")]
+        Dispatch(["CoordinatorDispatchService"])
+        Children(["Child MAF runs"])
+        Assembly(["CoordinatorAssemblyService<br/>CollectiveAssemblyPipeline"])
+        AGate{{"AssemblyReviewGate"}}
+        Result(["Assembled result: merge + scribe"])
+    end
+
+    Stream(["Coordinator stream (SSE)"])
+
+    Goal --> Draft --> CGate
+    CGate -- revise --> Revise --> Draft
+    CGate -- confirm --> Finalize
+    Draft -. persists .-> Spec
+    Finalize --> Orchestrate --> Plan --> Dispatch
+    Dispatch -- ready frontier --> Children
+    Children -- assemble_ready --> Dispatch
+    Dispatch -- all terminal --> Assembly --> AGate
+    AGate -- approve --> Result
+    AGate -- request changes --> Dispatch
+    Draft -. events .-> Stream
+    Dispatch -. events .-> Stream
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Goal client;
+    class Draft,Revise,Finalize,CGate,Children runtime;
+    class Spec,Plan data;
+    class Orchestrate,Assembly,AGate,Result svc;
+    class Dispatch core;
+    class Stream evt;
 ```
 
 The durable artifacts are:
@@ -82,6 +107,7 @@ The durable artifacts are:
 There are two overlapping state machines: the parent run status and the WorkPlan status. The WorkPlan is the more precise coordinator-internal state after planning.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 stateDiagram-v2
     [*] --> SpecDrafting
     SpecDrafting --> AwaitingConfirmation: outcome spec persisted
@@ -133,6 +159,7 @@ This contract is stored before the work is decomposed. From that point forward, 
 The first coordinator phase is a Microsoft Agents Framework workflow:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     Draft[coordinator-draft]
     Gate[await-confirmation RequestPort]
@@ -143,6 +170,17 @@ flowchart LR
     Draft --> Gate
     Gate -- revise --> Revise --> Draft
     Gate -- confirm / decline --> Finalize --> Orchestrate
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Draft,Gate,Finalize,Revise runtime;
+    class Orchestrate svc;
 ```
 
 The drafting executor compiles team memory and active decisions, resolves the Coordinator charter, and runs a real Copilot coordinator turn. The prompt asks for one JSON object with `desired_outcome`, `scope`, `assumptions`, and `clarifying_questions`.
@@ -250,6 +288,7 @@ The persisted WorkPlan starts as `planned`, with subtasks in `pending` and depen
 Dispatch repeatedly computes the ready frontier:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Load[(Load WorkPlan)]
     Status[Read subtask statuses]
@@ -269,6 +308,18 @@ flowchart TD
     Conflict -- no --> Launch --> Observe --> Terminal --> Update --> More
     More -- yes --> Status
     More -- no --> Assembly
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Load data;
+    class Status,Ready,Conflict,Observe,Terminal,Update,More,Assembly svc;
+    class Launch runtime;
 ```
 
 Only `assemble_ready` and `completed` satisfy dependencies. A failed or RAI-flagged dependency fails its still-pending dependents with recovery guidance, because serial dependents cannot safely proceed from a bad prerequisite.
@@ -319,6 +370,7 @@ Observation includes stall handling. If a child emits no events within the confi
 When all subtasks settle, dispatch moves the WorkPlan to `awaiting_assembly` and hands off to the assembly service. Assembly is service-driven rather than a MAF workflow because it starts from already-produced git state, has a coordinator-owned review gate, and routes review changes back to re-dispatch rather than back to one model turn.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Claim{CAS awaiting_assembly<br/>to assembling}
     Eligible{All subtasks eligible?}
@@ -349,6 +401,18 @@ flowchart TD
     Merge -- conflict or failure --> Blocked
     Merge -- merged --> Scribe --> Complete
     RequestChanges --> Dispatching[Back to dispatch]
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Claim,Eligible,Order,RaiFlag,Review,Decision,Complete,RequestChanges,AlreadyClaimed,Blocked svc;
+    class Integration,Rai,Merge,Scribe runtime;
+    class Dispatching core;
 ```
 
 ### Exactly-once claim

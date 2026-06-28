@@ -20,13 +20,57 @@ The most important rebuilding idea is **snapshot + stream**:
 This gives the UI a robust mental model: the backend is the source of truth; the frontend is a deterministic projection of backend facts.
 
 ```mermaid
-flowchart LR
-    User[Human operator] --> UI[React SPA]
-    UI -->|commands| API[Agentweaver API]
-    API -->|REST snapshots| UI
-    API -->|SSE event stream| UI
-    UI --> Projection[Reducers and hooks]
-    Projection --> Screens[Pages, graphs, timelines, panels]
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+    User(["Operator"])
+
+    subgraph SPA["React + Vite SPA"]
+      Gate("AuthGate")
+      Shell("AppShell: TopBar, LeftNav, ProjectSwitcher")
+      subgraph Pages["Pages"]
+        Board("ProjectPage board")
+        RunPg("WorkflowRunPage")
+        Coord("CoordinatorRunPage")
+        Work("WorkspacePage")
+      end
+    end
+
+    Api("AgentweaverApiClient")
+    UseBoard("useBoard poll")
+    Stream("useRunStream")
+    Reducer("topologyReducer")
+    Token[("sessionStorage token")]
+    Backend["Agentweaver API"]
+
+    User --> Gate
+    Gate --> Shell
+    Shell --> Pages
+    Gate --> Api
+    Board --> UseBoard
+    Work --> Api
+    RunPg --> Stream
+    Coord --> Stream
+    UseBoard --> Api
+    Api -->|"Bearer token"| Token
+    Api -->|"REST snapshots /runs /board"| Backend
+    Stream -->|"GET /runs/:id/stream"| Backend
+    Stream --> Reducer
+    Reducer --> Coord
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class User,Gate,Shell,Board,RunPg,Coord,Work client;
+    class UseBoard,Reducer svc;
+    class Api core;
+    class Stream evt;
+    class Token data;
+    class Backend ext;
 ```
 
 Where this lives:
@@ -99,6 +143,7 @@ Project-scoped routes start with `/projects/:projectId` and represent the work s
 All signed-in routes sit inside the persistent shell. The shell is intentionally above individual pages because navigation, project switching, top bar status, and the floating orchestration action should not disappear when the user opens a deep run page.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     App[App root] --> Auth{Auth checked?}
     Auth -->|no| Spinner[Loading screen]
@@ -120,6 +165,18 @@ flowchart TD
     Project --> Operations["/workflows, /settings"]
     Project --> System["/diagnostics, /heartbeat"]
     Project --> Runs["/runs/:runId/..."]
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class App core;
+    class Auth,Global,Project svc;
+    class Spinner,SignIn,Shell,Overview,Projects,Dashboard,Board,Flow,Orchestrations,Workspace,Squad,Operations,System,Runs client;
 ```
 
 The shell derives the active project from the URL. When the user moves to a global page, it remembers the last active project in local storage so the project switcher and project-scoped navigation can still point somewhere useful. This is a UX convenience only; the route remains the source of truth for the currently displayed page.
@@ -180,6 +237,7 @@ This design separates build-time artifacts from deployment-time configuration:
 - HTML and fallback responses should not be treated as immutable because they bootstrap the current app version and runtime config.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     Build[Vite build] --> Dist[Static SPA assets]
     Docs[VitePress docs build] --> DocsDist[Static docs]
@@ -190,6 +248,20 @@ flowchart LR
     Browser[Browser] --> Host
     Browser --> EnvConfig
     Browser -->|API_URL, usually /api| API[Agentweaver API]
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Build,Docs,Publish,Entrypoint runtime;
+    class Dist,DocsDist,EnvConfig data;
+    class Host svc;
+    class Browser client;
+    class API ext;
 ```
 
 Rebuild principle: static hosting should be dumb and predictable. Let the API own API behavior; let the SPA own client behavior; let the host serve files and route unknown non-doc paths back to `index.html` for client-side routing.
@@ -216,6 +288,7 @@ Conceptually, sign-in works like this:
 7. If the backend says the user is signed in, the shell renders. Otherwise, local session state is cleared and the sign-in page renders.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant User
     participant SPA as React SPA
@@ -234,7 +307,7 @@ sequenceDiagram
     end
     SPA->>API: Exchange code for session
     API-->>SPA: Session token + login / cookie context
-    SPA->>SPA: Store token and login in sessionStorage; strip auth params from URL
+    SPA->>SPA: Store token and login in sessionStorage, strip auth params from URL
     SPA->>API: GET auth status
     API-->>SPA: signed_in + login/avatar
     SPA-->>User: Render AppShell
@@ -300,6 +373,7 @@ A run can emit events such as:
 The stream hook uses `fetch`, not browser `EventSource`. That is intentional: authenticated streams need custom headers such as `Authorization`, and replay after reconnect benefits from `Last-Event-ID`.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant Page as Run page
     participant Stream as useRunStream
@@ -349,6 +423,7 @@ Agentweaver solves this by layering data:
 4. **Reducer fold** — derive display state from the merged event list.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Open[Open run page] --> Params[Read project/run route params]
     Params --> Metadata[Load project/team/run metadata]
@@ -359,6 +434,18 @@ flowchart TD
     Merge --> Dedupe[Deduplicate by sequence/type]
     Dedupe --> Fold[Fold through reducers]
     Fold --> UI[Render timeline, graph, status, approvals]
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Open,UI client;
+    class Params,Metadata,Seeds,Merge,Dedupe,Fold svc;
+    class Stream evt;
 ```
 
 For single-agent runs, the page resolves the execution id, loads project/team/run metadata, optionally fetches persisted events for terminal or parked states, fetches a graph descriptor, and then merges live stream events over the seed.
@@ -412,6 +499,7 @@ Conceptually:
 7. When children are ready, assembly/review/merge phases progress through coordinator events.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Goal[User goal] --> Coord[Coordinator run]
     Coord --> Spec[Outcome spec]
@@ -429,6 +517,20 @@ flowchart TD
     Steer --> ChildA
     Steer --> ChildB
     Steer --> ChildN
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Goal,UI,Steer client;
+    class Coord core;
+    class Spec,Plan,Topology data;
+    class ChildA,ChildB,ChildN runtime;
+    class CoordStream evt;
 ```
 
 The topology reducer is intentionally thin. It applies server-authored snapshots and deltas, merges subtask status updates, and attaches steering state to existing nodes. It does not invent dependencies or compute topology from scratch. This protects the UI from accidentally disagreeing with backend scheduling rules.

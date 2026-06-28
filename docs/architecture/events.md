@@ -2,6 +2,54 @@
 
 Run events are the primary mechanism for communicating progress from the agent to clients. Events are persisted durably and also delivered to SSE subscribers in real time.
 
+## Architecture at a glance
+
+A run emits events from the workflow orchestrator. Every event is written through to a durable log and fanned out to the live in-memory stream, then delivered to the UI over Server-Sent Events. The `workflow.step` event is emitted by the pipeline tracker and consumed as internal orchestration state that drives the stage pipeline.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart LR
+    subgraph run["Run execution"]
+        Orchestrator["MAF workflow orchestrator"]
+        StepEmit["WorkflowStepEvents.Emit"]
+        Writer["RecordingChannelWriter"]
+    end
+    Catalog{{"EventTypes: run.* review.* merge.* agent.* tool.* coordinator.* subtask.* workflow.step"}}
+    subgraph delivery["Event delivery"]
+        Live["RunStreamStore live history + waiters"]
+        Durable[("SqliteRunEventStream → RunEvents table")]
+    end
+    SSE["GET /api/runs/{id}/stream (SSE)"]
+    Replay["GET /api/runs/{id}/events"]
+    UI["Web UI timeline + pipeline bar"]
+
+    Orchestrator --> Writer
+    StepEmit --> Writer
+    Catalog -.->|event types| Writer
+    Writer --> Durable
+    Writer --> Live
+    Live --> SSE
+    Durable -.->|replay by Last-Event-ID| SSE
+    Durable --> Replay
+    SSE --> UI
+    Replay --> UI
+    StepEmit -.->|workflow.step to pipeline| UI
+
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Orchestrator,StepEmit runtime;
+    class Writer core;
+    class Catalog,Live,SSE,Replay evt;
+    class Durable data;
+    class UI client;
+```
+
 ## Two layers: durable write-through + live fan-out
 
 Event delivery is split across two cooperating components:
