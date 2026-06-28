@@ -109,6 +109,93 @@ The existing per-command exec path is **retained for its current utility purpose
 `run_command`); it is simply never the agent-turn transport. Nothing about pod-per-run deletes that
 capability — see [Sandbox](./sandbox.md#kubernetes-sandbox-lifecycle-claims-over-pods).
 
+## The executor seam: how commands are actually isolated
+
+Pod-per-run answers *where the agent turn runs*. It does not, by itself, answer *how a single
+`run_command` is isolated from the host* — that is the job of a second, older seam: the **executor
+abstraction**. Both seams matter, and they are easy to conflate, so this section pins down the
+relationship.
+
+Whenever an agent runs a shell command, the runtime hands a uniform command object (command line,
+working directory, environment, filesystem policy, timeout, network-enabled flag, run id) to an
+**`ISandboxExecutor`**, and gets back a uniform result (exit code, stdout, stderr, timeout flag,
+truncation flag). The executor decides *how and where* the process actually runs. That uniform contract
+is what lets the same agent code run unchanged whether isolation comes from a Windows process container, a
+Linux namespace sandbox, or a Kata-isolated Kubernetes pod. The contract itself is described in
+[Sandbox › Executor abstraction](./sandbox.md#executor-abstraction-one-command-contract-many-isolation-backends).
+
+### One executor per host, chosen at run start
+
+`SandboxExecutorFactory` selects exactly **one** executor for the host at run start, walking a fixed
+ladder and stopping at the first backend that is actually available. It emits a **`sandbox.selected`**
+event carrying `backend`, `isRealIsolation`, and `reason`, so the chosen backend — and *why* it was
+chosen — is observable for every run.
+
+```mermaid
+flowchart TD
+    Start[Run start:<br/>SandboxExecutorFactory] --> InCluster{In Kubernetes?<br/>KUBERNETES_SERVICE_HOST}
+    InCluster -->|yes| K8s[kubernetes-sandbox-claim<br/>K8s · Kata VM · real isolation]
+    InCluster -->|no| Win{Windows?}
+    Win -->|yes| Mxc[processcontainer<br/>Mxc · real isolation]
+    Mxc -->|unavailable| Wsl[wsl-bwrap / wsl-unshare<br/>WslMxc · real isolation]
+    Win -->|no| Bwrap[linux-bwrap<br/>bubblewrap · real isolation]
+    Bwrap -->|unavailable| Lxc[lxc-native-linux<br/>real isolation]
+    Wsl -->|unavailable| Direct
+    Lxc -->|unavailable| Direct[direct<br/>Passthrough · NO isolation]
+    K8s -. emits .-> Sel[[sandbox.selected:<br/>backend · isRealIsolation · reason]]
+    Direct -. emits .-> Sel
+```
+
+The ladder, top to bottom:
+
+- **`processcontainer` (Mxc, Windows)** — the first choice on Windows. `mxc` is Microsoft's open-source
+  sandbox isolation tool; its Windows `processcontainer` backend (BackendName `Mxc`) is driven by binaries
+  in `MXC_BIN_DIR` (for example `wxc-exec.exe --probe` returns a `tier` such as `base-container`). Setup is
+  in [Sandbox setup › Windows](../reference/sandbox-setup.md#windows-arm64).
+- **`wsl-bwrap` / `wsl-unshare` (WslMxc, Windows)** — when `processcontainer` is unavailable but WSL2
+  offers a usable Linux backend.
+- **`linux-bwrap` (bubblewrap)** — the preferred Linux backend, a selective-mount namespace sandbox.
+- **`lxc-native-linux`** — the Linux fallback when bubblewrap is absent but `lxc-exec` is present.
+- **`kubernetes-sandbox-claim` (K8s)** — selected automatically in-cluster. Each command runs in a warm
+  pod obtained through a `SandboxClaim` custom resource (`extensions.agents.x-k8s.io/v1alpha1`), with Kata
+  VM isolation and a NetworkPolicy egress allowlist.
+- **`direct` (Passthrough)** — the last resort, chosen **only when nothing else is available**. It runs
+  the command directly on the host with **no isolation layer**; the shell still runs, relying on whatever
+  isolation the surrounding deployment already provides.
+
+`IsRealIsolation` is `true` for every real backend and `false` for `direct`. The governance gate enforces
+a hard rule: a shell command is allowed only when the selected executor reports `IsRealIsolation == true`
+**or** is the `direct` backend. Any *other* non-isolating executor **denies `run_command`** outright — so
+an agent never silently runs a shell command under a half-isolated backend. The exact rows and selection
+conditions live in the [Sandbox backends table](../reference/sandbox-setup.md#sandbox-backends).
+
+### Two seams, one contract, three tiers
+
+The connective idea for pod-per-run is that **the executor abstraction and pod-per-run agent execution are
+the same seam at different deployment tiers — and the A2A agent-turn remoting is orthogonal to both.**
+Three things are deliberately distinct:
+
+- **The executor seam (`ISandboxExecutor`)** isolates an individual *command*. Local dev gets MXC
+  (`processcontainer`) or bubblewrap; in-cluster gets the Kubernetes claim backend. Same command contract,
+  different backend.
+- **The Kubernetes claim backend** is the in-cluster *implementation* of that same executor contract:
+  `KubernetesSandboxExecutor` runs each command in a warm pod obtained via a `SandboxClaim` CR, with Kata
+  VM isolation and NetworkPolicy egress. There is no special second contract for the cluster — it is the
+  same `ISandboxExecutor` seam, fulfilled by a pod instead of a local process.
+- **A2A agent-turn remoting** (the [A2A bridge](./a2a-bridge.md)) moves an entire *agent turn* — the SDK
+  session and its tool loop — out to the per-run pod. That is the pod-per-run story above. It is
+  **orthogonal** to backend selection: the in-pod AgentHost still runs each `run_command` through *its
+  own* `ISandboxExecutor`, which in-cluster is the Kata-pod backend the pod itself lives in.
+
+Read the whole isolation stack top-down: pod-per-run decides *which process hosts the agent turn* (worker
+vs. per-run pod, via A2A); the executor abstraction decides *how each command inside that turn is
+isolated* (MXC / bwrap / Kata-pod claim); and the governance gate decides *whether the command may run at
+all* given the selected backend's `IsRealIsolation`. On a laptop these collapse onto one host — the agent
+turn runs in-process and commands isolate via MXC or bubblewrap; in-cluster they fan out — the agent turn
+runs in its own pod and commands isolate via the Kata-pod claim. The contract a reader has to remember is
+single: *one command in, one uniform result out, isolation chosen per host and announced by
+`sandbox.selected`.*
+
 ## The hybrid pod-granularity model
 
 How long should a run hold a pod? Two naive answers both fail:
@@ -194,6 +281,22 @@ and the git remote(s) the run legitimately needs. Everything else — especially
 services and the database — is denied. Sandbox pods talk to the worker tier, never directly to the
 database.
 
+## Reaching into the pod: preview port-forward
+
+Default-deny egress governs traffic *out* of the pod. A separate, deliberate path lets an operator reach
+*into* a run's sandbox pod: a **preview port-forward**. When an agent starts a server inside its sandbox
+(a dev server, a built app, a debug endpoint), the run's pod can expose that port back through the API on
+demand, so a human can open a live preview scoped to exactly that run's pod.
+
+This is **Kubernetes-only** — it tunnels through the Kubernetes claim backend's pod, located by run id via
+the same `PodNameRegistry` the pod pill uses. It is initiated explicitly per port, lists and stops
+cleanly, and never widens the pod's own egress allowlist; it is an inbound tunnel the operator opens, not
+a capability the sandboxed agent can grant itself. The endpoints, the `PortForwardSessionDto` shape, and
+the K8s-only behavior are in
+[Sandbox pods reference › preview port-forward](../reference/sandbox-pods.md#sandbox-preview-port-forward-feature-017);
+the user-facing flow is in
+[the experience doc](../experience/sandbox-pod-execution.md#sandbox-preview-reaching-a-server-inside-the-pod).
+
 ## The execution-mode flag and rollback
 
 Everything above is gated behind a single flag so the change is reversible at any moment:
@@ -247,6 +350,8 @@ To rebuild pod-per-run from these ideas:
 ## Related reading
 
 - [Sandbox](./sandbox.md) — the underlying isolation model, claim lifecycle, and hardening.
+- [Sandbox setup](../reference/sandbox-setup.md) — the backend ladder, the `sandbox.selected` event, and
+  the MXC binary / `MXC_BIN_DIR` install.
 - [Infrastructure & deployment](./infra-deployment.md) — cluster topology, PVCs, and network policy.
 - [Sandbox pods reference](../reference/sandbox-pods.md) — flags, pod identity/quota, token injection,
   pod naming, and security properties.

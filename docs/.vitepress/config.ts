@@ -1,5 +1,19 @@
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
+// Shared group prepended to every sidebar so all top-level documentation
+// sections are reachable from the left table of contents on any page
+// (VitePress sidebars are otherwise scoped to a single path prefix).
+const docSections = {
+  text: 'Documentation',
+  items: [
+    { text: 'Guide', link: '/guide/' },
+    { text: 'Reference', link: '/reference/api' },
+    { text: 'Architecture', link: '/architecture/overview' },
+    { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
+    { text: 'Experience', link: '/experience/' },
+  ],
+}
+
 export default withMermaid({
   title: 'Agentweaver',
   description: 'Orchestrate AI agent teams that build and ship code — with full observability and human oversight at every step.',
@@ -24,6 +38,7 @@ export default withMermaid({
     ],
     sidebar: {
       '/guide/': [
+        docSections,
         {
           text: 'Guide',
           items: [
@@ -47,6 +62,7 @@ export default withMermaid({
         },
       ],
       '/reference/': [
+        docSections,
         {
           text: 'Reference',
           items: [
@@ -58,23 +74,28 @@ export default withMermaid({
             { text: 'Memory', link: '/reference/memory' },
             { text: 'Agent communication', link: '/reference/agent-communication' },
             { text: 'Sandbox pods', link: '/reference/sandbox-pods' },
+            { text: 'Sandbox setup', link: '/reference/sandbox-setup' },
             { text: 'A2A transport', link: '/reference/a2a' },
             { text: 'Scaling & data layer', link: '/reference/scaling-data-layer' },
           ],
         },
       ],
       '/architecture/': [
+        docSections,
         {
           text: 'Architecture',
           items: [
             { text: 'Overview', link: '/architecture/overview' },
+            { text: 'Agent Framework (MAF)', link: '/architecture/agent-framework' },
             { text: 'Sandbox', link: '/architecture/sandbox' },
+            { text: 'Sandboxed execution', link: '/architecture/sandboxed-execution' },
             { text: 'Events', link: '/architecture/events' },
             { text: 'AKS Architecture', link: '/architecture-aks' },
           ],
         },
       ],
       '/experience/': [
+        docSections,
         {
           text: 'Experience',
           items: [
@@ -96,10 +117,12 @@ export default withMermaid({
         },
       ],
       '/deep-dive/': [
+        docSections,
         {
           text: 'Foundations',
           items: [
             { text: 'System overview', link: '/deep-dive/00-system-overview' },
+            { text: 'Agent Framework (MAF)', link: '/deep-dive/agent-framework' },
             { text: 'API core', link: '/deep-dive/api-core' },
             { text: 'Auth & security', link: '/deep-dive/auth-security' },
           ],

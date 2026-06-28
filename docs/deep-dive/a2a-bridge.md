@@ -163,7 +163,7 @@ The mitigations are concrete and they are the reason the design is acceptable:
 
 A `kube-exec-stdio` path remains available strictly as a **degraded-mode fallback**, not as a wire transport for agent turns. The default execution mode stays `in-api` until the pod-per-run path completes soak, precisely because of this residual risk.
 
-A2A's place as a cross-vendor standard — and why standardizing on it is strategically sound rather than just convenient — is covered in the [competitive landscape reference](../reference/competitive-landscape.md). The MCP server, by contrast, is Agentweaver's *inbound* tool door and is documented separately in the [MCP server deep dive](./mcp-server.md); A2A is the *east-west* agent transport, a different seam entirely.
+A2A is a cross-vendor standard, which makes standardizing on it strategically sound rather than just convenient. The MCP server, by contrast, is Agentweaver's *inbound* tool door and is documented separately in the [MCP server deep dive](./mcp-server.md); A2A is the *east-west* agent transport, a different seam entirely.
 
 ## 8. Invariants to preserve when rebuilding
 

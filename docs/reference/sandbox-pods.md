@@ -168,7 +168,64 @@ A run's executing pod name is tracked so the UI can show *where* a run is runnin
 | `executionPodName` (per node) | `GET /api/runs/{id}/graph`, topology deltas, `subtask.*` events | The bound sandbox pod name for that run/node, from `PodNameRegistry`; overrides the global fallback. |
 
 > The same `PodNameRegistry` also lets preview/port-forward tooling locate a run's pod. That preview
-> path is documented in the [Sandbox deep dive](../deep-dive/sandbox.md#why-run-ids-map-to-pod-names).
+> path is documented in the [Sandbox deep dive](../deep-dive/sandbox.md#why-run-ids-map-to-pod-names) and,
+> for its API surface, in [Sandbox preview port-forward](#sandbox-preview-port-forward-feature-017) below.
+
+## Sandbox preview port-forward (Feature 017)
+
+A **preview port-forward** exposes a port of a run's sandbox pod back through the API, so an operator can
+reach a server the agent started **inside** the pod (a dev server, a built app, a debug endpoint) as a
+live preview scoped to that one run's pod. It runs a `kubectl port-forward` from the run's sandbox pod to
+the API and hands back a local URL.
+
+This surface is **Kubernetes-only**: it tunnels through the [Kubernetes claim backend](./sandbox-setup.md#kubernetes-in-cluster)'s
+pod, located by run id via the [`PodNameRegistry`](#pod-naming-and-the-executing-pod-surface). On local/dev
+backends (no claim pod) there is nothing to forward, and the endpoints report that the run has no
+forwardable sandbox pod.
+
+### Endpoints
+
+| Method & path | Body | Returns | Effect |
+|---|---|---|---|
+| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <int> }` | `PortForwardSessionDto` | Starts a `kubectl port-forward` from the run's sandbox pod's `target_port` to the API, and returns the new session (including the local URL). |
+| `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists the active preview sessions for the run. |
+| `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | — | Stops the identified session and tears down its tunnel. |
+
+### `PortForwardSessionDto`
+
+| Field | Meaning |
+|---|---|
+| `session_id` | Identifier for this preview session; used as `{sessionId}` to stop it via `DELETE`. |
+| `pod_name` | The bound sandbox pod the tunnel targets (from `PodNameRegistry`). |
+| `target_port` | The port **inside** the sandbox pod that is being forwarded. |
+| local URL | The API-local address that maps to the pod's `target_port` — what a user opens to see the preview. |
+
+### Behavior
+
+- **Per-port, explicit.** A session forwards one `target_port`; opening another preview is a second
+  `POST`. Sessions are listed and stopped individually.
+- **Scoped to the run's pod.** A session can only reach *that* run's sandbox pod — the run id resolves to a
+  single bound pod, so a preview never crosses into another run's pod.
+- **Inbound only, no egress widening.** The tunnel is an inbound path the operator opens to the pod; it
+  does **not** alter the pod's default-deny egress allowlist (see [Security properties](#security-properties)).
+- **Bounded by the pod.** A session is only valid while the run's pod is bound; releasing or replacing the
+  pod (suspend/resume, run end) ends forwarding, and a new preview must be started against the re-claimed
+  pod.
+
+```mermaid
+sequenceDiagram
+    participant User as User / operator
+    participant API as API
+    participant Reg as PodNameRegistry
+    participant Pod as Sandbox pod (run-bound)
+    User->>API: POST /api/runs/{runId}/sandbox/port-forward { target_port }
+    API->>Reg: resolve runId → pod_name
+    API->>Pod: kubectl port-forward target_port
+    API-->>User: PortForwardSessionDto { session_id, pod_name, target_port, local URL }
+    User->>API: open local URL → reach server in pod
+    User->>API: DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}
+    API->>Pod: tear down tunnel
+```
 
 ## Security properties
 

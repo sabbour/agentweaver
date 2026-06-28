@@ -76,6 +76,61 @@ Under the hood the heavy work — the model session, the tools, the shell — is
 the worker is relaying its stream into the same timeline. The user does not have to know that; the only
 new thing on screen is the pod name.
 
+## Sandbox preview: reaching a server inside the pod
+
+Sometimes an agent starts a **server inside its sandbox pod** — a dev server, a freshly built app, a
+debug endpoint — and a person wants to actually *open it* and look. Because the pod is isolated, that
+server is not reachable by default. The **sandbox preview port-forward** is the supported way to reach it:
+a live preview/debug endpoint tunnelled from the run's pod, scoped to that one run.
+
+From the run/execution view (`WorkflowRunPage`), there is a **Sandbox preview port-forward dialog**. The
+flow a user follows:
+
+1. **Open the preview dialog** on the run and **pick a port** — the port the agent's server is listening
+   on *inside* the pod.
+2. **Start the preview.** The app calls `POST /api/runs/{runId}/sandbox/port-forward` with that port, and
+   a tunnel is opened from the run's sandbox pod to the API.
+3. **See it become active.** The dialog confirms with **"Preview active for port {port} on pod
+   {pod_name}"** and gives a local URL. Opening that URL reaches the server running inside the pod.
+4. **Stop it when done.** Stopping the preview tears the tunnel down (a `DELETE` on that session). A user
+   can run more than one preview at a time — each is its own port and its own entry — and stop them
+   individually.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as WorkflowRunPage (preview dialog)
+    participant API as API
+    participant Pod as Run's sandbox pod
+    U->>UI: open preview dialog, pick port
+    UI->>API: POST /sandbox/port-forward { target_port }
+    API->>Pod: port-forward target_port
+    API-->>UI: session (pod_name, target_port, local URL)
+    UI-->>U: "Preview active for port {port} on pod {pod_name}"
+    U->>API: open local URL → see the app in the pod
+    U->>UI: stop preview
+    UI->>API: DELETE /sandbox/port-forward/{sessionId}
+```
+
+When to use it:
+
+- **You want to look at what the agent built/ran** — a running web app, an API the agent stood up, a
+  served artifact — without leaving the run view.
+- **You're debugging inside the sandbox** and need a live endpoint into the pod for the moment.
+
+What to expect:
+
+- **Kubernetes-only.** Preview tunnels into the Kubernetes claim backend's pod. On local/dev runs there is
+  no claim pod to forward, so the option doesn't apply — the same "this is a cluster feature" boundary as
+  the pod pill.
+- **Scoped to this run's pod.** A preview reaches only the run's own sandbox pod, never another run's.
+- **Tied to the live pod.** Because the hybrid lifecycle can release and re-claim a pod across a
+  suspension, a preview is valid while the current pod is bound; after a release/resume you start a fresh
+  preview against the re-claimed pod (the same reason the pod pill name can change).
+
+The endpoints and the `PortForwardSessionDto` fields behind the dialog are in the
+[reference](../reference/sandbox-pods.md#sandbox-preview-port-forward-feature-017).
+
 ## Suspend and resume, from the user's view
 
 Pod-per-run uses a **hybrid** lifecycle: the pod stays warm while an agent is actively reasoning, but it
@@ -135,6 +190,14 @@ back when it's waiting."** Concretely:
   execute at once. Heavier per-pod agent runtimes mean these caps must be raised deliberately in the
   manifests, not patched live. See [Operations](./operations.md) and the
   [reference](../reference/sandbox-pods.md#pod-identity-and-quota).
+- **The isolation backend is chosen per host.** Independently of pod-per-run, every host selects one
+  command-isolation backend at run start and announces it with a `sandbox.selected` event (`backend`,
+  `isRealIsolation`, `reason`). In-cluster that backend is the Kata-isolated `kubernetes-sandbox-claim`;
+  local dev gets `processcontainer` (MXC) on Windows or `linux-bwrap` on Linux, falling back to `direct`
+  (no isolation, shell still runs) only when nothing else is available. The deep dive's
+  [executor seam](../deep-dive/sandbox-pod-execution.md#the-executor-seam-how-commands-are-actually-isolated)
+  explains how this relates to pod-per-run; backend install/selection is in
+  [Sandbox setup](../reference/sandbox-setup.md#sandbox-backends).
 - **The pod is disposable.** Killing or losing a pod does not lose a run: durable state is in the shared
   workspace volume and the brokered checkpoint, and the run re-claims a fresh pod. Pods never persist past
   their run, and they hold only a short-lived, run-scoped credential.
