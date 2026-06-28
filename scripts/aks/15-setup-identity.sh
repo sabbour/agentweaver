@@ -58,9 +58,18 @@ az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-id -
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-secret --value "${GITHUB_CLIENT_SECRET}" --output none
 
 echo ""
-echo "=== Step 4: Grant 'Key Vault Secrets User' role to managed identity ==="
+echo "=== Step 4: Grant Key Vault roles to managed identity ==="
+# 'Key Vault Secrets User' — read access for CSI driver secret mounts.
 az role assignment create \
   --role "Key Vault Secrets User" \
+  --assignee-object-id "${IDENTITY_OBJECT_ID}" \
+  --assignee-principal-type ServicePrincipal \
+  --scope "${KEYVAULT_ID}"
+
+# 'Key Vault Secrets Officer' — write access for the GitHub token store
+# (SetAsync / DeleteAsync via Azure SDK + workload identity, spec 006).
+az role assignment create \
+  --role "Key Vault Secrets Officer" \
   --assignee-object-id "${IDENTITY_OBJECT_ID}" \
   --assignee-principal-type ServicePrincipal \
   --scope "${KEYVAULT_ID}"
