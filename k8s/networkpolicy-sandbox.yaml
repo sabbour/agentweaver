@@ -14,6 +14,43 @@ spec:
   policyTypes:
     - Ingress
 ---
+# Allow Istio ingress data-plane (preview gateway) to reach the sandbox browser preview port.
+#
+# Port 3000 is the sandbox dev-server preview port. This MUST match the port the sandbox
+# container actually binds its preview HTTP server to. Coordinate with Morpheus (backend)
+# before shipping; if the preview port changes, update this policy and sandbox-template.yaml.
+#
+# The approuting-istio add-on creates data-plane pods in the same namespace (agentweaver)
+# labelled gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway.
+# The aks-istio-ingress namespace selector covers the shared Istio control-plane pods
+# (confirmed from existing allow-gateway-to-api policy in networkpolicy-default-deny.yaml).
+#
+# Egress is NOT touched — all egress rules remain in sandbox-egress-allowlist below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-allow-preview-ingress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-sandbox
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-ingress
+      ports:
+        - protocol: TCP
+          port: 3000
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

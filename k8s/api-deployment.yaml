@@ -188,6 +188,17 @@ spec:
             # H4: A2A port — must match the Kestrel endpoint in configmap-agenthost.yaml.
             - name: Sandbox__A2A__Port
               value: "8088"
+            # Preview gateway wiring — values resolved at deploy time by 30-deploy.sh.
+            # ZoneSuffix is either "preview.<zone>" (nested wildcard cert) or "<zone>" (fallback).
+            # GatewayName/GatewayNamespace are static; only Enabled+ZoneSuffix are templated.
+            - name: Sandbox__Preview__Enabled
+              value: "${SANDBOX_PREVIEW_ENABLED}"
+            - name: Sandbox__Preview__ZoneSuffix
+              value: "${SANDBOX_PREVIEW_ZONE_SUFFIX}"
+            - name: Sandbox__Preview__GatewayName
+              value: "agentweaver-preview-gateway"
+            - name: Sandbox__Preview__GatewayNamespace
+              value: "agentweaver"
             # spec-018 P2: Postgres primary — flip from sqlite.
             - name: Database__Provider
               value: "Postgres"

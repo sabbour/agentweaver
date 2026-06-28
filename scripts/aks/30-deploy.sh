@@ -73,6 +73,81 @@ export HOST="agentweaver.${DOMAIN#\*.}"
 echo "  Managed domain: ${DOMAIN}"
 echo "  Ingress host:   ${HOST}"
 
+# --- Preview gateway cert probe ---
+# Attempt to provision a managed nested wildcard cert for *.preview.<zone>.
+# If AKS App Routing supports nested subdomain certs the probe succeeds and we
+# use the narrower *.preview.<zone> hostname (preferred). Otherwise we fall back
+# to the existing *.{zone} wildcard cert so the feature ships regardless.
+# NOTE: DefaultDomainCertificate status.domain determines the actual issued hostname;
+# we inspect it to confirm the cert really covers a nested subdomain, not just *.{zone}.
+echo ""
+echo "Probing for nested preview wildcard cert (*.preview.<zone>)..."
+ZONE="${DOMAIN#\*.}"
+PREVIEW_CERT_READY=false
+
+if kubectl get defaultdomaincertificate cert-preview --namespace "${NAMESPACE}" &>/dev/null; then
+  echo "  [OK] DefaultDomainCertificate 'cert-preview' already exists — checking status..."
+  PREVIEW_DOMAIN=$(kubectl get defaultdomaincertificate cert-preview \
+    --namespace "${NAMESPACE}" \
+    --output jsonpath='{.status.domain}' 2>/dev/null || true)
+  if kubectl wait \
+       --for=condition=Available \
+       defaultdomaincertificate/cert-preview \
+       --namespace "${NAMESPACE}" \
+       --timeout=30s 2>/dev/null && \
+     [[ "${PREVIEW_DOMAIN}" == *"preview."* ]]; then
+    PREVIEW_CERT_READY=true
+  fi
+else
+  echo "  Creating DefaultDomainCertificate 'cert-preview' (target secret: agentweaver-preview-tls)..."
+  cat <<EOF | kubectl apply -f - || true
+apiVersion: approuting.kubernetes.azure.com/v1alpha1
+kind: DefaultDomainCertificate
+metadata:
+  name: cert-preview
+  namespace: ${NAMESPACE}
+spec:
+  target:
+    secret: agentweaver-preview-tls
+EOF
+  # Wait up to 120s; suppress error since nested certs may be unsupported.
+  if kubectl wait \
+       --for=condition=Available \
+       defaultdomaincertificate/cert-preview \
+       --namespace "${NAMESPACE}" \
+       --timeout=120s 2>/dev/null; then
+    PREVIEW_DOMAIN=$(kubectl get defaultdomaincertificate cert-preview \
+      --namespace "${NAMESPACE}" \
+      --output jsonpath='{.status.domain}' 2>/dev/null || true)
+    if [[ "${PREVIEW_DOMAIN}" == *"preview."* ]]; then
+      PREVIEW_CERT_READY=true
+    else
+      echo "  [INFO] cert-preview became Available but domain '${PREVIEW_DOMAIN}' is not nested."
+      echo "         App Routing issued *.{zone} — falling back to single-label path."
+    fi
+  fi
+fi
+
+if [[ "${PREVIEW_CERT_READY}" == "true" ]]; then
+  echo "  [NESTED PATH] Nested wildcard cert Ready — preview hostname: *.preview.${ZONE}"
+  ZONE_SUFFIX="preview.${ZONE}"
+  PREVIEW_TLS_SECRET="agentweaver-preview-tls"
+else
+  echo "  [FALLBACK PATH] Nested cert unavailable — using *.${ZONE} with existing agentweaver-tls"
+  echo "                  Preview subdomains will be {runid}.${ZONE} (same label as main zone)."
+  ZONE_SUFFIX="${ZONE}"
+  PREVIEW_TLS_SECRET="agentweaver-tls"
+fi
+
+export PREVIEW_HOSTNAME="*.${ZONE_SUFFIX}"
+export PREVIEW_TLS_SECRET
+export SANDBOX_PREVIEW_ENABLED="true"
+export SANDBOX_PREVIEW_ZONE_SUFFIX="${ZONE_SUFFIX}"
+
+echo "  Preview hostname:    ${PREVIEW_HOSTNAME}"
+echo "  Preview TLS secret:  ${PREVIEW_TLS_SECRET}"
+echo "  ZoneSuffix (API):    ${ZONE_SUFFIX}"
+
 rm -rf "${RENDERED_DIR}"
 mkdir -p "${RENDERED_DIR}"
 
@@ -80,7 +155,7 @@ echo ""
 echo "Rendering manifests..."
 for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
   fname="$(basename "${yaml_file}")"
-  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID}' \
+  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX}' \
     < "${yaml_file}" > "${RENDERED_DIR}/${fname}"
   echo "  rendered: ${fname}"
 done
@@ -125,6 +200,7 @@ apply_rendered api-service.yaml
 apply_rendered frontend-service.yaml
 apply_rendered mcp-service.yaml
 apply_rendered gateway.yaml
+apply_rendered gateway-preview.yaml
 apply_rendered httproute-api.yaml
 apply_rendered httproute-frontend.yaml
 apply_rendered mcp-httproute.yaml
@@ -144,6 +220,13 @@ echo "Waiting for gateway/agentweaver-gateway to become Programmed (up to 3 min)
 kubectl wait \
   --for=condition=Programmed \
   gateway/agentweaver-gateway \
+  --namespace "${NAMESPACE}" \
+  --timeout=180s
+
+echo "Waiting for gateway/agentweaver-preview-gateway to become Programmed (up to 3 min)..."
+kubectl wait \
+  --for=condition=Programmed \
+  gateway/agentweaver-preview-gateway \
   --namespace "${NAMESPACE}" \
   --timeout=180s
 
@@ -190,10 +273,17 @@ echo "==================================================="
 echo " DEPLOYMENT COMPLETE"
 echo "==================================================="
 echo ""
-echo "  Frontend URL: https://${HOST}/"
-echo "  API URL:      https://${HOST}/api/"
-echo "  MCP URL:      https://${HOST}/mcp/"
-echo "  Gateway IP:   ${GATEWAY_IP}"
+echo "  Frontend URL:        https://${HOST}/"
+echo "  API URL:             https://${HOST}/api/"
+echo "  MCP URL:             https://${HOST}/mcp/"
+echo "  Gateway IP:          ${GATEWAY_IP}"
+echo ""
+echo "  Preview gateway:     ${PREVIEW_HOSTNAME} (TLS: ${PREVIEW_TLS_SECRET})"
+echo "  Preview zone suffix: ${ZONE_SUFFIX}"
+echo "  Sandbox__Preview__Enabled:          true"
+echo "  Sandbox__Preview__ZoneSuffix:       ${ZONE_SUFFIX}"
+echo "  Sandbox__Preview__GatewayName:      agentweaver-preview-gateway"
+echo "  Sandbox__Preview__GatewayNamespace: agentweaver"
 echo ""
 echo "  Next step:"
 echo "    bash scripts/aks/40-verify.sh"
