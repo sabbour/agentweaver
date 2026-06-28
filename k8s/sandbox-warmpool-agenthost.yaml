@@ -1,0 +1,22 @@
+# SandboxWarmPool — agentweaver-agent-host (pod-per-run AgentHost pool).
+#
+# In the agent-sandbox v1beta1 CRD a SandboxClaim binds to a SandboxWarmPool via
+# spec.warmPoolRef.name (NOT directly to a SandboxTemplate). KubernetesSandboxExecutor's
+# AgentHost claim path emits spec.warmPoolRef.name = AgentHostWarmPoolRef
+# (default "agentweaver-agent-host"), so this pool must exist for AgentHost pods to be
+# provisioned. The pool references the agentweaver-agent-host SandboxTemplate
+# (k8s/sandbox-template-agenthost.yaml), which carries the real AgentHost pod spec.
+#
+# replicas: 1 — keep the warm reserve small; cluster autoscaling/NAP handles burst capacity.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: agentweaver-agent-host
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+    app.kubernetes.io/component: agent-host
+spec:
+  sandboxTemplateRef:
+    name: agentweaver-agent-host
+  replicas: 1

@@ -162,6 +162,12 @@ echo "Applying sandbox template and warm pool (if CRD is available)..."
 if kubectl api-resources --api-group=extensions.agents.x-k8s.io 2>/dev/null | grep -q SandboxTemplate; then
   apply_rendered sandbox-template.yaml
   apply_rendered sandbox-warmpool.yaml
+  # spec-018 pod-per-run: AgentHost warm pool (claims bind via spec.warmPoolRef.name).
+  # NOTE: the referenced agentweaver-agent-host SandboxTemplate is rendered/applied
+  # separately (sandbox-template-agenthost.yaml needs ${AGENTHOST_IMAGE_TAG}, which is
+  # not in this script's envsubst allowlist) — ensure it is applied before this pool can
+  # provision pods.
+  apply_rendered sandbox-warmpool-agenthost.yaml
 else
   echo "  [SKIP] agent-sandbox CRD not installed — sandbox template skipped."
 fi

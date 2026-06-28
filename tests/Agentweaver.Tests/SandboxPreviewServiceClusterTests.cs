@@ -45,7 +45,7 @@ public sealed class SandboxPreviewServiceClusterTests
         // GET SandboxClaim -> Ready condition True, pod resolved from status.sandbox.name.
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
-            """{"apiVersion":"extensions.agents.x-k8s.io/v1alpha1","kind":"SandboxClaim","metadata":{"name":"c"},"status":{"conditions":[{"type":"Ready","status":"True","reason":"Bound","message":"sandbox ready","lastTransitionTime":"2026-06-28T06:00:00Z"}],"sandbox":{"name":"agenthost-pod-zzz"}}}""");
+            """{"apiVersion":"extensions.agents.x-k8s.io/v1beta1","kind":"SandboxClaim","metadata":{"name":"c"},"status":{"conditions":[{"type":"Ready","status":"True","reason":"Bound","message":"sandbox ready","lastTransitionTime":"2026-06-28T06:00:00Z"}],"sandbox":{"name":"agenthost-pod-zzz"}}}""");
         // Pod patch, Service create, HTTPRoute create all succeed (echoed).
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/", """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-zzz"}}""");
         handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
@@ -183,7 +183,7 @@ public sealed class SandboxPreviewServiceClusterTests
 /// </summary>
 internal sealed class FakeKubeHandler : DelegatingHandler
 {
-    public sealed record Req(string Method, string Path);
+    public sealed record Req(string Method, string Path, string? Body);
 
     public List<Req> Requests { get; } = new();
 
@@ -209,7 +209,10 @@ internal sealed class FakeKubeHandler : DelegatingHandler
     {
         var method = request.Method.Method;
         var path = request.RequestUri!.AbsolutePath;
-        Requests.Add(new Req(method, path));
+        var reqBody = request.Content is not null
+            ? await request.Content.ReadAsStringAsync(cancellationToken)
+            : null;
+        Requests.Add(new Req(method, path, reqBody));
 
         foreach (var (rMethod, pathOrRegex, isRegex, body) in _routes)
         {

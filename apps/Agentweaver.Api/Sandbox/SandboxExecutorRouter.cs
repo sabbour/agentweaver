@@ -58,6 +58,10 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             {
                 Namespace = _config["Sandbox:Kubernetes:Namespace"] ?? "agentweaver",
                 TemplateRef = _config["Sandbox:Kubernetes:TemplateRef"] ?? "agentweaver-sandbox",
+                WarmPoolRef = _config["Sandbox:Kubernetes:WarmPoolRef"]
+                    ?? _config["Sandbox:Kubernetes:TemplateRef"] ?? "agentweaver-sandbox",
+                AgentHostWarmPoolRef = _config["Sandbox:Kubernetes:AgentHostWarmPoolRef"]
+                    ?? "agentweaver-agent-host",
                 WorkspaceMountPath = _config["Sandbox:Kubernetes:WorkspaceMountPath"]
                     ?? _config["Workspace:PersistentVolume:MountRoot"]
                     ?? _config["Workspace:Path"]

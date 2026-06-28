@@ -20,7 +20,7 @@ public static class SandboxClaimConventions
     public const string ApiGroup = "extensions.agents.x-k8s.io";
 
     /// <summary>CRD version for SandboxClaims.</summary>
-    public const string ApiVersion = "v1alpha1";
+    public const string ApiVersion = "v1beta1";
 
     /// <summary>CRD plural for SandboxClaims.</summary>
     public const string ClaimPlural = "sandboxclaims";
