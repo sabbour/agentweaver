@@ -74,7 +74,7 @@ The API runs at **replicas:2 with no session affinity**. The in-memory `PodNameR
 **only on the replica that launched the sandbox pod**, so a preview-start request landing on the *other*
 replica would find nothing and fail — a split-brain `409`. `SandboxClaimConventions`
 ([`SandboxClaimConventions.cs`](#source)) reads the bound pod from the `SandboxClaim`'s `status`
-(`status.phase=="Bound"` → `status.sandbox.name`, fallback `status.podName`), which **every** replica sees
+(`Ready` condition `True` → `status.sandbox.name`), which **every** replica sees
 identically. All other per-preview state lives in HTTPRoute annotations, never in process memory, so
 keepalive and reaping are equally replica-safe.
 

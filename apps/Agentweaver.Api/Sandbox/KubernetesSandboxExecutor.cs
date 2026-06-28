@@ -15,6 +15,12 @@ public sealed class KubernetesSandboxOptions
 {
     public string Namespace { get; init; } = "agentweaver";
     public string TemplateRef { get; init; } = "agentweaver-sandbox";
+    /// <summary>
+    /// SandboxWarmPool the generic command-exec claim binds to. In the v1beta1 CRD a
+    /// <c>SandboxClaim</c> references a <c>SandboxWarmPool</c> (<c>spec.warmPoolRef.name</c>),
+    /// which in turn references the SandboxTemplate. Default: <c>agentweaver-sandbox</c>.
+    /// </summary>
+    public string WarmPoolRef { get; init; } = "agentweaver-sandbox";
     /// <summary>Path where the shared workspace PVC is mounted inside API and sandbox pods.</summary>
     public string WorkspaceMountPath { get; init; } = "/workspace";
     /// <summary>SandboxClaim TTL. Command timeouts are capped below this so controller GC cannot interrupt exec.</summary>
@@ -32,6 +38,13 @@ public sealed class KubernetesSandboxOptions
     /// Default: <c>agentweaver-agent-host</c>.
     /// </summary>
     public string AgentHostTemplateRef { get; init; } = "agentweaver-agent-host";
+
+    /// <summary>
+    /// SandboxWarmPool the AgentHost (pod-per-run) claim binds to in the v1beta1 CRD
+    /// (<c>spec.warmPoolRef.name</c>). The pool references <see cref="AgentHostTemplateRef"/>.
+    /// Default: <c>agentweaver-agent-host</c>.
+    /// </summary>
+    public string AgentHostWarmPoolRef { get; init; } = "agentweaver-agent-host";
 
     /// <summary>
     /// Port the AgentHost Kestrel listener binds to inside the pod.
@@ -273,9 +286,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
-    /// Creates a <c>SandboxClaim</c> that provisions an AgentHost pod (using the
-    /// <c>AgentHostTemplateRef</c> template). Injects per-run env vars into the spec
-    /// so the pod's <c>AgentHost</c> process can read its <c>AgentHost:RunId</c>, etc.
+    /// Creates a <c>SandboxClaim</c> that provisions an AgentHost pod by binding to the
+    /// <c>AgentHostWarmPoolRef</c> warm pool (which references the AgentHost template).
+    /// Injects per-run env vars into the spec so the pod's <c>AgentHost</c> process can read
+    /// its <c>AgentHost:RunId</c>, etc.
     /// </summary>
     private Task CreateAgentHostClaimAsync(string claimName, string runId, CancellationToken ct)
     {
@@ -286,8 +300,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                templateRef = _options.AgentHostTemplateRef,
-                ttl = $"{_options.TimeoutSeconds}s",
+                warmPoolRef = new { name = _options.AgentHostWarmPoolRef },
+                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
                 // Per-run env vars for Agentweaver.AgentHost (injected into the pod spec
                 // by the sandbox controller if it supports the `env` field; otherwise the
                 // template or a mounted ConfigMap carries the static config and the runId
@@ -348,8 +362,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                templateRef = _options.TemplateRef,
-                ttl = $"{_options.TimeoutSeconds}s",
+                warmPoolRef = new { name = _options.WarmPoolRef },
+                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
             },
         };
 
@@ -359,8 +373,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
-    /// Polls every 2 s until <c>status.phase == "Bound"</c>; returns the pod name
-    /// from <c>status.sandbox.name</c> (preferred) or <c>status.podName</c>.
+    /// Polls every 2 s until the claim's <c>Ready</c> condition is <c>True</c>; returns the bound
+    /// pod name from <c>status.sandbox.name</c>.
     /// </summary>
     private async Task<string> WaitForBoundAsync(string claimName, CancellationToken ct)
     {

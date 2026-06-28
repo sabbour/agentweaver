@@ -52,6 +52,20 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 
 Some local samples still show `Providers:Foundry` with `DeploymentName`. The current runtime reads `Providers:MicrosoftFoundry:Endpoint`, `Providers:MicrosoftFoundry:ApiKey`, and `Providers:MicrosoftFoundry:Deployment`.
 
+### Logging verbosity
+
+The committed `appsettings.json` quiets framework and EF Core noise while keeping the app's own logs at `Information`:
+
+| Category | Level | Purpose |
+| --- | --- | --- |
+| `Default` | `Information` | Baseline level for uncategorised logs. |
+| `Agentweaver` | `Information` | The app's own logs (`Agentweaver.*`) stay verbose. |
+| `Microsoft` | `Warning` | Quiets general framework `Information` noise. |
+| `Microsoft.AspNetCore` | `Warning` | Quiets per-request hosting/routing `Information` logs. |
+| `Microsoft.EntityFrameworkCore` | `Warning` | Suppresses EF Core query/SQL `Information` spam (e.g. `Microsoft.EntityFrameworkCore.Database.Command`). |
+
+Grounded in `apps/Agentweaver.Api/appsettings.json` (`Logging:LogLevel`). Override per-environment with `appsettings.{Environment}.json` or `Logging__LogLevel__<Category>` environment variables; the cluster deployment does not re-enable EF/framework `Information` logs.
+
 ## Web environment variables
 
 The web UI authenticates users through GitHub OAuth and sends the resulting session token automatically — it does not require a static API key.

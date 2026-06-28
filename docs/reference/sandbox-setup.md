@@ -13,7 +13,7 @@ When the `processcontainer` backend is active on Windows, network allowlist enfo
 Agentweaver uses **two unrelated runtimes** depending on where it runs, and they are easy to confuse:
 
 - **MXC** is the **local-host** isolation runtime: the `Sabbour.Mxc.Sdk` NuGet package driving the external `wxc-exec.exe` binary. It backs the Windows `processcontainer` (`MxcSandboxExecutor`), the WSL2 backends (`WslMxcSandboxExecutor`), and the native-Linux `lxc-exec` fallback (`LinuxNativeMxcSandboxExecutor`). MXC isolates **one command at a time** on the developer/host machine. It is *not* a Kubernetes component and runs no controller.
-- The **agent-sandbox controller** is the **in-cluster** runtime: the upstream [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and its CRDs (API group `extensions.agents.x-k8s.io/v1alpha1`). In-cluster, `KubernetesSandboxExecutor` provisions each sandbox pod through this controller via a `SandboxClaim`. There is no MXC binary in the cluster.
+- The **agent-sandbox controller** is the **in-cluster** runtime: the upstream [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and its CRDs (API group `extensions.agents.x-k8s.io`, served `v1beta1`). In-cluster, `KubernetesSandboxExecutor` provisions each sandbox pod through this controller via a `SandboxClaim`. There is no MXC binary in the cluster.
 
 In short: **MXC isolates commands on a laptop; the agent-sandbox controller provisions sandbox pods in the cluster.** Both satisfy the same `ISandboxExecutor` contract, so the same agent code runs unchanged either way. The sections below cover each.
 
@@ -92,20 +92,20 @@ kubectl wait --for=condition=Established crd/sandboxtemplates.extensions.agents.
 kubectl wait --for=condition=Established crd/sandboxwarmpools.extensions.agents.x-k8s.io --timeout=180s
 ```
 
-The three CRDs (all `extensions.agents.x-k8s.io/v1alpha1`) Agentweaver applies:
+The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecutor` targets the `v1beta1` storage version) Agentweaver applies:
 
 | CRD | Agentweaver manifest | Role |
 | --- | --- | --- |
 | `SandboxTemplate` | `k8s/sandbox-template.yaml` (`agentweaver-sandbox`) | The pod shape + hardening (Kata runtime class, non-root, read-only rootfs, dropped caps, `/workspace` PVC, A2A port `8088`). |
-| `SandboxWarmPool` | `k8s/sandbox-warmpool.yaml` (`replicas: 3`) | Keeps N warm pods pre-built from the template so claims bind quickly. |
-| `SandboxClaim` | created per run by `KubernetesSandboxExecutor` (shape in `k8s/sandbox-claim-template.yaml`) | A request for one sandbox instance with a TTL; the controller binds it to a warm pod. |
+| `SandboxWarmPool` | `k8s/sandbox-warmpool.yaml` (`agentweaver-sandbox`, `replicas: 3`) and `k8s/sandbox-warmpool-agenthost.yaml` (`agentweaver-agent-host`, `replicas: 0`) | Keeps warm pods pre-built from a template so claims bind quickly. The agent-host pool backs pod-per-run AgentHost claims; it runs `replicas: 0` because those claims always inject per-run env (forcing a cold start), so a warm spare would only CrashLoop — the pool just provides the env-injection-allowed template. |
+| `SandboxClaim` | created per run by `KubernetesSandboxExecutor` (shape in `k8s/sandbox-claim-template.yaml`) | A request for one sandbox instance (`spec.warmPoolRef.name` + `spec.lifecycle`); the controller binds it to a warm pod from that pool. |
 
-The controller watches `SandboxClaim` objects, adopts a warm pod from the matching pool, and reports binding via `status.phase: Bound` plus the bound pod's name in `status.sandbox.name` (with `status.podName` as a fallback). On claim deletion (or TTL expiry) the controller garbage-collects the pod and its service.
+The controller watches `SandboxClaim` objects, adopts a warm pod from the matching pool, and signals binding via a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) plus the bound pod's name in `status.sandbox.name`. There is no `status.phase` field. On claim deletion (or TTL expiry) the controller garbage-collects the pod and its service.
 
 ### How a command runs
 
-1. The executor creates a `SandboxClaim` (`apiVersion: extensions.agents.x-k8s.io/v1alpha1`, plural `sandboxclaims`, `spec.templateRef` + `spec.ttl`), which adopts a warm pod from the pool.
-2. It polls every 2 s until the claim reaches `phase: Bound`, then reads the pod name from `status.sandbox.name` (preferred) or `status.podName`.
+1. The executor creates a `SandboxClaim` (`apiVersion: extensions.agents.x-k8s.io/v1beta1`, plural `sandboxclaims`, `spec.warmPoolRef.name` + `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}` + `spec.env[]`), which binds to a warm pod from the referenced pool.
+2. It polls every 2 s until the claim's `Ready` condition is `True`, then reads the pod name from `status.sandbox.name`.
 3. For a run-scoped command it registers the pod name in `PodNameRegistry` (keyed by run id) so preview/port-forward can find it later.
 4. It runs the command via pod-exec (the Kubernetes WebSocket exec API) against the `agentweaver-sandbox` container.
 5. **Cleanup differs by command kind:** ad-hoc commands delete the claim immediately; run-scoped commands retain the claim until run cleanup or TTL so preview stays available.
@@ -115,8 +115,8 @@ Configuration is bound from the `Sandbox:Kubernetes` section:
 | Option | Default | Notes |
 | --- | --- | --- |
 | `Namespace` | `agentweaver` | Namespace the claims and pods live in. |
-| `TemplateRef` | `agentweaver-sandbox` | The SandboxTemplate the warm pool is built from. |
-| `TimeoutSeconds` | `600` | Claim TTL; per-command timeouts are clamped below it so the controller cannot GC a pod mid-exec. |
+| `WarmPoolRef` | `agentweaver-sandbox` | The SandboxWarmPool a generic claim binds to (`spec.warmPoolRef.name`). Pod-per-run AgentHost claims use `AgentHostWarmPoolRef` (`agentweaver-agent-host`). |
+| `TimeoutSeconds` | `600` | Claim lifecycle TTL (`spec.lifecycle.ttlSecondsAfterFinished`); per-command timeouts are clamped below it so the controller cannot GC a pod mid-exec. |
 
 ### The `agentweaver-sandbox` image
 
