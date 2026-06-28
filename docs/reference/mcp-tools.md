@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **79 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **80 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 ## Backlog
 
@@ -120,6 +120,7 @@ The Agentweaver MCP server exposes **79 tools** across **13 categories**. This i
 | `run_status` | Get the current status of a run. |
 | `run_submit` | Submit a new agent run for a project. |
 | `run_watch` | Watch a run live, streaming progress until completion. |
+| `start_preview` | Expose a web server an agent started inside a run's sandbox pod (e.g. on port 3000) so it can be previewed at a public HTTPS URL. Routes through a human-in-the-loop approval gate; returns the preview_url once approved. |
 
 ## Sandbox Policy
 

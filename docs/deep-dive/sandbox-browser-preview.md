@@ -197,6 +197,22 @@ sequenceDiagram
 > `RequestPort` workflow primitive — `RequestPort` suspends/checkpoints the whole workflow and resumes via a
 > separately-posted decision, which cannot satisfy a synchronous tool callback.
 
+### Second surface: the MCP `start_preview` tool
+
+The same capability is also exposed as an **MCP tool** on the `agentweaver-mcp` server, so an external MCP
+client (e.g. GitHub Copilot connected to the Agentweaver MCP server) can expose a run's preview without being
+the in-sandbox agent. Because an external caller is not bound to a single run, the MCP tool takes the run id as
+an explicit parameter: `start_preview(run_id: string, port: int)`
+([`RunTools.cs`](#source), auto-discovered by `WithToolsFromAssembly`). It POSTs `{ target_port }` to the
+**same** `POST /api/runs/{runId}/sandbox/preview` endpoint, so it reuses the **same** `AgentPreviewGate` and
+`StartPreviewForRunAsync` path — no port-forward or approval logic is duplicated. Authorization is enforced by
+the MCP server forwarding the caller's bearer token to the API (`AgentweaverApiClient`), so the backend sees the
+real human identity and the owner check (`IsOwnerOrServiceCaller`) applies unchanged. The auto-approve flag still
+governs unattended runs; production stays human-gated.
+
+> The MCP surface lives in the separate `agentweaver-mcp` deployable image, so changes to `start_preview` require
+> rebuilding **both** `agentweaver-api` and `agentweaver-mcp`.
+
 ## Source
 
 | Concern | File |
@@ -210,6 +226,7 @@ sequenceDiagram
 | HTTP endpoints (start / agent-start / keepalive / stop / list) | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
 | Agent-initiated approval gate (HITL + auto-approve) | `apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs` |
 | `start_preview` agent tool (run-scoped HTTP callback) | `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs` |
+| `start_preview` MCP tool (run_id + port, same endpoint) | `apps/Agentweaver.Mcp/Tools/RunTools.cs` |
 | Owner-or-agent-callback authorization helper | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
 | HITL approval primitive (shared with `web_fetch`) | `packages/Agentweaver.AgentRuntime/InMemoryToolApprovalGate.cs` |
 | Agent capability note injection | `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` |

@@ -112,6 +112,22 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
+    [McpServerTool(Name = "start_preview"), Description("Expose a web server an agent started inside a run's sandbox pod (e.g. on port 3000) so it can be previewed at a public HTTPS URL. Routes through a human-in-the-loop approval gate; returns the preview_url once approved.")]
+    public async Task<string> StartPreviewAsync(
+        [Description("Run ID whose sandbox pod hosts the server to expose")] string run_id,
+        [Description("Port the server is listening on inside the sandbox pod, e.g. 3000")] int port,
+        CancellationToken ct)
+    {
+        try
+        {
+            var body = new { target_port = port };
+            var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/sandbox/preview", body, ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
     [McpServerTool(Name = "run_show_artifacts"), Description("List the files changed by a run.")]
     public async Task<string> RunShowArtifactsAsync(
         [Description("Run ID")] string run_id,
