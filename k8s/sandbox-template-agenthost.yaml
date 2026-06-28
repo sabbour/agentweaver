@@ -48,6 +48,27 @@ spec:
         app.kubernetes.io/component: agent-host
     spec:
       runtimeClassName: kata-vm-isolation
+      # Dedicated kata scheduling (fix/kata-userpool): prefer the fixed kata USER pool
+      # (katapool, labeled agentweaver.io/kata=true, tainted sandbox=kata:NoSchedule) so
+      # sandbox/agent-host pods stop depending on the System pool (nodepool1). The toleration
+      # admits katapool's taint; the nodeAffinity is PREFERRED (not required) so pods fall
+      # back to any other kata-capable node (e.g. nodepool1's kata nodes) if katapool is
+      # full/unavailable — pods are never stranded.
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: kata
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: agentweaver.io/kata
+                    operator: In
+                    values:
+                      - "true"
       restartPolicy: Never
       automountServiceAccountToken: false
       securityContext:
