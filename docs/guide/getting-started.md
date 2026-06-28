@@ -77,4 +77,4 @@ VITE_API_URL=http://localhost:5000
 5. **Watch** the live topology and per-agent execution stream.
 6. **Review and merge** the assembled diff once the run reaches Human Review — nothing lands on your branch until you approve.
 
-For full end-to-end walkthroughs, see [Example scenarios](./example-scenarios).
+For full end-to-end walkthroughs, see [Example walkthroughs](./example-scenarios).

@@ -58,12 +58,7 @@ export default withMermaid({
           text: 'Getting Started',
           items: [
             { text: 'Getting started', link: '/guide/getting-started' },
-          ],
-        },
-        {
-          text: 'Example scenarios',
-          items: [
-            { text: 'Example scenarios', link: '/guide/example-scenarios' },
+            { text: 'Example walkthroughs', link: '/guide/example-scenarios' },
           ],
         },
       ],

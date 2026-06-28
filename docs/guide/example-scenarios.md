@@ -1,8 +1,8 @@
 ---
-title: Example scenarios
+title: Example walkthroughs
 ---
 
-# Example scenarios
+# Example walkthroughs
 
 This page walks through complete, end-to-end scenarios using Agentweaver — from creating a project to merging reviewed work. Each scenario is grounded in the actual web UI and API behavior. Every run passes through the same default pipeline:
 

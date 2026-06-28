@@ -40,15 +40,24 @@
   cursor: zoom-out;
 }
 
+.mermaid-lightbox-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 95vw;
+  height: 95vh;
+}
+
 .mermaid-lightbox-overlay svg {
+  width: 95vw !important;
+  height: 95vh !important;
   max-width: 95vw !important;
   max-height: 95vh !important;
-  width: auto;
-  height: auto;
   background: var(--vp-c-bg, #fff);
   border-radius: 8px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
   padding: 16px;
+  box-sizing: border-box;
 }
 
 html.dark .mermaid-lightbox-overlay svg {
