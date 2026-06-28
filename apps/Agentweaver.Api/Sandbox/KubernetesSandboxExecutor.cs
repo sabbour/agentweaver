@@ -301,7 +301,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             spec = new
             {
                 warmPoolRef = new { name = _options.AgentHostWarmPoolRef },
-                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds },
+                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
                 // Per-run env vars for Agentweaver.AgentHost (injected into the pod spec
                 // by the sandbox controller if it supports the `env` field; otherwise the
                 // template or a mounted ConfigMap carries the static config and the runId
@@ -363,7 +363,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             spec = new
             {
                 warmPoolRef = new { name = _options.WarmPoolRef },
-                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds },
+                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
             },
         };
 

@@ -79,6 +79,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         spec.GetProperty("warmPoolRef").GetProperty("name").GetString()
             .Should().Be("agentweaver-agent-host", "agent-host claims bind to the agent-host warm pool");
         spec.GetProperty("lifecycle").GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
+        spec.GetProperty("lifecycle").GetProperty("shutdownPolicy").GetString().Should().Be("Delete");
         spec.TryGetProperty("templateRef", out _).Should().BeFalse("the deprecated templateRef key must be gone");
         spec.TryGetProperty("sandboxTemplateRef", out _).Should().BeFalse("claims reference a warm pool, not a template");
         spec.TryGetProperty("ttl", out _).Should().BeFalse("the non-existent ttl field must be gone");
@@ -106,6 +107,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         var spec = SpecOf(post.Body!);
         spec.GetProperty("warmPoolRef").GetProperty("name").GetString().Should().Be("agentweaver-sandbox");
         spec.GetProperty("lifecycle").GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
+        spec.GetProperty("lifecycle").GetProperty("shutdownPolicy").GetString().Should().Be("Delete");
         spec.TryGetProperty("templateRef", out _).Should().BeFalse();
         spec.TryGetProperty("ttl", out _).Should().BeFalse();
     }

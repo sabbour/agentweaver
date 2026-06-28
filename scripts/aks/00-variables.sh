@@ -29,6 +29,11 @@ if [[ -z "${IMAGE_TAG:-}" ]]; then
 fi
 ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
 
+# AgentHost (pod-per-run) image tag. Defaults to the unified IMAGE_TAG so the
+# agentweaver-agent-host image/template/warmpool track the same build unless
+# explicitly overridden.
+: "${AGENTHOST_IMAGE_TAG:=${IMAGE_TAG}}"
+
 # -- Derived values (do not override) -----------------------------------------
 export RESOURCE_GROUP
 export CLUSTER_NAME
@@ -36,6 +41,7 @@ export ACR_NAME
 export LOCATION
 export NAMESPACE
 export IMAGE_TAG
+export AGENTHOST_IMAGE_TAG
 export ACR_LOGIN_SERVER
 export KEYVAULT_NAME
 export TENANT_ID

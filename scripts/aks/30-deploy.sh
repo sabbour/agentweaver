@@ -106,7 +106,7 @@ echo ""
 echo "Rendering manifests..."
 for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
   fname="$(basename "${yaml_file}")"
-  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX}' \
+  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${AGENTHOST_IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX}' \
     < "${yaml_file}" > "${RENDERED_DIR}/${fname}"
   echo "  rendered: ${fname}"
 done
@@ -162,11 +162,10 @@ echo "Applying sandbox template and warm pool (if CRD is available)..."
 if kubectl api-resources --api-group=extensions.agents.x-k8s.io 2>/dev/null | grep -q SandboxTemplate; then
   apply_rendered sandbox-template.yaml
   apply_rendered sandbox-warmpool.yaml
-  # spec-018 pod-per-run: AgentHost warm pool (claims bind via spec.warmPoolRef.name).
-  # NOTE: the referenced agentweaver-agent-host SandboxTemplate is rendered/applied
-  # separately (sandbox-template-agenthost.yaml needs ${AGENTHOST_IMAGE_TAG}, which is
-  # not in this script's envsubst allowlist) — ensure it is applied before this pool can
-  # provision pods.
+  # spec-018 pod-per-run: AgentHost SandboxTemplate + warm pool. The template MUST be
+  # applied before the warm pool (the pool's sandboxTemplateRef points at it), and the
+  # warm pool MUST exist before AgentHost claims (which bind via spec.warmPoolRef.name).
+  apply_rendered sandbox-template-agenthost.yaml
   apply_rendered sandbox-warmpool-agenthost.yaml
 else
   echo "  [SKIP] agent-sandbox CRD not installed — sandbox template skipped."

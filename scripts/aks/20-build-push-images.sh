@@ -88,6 +88,22 @@ az acr build \
 echo ""
 echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-sandbox:${IMAGE_TAG}"
 
+# -- Image 5: agentweaver-agent-host (spec-018 pod-per-run AgentHost) ----------
+# Build context: repo root (Dockerfile COPYs apps/Agentweaver.AgentHost + packages/).
+# Tagged with AGENTHOST_IMAGE_TAG (defaults to IMAGE_TAG) so the SandboxTemplate
+# agentweaver-agent-host references a real, pushed image.
+echo ""
+echo "--- Building agentweaver-agent-host ---"
+az acr build \
+  --registry "${ACR_NAME}" \
+  --resource-group "${RESOURCE_GROUP}" \
+  --image "agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}" \
+  --file "apps/Agentweaver.AgentHost/Dockerfile" \
+  "."
+
+echo ""
+echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}"
+
 # -- Summary ------------------------------------------------------------------
 echo ""
 echo "==================================================="
@@ -98,10 +114,12 @@ echo "  ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}"
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-frontend:${IMAGE_TAG}"
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-mcp:${IMAGE_TAG}"
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-sandbox:${IMAGE_TAG}"
+echo "  ${ACR_LOGIN_SERVER}/agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}"
 echo ""
 echo "Export for deploy step:"
 echo "  export ACR_NAME=${ACR_NAME}"
 echo "  export IMAGE_TAG=${IMAGE_TAG}"
+echo "  export AGENTHOST_IMAGE_TAG=${AGENTHOST_IMAGE_TAG}"
 echo ""
 echo "  Next step:"
 echo "    bash scripts/aks/30-deploy.sh"

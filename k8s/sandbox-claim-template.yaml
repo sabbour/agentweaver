@@ -10,3 +10,4 @@ spec:
     name: agentweaver-sandbox
   lifecycle:
     ttlSecondsAfterFinished: 600
+    shutdownPolicy: Delete
