@@ -6,6 +6,8 @@ The Agentweaver MCP server is **experimental**. Tool names, parameters, and beha
 
 The Agentweaver MCP server exposes all Agentweaver operations as structured tool calls over stdio. Any MCP-capable host (GitHub Copilot CLI, Claude, Cursor, Windsurf, etc.) can discover and invoke these tools automatically via the `.mcp.json` file at the repository root.
 
+> For a complete, always-up-to-date list of every tool name and its one-line description, see the auto-generated [MCP tool index](./mcp-tools.md). This page documents each tool's full parameters and return shape.
+
 ## Setup
 
 Set the required environment variable before starting any MCP host that uses the server:
