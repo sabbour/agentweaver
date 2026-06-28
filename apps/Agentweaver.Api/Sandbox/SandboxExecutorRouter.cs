@@ -19,14 +19,17 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly ILoggerFactory _loggerFactory;
     private readonly IPodNameRegistry? _podRegistry;
     private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly IRunSubmittingUserResolver? _submittingUserResolver;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
-        IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null)
+        IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
+        IRunSubmittingUserResolver? submittingUserResolver = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
         _podRegistry = podRegistry;
         _httpClientFactory = httpClientFactory;
+        _submittingUserResolver = submittingUserResolver;
     }
 
     public ISandboxExecutor Resolve()
@@ -107,7 +110,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 "SandboxExecutorRouter: selecting KubernetesSandboxExecutor (namespace={Namespace}, workspaceMountPath={WorkspaceMountPath})",
                 sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
             return new KubernetesSandboxExecutor(
-                k8sClient, sandboxOptions, k8sLogger, _podRegistry, readinessProbe);
+                k8sClient, sandboxOptions, k8sLogger, _podRegistry, readinessProbe, _submittingUserResolver);
         }
         catch (Exception ex)
         {

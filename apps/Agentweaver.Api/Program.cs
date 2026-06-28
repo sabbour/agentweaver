@@ -270,6 +270,10 @@ builder.Services.AddAgentRuntime();
 // ISandboxExecutorRouter (017-US2): explicit router replaces fragile last-registration-wins pattern.
 // Overrides the ISandboxExecutor registered by AddAgentRuntime() — last registration wins.
 builder.Services.AddSingleton<IPodNameRegistry, PodNameRegistry>();
+// Resolves a run's submitting user (from IRunStore) so the pod-per-run executor can inject
+// AgentHost__UserId, scoping the in-pod GitHub Copilot auth to the user's Copilot-entitled token
+// instead of the installation token (which fails the first model turn).
+builder.Services.AddSingleton<IRunSubmittingUserResolver, RunStoreSubmittingUserResolver>();
 builder.Services.AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>();
 builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     sp.GetRequiredService<ISandboxExecutorRouter>().Resolve());
