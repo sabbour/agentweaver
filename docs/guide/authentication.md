@@ -17,7 +17,8 @@ Click **Sign in with GitHub**. You'll be redirected to GitHub to authorize the a
 ::: tip One sign-in for everything
 The GitHub sign-in grants both:
 - **Repository access** — including private repositories, used when creating projects from GitHub
-- **GitHub Copilot access** — authorization to use GitHub Copilot as the AI provider for your runs
+- **Organization membership checks** — `read:org` scope lets Agentweaver verify you belong to the required org
+- **GitHub Copilot access** — the `copilot` scope authorizes Agentweaver to use GitHub Copilot as the AI provider for your runs
 
 You do not need a separate API key for GitHub Copilot after signing in.
 :::

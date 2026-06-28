@@ -238,6 +238,29 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("OAuthStates");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.WebSessionExchangeCode", b =>
+                {
+                    b.Property<string>("Code")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AccessToken")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Login")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Code");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("WebSessionExchangeCodes");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Diagnostics.HeartbeatStatusRecord", b =>
                 {
                     b.Property<string>("PodName")

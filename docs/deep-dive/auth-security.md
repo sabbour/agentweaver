@@ -521,14 +521,13 @@ A refresh helper centralizes token retrieval. It returns still-valid tokens dire
 
 ### OAuth authorization state and web exchange codes
 
-Some OAuth artifacts are intentionally in-memory:
+OAuth bootstrap artifacts are persisted in `MemoryDbContext` (Postgres in production, SQLite in development) so that any API replica can validate or redeem them — the load balancer can send the follow-up request to a different pod than the one that issued the code:
 
-- GitHub CSRF states;
-- MCP pending authorizations keyed by GitHub state;
-- Agentweaver authorization codes;
-- browser one-time session exchange codes.
+- **GitHub CSRF states** (`OAuthState` table): armed at `/auth/github/authorize`, redeemed atomically at `/auth/github/callback` via conditional `ExecuteDeleteAsync` on the state token.
+- **MCP pending authorizations** and **Agentweaver authorization codes** (`McpPendingAuthorization`, `McpAuthorizationCode` tables): broker state for the MCP OAuth 2.1 AS.
+- **Browser one-time session exchange codes** (`WebSessionExchangeCode` table): issued at the callback and redeemed at `POST /api/auth/session/exchange`. At-most-once redemption is enforced across replicas via a conditional `ExecuteDeleteAsync` on `Code`.
 
-These are short-lived bootstrap artifacts, not durable sessions. The trade-off is operational: a process restart can force the user to restart an OAuth flow, but it avoids persisting sensitive, replayable intermediate codes.
+All entries are short-lived (60 s – 10 min TTL). Expired rows are purged opportunistically on Postgres; SQLite/dev relies on read-time expiry checks. A pod restart or scaling event cannot orphan an in-flight login — any replica in the pool will handle the follow-up request.
 
 ### OAuth refresh tokens
 
