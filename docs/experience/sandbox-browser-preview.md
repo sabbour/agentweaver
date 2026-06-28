@@ -42,6 +42,25 @@ pod to route into. The button sits in the run header.
 6. **Stop when done.** Click **Stop** to tear it down (`DELETE` on that session). **Close** just dismisses
    the dialog.
 
+## Agent-initiated preview (with your approval)
+
+An agent can also open a preview **for you**, mid-run, when it has just started a server and wants to show
+you the result — without you opening the dialog or typing a port. The agent calls a `start_preview(port)`
+tool; instead of exposing the server silently, that request raises a **human-in-the-loop approval** on the
+run timeline:
+
+- A **"the agent wants to expose a preview server on port N"** approval card appears (the same kind of card
+  used for the agent's URL-fetch requests). **Approve** it and the agent gets back the live `preview_url`;
+  the preview behaves exactly like one you started yourself (same URL, same auto-expiry, same Stop).
+- If you don't approve within ~5 minutes the request lapses and the agent is told the preview was not
+  granted.
+- The agent can only ever request a preview for **its own run** — the run is bound server-side, so a
+  `start_preview` call can't reach another run's pod.
+
+Operators running automated demos can set `SANDBOX_PREVIEW_AUTO_APPROVE=true` (or the per-run
+auto-approve-tools option) to grant these requests automatically; in normal use the approval stays in your
+hands.
+
 ## What to expect
 
 - **Kubernetes-only.** The preview routes into the run's own sandbox pod. On local/dev runs there is no

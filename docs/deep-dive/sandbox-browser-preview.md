@@ -139,8 +139,63 @@ replica-safe.
 When the feature is enabled, `RunOrchestrator.ComposeCapabilities`
 ([`RunOrchestrator.cs:590`](#source)) appends a short **Browser Preview** note
 ([`RunOrchestrator.cs:64`](#source)) to worker/child system prompts, telling the agent to bind its server to
-`0.0.0.0` (not `127.0.0.1`), keep it running, and tell the user which port to preview. There is **no MCP
-tool** — preview start is always user-initiated from the UI. When disabled, the prompt is unchanged.
+`0.0.0.0` (not `127.0.0.1`), keep it running, and tell the user which port to preview.
+
+## Agent-initiated preview (`start_preview`)
+
+A running agent can also expose its server **autonomously**, mid-workflow, without a human picking a port in
+the UI — via the `start_preview` agent tool. The tool is produced by `AgentweaverApiTools.Build` and is
+**run-scoped**: it is only offered when a `runId` is captured in the tool closure
+([`AgentweaverApiTools.cs:245`](#source)), and the model supplies **only** the port. Because the `runId` is
+server-bound, the agent physically cannot target another run.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+sequenceDiagram
+    participant Agent as Agent (in sandbox)
+    participant API as API (start_preview endpoint)
+    participant Gate as AgentPreviewGate
+    participant Op as Operator / auto-approve
+    participant Preview as SandboxPreviewService
+    Agent->>API: POST /api/runs/{runId}/sandbox/preview { target_port }
+    API->>API: IsOwnerOrServiceCaller (owner OR run's own agent)
+    API->>Gate: RequestApprovalAsync(runId, port)
+    alt auto-approve source on
+        Gate-->>API: Approved (immediate)
+    else human-gated
+        Gate->>Op: emit tool.approval_required (request_id)
+        Op-->>Gate: POST /tool-approvals (grant) — or timeout
+        Gate-->>API: Approved / DeniedOrTimedOut
+    end
+    API->>Preview: StartPreviewAsync(runId, port)  %% same path as operator route
+    Preview-->>API: preview_url
+    API-->>Agent: { preview_url, … }
+```
+
+1. **The tool POSTs** `{ target_port }` to `POST /api/runs/{runId}/sandbox/preview`
+   ([`SandboxEndpoints.cs:57`](#source)) and returns the response `preview_url` back to the agent.
+2. **Authorization** accepts the run's owner **or** the run's own agent callback. The agent callback
+   authenticates with the shared service key, which resolves to the configured `Auth:User` identity (not the
+   human owner), so the human-oriented `IsOwner` check would block it; `IsOwnerOrServiceCaller`
+   ([`EndpointHelpers.cs:40`](#source)) admits that service identity **without** weakening security — the
+   server-bound `runId` means a service caller can only ever act on the run its agent is executing.
+3. **The HITL gate** `AgentPreviewGate.RequestApprovalAsync` ([`AgentPreviewGate.cs:85`](#source)) is the
+   human-in-the-loop seam. It reuses the same `IToolApprovalGate` primitive as `web_fetch`: it emits a
+   `tool.approval_required` card ([`AgentPreviewGate.cs:103`](#source)) and suspends until an operator grants
+   via `POST /api/runs/{runId}/tool-approvals` or the 5-minute window times out.
+4. **Auto-approve** short-circuits the wait when any of these is on
+   ([`AgentPreviewGate.cs:75`](#source)): the global `Sandbox:Preview:AutoApprove` config / env
+   `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:125`](#source)), the per-run `AutoApproveTools`
+   operator option, or an existing scoped allow policy. Production stays human-gated (default `false`); the
+   flag exists so an automated demo can run unattended.
+5. **On approval** the endpoint runs the **same** `StartPreviewForRunAsync` path
+   ([`SandboxEndpoints.cs:217`](#source)) as the operator route — Gateway-direct preview when enabled,
+   legacy `kubectl` fallback otherwise — and returns `preview_url`.
+
+> **Design note.** The agent tool is a synchronous HTTP callback that must return a URL, so it uses the
+> per-tool `IToolApprovalGate` (which resolves in-process and returns a bool) rather than the MAF
+> `RequestPort` workflow primitive — `RequestPort` suspends/checkpoints the whole workflow and resumes via a
+> separately-posted decision, which cannot satisfy a synchronous tool callback.
 
 ## Source
 
@@ -152,7 +207,11 @@ tool** — preview start is always user-initiated from the UI. When disabled, th
 | Reaper decision logic & label/Service-name helpers | `apps/Agentweaver.Api/Sandbox/Preview/PreviewReaper.cs` |
 | Background ~60 s reaper sweep | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewReaperService.cs` |
 | SandboxClaim CRD coordinates + bound-pod parsing | `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs` |
-| HTTP endpoints (start / keepalive / stop / list) | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
+| HTTP endpoints (start / agent-start / keepalive / stop / list) | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
+| Agent-initiated approval gate (HITL + auto-approve) | `apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs` |
+| `start_preview` agent tool (run-scoped HTTP callback) | `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs` |
+| Owner-or-agent-callback authorization helper | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
+| HITL approval primitive (shared with `web_fetch`) | `packages/Agentweaver.AgentRuntime/InMemoryToolApprovalGate.cs` |
 | Agent capability note injection | `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` |
 | Shared preview Gateway | `k8s/gateway-preview.yaml` |
 | Sandbox NetworkPolicy (preview ingress range) | `k8s/networkpolicy-sandbox.yaml` |
