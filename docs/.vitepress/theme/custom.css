@@ -140,3 +140,55 @@ html.dark .mermaid .marker {
   fill: #a0a0a6 !important;
   stroke: #a0a0a6 !important;
 }
+
+/* ----------------------------------------------------------------------- */
+/* 4. Dark mode: sequenceDiagram text (flowchart block above doesn't cover  */
+/*    these classes, so message/loop/label text stayed dark #242424 on the  */
+/*    dark page background). Surgical — NO blanket `.mermaid text` rule, so  */
+/*    the light actor boxes and yellow notes keep their readable dark text.  */
+/* ----------------------------------------------------------------------- */
+
+/* Message / signal labels on the arrows */
+html.dark .mermaid .messageText,
+html.dark .mermaid text.messageText {
+  fill: #e6e6e6 !important;
+}
+
+/* Loop / alt / opt / par labels (the "loop", "alt", condition text) */
+html.dark .mermaid .loopText,
+html.dark .mermaid .loopText tspan,
+html.dark .mermaid .labelText,
+html.dark .mermaid .labelText tspan {
+  fill: #e6e6e6 !important;
+}
+
+/* The little box behind the loop/alt label */
+html.dark .mermaid .labelBox {
+  fill: #2b2b2c !important;
+  stroke: #54545a !important;
+}
+
+/* Loop / alt / opt frame border */
+html.dark .mermaid .loopLine {
+  stroke: #a0a0a6 !important;
+}
+
+/* Lifelines dropping from each actor */
+html.dark .mermaid .actor-line {
+  stroke: #6a6a70 !important;
+}
+
+/* Message lines / arrows (solid and dashed) */
+html.dark .mermaid .messageLine0,
+html.dark .mermaid .messageLine1 {
+  stroke: #a0a0a6 !important;
+}
+
+/* Sequence step numbers (the little circled numbers) */
+html.dark .mermaid .sequenceNumber {
+  fill: #e6e6e6 !important;
+}
+
+/* Actor boxes (.actor rect/text) and notes (.note rect, .noteText) are left
+   untouched on purpose — they are light/yellow boxes with dark text that
+   read fine in dark mode. */
