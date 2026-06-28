@@ -12,11 +12,11 @@ Run the full AKS provisioning — ACR, cluster, identity, Postgres, image builds
 
 ```bash
 # macOS / Linux / WSL2
-curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.sh | bash -s -- --aks
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
 ```
 ```powershell
 # Windows PowerShell (delegates to install.sh via WSL2)
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/asabbour/agentweaver/main/install.ps1'))) -Aks
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1'))) -Aks
 ```
 
 **Optional flags:**
@@ -25,10 +25,31 @@ curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.s
 |---|---|---|
 | `--skip-postgres` | `-SkipPostgres` | Skip Postgres provisioning (step 17) if it already exists |
 | `--skip-oauth-key` | `-SkipOauthKey` | Skip OAuth signing key provisioning (step 16) if it already exists |
+| `--image-tag <tag>` | `-ImageTag <tag>` | Use this image tag instead of the short git SHA (see [Redeploy](#redeploy--update)) |
 
 The installer will clone the repo to `~/agentweaver` if you don't already have a local checkout, then run all provisioning steps in order.
 
 > **Prerequisites before running:** `az login`, `kubectl`, `envsubst`, `openssl`, and the `aks-preview` Azure CLI extension. See [Prerequisites](#prerequisites) below for install links.
+
+### Redeploy / update
+
+Re-running the installer with `--image-tag` builds new images, pushes them, and redeploys — this is the standard update path:
+
+```bash
+# From a cloned checkout
+bash install.sh --aks --image-tag <new-git-sha>
+```
+```powershell
+.\install.ps1 -Aks -ImageTag <new-git-sha>
+```
+
+Or via one-liner (no local checkout required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks --image-tag <new-git-sha>
+```
+
+> **Never use `:latest`.** Image tags are immutable per build. The default is `git rev-parse --short HEAD`. Always pin to a specific SHA for reproducible, rollback-safe deployments.
 
 ---
 

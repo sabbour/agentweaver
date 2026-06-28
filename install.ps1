@@ -24,6 +24,11 @@
 .PARAMETER SkipOauthKey
     (AKS) Skip OAuth signing key provisioning (16-provision-oauth-signing-key.sh).
 
+.PARAMETER ImageTag
+    (AKS) Use this image tag instead of the short git SHA. Re-run with a new tag to
+    build, push, and redeploy (this is the update/redeploy path). Never use 'latest' —
+    always pin to a specific SHA for reproducible deployments.
+
 .PARAMETER SkipBuild
     (Local) Skip dotnet build in start-dev.ps1.
 
@@ -32,7 +37,7 @@
 
 .EXAMPLE
     # Local dev — default
-    iwr https://raw.githubusercontent.com/asabbour/agentweaver/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1 | iex
 
     # Local dev with flags
     .\install.ps1
@@ -43,12 +48,16 @@
 
     # AKS deploy, skip Postgres provisioning
     .\install.ps1 -Aks -SkipPostgres
+
+    # AKS redeploy with a specific image tag
+    .\install.ps1 -Aks -ImageTag abc1234
 #>
 param(
     [switch] $Local,
     [switch] $Aks,
     [switch] $SkipPostgres,
     [switch] $SkipOauthKey,
+    [string] $ImageTag = "",
     [switch] $SkipBuild,
     [switch] $NoBrowser
 )
@@ -68,10 +77,9 @@ if ($Aks -and $Local) { Fail "-Aks and -Local are mutually exclusive." }
 $Mode = if ($Aks) { "aks" } else { "local" }
 
 # ── Locate repo root ───────────────────────────────────────────────────────────
-# NOTE: RepoUrl is ASSUMED — no remote is configured in this local repo.
-# If you are using a fork, set $env:AGENTWEAVER_REPO_URL before running.
+# Override for forks: set $env:AGENTWEAVER_REPO_URL to point at your fork.
 $RepoUrl = if ($env:AGENTWEAVER_REPO_URL) { $env:AGENTWEAVER_REPO_URL } `
-           else { "https://github.com/asabbour/agentweaver.git" }
+           else { "https://github.com/sabbour/agentweaver.git" }
 
 $RepoRoot = $PSScriptRoot
 if (-not $RepoRoot) {
@@ -186,6 +194,7 @@ function Install-Aks {
     $bashArgs = @("--aks")
     if ($SkipPostgres)  { $bashArgs += "--skip-postgres" }
     if ($SkipOauthKey)  { $bashArgs += "--skip-oauth-key" }
+    if ($ImageTag)      { $bashArgs += "--image-tag"; $bashArgs += $ImageTag }
     $bashArgsStr = $bashArgs -join " "
 
     # Convert Windows path to WSL path

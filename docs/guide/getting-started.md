@@ -8,11 +8,11 @@ The installer checks prerequisites, installs web and .NET dependencies, and laun
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash
 ```
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/asabbour/agentweaver/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1 | iex
 ```
 
 Both commands will clone the repo to `~/agentweaver` if you don't already have a local checkout. If you have already cloned the repo, run `bash install.sh` (or `.\install.ps1`) from the repo root instead.

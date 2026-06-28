@@ -18,18 +18,18 @@ Read the docs: [docs/index.md](docs/index.md)
 
 **Local dev — one command:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash
 ```
 ```powershell
-irm https://raw.githubusercontent.com/asabbour/agentweaver/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1 | iex
 ```
 
 **Deploy to AKS — one command** (requires `az login` + `kubectl` + `envsubst` + `openssl`):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.sh | bash -s -- --aks
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
 ```
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/asabbour/agentweaver/main/install.ps1'))) -Aks
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1'))) -Aks
 ```
 
 > **AKS flags:** `--skip-postgres` / `-SkipPostgres` and `--skip-oauth-key` / `-SkipOauthKey`
@@ -50,6 +50,52 @@ bash install.sh          # local dev — checks prereqs, installs deps, prints s
 bash install.sh --aks    # AKS deploy (requires az login + kubectl + envsubst + openssl)
 ```
 </details>
+
+## Build & deploy
+
+### Local build
+
+```bash
+# Build the .NET solution
+dotnet build agentweaver.sln
+
+# Build the web frontend
+npm --prefix apps/web run build
+```
+
+### Run locally
+
+Start each component from the repo root (three terminals):
+
+```bash
+# Terminal 1 — API backend
+dotnet run --project apps/Agentweaver.Api
+
+# Terminal 2 — MCP server (optional)
+dotnet run --project apps/Agentweaver.Mcp
+
+# Terminal 3 — Web UI (Vite dev server, hot reload)
+npm --prefix apps/web run dev
+```
+
+> **Windows shortcut:** `.\start-dev.ps1` launches all three automatically.
+
+### Deploy / redeploy to AKS
+
+**First deploy:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
+```
+
+**Redeploy with a new image tag** (build, push, and redeploy in one command):
+```bash
+bash install.sh --aks --image-tag <git-sha>
+```
+```powershell
+.\install.ps1 -Aks -ImageTag <git-sha>
+```
+
+> **Never use `:latest`.** The default tag is the short git SHA (`git rev-parse --short HEAD`). Always pin to a specific SHA for reproducible deployments. Image tags are immutable per build.
 
 ## Key docs
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # install.sh — Agentweaver one-liner installer
 #
 # Usage (local dev, default):
@@ -6,11 +6,15 @@
 #   bash install.sh --local
 #
 # Usage (AKS deploy):
-#   bash install.sh --aks [--skip-postgres] [--skip-oauth-key]
+#   bash install.sh --aks [--skip-postgres] [--skip-oauth-key] [--image-tag <tag>]
+#
+# Usage (AKS redeploy with a specific image tag):
+#   bash install.sh --aks --image-tag abc1234
 #
 # Runnable via:
-#   curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.sh | bash -s -- --aks
+#   curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
+#   curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks --image-tag abc1234
 
 set -euo pipefail
 
@@ -27,23 +31,29 @@ die()     { echo -e "${RED}[error]${RESET} $*" >&2; exit 1; }
 MODE="local"
 SKIP_POSTGRES=false
 SKIP_OAUTH_KEY=false
+IMAGE_TAG_OVERRIDE=""
 
-for arg in "$@"; do
-  case "$arg" in
-    --local)          MODE="local" ;;
-    --aks)            MODE="aks" ;;
-    --skip-postgres)  SKIP_POSTGRES=true ;;
-    --skip-oauth-key) SKIP_OAUTH_KEY=true ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --local)          MODE="local"; shift ;;
+    --aks)            MODE="aks"; shift ;;
+    --skip-postgres)  SKIP_POSTGRES=true; shift ;;
+    --skip-oauth-key) SKIP_OAUTH_KEY=true; shift ;;
+    --image-tag)      IMAGE_TAG_OVERRIDE="${2:-}"; shift 2 ;;
+    --image-tag=*)    IMAGE_TAG_OVERRIDE="${1#*=}"; shift ;;
     -h|--help)
-      echo "Usage: install.sh [--local|--aks] [--skip-postgres] [--skip-oauth-key]"
+      echo "Usage: install.sh [--local|--aks] [--skip-postgres] [--skip-oauth-key] [--image-tag <tag>]"
       echo ""
-      echo "  --local          Set up local dev environment (default)"
-      echo "  --aks            Deploy to Azure Kubernetes Service"
-      echo "  --skip-postgres  (AKS) Skip Postgres provisioning (17-provision-postgres.sh)"
-      echo "  --skip-oauth-key (AKS) Skip OAuth signing key provisioning (16-provision-oauth-signing-key.sh)"
+      echo "  --local              Set up local dev environment (default)"
+      echo "  --aks                Deploy to Azure Kubernetes Service"
+      echo "  --skip-postgres      (AKS) Skip Postgres provisioning (17-provision-postgres.sh)"
+      echo "  --skip-oauth-key     (AKS) Skip OAuth signing key provisioning (16-provision-oauth-signing-key.sh)"
+      echo "  --image-tag <tag>    (AKS) Use this image tag instead of the short git SHA."
+      echo "                             Re-run with a new tag to build, push, and redeploy."
+      echo "                             Never use 'latest' — always pin to a specific SHA."
       exit 0
       ;;
-    *) die "Unknown argument: $arg. Run with --help for usage." ;;
+    *) die "Unknown argument: $1. Run with --help for usage." ;;
   esac
 done
 
@@ -51,10 +61,8 @@ done
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 # When piped through bash, BASH_SOURCE[0] may be empty; fall back to cwd.
 
-# NOTE: AGENTWEAVER_REPO_URL is ASSUMED — no remote is configured in this local repo.
-# The value below is the expected GitHub location. If you are using a fork, override:
-#   AGENTWEAVER_REPO_URL=https://github.com/YOUR_ORG/agentweaver.git curl -fsSL ... | bash
-AGENTWEAVER_REPO_URL="${AGENTWEAVER_REPO_URL:-https://github.com/asabbour/agentweaver.git}"
+# Override for forks: set AGENTWEAVER_REPO_URL to point at your fork.
+AGENTWEAVER_REPO_URL="${AGENTWEAVER_REPO_URL:-https://github.com/sabbour/agentweaver.git}"
 
 if [[ ! -f "${INSTALL_DIR}/agentweaver.sln" && ! -f "${INSTALL_DIR}/global.json" ]]; then
   # ── Bootstrap: running piped (curl | bash) outside a checkout ───────────────
@@ -180,6 +188,11 @@ install_aks() {
 
   echo ""
   echo -e "${BOLD}── Sourcing variables ──${RESET}"
+  # Pre-set IMAGE_TAG if --image-tag was provided; 00-variables.sh respects a pre-set value.
+  if [[ -n "${IMAGE_TAG_OVERRIDE}" ]]; then
+    export IMAGE_TAG="${IMAGE_TAG_OVERRIDE}"
+    info "Using specified image tag: ${IMAGE_TAG}"
+  fi
   # shellcheck source=scripts/aks/00-variables.sh
   source "${AKS_DIR}/00-variables.sh"
 

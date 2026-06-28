@@ -10,6 +10,8 @@ source: "team-decision"
 
 Docs live in `docs/` (a VitePress site) and drift from the code as features land. This skill is the repeatable playbook so doc updates are deterministic instead of a one-off prompt. See `.github/DOCS_SYNC.md` for the full strategy.
 
+> **Companion skill.** This skill owns **drift detection** and **generated/derived docs** (the generator + CI check). To *author* a feature's docs across all facets (deep-dive, reference, user guide, screenshots, landing card, nav, cross-links, diagrams), use the [`docs-feature`](../docs-feature/SKILL.md) skill. Use them together: `docs-feature` to write, `docs-sync` to keep generated docs in sync.
+
 Docs are split into two kinds:
 
 - **Generated** — derived from source, never hand-edited (carry a `GENERATED — DO NOT EDIT` header).
