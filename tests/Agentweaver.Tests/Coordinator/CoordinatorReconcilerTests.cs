@@ -208,7 +208,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
             _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
 
         return new CoordinatorDispatchService(
-            _runStore, _streamStore, orchestrator, new CoordinatorSteeringQueue(), _assembly,
+            _runStore, _streamStore, orchestrator, new CoordinatorSteeringQueue(_scopeFactory), _assembly,
             _scopeFactory, new TestHostApplicationLifetime(),
             NullLogger<CoordinatorDispatchService>.Instance,
             runOptions: null, autopilot: null, configuration: config);

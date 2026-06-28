@@ -63,7 +63,7 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
 
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
         _sut = new CoordinatorSteeringService(
-            _streamStore, new RunWorkflowRegistry(), new CoordinatorSteeringQueue(),
+            _streamStore, new RunWorkflowRegistry(),
             _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance);
     }
 

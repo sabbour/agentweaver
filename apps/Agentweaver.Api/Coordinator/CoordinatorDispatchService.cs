@@ -273,7 +273,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // through to normal finalization.
             if (result.Outcome is ChildOutcome.AssembleReady or ChildOutcome.Completed)
             {
-                var directive = _steering.TryTakeForChild(context.CoordinatorRunId, result.ChildRunId);
+                var directive = await _steering.TryTakeForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
+                    .ConfigureAwait(false);
                 if (directive is not null
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false))
@@ -287,7 +288,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // Amend is not applied on failure — it is additive and requires a clean boundary.
             else if (result.Outcome == ChildOutcome.Failed)
             {
-                var redirect = _steering.TryTakeRedirectForChild(context.CoordinatorRunId, result.ChildRunId);
+                var redirect = await _steering.TryTakeRedirectForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
+                    .ConfigureAwait(false);
                 if (redirect is not null
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false))

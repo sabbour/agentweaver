@@ -25,7 +25,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RunStreamStore _streamStore = new();
     private readonly RunWorkflowRegistry _registry = new();
-    private readonly CoordinatorSteeringQueue _queue = new();
+    private readonly CoordinatorSteeringQueue _queue;
     private readonly CoordinatorSteeringService _sut;
 
     public CoordinatorSteeringServiceTests()
@@ -41,8 +41,9 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
 
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
+        _queue = new CoordinatorSteeringQueue(_scopeFactory);
         _sut = new CoordinatorSteeringService(
-            _streamStore, _registry, _queue, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance);
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance);
     }
 
     [Fact]
@@ -96,8 +97,8 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
         persisted!.Status.Should().Be(SteeringStatus.Queued);
         persisted.CreatedBy.Should().Be("alice");
 
-        // Parked in the cross-thread queue for the dispatch loop to drain at the boundary.
-        var taken = _queue.TryTakeForChild("coord-1", "child-7");
+        // Parked in the durable (DB-backed) queue for the dispatch loop to drain at the boundary.
+        var taken = await _queue.TryTakeForChildAsync("coord-1", "child-7");
         taken.Should().NotBeNull();
         taken!.DirectiveId.Should().Be(view.Id);
         taken.Instruction.Should().Be("use the v2 API");
@@ -131,7 +132,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
         _streamStore.Get("child-9")!.IsCompleted.Should().BeTrue();
 
         // stop never goes through the next-turn-boundary queue.
-        _queue.TryTakeForChild("coord-1", "child-9").Should().BeNull();
+        (await _queue.TryTakeForChildAsync("coord-1", "child-9")).Should().BeNull();
 
         var persisted = await GetDirectiveAsync(view.Id);
         persisted!.Status.Should().Be(SteeringStatus.Applied);
@@ -177,7 +178,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
         view.TargetChildRunId.Should().BeNull("send is coordinator-level, not child-targeted");
 
         // Nothing queued in the next-boundary queue.
-        _queue.TryTakeForChild("coord-send", "any-child").Should().BeNull("send never goes through the steering queue");
+        (await _queue.TryTakeForChildAsync("coord-send", "any-child")).Should().BeNull("send never goes through the steering queue");
 
         // Persisted as applied.
         var persisted = await GetDirectiveAsync(view.Id);
@@ -288,6 +289,75 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
+    }
+
+    // -----------------------------------------------------------------------
+    // Replica-safety: the queue is DB-backed, so a directive enqueued on one pod
+    // (DbContext) is drained on another pod (a SEPARATE DbContext) exactly once.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task QueuedDirective_IsDrainedExactlyOnce_AcrossSeparateDbContexts()
+    {
+        _streamStore.Create("coord-xpod", "alice");
+
+        // Producer pod: persist a queued redirect via SteerAsync (its own scoped DbContext).
+        var view = await _sut.SteerAsync("coord-xpod", "redirect", "child-x", "switch to v2", "alice", default);
+        view.Status.Should().Be(SteeringStatus.Queued);
+
+        // Consumer pod: a queue instance backed by a DIFFERENT scope factory / DbContext, simulating
+        // the dispatch loop running on the pod that owns the coordinator run.
+        var consumerQueue = NewQueueOnSeparateDbContext();
+
+        var first = await consumerQueue.TryTakeForChildAsync("coord-xpod", "child-x");
+        first.Should().NotBeNull("the directive persisted on the producer pod must be visible on the consumer pod");
+        first!.DirectiveId.Should().Be(view.Id);
+        first.Instruction.Should().Be("switch to v2");
+
+        // The atomic queued->relayed claim means a second drain (a re-poll, or another pod) gets nothing.
+        var second = await consumerQueue.TryTakeForChildAsync("coord-xpod", "child-x");
+        second.Should().BeNull("an already-claimed directive must never be delivered twice (at-most-once)");
+
+        // The persisted row reflects the claim.
+        var persisted = await GetDirectiveAsync(view.Id);
+        persisted!.Status.Should().Be(SteeringStatus.Relayed);
+        persisted.RelayedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task QueuedDirectives_AreDrainedInFifoOrder()
+    {
+        _streamStore.Create("coord-fifo", "alice");
+
+        var first = await _sut.SteerAsync("coord-fifo", "redirect", "child-f", "step one", "alice", default);
+        var second = await _sut.SteerAsync("coord-fifo", "redirect", "child-f", "step two", "alice", default);
+
+        var consumerQueue = NewQueueOnSeparateDbContext();
+
+        var taken1 = await consumerQueue.TryTakeForChildAsync("coord-fifo", "child-f");
+        var taken2 = await consumerQueue.TryTakeForChildAsync("coord-fifo", "child-f");
+
+        taken1!.DirectiveId.Should().Be(first.Id, "FIFO: the oldest queued directive drains first");
+        taken1.Instruction.Should().Be("step one");
+        taken2!.DirectiveId.Should().Be(second.Id, "FIFO: the next-oldest directive drains second");
+        taken2.Instruction.Should().Be("step two");
+
+        (await consumerQueue.TryTakeForChildAsync("coord-fifo", "child-f"))
+            .Should().BeNull("both directives have been drained");
+    }
+
+    /// <summary>
+    /// Builds a <see cref="CoordinatorSteeringQueue"/> over a fresh <see cref="ServiceProvider"/> that
+    /// shares the same SQLite connection (so it sees the same physical table) but uses a SEPARATE
+    /// <see cref="IServiceScopeFactory"/>/<see cref="MemoryDbContext"/> — simulating the dispatch loop
+    /// running on a different pod than the one that handled the <c>/steer</c> request.
+    /// </summary>
+    private CoordinatorSteeringQueue NewQueueOnSeparateDbContext()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_connection));
+        var provider = services.BuildServiceProvider();
+        return new CoordinatorSteeringQueue(provider.GetRequiredService<IServiceScopeFactory>());
     }
 
     private async Task<int> CountDirectivesAsync()

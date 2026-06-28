@@ -129,7 +129,7 @@ public sealed class CoordinatorEventPersistenceTests : IAsyncDisposable
         registry.Register(child, null!, cts);
 
         var sut = new CoordinatorSteeringService(
-            _streamStore, registry, new CoordinatorSteeringQueue(), _scopeFactory,
+            _streamStore, registry, _scopeFactory,
             NullLogger<CoordinatorSteeringService>.Instance);
 
         await sut.SteerAsync(coord, "stop", child, "halt", "alice", default);
