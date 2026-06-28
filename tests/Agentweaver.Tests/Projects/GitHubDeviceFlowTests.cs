@@ -166,6 +166,45 @@ public sealed class GitHubDeviceFlowTests
     }
 
     // =========================================================================
+    // DFT-07: Default scopes include "copilot" when Auth:GitHub:Scopes is absent
+    // =========================================================================
+    [Fact]
+    public async Task StartDeviceFlow_DefaultScopes_IncludeCopilot()
+    {
+        var tokenStore = new InMemoryGitHubTokenStore();
+        var scope      = GitHubTokenScope.Installation;
+
+        string? capturedScopeParam = null;
+        var capturer = new CapturingScopeHandler(
+            """{"device_code":"dc_123","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}""",
+            s => capturedScopeParam = s);
+
+        var http   = new HttpClient(capturer);
+        // Build WITHOUT Auth:GitHub:Scopes → falls back to DefaultScopes
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Auth:GitHub:BaseUrl"]  = "https://github.com",
+                ["Auth:GitHub:ClientId"] = "test-client-id",
+            })
+            .Build();
+
+        var service = new GitHubDeviceFlowAuthService(
+            config, tokenStore, http,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubDeviceFlowAuthService>.Instance);
+
+        await service.StartDeviceFlowAsync(scope);
+
+        capturedScopeParam.Should().NotBeNullOrEmpty();
+        capturedScopeParam!.Split(' ')
+            .Should().Contain("copilot", "the default scope list must include copilot");
+        capturedScopeParam.Split(' ')
+            .Should().Contain("repo");
+        capturedScopeParam.Split(' ')
+            .Should().Contain("read:org");
+    }
+
+    // =========================================================================
     // Helpers
     // =========================================================================
 
@@ -213,6 +252,44 @@ public sealed class GitHubDeviceFlowTests
             }
 
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError));
+        }
+    }
+
+    /// <summary>
+    /// HTTP handler that captures the "scope" form field sent to GitHub and then returns a fixed response.
+    /// </summary>
+    private sealed class CapturingScopeHandler : HttpMessageHandler
+    {
+        private readonly string _responseJson;
+        private readonly Action<string> _onScope;
+
+        public CapturingScopeHandler(string responseJson, Action<string> onScope)
+        {
+            _responseJson = responseJson;
+            _onScope      = onScope;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Content is not null)
+            {
+                var body = await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var pairs = body.Split('&')
+                    .Select(p => p.Split('=', 2))
+                    .Where(p => p.Length == 2)
+                    .ToDictionary(
+                        p => Uri.UnescapeDataString(p[0].Replace('+', ' ')),
+                        p => Uri.UnescapeDataString(p[1].Replace('+', ' ')));
+
+                if (pairs.TryGetValue("scope", out var s))
+                    _onScope(s);
+            }
+
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responseJson, System.Text.Encoding.UTF8, "application/json"),
+            };
         }
     }
 }

@@ -40,6 +40,8 @@ These already flow through the `Database:Provider` switch and carry generated EF
 | `SubtaskDependency` | Subtask DAG edges. |
 | `SteeringDirective` | Queued/applied steering directives. |
 | `McpRefreshToken` / `McpRevokedJti` / `McpClientRegistration` | MCP OAuth state with their respective unique keys. |
+| `OAuthState` / `McpPendingAuthorization` / `McpAuthorizationCode` | Short-lived, replica-safe OAuth CSRF state and authorization codes. |
+| `WebSessionExchangeCode` | Short-lived (60s), single-use one-time code issued at the OAuth callback to carry the session token to the browser without placing it in the redirect URL. Backed by Postgres so `POST /api/auth/session/exchange` can land on any replica. |
 | `WorkflowCheckpointRecord` | Shared MAF workflow checkpoints (`workflow_checkpoints`), PK `(store_name, session_id, checkpoint_id)`, `jsonb` payload. Postgres-only (`model.Ignore<>()`d on SQLite); replaces the per-pod file checkpoint store so both `replicas: 2` share checkpoints with no exclusive lock (see the [Agent Framework deep dive](../deep-dive/agent-framework.md#checkpointing-durable-resume)). |
 
 ### 1c. Not a database (no migration)

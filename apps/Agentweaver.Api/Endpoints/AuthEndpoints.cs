@@ -93,7 +93,7 @@ app.MapGet("/auth/github/callback", async (
         // F5: do not place the access token (or login) in the redirect URL — it would leak to
         // browser history, server access logs, and Referer headers. Issue a short-lived, single-use
         // one-time code instead; the frontend exchanges it server-side via POST /api/auth/session/exchange.
-        var oneTimeCode = webSessionExchange.Issue(accessToken, login);
+        var oneTimeCode = await webSessionExchange.IssueAsync(accessToken, login, ct).ConfigureAwait(false);
         return Results.Redirect(
             $"{frontendUrl}/?auth=success&code={Uri.EscapeDataString(oneTimeCode)}");
     }
@@ -106,11 +106,15 @@ app.MapGet("/auth/github/callback", async (
 // POST /api/auth/session/exchange — redeem a web sign-in one-time code for the session token (F5).
 // AllowAnonymous: the opaque, single-use code is itself the credential. The GitHub access token is
 // never placed in a URL; it is returned only here, in the response body, over the server-side POST.
-app.MapPost("/api/auth/session/exchange", (
+app.MapPost("/api/auth/session/exchange", async (
     SessionExchangeRequest request,
-    WebSessionExchangeService webSessionExchange) =>
+    WebSessionExchangeService webSessionExchange,
+    CancellationToken ct) =>
 {
-    if (request is null || !webSessionExchange.TryRedeem(request.Code, out var accessToken, out var login))
+    if (request is null) return Results.BadRequest(new { error = "invalid_code" });
+
+    var (success, accessToken, login) = await webSessionExchange.TryRedeemAsync(request.Code, ct).ConfigureAwait(false);
+    if (!success)
         return Results.BadRequest(new { error = "invalid_code" });
 
     return Results.Ok(new SessionExchangeResponse(accessToken, login));
