@@ -1,52 +1,87 @@
 using System.Globalization;
 using Agentweaver.Api.Diagnostics;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Squad;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Metrics;
 
 /// <summary>
 /// Assembles per-project dashboard metrics and the global "Now" overview entirely from live stores
-/// (the <c>runs</c>, <c>backlog_tasks</c>, and <c>projects</c> SQLite tables) plus the in-process
+/// (the <c>runs</c>, <c>backlog_tasks</c>, and <c>projects</c> tables) plus the in-process
 /// coordinator heartbeat surface. No values are fabricated, estimated, or mocked
 /// (Constitution Principle VII). Cost is never reported (Agentweaver records no real cost source).
 ///
-/// <para>Every public method opens a single SQLite connection and groups/aggregates in SQL to keep
-/// the 30-second auto-refresh pages cheap (no N+1). Singleton-safe: connection-per-call, no shared
-/// mutable state.</para>
+/// <para>Provider-agnostic (spec-018): data access is delegated to a thin per-provider loader that
+/// reads raw rows once — EF Core LINQ over <see cref="MemoryDbContext"/> when the active provider is
+/// Postgres, raw SQLite SQL over <see cref="SqliteDb"/> otherwise — after which ALL grouping,
+/// aggregation, and time math runs in process. This keeps a single source of truth for the metric
+/// formulas across providers and avoids dialect-specific SQL (no <c>julianday</c>, no
+/// <c>EXTRACT(EPOCH …)</c>). Singleton-safe: every call loads its own rows, no shared mutable state.</para>
 /// </summary>
 public sealed class MetricsService
 {
     // Non-terminal run states that represent live, in-flight orchestration work.
-    private const string ActiveStatuses = "'pending','in_progress','awaiting_review','committing','merging'";
+    private static readonly HashSet<string> ActiveStatuses =
+        new(StringComparer.Ordinal) { "pending", "in_progress", "awaiting_review", "committing", "merging" };
 
     // Terminal SUCCESS states. 'completed' is the legacy success terminal; 'merged' is the
     // full pipeline success terminal; 'assemble_ready' is the coordinator child success terminal.
-    private const string SuccessStatuses = "'merged','completed','assemble_ready'";
+    private static readonly HashSet<string> SuccessStatuses =
+        new(StringComparer.Ordinal) { "merged", "completed", "assemble_ready" };
 
     // Any terminal (finished) state, used for the throughput "done" series.
-    private const string FinishedStatuses = "'merged','completed','assemble_ready','declined','failed','merge_failed'";
-
-    // Active (working) duration of a FINISHED run in ms, EXCLUDING the cumulative time the run spent
-    // parked in the awaiting_review human-review gate (runs.review_wait_ms, accrued on every exit from
-    // awaiting_review). Single source of truth so every duration aggregate excludes review dwell
-    // identically; clamped at 0 so review-heavy rows never report negative. See
-    // <see cref="ActiveDurationMsExcludingReview"/> for the equivalent C# computation.
-    private const string ActiveDurationMsSql =
-        "MAX(0, ((julianday(ended_at) - julianday(started_at)) * 86400000.0) - COALESCE(review_wait_ms, 0))";
+    private static readonly HashSet<string> FinishedStatuses =
+        new(StringComparer.Ordinal) { "merged", "completed", "assemble_ready", "declined", "failed", "merge_failed" };
 
     private readonly SqliteDb _db;
     private readonly IProjectStore _projectStore;
     private readonly HeartbeatStatusStore _heartbeatStore;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly bool _isPostgres;
 
-    public MetricsService(SqliteDb db, IProjectStore projectStore, HeartbeatStatusStore heartbeatStore)
+    public MetricsService(
+        SqliteDb db,
+        IProjectStore projectStore,
+        HeartbeatStatusStore heartbeatStore,
+        IServiceScopeFactory scopeFactory,
+        IConfiguration configuration)
     {
         _db = db;
         _projectStore = projectStore;
         _heartbeatStore = heartbeatStore;
+        _scopeFactory = scopeFactory;
+        var provider = configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+        _isPostgres = provider is "postgres" or "postgresql";
     }
+
+    /// <summary>
+    /// Minimal projection of a <c>runs</c> row carrying only the columns the dashboard/overview
+    /// aggregates need. Loaded once per request by <see cref="LoadRunsAsync"/> so every metric is
+    /// computed in process from the same provider-neutral shape.
+    /// </summary>
+    private readonly record struct RunRow(
+        string? ProjectId,
+        string? AgentName,
+        string Status,
+        string Origin,
+        string? ParentRunId,
+        string? Task,
+        DateTimeOffset StartedAt,
+        DateTimeOffset? EndedAt,
+        long ReviewWaitMs);
+
+    // Active (working) duration of a run, in ms, EXCLUDING accrued human-review dwell, clamped at 0.
+    private static double ActiveDurationMs(RunRow r) =>
+        ActiveDurationMsExcludingReview(r.StartedAt, r.EndedAt!.Value, r.ReviewWaitMs);
+
+    // UTC calendar day (yyyy-MM-dd) of a timestamp, matching SQLite date() on the stored ISO value.
+    private static string UtcDay(DateTimeOffset value) =>
+        value.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     // ---------------------------------------------------------------------------------
     // ENDPOINT 1 — Per-project dashboard
@@ -60,12 +95,12 @@ public sealed class MetricsService
         var windowStart = now.UtcDateTime.Date.AddDays(-29);
         var pid = project.Id.ToString();
 
-        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        var runs = await LoadRunsAsync(pid, ct).ConfigureAwait(false);
 
-        var summary = await ReadSummaryAsync(conn, pid, weekAgo, ct).ConfigureAwait(false);
-        var throughput = await ReadThroughputAsync(conn, pid, windowStart, ct).ConfigureAwait(false);
+        var summary = ReadSummary(runs, weekAgo);
+        var throughput = ReadThroughput(runs, windowStart);
         var agentRoles = ReadAgentRoles(project);
-        var leaderboard = await ReadLeaderboardAsync(conn, pid, weekAgo, agentRoles, ct).ConfigureAwait(false);
+        var leaderboard = ReadLeaderboard(runs, weekAgo, agentRoles);
 
         return new ProjectDashboardDto
         {
@@ -78,76 +113,51 @@ public sealed class MetricsService
         };
     }
 
-    private static async Task<DashboardSummaryDto> ReadSummaryAsync(
-        SqliteConnection conn, string pid, DateTimeOffset weekAgo, CancellationToken ct)
+    private static DashboardSummaryDto ReadSummary(IReadOnlyList<RunRow> runs, DateTimeOffset weekAgo)
     {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            $"""
-            SELECT
-                COALESCE(SUM(CASE WHEN julianday(started_at) >= julianday($weekAgo) THEN 1 ELSE 0 END), 0),
-                COUNT(*),
-                COALESCE(SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END), 0),
-                COUNT(DISTINCT CASE WHEN status = 'in_progress' AND agent_name IS NOT NULL THEN agent_name END),
-                COALESCE(SUM(CASE WHEN status IN ({SuccessStatuses}) AND ended_at IS NOT NULL
-                                   AND julianday(ended_at) >= julianday($weekAgo) THEN 1 ELSE 0 END), 0)
-            FROM runs
-            WHERE project_id = $pid;
-            """;
-        cmd.Parameters.AddWithValue("$pid", pid);
-        cmd.Parameters.AddWithValue("$weekAgo", Iso(weekAgo));
+        var activeAgents = new HashSet<string>(StringComparer.Ordinal);
+        int runsThisWeek = 0, activeRuns = 0, tasksDoneThisWeek = 0;
+        foreach (var r in runs)
+        {
+            if (r.StartedAt >= weekAgo) runsThisWeek++;
+            if (r.Status == "in_progress")
+            {
+                activeRuns++;
+                if (r.AgentName is not null) activeAgents.Add(r.AgentName);
+            }
+            if (SuccessStatuses.Contains(r.Status) && r.EndedAt is { } ended && ended >= weekAgo)
+                tasksDoneThisWeek++;
+        }
 
-        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        await r.ReadAsync(ct).ConfigureAwait(false);
         return new DashboardSummaryDto
         {
-            RunsThisWeek      = r.GetInt32(0),
-            RunsTotal         = r.GetInt32(1),
-            ActiveRuns        = r.GetInt32(2),
-            ActiveAgents      = r.GetInt32(3),
-            TasksDoneThisWeek = r.GetInt32(4),
+            RunsThisWeek      = runsThisWeek,
+            RunsTotal         = runs.Count,
+            ActiveRuns        = activeRuns,
+            ActiveAgents      = activeAgents.Count,
+            TasksDoneThisWeek = tasksDoneThisWeek,
         };
     }
 
-    private static async Task<IReadOnlyList<ThroughputPointDto>> ReadThroughputAsync(
-        SqliteConnection conn, string pid, DateTime windowStart, CancellationToken ct)
+    private static IReadOnlyList<ThroughputPointDto> ReadThroughput(IReadOnlyList<RunRow> runs, DateTime windowStart)
     {
         var startDate = windowStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         var created = new Dictionary<string, int>(StringComparer.Ordinal);
         var done = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        await using (var cmd = conn.CreateCommand())
+        foreach (var r in runs)
         {
-            cmd.CommandText =
-                """
-                SELECT date(started_at) AS d, COUNT(*)
-                FROM runs
-                WHERE project_id = $pid AND date(started_at) >= $start
-                GROUP BY d;
-                """;
-            cmd.Parameters.AddWithValue("$pid", pid);
-            cmd.Parameters.AddWithValue("$start", startDate);
-            await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            while (await r.ReadAsync(ct).ConfigureAwait(false))
-                if (!r.IsDBNull(0)) created[r.GetString(0)] = r.GetInt32(1);
-        }
+            var createdDay = UtcDay(r.StartedAt);
+            if (string.CompareOrdinal(createdDay, startDate) >= 0)
+                created[createdDay] = created.GetValueOrDefault(createdDay) + 1;
 
-        await using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText =
-                $"""
-                SELECT date(ended_at) AS d, COUNT(*)
-                FROM runs
-                WHERE project_id = $pid AND ended_at IS NOT NULL
-                  AND status IN ({FinishedStatuses}) AND date(ended_at) >= $start
-                GROUP BY d;
-                """;
-            cmd.Parameters.AddWithValue("$pid", pid);
-            cmd.Parameters.AddWithValue("$start", startDate);
-            await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            while (await r.ReadAsync(ct).ConfigureAwait(false))
-                if (!r.IsDBNull(0)) done[r.GetString(0)] = r.GetInt32(1);
+            if (r.EndedAt is { } ended && FinishedStatuses.Contains(r.Status))
+            {
+                var doneDay = UtcDay(ended);
+                if (string.CompareOrdinal(doneDay, startDate) >= 0)
+                    done[doneDay] = done.GetValueOrDefault(doneDay) + 1;
+            }
         }
 
         var series = new List<ThroughputPointDto>(30);
@@ -164,51 +174,44 @@ public sealed class MetricsService
         return series;
     }
 
-    private static async Task<IReadOnlyList<AgentLeaderboardEntryDto>> ReadLeaderboardAsync(
-        SqliteConnection conn,
-        string pid,
+    private static IReadOnlyList<AgentLeaderboardEntryDto> ReadLeaderboard(
+        IReadOnlyList<RunRow> runs,
         DateTimeOffset weekAgo,
-        IReadOnlyDictionary<string, string> agentRoles,
-        CancellationToken ct)
+        IReadOnlyDictionary<string, string> agentRoles)
     {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            $"""
-            SELECT
-                agent_name,
-                COALESCE(SUM(CASE WHEN julianday(started_at) >= julianday($weekAgo) THEN 1 ELSE 0 END), 0),
-                COUNT(*),
-                COALESCE(SUM(CASE WHEN status IN ({SuccessStatuses}) THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN status IN ({FinishedStatuses}) THEN 1 ELSE 0 END), 0),
-                AVG(CASE WHEN ended_at IS NOT NULL THEN {ActiveDurationMsSql} END)
-            FROM runs
-            WHERE project_id = $pid AND agent_name IS NOT NULL
-            GROUP BY agent_name
-            ORDER BY COUNT(*) DESC, agent_name ASC;
-            """;
-        cmd.Parameters.AddWithValue("$pid", pid);
-        cmd.Parameters.AddWithValue("$weekAgo", Iso(weekAgo));
-
-        var result = new List<AgentLeaderboardEntryDto>();
-        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        // Aggregate per agent_name (children included, matching the original GROUP BY agent_name).
+        var acc = new Dictionary<string, (int runsThisWeek, int runsTotal, int success, int terminal, double durSum, int durCount)>(StringComparer.Ordinal);
+        foreach (var r in runs)
         {
-            var agent = r.GetString(0);
-            var successfulRuns = r.GetInt32(3);
-            var terminalRuns = r.GetInt32(4);
-            result.Add(new AgentLeaderboardEntryDto
+            if (r.AgentName is null) continue;
+            var a = acc.GetValueOrDefault(r.AgentName);
+            a.runsTotal++;
+            if (r.StartedAt >= weekAgo) a.runsThisWeek++;
+            if (SuccessStatuses.Contains(r.Status)) a.success++;
+            if (FinishedStatuses.Contains(r.Status)) a.terminal++;
+            if (r.EndedAt is not null)
             {
-                Agent         = agent,
-                RoleTitle     = ResolveAgentRole(agentRoles, agent),
-                RunsThisWeek  = r.GetInt32(1),
-                RunsTotal     = r.GetInt32(2),
-                SuccessfulRuns = successfulRuns,
-                TerminalRuns  = terminalRuns,
-                SuccessRate   = terminalRuns == 0 ? 0d : (double)successfulRuns / terminalRuns,
-                AvgDurationMs = r.IsDBNull(5) ? null : r.GetDouble(5),
-            });
+                a.durSum += ActiveDurationMs(r);
+                a.durCount++;
+            }
+            acc[r.AgentName] = a;
         }
-        return result;
+
+        return acc
+            .OrderByDescending(kv => kv.Value.runsTotal)
+            .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => new AgentLeaderboardEntryDto
+            {
+                Agent          = kv.Key,
+                RoleTitle      = ResolveAgentRole(agentRoles, kv.Key),
+                RunsThisWeek   = kv.Value.runsThisWeek,
+                RunsTotal      = kv.Value.runsTotal,
+                SuccessfulRuns = kv.Value.success,
+                TerminalRuns   = kv.Value.terminal,
+                SuccessRate    = kv.Value.terminal == 0 ? 0d : (double)kv.Value.success / kv.Value.terminal,
+                AvgDurationMs  = kv.Value.durCount == 0 ? null : kv.Value.durSum / kv.Value.durCount,
+            })
+            .ToList();
     }
 
     private static IReadOnlyDictionary<string, string> ReadAgentRoles(Project project)
@@ -300,18 +303,19 @@ public sealed class MetricsService
     public async Task<OverviewDto> GetOverviewAsync(CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
-        var todayUtc = now.UtcDateTime.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var todayUtc = now.UtcDateTime.Date;
 
         var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
         var names = projects.ToDictionary(p => p.Id.ToString(), p => p.Name, StringComparer.Ordinal);
 
-        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        var runs = await LoadRunsAsync(null, ct).ConfigureAwait(false);
+        var readyProjectIds = await LoadReadyBacklogProjectIdsAsync(ct).ConfigureAwait(false);
 
-        var atAGlance = await ReadAtAGlanceAsync(conn, todayUtc, ct).ConfigureAwait(false);
-        var liveSessions = await ReadLiveSessionsAsync(conn, names, ct).ConfigureAwait(false);
-        var workflowRuns = await ReadActiveWorkflowRunsAsync(conn, names, ct).ConfigureAwait(false);
-        var activeProjects = await ReadActiveProjectsAsync(conn, names, ct).ConfigureAwait(false);
-        var recent = await ReadRecentActivityAsync(conn, names, ct).ConfigureAwait(false);
+        var atAGlance = ReadAtAGlance(runs, readyProjectIds, todayUtc);
+        var liveSessions = ReadLiveSessions(runs, names);
+        var workflowRuns = ReadActiveWorkflowRuns(runs, names);
+        var activeProjects = ReadActiveProjects(runs, readyProjectIds, names);
+        var recent = ReadRecentActivity(runs, names);
 
         return new OverviewDto
         {
@@ -324,152 +328,102 @@ public sealed class MetricsService
         };
     }
 
-    private async Task<AtAGlanceDto> ReadAtAGlanceAsync(SqliteConnection conn, string todayUtc, CancellationToken ct)
+    private AtAGlanceDto ReadAtAGlance(
+        IReadOnlyList<RunRow> runs, IReadOnlyList<string> readyProjectIds, DateTime todayUtc)
     {
-        int inFlight, pendingRuns, readyTasks, doneToday, activeProjects, mergeFailed;
-        await using (var cmd = conn.CreateCommand())
+        int inFlight = 0, pendingRuns = 0, doneToday = 0, mergeFailed = 0;
+        var activeProjectIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in runs)
         {
-            cmd.CommandText =
-                $"""
-                SELECT
-                    (SELECT COUNT(*) FROM runs WHERE status = 'in_progress'),
-                    (SELECT COUNT(*) FROM runs WHERE status = 'pending'),
-                    (SELECT COUNT(*) FROM backlog_tasks WHERE state = 'ready'),
-                    (SELECT COUNT(*) FROM runs WHERE status IN ({SuccessStatuses})
-                        AND ended_at IS NOT NULL AND date(ended_at) = $today),
-                    (SELECT COUNT(*) FROM (
-                        SELECT project_id FROM runs WHERE status = 'in_progress' AND project_id IS NOT NULL
-                        UNION
-                        SELECT project_id FROM backlog_tasks WHERE state = 'ready')),
-                    (SELECT COUNT(*) FROM runs WHERE status = 'merge_failed');
-                """;
-            cmd.Parameters.AddWithValue("$today", todayUtc);
-            await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            await r.ReadAsync(ct).ConfigureAwait(false);
-            inFlight       = r.GetInt32(0);
-            pendingRuns    = r.GetInt32(1);
-            readyTasks     = r.GetInt32(2);
-            doneToday      = r.GetInt32(3);
-            activeProjects = r.GetInt32(4);
-            mergeFailed    = r.GetInt32(5);
+            switch (r.Status)
+            {
+                case "in_progress":
+                    inFlight++;
+                    if (r.ProjectId is not null) activeProjectIds.Add(r.ProjectId);
+                    break;
+                case "pending":
+                    pendingRuns++;
+                    break;
+                case "merge_failed":
+                    mergeFailed++;
+                    break;
+            }
+            if (SuccessStatuses.Contains(r.Status) && r.EndedAt is { } ended
+                && ended.UtcDateTime.Date == todayUtc)
+                doneToday++;
         }
+        activeProjectIds.UnionWith(readyProjectIds);
 
         var degraded = !_heartbeatStore.Enabled || _heartbeatStore.LastError is not null || mergeFailed > 0;
 
         return new AtAGlanceDto
         {
             InFlight       = inFlight,
-            QueuedWork     = pendingRuns + readyTasks,
+            QueuedWork     = pendingRuns + readyProjectIds.Count,
             DoneToday      = doneToday,
-            ActiveProjects = activeProjects,
+            ActiveProjects = activeProjectIds.Count,
             Health         = degraded ? "degraded" : "healthy",
         };
     }
 
-    private static async Task<IReadOnlyList<LiveSessionDto>> ReadLiveSessionsAsync(
-        SqliteConnection conn, IReadOnlyDictionary<string, string> names, CancellationToken ct)
+    private static IReadOnlyList<LiveSessionDto> ReadLiveSessions(
+        IReadOnlyList<RunRow> runs, IReadOnlyDictionary<string, string> names)
     {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            """
-            SELECT project_id, agent_name, status, started_at, ended_at
-            FROM runs
-            WHERE status = 'in_progress' AND project_id IS NOT NULL
-            ORDER BY julianday(started_at) DESC;
-            """;
-        var result = new List<LiveSessionDto>();
-        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await r.ReadAsync(ct).ConfigureAwait(false))
-        {
-            var projectId = r.GetString(0);
-            if (!names.TryGetValue(projectId, out var name)) continue;
-            var started = ParseTs(r.GetString(3));
-            var ended = r.IsDBNull(4) ? (DateTimeOffset?)null : ParseTs(r.GetString(4));
-            result.Add(new LiveSessionDto
+        return runs
+            .Where(r => r.Status == "in_progress" && r.ProjectId is not null && names.ContainsKey(r.ProjectId))
+            .OrderByDescending(r => r.StartedAt)
+            .Select(r => new LiveSessionDto
             {
-                ProjectId       = projectId,
-                ProjectName     = name,
-                Agent           = r.IsDBNull(1) ? null : r.GetString(1),
-                Status          = r.GetString(2),
-                StartedUtc      = started,
-                LastActivityUtc = ended ?? started,
-            });
-        }
-        return result;
+                ProjectId       = r.ProjectId!,
+                ProjectName     = names[r.ProjectId!],
+                Agent           = r.AgentName,
+                Status          = r.Status,
+                StartedUtc      = r.StartedAt,
+                LastActivityUtc = r.EndedAt ?? r.StartedAt,
+            })
+            .ToList();
     }
 
-    private static async Task<IReadOnlyList<ActiveWorkflowRunDto>> ReadActiveWorkflowRunsAsync(
-        SqliteConnection conn, IReadOnlyDictionary<string, string> names, CancellationToken ct)
+    private static IReadOnlyList<ActiveWorkflowRunDto> ReadActiveWorkflowRuns(
+        IReadOnlyList<RunRow> runs, IReadOnlyDictionary<string, string> names)
     {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            $"""
-            SELECT project_id, origin, status, started_at
-            FROM runs
-            WHERE status IN ({ActiveStatuses}) AND parent_run_id IS NULL AND project_id IS NOT NULL
-            ORDER BY julianday(started_at) DESC;
-            """;
-        var result = new List<ActiveWorkflowRunDto>();
-        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await r.ReadAsync(ct).ConfigureAwait(false))
-        {
-            var projectId = r.GetString(0);
-            if (!names.TryGetValue(projectId, out var name)) continue;
-            result.Add(new ActiveWorkflowRunDto
+        return runs
+            .Where(r => ActiveStatuses.Contains(r.Status) && r.ParentRunId is null
+                        && r.ProjectId is not null && names.ContainsKey(r.ProjectId))
+            .OrderByDescending(r => r.StartedAt)
+            .Select(r => new ActiveWorkflowRunDto
             {
-                ProjectId   = projectId,
-                ProjectName = name,
-                Trigger     = r.IsDBNull(1) ? "interactive" : r.GetString(1),
-                Status      = r.GetString(2),
-                StartedUtc  = ParseTs(r.GetString(3)),
-            });
-        }
-        return result;
+                ProjectId   = r.ProjectId!,
+                ProjectName = names[r.ProjectId!],
+                Trigger     = string.IsNullOrEmpty(r.Origin) ? "interactive" : r.Origin,
+                Status      = r.Status,
+                StartedUtc  = r.StartedAt,
+            })
+            .ToList();
     }
 
-    private static async Task<IReadOnlyList<ActiveProjectDto>> ReadActiveProjectsAsync(
-        SqliteConnection conn, IReadOnlyDictionary<string, string> names, CancellationToken ct)
+    private static IReadOnlyList<ActiveProjectDto> ReadActiveProjects(
+        IReadOnlyList<RunRow> runs,
+        IReadOnlyList<string> readyProjectIds,
+        IReadOnlyDictionary<string, string> names)
     {
         // Per-project run rollup: active (in_progress), pending, and latest activity timestamp.
-        var rollup = new Dictionary<string, (int active, int pending, string? lastAct)>(StringComparer.Ordinal);
-        await using (var cmd = conn.CreateCommand())
+        var rollup = new Dictionary<string, (int active, int pending, DateTimeOffset? lastAct)>(StringComparer.Ordinal);
+        foreach (var r in runs)
         {
-            cmd.CommandText =
-                """
-                SELECT
-                    project_id,
-                    SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END),
-                    MAX(COALESCE(ended_at, started_at))
-                FROM runs
-                WHERE project_id IS NOT NULL
-                GROUP BY project_id;
-                """;
-            await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            while (await r.ReadAsync(ct).ConfigureAwait(false))
-            {
-                rollup[r.GetString(0)] = (
-                    r.GetInt32(1),
-                    r.GetInt32(2),
-                    r.IsDBNull(3) ? null : r.GetString(3));
-            }
+            if (r.ProjectId is null) continue;
+            var acc = rollup.GetValueOrDefault(r.ProjectId);
+            if (r.Status == "in_progress") acc.active++;
+            if (r.Status == "pending") acc.pending++;
+            var activity = r.EndedAt ?? r.StartedAt;
+            if (acc.lastAct is null || activity > acc.lastAct) acc.lastAct = activity;
+            rollup[r.ProjectId] = acc;
         }
 
         // Ready backlog tasks per project.
         var ready = new Dictionary<string, int>(StringComparer.Ordinal);
-        await using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText =
-                """
-                SELECT project_id, COUNT(*)
-                FROM backlog_tasks
-                WHERE state = 'ready'
-                GROUP BY project_id;
-                """;
-            await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            while (await r.ReadAsync(ct).ConfigureAwait(false))
-                ready[r.GetString(0)] = r.GetInt32(1);
-        }
+        foreach (var pid in readyProjectIds)
+            ready[pid] = ready.GetValueOrDefault(pid) + 1;
 
         var ids = new HashSet<string>(rollup.Keys, StringComparer.Ordinal);
         ids.UnionWith(ready.Keys);
@@ -489,7 +443,7 @@ public sealed class MetricsService
                 ProjectName     = name,
                 ActiveCount     = active,
                 QueuedCount     = queued,
-                LastActivityUtc = lastAct is null ? null : ParseTs(lastAct),
+                LastActivityUtc = lastAct,
             });
         }
 
@@ -499,44 +453,97 @@ public sealed class MetricsService
             .ToList();
     }
 
-    private static async Task<IReadOnlyList<RecentActivityDto>> ReadRecentActivityAsync(
-        SqliteConnection conn, IReadOnlyDictionary<string, string> names, CancellationToken ct)
+    private static IReadOnlyList<RecentActivityDto> ReadRecentActivity(
+        IReadOnlyList<RunRow> runs, IReadOnlyDictionary<string, string> names)
     {
+        return runs
+            .Where(r => r.ProjectId is not null && names.ContainsKey(r.ProjectId))
+            .OrderByDescending(r => r.EndedAt ?? r.StartedAt)
+            .Take(20)
+            .Select(r => new RecentActivityDto
+            {
+                ProjectId    = r.ProjectId!,
+                ProjectName  = names[r.ProjectId!],
+                Label        = Truncate(r.Task ?? string.Empty, 80),
+                Kind         = r.Status,
+                TimestampUtc = r.EndedAt ?? r.StartedAt,
+            })
+            .ToList();
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Provider-agnostic data access (spec-018): EF Core over MemoryDbContext for Postgres,
+    // raw SQLite SQL over SqliteDb otherwise. Aggregation always happens in process above.
+    // ---------------------------------------------------------------------------------
+
+    private async Task<IReadOnlyList<RunRow>> LoadRunsAsync(string? projectId, CancellationToken ct)
+    {
+        if (_isPostgres)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var query = db.Runs.AsNoTracking();
+            if (projectId is not null) query = query.Where(r => r.ProjectId == projectId);
+            return await query
+                .Select(r => new RunRow(
+                    r.ProjectId, r.AgentName, r.Status, r.Origin, r.ParentRunId, r.Task,
+                    r.StartedAt, r.EndedAt, r.ReviewWaitMs))
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
-            """
-            SELECT project_id, task, status, started_at, ended_at
-            FROM runs
-            WHERE project_id IS NOT NULL
-            ORDER BY julianday(COALESCE(ended_at, started_at)) DESC
-            LIMIT 20;
-            """;
-        var result = new List<RecentActivityDto>();
+            "SELECT project_id, agent_name, status, origin, parent_run_id, task, " +
+            "started_at, ended_at, review_wait_ms FROM runs" +
+            (projectId is null ? ";" : " WHERE project_id = $pid;");
+        if (projectId is not null) cmd.Parameters.AddWithValue("$pid", projectId);
+
+        var rows = new List<RunRow>();
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            var projectId = r.GetString(0);
-            if (!names.TryGetValue(projectId, out var name)) continue;
-            var task = r.IsDBNull(1) ? string.Empty : r.GetString(1);
-            var status = r.GetString(2);
-            var ts = r.IsDBNull(4) ? ParseTs(r.GetString(3)) : ParseTs(r.GetString(4));
-            result.Add(new RecentActivityDto
-            {
-                ProjectId    = projectId,
-                ProjectName  = name,
-                Label        = Truncate(task, 80),
-                Kind         = status,
-                TimestampUtc = ts,
-            });
+            rows.Add(new RunRow(
+                ProjectId:    r.IsDBNull(0) ? null : r.GetString(0),
+                AgentName:    r.IsDBNull(1) ? null : r.GetString(1),
+                Status:       r.GetString(2),
+                Origin:       r.IsDBNull(3) ? "interactive" : r.GetString(3),
+                ParentRunId:  r.IsDBNull(4) ? null : r.GetString(4),
+                Task:         r.IsDBNull(5) ? null : r.GetString(5),
+                StartedAt:    ParseTs(r.GetString(6)),
+                EndedAt:      r.IsDBNull(7) ? null : ParseTs(r.GetString(7)),
+                ReviewWaitMs: r.IsDBNull(8) ? 0L : r.GetInt64(8)));
         }
-        return result;
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<string>> LoadReadyBacklogProjectIdsAsync(CancellationToken ct)
+    {
+        if (_isPostgres)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            return await db.BacklogTasks.AsNoTracking()
+                .Where(t => t.State == "ready")
+                .Select(t => t.ProjectId)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT project_id FROM backlog_tasks WHERE state = 'ready';";
+        var ids = new List<string>();
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+            if (!r.IsDBNull(0)) ids.Add(r.GetString(0));
+        return ids;
     }
 
     // ---------------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------------
-
-    private static string Iso(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
 
     private static DateTimeOffset ParseTs(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
@@ -544,9 +551,8 @@ public sealed class MetricsService
     /// <summary>
     /// Active (working) duration of a run, in milliseconds, EXCLUDING the cumulative time it spent
     /// parked in the awaiting_review human-review gate (<paramref name="reviewWaitMs"/> = the run's
-    /// accrued <c>review_wait_ms</c>). The C# counterpart of <see cref="ActiveDurationMsSql"/>: both
-    /// compute total elapsed minus review dwell, clamped at 0. Use this for any per-run duration
-    /// computed in process so it matches the dashboard aggregates exactly.
+    /// accrued <c>review_wait_ms</c>). Total elapsed minus review dwell, clamped at 0. Use this for any
+    /// per-run duration computed in process so it matches the dashboard aggregates exactly.
     /// </summary>
     internal static double ActiveDurationMsExcludingReview(
         DateTimeOffset startedAt, DateTimeOffset endedAt, long reviewWaitMs) =>

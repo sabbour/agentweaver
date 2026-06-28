@@ -71,7 +71,7 @@ public sealed class MetricsReviewWaitTests
         await using var test = await TestSqliteDb.CreateAsync();
         var runStore = new SqliteRunStore(test.Db);
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var project = MakeProject(ProjectId.New());
         await projectStore.InsertAsync(project);
@@ -103,7 +103,7 @@ public sealed class MetricsReviewWaitTests
         await using var test = await TestSqliteDb.CreateAsync();
         var runStore = new SqliteRunStore(test.Db);
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var project = MakeProject(ProjectId.New());
         await projectStore.InsertAsync(project);
@@ -138,7 +138,7 @@ public sealed class MetricsReviewWaitTests
         await using var test = await TestSqliteDb.CreateAsync();
         var runStore = new SqliteRunStore(test.Db);
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var project = MakeProject(ProjectId.New());
         await projectStore.InsertAsync(project);
