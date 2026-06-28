@@ -134,7 +134,7 @@ public sealed class MetricsServiceTests
         await using var test = await TestSqliteDb.CreateAsync();
         var runStore = new SqliteRunStore(test.Db);
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var now = DateTimeOffset.UtcNow;
         var project = MakeProject(ProjectId.New());
@@ -200,7 +200,7 @@ public sealed class MetricsServiceTests
         await using var test = await TestSqliteDb.CreateAsync();
         var runStore = new SqliteRunStore(test.Db);
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var now = DateTimeOffset.UtcNow;
         var project = MakeProject(ProjectId.New());
@@ -230,7 +230,7 @@ public sealed class MetricsServiceTests
         await using var test = await TestSqliteDb.CreateAsync();
         var runStore = new SqliteRunStore(test.Db);
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var now = DateTimeOffset.UtcNow;
         var project = MakeProject(ProjectId.New());
@@ -262,7 +262,7 @@ public sealed class MetricsServiceTests
     {
         await using var test = await TestSqliteDb.CreateAsync();
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var project = MakeProject(ProjectId.New());
         await projectStore.InsertAsync(project);
@@ -283,7 +283,7 @@ public sealed class MetricsServiceTests
         var runStore = new SqliteRunStore(test.Db);
         var projectStore = new SqliteProjectStore(test.Db);
         var backlogStore = new SqliteBacklogTaskStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat());
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
 
         var now = DateTimeOffset.UtcNow;
         var p1 = MakeProject(ProjectId.New(), owner: "alice", name: "Alpha");
@@ -342,7 +342,7 @@ public sealed class MetricsServiceTests
     {
         await using var test = await TestSqliteDb.CreateAsync();
         var projectStore = new SqliteProjectStore(test.Db);
-        var service = new MetricsService(test.Db, projectStore, MakeHeartbeat(enabled: false));
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat(enabled: false));
 
         var dto = await service.GetOverviewAsync();
 

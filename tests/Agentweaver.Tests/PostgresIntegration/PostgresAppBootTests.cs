@@ -125,6 +125,111 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         fetched!.Status.Should().Be(RunStatus.Failed);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // BUG B regression: MetricsService used SQLite-only SQL (julianday) against the
+    // concrete SqliteDb, which in Postgres mode has no `runs` table → the dashboard /
+    // overview endpoints threw 'SQLite Error 1: no such table: runs' (HTTP 500).
+    // These tests exercise the provider-agnostic MetricsService against real Postgres.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task MetricsService_ProjectDashboard_AggregatesAgainstPostgres_DoesNotThrow()
+    {
+        var projectStore = _fixture.Services.GetRequiredService<IProjectStore>();
+        var runStore = _fixture.Services.GetRequiredService<IRunStore>();
+        var metrics = _fixture.Services.GetRequiredService<Agentweaver.Api.Metrics.MetricsService>();
+
+        var project = MakeProject("Dashboard-PG");
+        await projectStore.InsertAsync(project);
+
+        var now = DateTimeOffset.UtcNow;
+        // A: merged this week, finished (10 min).
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Merged, now.AddDays(-1), now.AddDays(-1).AddMinutes(10), "morpheus"));
+        // B: in_progress (active).
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.InProgress, now.AddMinutes(-5), null, "morpheus"));
+        // C: failed 2 days ago, finished.
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Failed, now.AddDays(-2), now.AddDays(-2).AddMinutes(4), "tank"));
+
+        // The EXACT call that threw 'no such table: runs' (HTTP 500) in Postgres mode.
+        var dto = await metrics.GetProjectDashboardAsync(project, CancellationToken.None);
+
+        dto.Summary.RunsTotal.Should().Be(3, "exactly the three seeded runs belong to this project");
+        dto.Summary.RunsThisWeek.Should().Be(3);
+        dto.Summary.ActiveRuns.Should().Be(1, "only run B is in_progress");
+        dto.Summary.ActiveAgents.Should().Be(1, "morpheus is the only agent on an in_progress run");
+        dto.Summary.TasksDoneThisWeek.Should().Be(1, "only the merged run A is a success terminal this week");
+
+        dto.Throughput.Should().HaveCount(30);
+        dto.Throughput.Sum(p => p.Created).Should().Be(3);
+        dto.Throughput.Sum(p => p.Done).Should().Be(2, "A (merged) and C (failed) are finished");
+
+        dto.AgentLeaderboard.Should().HaveCount(2);
+        var morpheus = dto.AgentLeaderboard.Single(e => e.Agent == "morpheus");
+        morpheus.RunsTotal.Should().Be(2);
+        morpheus.SuccessfulRuns.Should().Be(1);
+        morpheus.TerminalRuns.Should().Be(1, "the in_progress run is not terminal");
+        morpheus.AvgDurationMs.Should().NotBeNull();
+        morpheus.AvgDurationMs!.Value.Should().BeApproximately(10 * 60_000, 1.0,
+            "the merged run ran 10 minutes with no review dwell");
+        var tank = dto.AgentLeaderboard.Single(e => e.Agent == "tank");
+        tank.TerminalRuns.Should().Be(1);
+        tank.SuccessRate.Should().Be(0d);
+    }
+
+    [Fact]
+    public async Task MetricsService_Overview_AggregatesAgainstPostgres_DoesNotThrow()
+    {
+        var projectStore = _fixture.Services.GetRequiredService<IProjectStore>();
+        var runStore = _fixture.Services.GetRequiredService<IRunStore>();
+        var metrics = _fixture.Services.GetRequiredService<Agentweaver.Api.Metrics.MetricsService>();
+
+        var project = MakeProject("Overview-PG");
+        await projectStore.InsertAsync(project);
+
+        var now = DateTimeOffset.UtcNow;
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.InProgress, now.AddMinutes(-3), null, "neo"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Merged, now.AddHours(-1), now.AddMinutes(-30), "trinity"));
+
+        // The global overview previously 500'd on the same SQLite-only-SQL defect.
+        var dto = await metrics.GetOverviewAsync(CancellationToken.None);
+
+        dto.Should().NotBeNull();
+        dto.AtAGlance.InFlight.Should().BeGreaterThanOrEqualTo(1);
+        dto.LiveSessions.Should().Contain(s => s.ProjectName == "Overview-PG" && s.Agent == "neo");
+        dto.ActiveProjects.Should().Contain(p => p.ProjectName == "Overview-PG" && p.ActiveCount >= 1);
+        dto.RecentActivity.Should().Contain(a => a.ProjectName == "Overview-PG");
+    }
+
+    private static Project MakeProject(string name) => new()
+    {
+        Id               = ProjectId.New(),
+        Name             = name,
+        Origin           = ProjectOrigin.Blank(),
+        WorkingDirectory = Path.Combine(Path.GetTempPath(), $"aw-pg-metrics-{Guid.NewGuid():N}"),
+        DefaultBranch    = "main",
+        Owner            = "tank",
+        ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+        State            = ProjectState.Active,
+        CreatedAt        = DateTimeOffset.UtcNow,
+        UpdatedAt        = DateTimeOffset.UtcNow,
+    };
+
+    private static Run MakeRun(
+        ProjectId projectId, RunStatus status, DateTimeOffset startedAt, DateTimeOffset? endedAt, string agent) => new()
+    {
+        Id                = RunId.New(),
+        RepositoryPath    = "/repo",
+        OriginatingBranch = "main",
+        ModelSource       = ModelSource.GitHubCopilot,
+        Task              = "metrics regression seed",
+        SubmittingUser    = "tank",
+        Status            = status,
+        StartedAt         = startedAt,
+        EndedAt           = endedAt,
+        ProjectId         = projectId,
+        AgentName         = agent,
+    };
+
     /// <summary>
     /// Boots the real API once for the whole test class with Database:Provider=Postgres backed by
     /// a postgres:16 Testcontainer. The container + app boot are shared across the class's tests.

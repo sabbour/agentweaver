@@ -79,19 +79,12 @@ public sealed class DiagnosticsService
         checks.Add(await CheckProjectStoreAsync(ct).ConfigureAwait(false));
         checks.Add(await CheckGitHubCliAsync(ct).ConfigureAwait(false));
 
-        // Pull counts from the SQLite check result (project_store check already ran ListAsync;
-        // reuse by re-querying to avoid cross-check coupling).
+        // Pull counts from the live run store. Provider-aware (spec-018): EF over MemoryDbContext for
+        // Postgres, raw SQLite SQL over SqliteDb otherwise. The concrete SqliteDb has no `runs` table
+        // in Postgres mode (data lives in MemoryDbContext), so a raw SQLite query would 500.
         var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
 
-        int totalRuns;
-        int activeRuns;
-        await using (var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false))
-        {
-            totalRuns = await ScalarCountAsync(conn, "SELECT COUNT(*) FROM runs", ct).ConfigureAwait(false);
-            activeRuns = await ScalarCountAsync(
-                conn, "SELECT COUNT(*) FROM runs WHERE status = 'in_progress'", ct)
-                .ConfigureAwait(false);
-        }
+        var (totalRuns, activeRuns) = await CountRunsAsync(ct).ConfigureAwait(false);
 
         overallSw.Stop();
 
@@ -522,6 +515,32 @@ public sealed class DiagnosticsService
         cmd.CommandText = sql;
         var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         return result is long count ? (int)count : 0;
+    }
+
+    /// <summary>
+    /// Provider-agnostic (spec-018) total/active run counts. In Postgres mode the run rows live in
+    /// <see cref="MemoryDbContext"/>; the concrete <see cref="SqliteDb"/> has no <c>runs</c> table and
+    /// a raw SQLite query would throw "no such table: runs" (HTTP 500). EF over MemoryDbContext when
+    /// Postgres, raw SQLite SQL over SqliteDb otherwise.
+    /// </summary>
+    private async Task<(int total, int active)> CountRunsAsync(CancellationToken ct)
+    {
+        var provider = _configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+        if (provider is "postgres" or "postgresql")
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var memDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var total = await memDb.Runs.AsNoTracking().CountAsync(ct).ConfigureAwait(false);
+            var active = await memDb.Runs.AsNoTracking()
+                .CountAsync(r => r.Status == "in_progress", ct).ConfigureAwait(false);
+            return (total, active);
+        }
+
+        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        var totalRuns = await ScalarCountAsync(conn, "SELECT COUNT(*) FROM runs", ct).ConfigureAwait(false);
+        var activeRuns = await ScalarCountAsync(
+            conn, "SELECT COUNT(*) FROM runs WHERE status = 'in_progress'", ct).ConfigureAwait(false);
+        return (totalRuns, activeRuns);
     }
 
     private string ResolveDataDirectory()
