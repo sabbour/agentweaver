@@ -226,7 +226,7 @@ The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecut
   filesystem, `/workspace` PVC, and the A2A listener on container port `8088`.
 - **`SandboxWarmPool`** — keeps warm pods pre-built from a template so a claim binds without a cold
   start. Two pools ship: generic `agentweaver-sandbox` (`k8s/sandbox-warmpool.yaml`, `replicas: 3`)
-  and pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 1`).
+  and pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 0`).
 - **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.warmPoolRef.name`
   (the pool to bind), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and
   `spec.env[]`. The controller adopts a warm pod and signals readiness via a `Ready` condition.

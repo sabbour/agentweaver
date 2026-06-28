@@ -35,6 +35,10 @@ metadata:
   namespace: agentweaver
   labels:
     app.kubernetes.io/part-of: agentweaver
+# NOTE: the value below is parsed as STRICT JSON (System.Text.Json) by AgentHost.
+#   Do NOT add '#' or '//' comments inside it -- that breaks AgentHost startup
+#   (JsonReaderException -> exit 11). Production mTLS guidance is in the header above
+#   and in sandbox-template-agenthost.yaml; keep it OUTSIDE the JSON value.
 data:
   appsettings.k8s.json: |
     {
@@ -61,19 +65,3 @@ data:
         }
       }
     }
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PoC NOTE (spec-018 P1.5): RequireMtls=false makes the AgentHost listen on PLAIN
-    # HTTP at :8088 (no Kestrel:Endpoints, no server/client cert). This is for the PoC
-    # ONLY. PRODUCTION MUST set RequireMtls=true and restore the mTLS Kestrel endpoint:
-    #
-    #   "Kestrel": {
-    #     "Endpoints": {
-    #       "A2A": {
-    #         "Url": "https://0.0.0.0:8088",
-    #         "Certificate": { "Path": "/mnt/a2a-tls/tls.crt", "KeyPath": "/mnt/a2a-tls/tls.key" },
-    #         "ClientCertificateMode": "RequireCertificate"
-    #       }
-    #     }, "Limits": { ... }
-    #   }
-    #   and "AgentHost": { "RequireMtls": true, "Security": { "RequireClientCertificate": true } }
-    # ─────────────────────────────────────────────────────────────────────────────

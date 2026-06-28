@@ -7,7 +7,10 @@
 # provisioned. The pool references the agentweaver-agent-host SandboxTemplate
 # (k8s/sandbox-template-agenthost.yaml), which carries the real AgentHost pod spec.
 #
-# replicas: 1 — keep the warm reserve small; cluster autoscaling/NAP handles burst capacity.
+# replicas: 0 — agent-host claims always inject spec.env (incl. AgentHost__RunId), which
+# forces a COLD START, so a warm SPARE (bare template, no RunId) would CrashLoop uselessly.
+# Each claim cold-starts its own pod with RunId and boots fine; this pool exists purely as
+# the template reference. Cluster autoscaling/NAP handles burst capacity.
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
@@ -19,4 +22,4 @@ metadata:
 spec:
   sandboxTemplateRef:
     name: agentweaver-agent-host
-  replicas: 1
+  replicas: 0
