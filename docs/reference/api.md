@@ -633,7 +633,7 @@ Returns `404 Not Found` when the run or port-forward session does not exist.
 
 ## Sandbox policy endpoints
 
-These endpoints read and write the per-project sandbox execution policy stored at `.agentweaver/settings.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md) for the full design.
+These endpoints read and write the per-project sandbox execution policy stored at `.agentweaver/settings.yml` in the project repository root. Sandbox policies control whether shell execution is enabled, which commands require human approval, and output handling options. See [sandbox-setup.md](sandbox-setup.md) for setup and [deep-dive/sandboxed-execution.md](../deep-dive/sandboxed-execution.md) for the full design.
 
 ### GET /api/sandbox-policy
 

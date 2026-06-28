@@ -54,7 +54,100 @@ Both clients are thin: all orchestration logic lives in the API's coordinator se
 
 ## Phase 2 orchestration
 
-Confirming the outcome spec carries the coordinator run through Phase 2: **confirm -> decompose -> dispatch -> observe -> steer**. No work begins before confirmation, so the Phase 1 gate stays the single safety property.
+Confirming the outcome spec carries the coordinator run through Phase 2: **confirm -> select workflow -> decompose -> dispatch -> observe -> steer**. No work begins before confirmation, so the Phase 1 gate stays the single safety property.
+
+### Workflow selection: how the coordinator picks the process to run
+
+Before it decomposes anything, the coordinator decides **which workflow** (which run pipeline) the work should follow. The selection algorithm is `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs`). It is deterministic-first: hard rules narrow the candidate set, and an LLM is consulted only as a last step when more than one candidate genuinely fits.
+
+The algorithm runs in this order:
+
+1. **Resolve the project default first.** `WorkflowRegistry.ResolveDefault(project)` produces the project's effective default (the project's `DefaultWorkflowId` when valid, else the built-in `default`). It is held as the deterministic fallback this method returns whenever a later step throws or nothing is eligible.
+2. **Build the available list.** `WorkflowRegistry.GetOrLoad(project).Available` (validation-passing workflows) is ordered **default first**, then by id (`StringComparer.Ordinal`). The first entry is, by convention, the deterministic fallback for the selector.
+3. **Resolve the invocation kind.** `ResolveInvocationKindAsync` maps the run's origin to a `WorkflowInvocationKind`: a run stamped `RunOrigin.BacklogPickup` (the heartbeat picked up a Ready task) becomes `WorkflowInvocationKind.Heartbeat`; every other origin — and any lookup failure — becomes `WorkflowInvocationKind.Manual`.
+4. **Honor a backlog task override (if eligible).** If the run's backlog task carries a `WorkflowOverrideId`, that workflow is used **only if** it exists in the available set **and** its trigger is eligible for this invocation (`WorkflowTriggerEvaluator.IsEligible`). An unavailable or trigger-ineligible override is logged and ignored, and selection continues.
+5. **Filter by trigger eligibility.** The available list is reduced to workflows whose declared trigger matches the invocation kind via `WorkflowTriggerEvaluator.IsEligible`.
+6. **No eligible candidate → project default.** If nothing passes the trigger filter, the project default is returned (never a trigger-mismatched workflow).
+7. **Exactly one eligible candidate → use it.** A single eligible workflow is used directly, with no model call and no selection event.
+8. **Multiple eligible candidates → resolve the pick.** A `WorkflowSelectionContext` is built (project id, goal, roster role titles, the eligible definitions, and the set of custom/project workflow ids). Then:
+   - An explicit human override `use <workflow-id>` in the latest revise feedback wins (`WorkflowSelector.TryParseOverride`); the chosen workflow is returned and a selection event is emitted (`wasAutoSelected: false`).
+   - Otherwise the LLM-backed `WorkflowSelector.SelectAsync` picks by process fit; the result (and its rationale) is returned and a selection event is emitted (`wasAutoSelected: true`).
+
+#### Trigger taxonomy (`apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs`)
+
+Every workflow declares exactly one `WorkflowTrigger { Type, Event }`:
+
+| `WorkflowTriggerType` | Meaning | Eligible for |
+| --- | --- | --- |
+| `Manual` | A person or client explicitly starts the run. | `Manual` invocations only. |
+| `Heartbeat` | The coordinator heartbeat picks up Ready work. | `Heartbeat` invocations only. |
+| `Event` | The workflow starts on a declared `WorkflowEventType`. The only supported event is `TaskAddedToReady`. | `Heartbeat` invocations (a task entering Ready *is* that event). |
+
+#### Trigger filtering (`apps/Agentweaver.Api/Workflows/WorkflowTriggerEvaluator.cs`)
+
+`WorkflowTriggerEvaluator.IsEligible(trigger, kind)` is the hard boundary applied before any model call:
+
+- `Manual` invocation → only `Manual`-trigger workflows.
+- `Heartbeat` invocation → `Heartbeat`-trigger workflows **or** `Event`-trigger workflows whose event is `TaskAddedToReady`.
+
+`WorkflowTriggerEvaluator.Filter` preserves input order, so the default-first ordering survives filtering.
+
+#### Override mechanisms
+
+| Channel | Source | Resolution |
+| --- | --- | --- |
+| **Backlog task override** | `BacklogTask.WorkflowOverrideId`, set before pickup. | Step 4: used only when the workflow exists and is trigger-eligible. `CoordinatorPickupService` additionally prepends `use <id>` to the goal text so the conversational path also sees it. |
+| **Conversational override** | A human message matching `use <workflow-id>` in the revise feedback. | Step 8: `WorkflowSelector.TryParseOverride` matches the pattern; the requested workflow wins if it is among the eligible candidates. |
+
+An override never escapes the candidate safety boundary: it cannot run a workflow the registry cannot resolve or the trigger evaluator rejects.
+
+#### The LLM selector and its fallbacks (`apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs`)
+
+`WorkflowSelector.SelectAsync` is reached only with two or more eligible candidates and no explicit override:
+
+- If `AvailableWorkflows.Count == 1` it returns the default with no model call.
+- Otherwise it builds a process-fit prompt and calls `IWorkflowSelectionModel.CompleteAsync`. The production implementation is `CopilotWorkflowSelectionModel`, a Copilot completion wrapper whose failures return `null`.
+- The model must reply with JSON `{ "selected": "<id>", "rationale": "<why>" }`. A `null`/unparseable response, an unknown id, or a thrown exception all fall back deterministically to the first candidate (the project default), with a rationale that explains the fallback.
+
+Whenever the multi-candidate path runs, the coordinator emits a `coordinator.workflow_selected` event (`EmitWorkflowSelectedEvent`) carrying `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, an `overrideHint` (`Reply 'use {other-id}' to change...`), and the list of `available` workflows. If `SelectWorkflowAsync` throws anywhere, it logs a warning and returns the resolved project default so the caller always knows which workflow it is planning against.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TD
+    Start([SelectWorkflowAsync])
+    ResolveDefault[ResolveDefault<br/>project default = fallback]
+    Available[GetOrLoad.Available<br/>default first, then by id]
+    Kind[ResolveInvocationKindAsync<br/>BacklogPickup -> Heartbeat<br/>else Manual]
+    OverrideCheck{Backlog WorkflowOverrideId<br/>exists and IsEligible?}
+    UseOverride[Use override workflow]
+    Filter[Filter by<br/>WorkflowTriggerEvaluator.IsEligible]
+    Count{Eligible count}
+    Default[Return project default]
+    Single[Use the only candidate<br/>no model call]
+    HumanOverride{Revise feedback<br/>'use id'?}
+    UseHuman[Use requested workflow<br/>emit event]
+    Selector[WorkflowSelector.SelectAsync<br/>CopilotWorkflowSelectionModel]
+    Picked[Emit coordinator.workflow_selected<br/>return choice]
+
+    Start --> ResolveDefault --> Available --> Kind --> OverrideCheck
+    OverrideCheck -- yes --> UseOverride
+    OverrideCheck -- no --> Filter --> Count
+    Count -- 0 --> Default
+    Count -- 1 --> Single
+    Count -- "2+" --> HumanOverride
+    HumanOverride -- yes --> UseHuman
+    HumanOverride -- no --> Selector --> Picked
+
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
+
+    class Start,ResolveDefault,Available,Kind,OverrideCheck,Filter,Count,Default,Single,HumanOverride,UseOverride,UseHuman svc;
+    class Selector ext;
+    class Picked core;
+```
+
+The selected workflow is not only recorded for display: it becomes prompt context for decomposition so the resulting subtask graph mirrors the intended process shape. The run workflow factory later resolves the effective workflow again when it builds the executable graph, so a stale planning pick can never become unchecked runtime execution.
 
 ### Decomposition and the work plan
 

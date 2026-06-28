@@ -222,6 +222,26 @@ sequenceDiagram
     end
 ```
 
+### The agent-sandbox controller (and where MXC fits)
+
+The "Sandbox controller" above is the upstream [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller — **not** MXC. The two are different runtimes for different tiers, and the names are easy to conflate:
+
+- **MXC** (`Sabbour.Mxc.Sdk` / `wxc-exec.exe`) is the **local-host** command isolation runtime behind the Windows `processcontainer`, WSL, and Linux `lxc-exec` executors. It runs on a developer or non-cluster host and has no Kubernetes presence.
+- The **agent-sandbox controller** is the **in-cluster** runtime that turns a `SandboxClaim` into a bound, Kata-isolated pod. `KubernetesSandboxExecutor` talks only to this controller's CRDs; no MXC binary exists in the cluster.
+
+Agentweaver installs the controller and its three CRDs (all API group `extensions.agents.x-k8s.io/v1alpha1`) in `scripts/aks/10-create-cluster.sh` (default version `v0.4.6`):
+
+- **`SandboxTemplate`** (`k8s/sandbox-template.yaml`, `agentweaver-sandbox`) defines the pod shape and hardening: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, read-only root filesystem, the `/workspace` PVC, and the A2A listener port `8088`.
+- **`SandboxWarmPool`** (`k8s/sandbox-warmpool.yaml`, `replicas: 3`) keeps pre-built warm pods from that template so claims bind without a cold pod start.
+- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/sandbox-claim-template.yaml`) carries `spec.templateRef` and `spec.ttl`. The controller adopts a warm pod, then writes `status.phase: Bound` and the pod name into `status.sandbox.name` (preferred) or `status.podName`.
+
+The executor's provisioning loop is the concrete contract with the controller:
+
+1. `CreateClaimAsync` POSTs the `SandboxClaim` custom object into the namespace.
+2. `WaitForBoundAsync` polls the claim every 2 s until `status.phase == "Bound"`, then returns `status.sandbox.name` (falling back to `status.podName`).
+3. For pod-per-run AgentHost pods, `GetPodIpAsync` then polls the pod's `status.podIP` so the worker can build the A2A endpoint `http[s]://<podIP>:<port><a2aPath>`.
+4. On claim deletion (ad-hoc command) or TTL expiry, the controller garbage-collects the pod and its service — Agentweaver never deletes pods directly.
+
 ### Why claims have TTLs
 
 A shell command can hang, or a client can disconnect. The claim TTL gives the controller an independent cleanup clock. Agentweaver also clamps the command timeout below the claim TTL so the controller should not delete the sandbox while the executor is still expecting a result.

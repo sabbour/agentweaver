@@ -83,33 +83,42 @@ debug endpoint — and a person wants to actually *open it* and look. Because th
 server is not reachable by default. The **sandbox preview port-forward** is the supported way to reach it:
 a live preview/debug endpoint tunnelled from the run's pod, scoped to that one run.
 
-From the run/execution view (`WorkflowRunPage`), there is a **Sandbox preview port-forward dialog**. The
-flow a user follows:
+A **Preview** button appears on the run/execution view (`WorkflowRunPage`) **only** when the run is using
+the Kubernetes sandbox (`sandboxBackend === 'kubernetes-sandbox-claim'`, read from the run's
+`sandbox.selected` event) **and** the run is still active. On local/dev backends, or after the run ends,
+the button is not shown. The flow a user follows:
 
-1. **Open the preview dialog** on the run and **pick a port** — the port the agent's server is listening
-   on *inside* the pod.
-2. **Start the preview.** The app calls `POST /api/runs/{runId}/sandbox/port-forward` with that port, and
-   a tunnel is opened from the run's sandbox pod to the API.
-3. **See it become active.** The dialog confirms with **"Preview active for port {port} on pod
-   {pod_name}"** and gives a local URL. Opening that URL reaches the server running inside the pod.
-4. **Stop it when done.** Stopping the preview tears the tunnel down (a `DELETE` on that session). A user
-   can run more than one preview at a time — each is its own port and its own entry — and stop them
-   individually.
+1. **Open the preview dialog** ("Sandbox Preview") and **pick a port** — the port the agent's server is
+   listening on *inside* the pod (the field defaults to `3000`). The dialog notes that preview traffic is
+   **proxied through the Agentweaver API server**.
+2. **Start the preview.** The app calls `apiClient.startPortForward(runId, port)` →
+   `POST /api/runs/{runId}/sandbox/port-forward` with that port, and a `kubectl port-forward` tunnel is
+   opened from the run's sandbox pod to a loopback port on the API host.
+3. **See it become active.** The dialog confirms with **"Preview active for port {target_port} on pod
+   {pod_name}"** and shows the session id. If the API returned a proxied `preview_url`, the dialog embeds
+   it in an iframe with an **"Open preview"** button; if it did not (the backend does not currently
+   populate `preview_url`), the dialog honestly says *"The API server did not return a proxied preview
+   URL."*
+4. **Stop it when done.** Stopping the preview calls `apiClient.stopPortForward(runId, sessionId)` →
+   `DELETE` on that session, tearing the tunnel down. You can run more than one preview at a time (up to a
+   per-run cap), each its own port and entry, and stop them individually.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant U as User
     participant UI as WorkflowRunPage (preview dialog)
     participant API as API
     participant Pod as Run's sandbox pod
-    U->>UI: open preview dialog, pick port
+    U->>UI: click Preview (K8s sandbox + active run), pick port
     UI->>API: POST /sandbox/port-forward { target_port }
-    API->>Pod: port-forward target_port
-    API-->>UI: session (pod_name, target_port, local URL)
-    UI-->>U: "Preview active for port {port} on pod {pod_name}"
-    U->>API: open local URL → see the app in the pod
+    API->>Pod: kubectl port-forward :target_port
+    API-->>UI: { session_id, local_port, target_port, pod_name, started_at }
+    UI-->>U: "Preview active for port {target_port} on pod {pod_name}"
+    Note over UI,U: iframe shown only if preview_url present;<br/>otherwise "no proxied preview URL"
     U->>UI: stop preview
     UI->>API: DELETE /sandbox/port-forward/{sessionId}
+    API->>Pod: tear down tunnel
 ```
 
 When to use it:
@@ -120,13 +129,17 @@ When to use it:
 
 What to expect:
 
-- **Kubernetes-only.** Preview tunnels into the Kubernetes claim backend's pod. On local/dev runs there is
-  no claim pod to forward, so the option doesn't apply — the same "this is a cluster feature" boundary as
-  the pod pill.
-- **Scoped to this run's pod.** A preview reaches only the run's own sandbox pod, never another run's.
+- **Kubernetes-only.** Preview tunnels into the agent-sandbox controller's pod. On local/dev runs there is
+  no claim pod to forward, so the button doesn't appear — the same "this is a cluster feature" boundary as
+  the pod pill. (Local runs isolate commands with MXC, which has no pod to forward into.)
+- **A loopback port, not a public URL.** The API returns a `local_port` it bound on the API host; whether a
+  browser-openable preview appears depends on whether a proxied `preview_url` is returned (today it is not).
+- **Scoped to this run's pod.** A preview reaches only the run's own sandbox pod, never another run's, and
+  is capped (default 3 per run, 20 globally).
 - **Tied to the live pod.** Because the hybrid lifecycle can release and re-claim a pod across a
   suspension, a preview is valid while the current pod is bound; after a release/resume you start a fresh
-  preview against the re-claimed pod (the same reason the pod pill name can change).
+  preview against the re-claimed pod (the same reason the pod pill name can change). Sessions have no TTL
+  and end on stop, run end, or API shutdown.
 
 The endpoints and the `PortForwardSessionDto` fields behind the dialog are in the
 [reference](../reference/sandbox-pods.md#sandbox-preview-port-forward-feature-017).
@@ -192,11 +205,14 @@ back when it's waiting."** Concretely:
   [reference](../reference/sandbox-pods.md#pod-identity-and-quota).
 - **The isolation backend is chosen per host.** Independently of pod-per-run, every host selects one
   command-isolation backend at run start and announces it with a `sandbox.selected` event (`backend`,
-  `isRealIsolation`, `reason`). In-cluster that backend is the Kata-isolated `kubernetes-sandbox-claim`;
-  local dev gets `processcontainer` (MXC) on Windows or `linux-bwrap` on Linux, falling back to `direct`
+  `isRealIsolation`, `reason`). In-cluster that backend is the Kata-isolated `kubernetes-sandbox-claim`,
+  whose pods are provisioned by the upstream **agent-sandbox controller** (installed by
+  `scripts/aks/10-create-cluster.sh`); local dev gets `processcontainer` (**MXC**, a different
+  local-host runtime) on Windows or `linux-bwrap` on Linux, falling back to `direct`
   (no isolation, shell still runs) only when nothing else is available. The deep dive's
   [executor seam](../deep-dive/sandbox-pod-execution.md#the-executor-seam-how-commands-are-actually-isolated)
-  explains how this relates to pod-per-run; backend install/selection is in
+  and [agent-sandbox controller](../deep-dive/sandbox-pod-execution.md#the-agent-sandbox-controller-mxc-vs-the-controller)
+  sections explain how these relate to pod-per-run; backend install/selection is in
   [Sandbox setup](../reference/sandbox-setup.md#sandbox-backends).
 - **The pod is disposable.** Killing or losing a pod does not lose a run: durable state is in the shared
   workspace volume and the brokered checkpoint, and the run re-claims a fresh pod. Pods never persist past

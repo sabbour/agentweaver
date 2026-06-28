@@ -268,9 +268,13 @@ When an agent turn runs in a distributed deployment, the **worker** keeps the
 entire orchestration graph — the workflow, the human-in-the-loop gates, the
 resume logic — in process. Only the **leaf agent turn** is sent over A2A to an
 **AgentHost** running inside a **sandbox pod**, which executes the model turn and
-its tools, then streams the turn's output back. The orchestration graph never
-crosses the boundary; A2A carries one turn's chat/output stream and nothing more.
-A2A is the sole worker→AgentHost wire transport for that seam.
+its tools, then streams the turn's output back. On the worker side the leaf is a
+`RemoteAgentProxy` (an `A2AAgent` over the A2A **HTTP+JSON** transport); the pod
+hosts an `A2ATurnBridgeAgent` (MAF name `agentweaver-pod`) wrapping its singleton
+`CopilotAIAgent`. `RemoteWorkflowAgentFactory` remotes **all four** workflow roles
+this way. The orchestration graph never crosses the boundary; A2A carries one
+turn's chat/output stream and nothing more. A2A is the sole worker→AgentHost wire
+transport for that seam.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%

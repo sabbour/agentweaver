@@ -103,6 +103,12 @@ Example MCP-oriented flow:
 
 The board is a six-column Kanban surface:
 
+![Project board with Backlog, Ready, Problems, Human Review, Active, and Done columns](/screenshots/project-board.png)
+
+> 📸 **Screenshot — `project-board.png`**
+> *Shows:* the **Board** page (title is the project name, subtitle "Backlog, Ready, and in-flight work.") with the six Kanban columns **Backlog**, **Ready**, **Problems**, **Human Review**, **Active**, and **Done**, the **Runs** section, and the start-orchestration action.
+> *Path:* open a project → click **Board** in the left rail → `/projects/:projectId/board`.
+
 | Column | What the user sees | Who moves cards there |
 | --- | --- | --- |
 | **Backlog** | Captured work that is not yet committed. | The user. |
@@ -148,6 +154,12 @@ Dragging to **Problems**, **Human Review**, **Active**, or **Done** is rejected 
 ### Run cards in workflow columns
 
 Run cards appear once work is claimed or submitted as execution. They are read-only from a workflow-position perspective: the coordinator owns their movement across Problems, Human Review, Active, and Done.
+
+![Run card showing Workflow, Abandon, and Delete actions](/screenshots/run-card-actions.png)
+
+> 📸 **Screenshot — `run-card-actions.png`**
+> *Shows:* a run card in a workflow column with its **Workflow** (or **Topology** for coordinator runs) button, the **Abandon** button (`aria-label="Abandon run"`, opens the **Abandon run?** dialog), and the delete icon button (`aria-label="Delete run"`, opens the **Delete run?** dialog).
+> *Path:* `/projects/:projectId/board` → hover a run card in the **Runs** section.
 
 A run card shows:
 
@@ -215,6 +227,18 @@ The watch surface auto-scrolls while the user stays near the bottom; if the user
 
 The run header shows **Run** followed by the short run id. While the SSE connection is opening, the header says **Connecting**. Once events are flowing, it says **Streaming**. A terminal stream shows **done**. A stream failure shows **error** and the current error text, such as a reconnect notice or final failure message.
 
+![Workflow run page showing the run graph, Preview button, and Auto-approve tools toggle](/screenshots/workflow-run-graph.png)
+
+> 📸 **Screenshot — `workflow-run-graph.png`**
+> *Shows:* the **Run** page (`WorkflowRunPage`) with the live run graph (`aria-label="Loading run graph"` while loading), the **Auto-approve tools** toggle, the **Preview** button (visible only for a Kubernetes sandbox on an active run), and **Jump to approval** when a question is pending (`aria-label="Questions awaiting an answer"`).
+> *Path:* `/projects/:projectId/board` → click a run card's **Workflow** button → `/projects/:projectId/runs/:runId/workflow`.
+
+![Sandbox Preview dialog proxying the running pod preview](/screenshots/sandbox-preview-dialog.png)
+
+> 📸 **Screenshot — `sandbox-preview-dialog.png`**
+> *Shows:* the **Sandbox Preview** dialog opened from the **Preview** button on the Run page, with the text "Preview traffic is proxied through the Agentweaver API server.", the "Preview active for port {port} on pod {pod_name}." status, and the **Cancel** / **Start preview** / **Stop preview** / **Close** actions.
+> *Path:* on `/projects/:projectId/runs/:runId/workflow` (Kubernetes sandbox, active run) → click **Preview**.
+
 This header is stream status, not the entire lifecycle. A run can be **awaiting_review** while the stream is done; lifecycle cards provide the domain meaning.
 
 ### The timeline
@@ -228,6 +252,12 @@ The timeline is a projection of the run event stream. It is not a chat transcrip
 - **workflow step cards** for pipeline step transitions.
 
 The timeline announces itself as **Run timeline** and behaves like a live log while the run is active. If the local buffer drops older entries during a very long run, the page shows how many older events are not currently shown.
+
+![Live Watch page showing the execution timeline](/screenshots/watch-timeline.png)
+
+> 📸 **Screenshot — `watch-timeline.png`**
+> *Shows:* the **Execution** watch page with the breadcrumb (`aria-label="Breadcrumb"`: Projects / Project / Run {shortId} / Execution {shortId}), the run header status (**Connecting** / **Streaming** / **done** / **error**), and the center **Run timeline** with turn groups, agent message bubbles, tool-call cards, and lifecycle cards.
+> *Path:* from a run, open an execution → `/projects/:projectId/runs/:runId/execution/:executionId`.
 
 ### Turn groups
 

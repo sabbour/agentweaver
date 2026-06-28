@@ -1,12 +1,21 @@
 # Sandbox setup
 
-This guide covers installing and configuring sandboxed execution for operators. For the full design rationale, see [architecture/sandboxed-execution.md](../architecture/sandboxed-execution.md).
+This guide covers installing and configuring sandboxed execution for operators. For the full design rationale, see [deep-dive/sandboxed-execution.md](../deep-dive/sandboxed-execution.md).
 
 ## Security caveat
 
 `mxc` is an early preview. Its profiles are not yet hardened security boundaries. The sandbox is a defense-in-depth layer on top of Agentweaver's existing path containment and deny-by-default governance. Do not rely on it as the sole security control.
 
 When the `processcontainer` backend is active on Windows, network allowlist enforcement is not available (see [Network allowlist gap](#network-allowlist-gap)).
+
+## Two distinct sandbox runtimes: MXC vs. the agent-sandbox controller
+
+Agentweaver uses **two unrelated runtimes** depending on where it runs, and they are easy to confuse:
+
+- **MXC** is the **local-host** isolation runtime: the `Sabbour.Mxc.Sdk` NuGet package driving the external `wxc-exec.exe` binary. It backs the Windows `processcontainer` (`MxcSandboxExecutor`), the WSL2 backends (`WslMxcSandboxExecutor`), and the native-Linux `lxc-exec` fallback (`LinuxNativeMxcSandboxExecutor`). MXC isolates **one command at a time** on the developer/host machine. It is *not* a Kubernetes component and runs no controller.
+- The **agent-sandbox controller** is the **in-cluster** runtime: the upstream [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and its CRDs (API group `extensions.agents.x-k8s.io/v1alpha1`). In-cluster, `KubernetesSandboxExecutor` provisions each sandbox pod through this controller via a `SandboxClaim`. There is no MXC binary in the cluster.
+
+In short: **MXC isolates commands on a laptop; the agent-sandbox controller provisions sandbox pods in the cluster.** Both satisfy the same `ISandboxExecutor` contract, so the same agent code runs unchanged either way. The sections below cover each.
 
 ## Sandbox backends
 
@@ -72,12 +81,34 @@ Install `bwrap` (or `lxc-exec` at one of those paths) before starting the server
 
 When the API runs inside a Kubernetes cluster, `SandboxExecutorFactory.IsInCluster` (detected via the `KUBERNETES_SERVICE_HOST` environment variable) is `true` and the API overrides the platform factory with the `kubernetes-sandbox-claim` backend (`KubernetesSandboxExecutor`). This backend provides real isolation (Kata VM) and NetworkPolicy egress restriction, so `HasNetworkWarning` is `false`.
 
-Each shell command runs inside a pre-warmed pod obtained through a **`SandboxClaim`** custom resource:
+### Installing the agent-sandbox controller
 
-1. The executor creates a `SandboxClaim` (`apiVersion: extensions.agents.x-k8s.io/v1alpha1`, plural `sandboxclaims`), which adopts a warm pod from the pool.
-2. It polls until the claim reaches `phase: Bound` and reports a pod name.
-3. It runs the command via pod-exec (the Kubernetes WebSocket exec API) against the `agentweaver-sandbox` container.
-4. It deletes the claim on completion; the controller GC cleans up the pod and service.
+The in-cluster sandbox is provisioned by the upstream **agent-sandbox** controller, not by MXC. `scripts/aks/10-create-cluster.sh` installs it (default `SANDBOX_CONTROLLER_VERSION=v0.4.6`) from the release manifest and waits for its three CRDs to establish:
+
+```bash
+kubectl apply -f "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${SANDBOX_CONTROLLER_VERSION}/release.yaml"
+kubectl wait --for=condition=Established crd/sandboxclaims.extensions.agents.x-k8s.io --timeout=180s
+kubectl wait --for=condition=Established crd/sandboxtemplates.extensions.agents.x-k8s.io --timeout=180s
+kubectl wait --for=condition=Established crd/sandboxwarmpools.extensions.agents.x-k8s.io --timeout=180s
+```
+
+The three CRDs (all `extensions.agents.x-k8s.io/v1alpha1`) Agentweaver applies:
+
+| CRD | Agentweaver manifest | Role |
+| --- | --- | --- |
+| `SandboxTemplate` | `k8s/sandbox-template.yaml` (`agentweaver-sandbox`) | The pod shape + hardening (Kata runtime class, non-root, read-only rootfs, dropped caps, `/workspace` PVC, A2A port `8088`). |
+| `SandboxWarmPool` | `k8s/sandbox-warmpool.yaml` (`replicas: 3`) | Keeps N warm pods pre-built from the template so claims bind quickly. |
+| `SandboxClaim` | created per run by `KubernetesSandboxExecutor` (shape in `k8s/sandbox-claim-template.yaml`) | A request for one sandbox instance with a TTL; the controller binds it to a warm pod. |
+
+The controller watches `SandboxClaim` objects, adopts a warm pod from the matching pool, and reports binding via `status.phase: Bound` plus the bound pod's name in `status.sandbox.name` (with `status.podName` as a fallback). On claim deletion (or TTL expiry) the controller garbage-collects the pod and its service.
+
+### How a command runs
+
+1. The executor creates a `SandboxClaim` (`apiVersion: extensions.agents.x-k8s.io/v1alpha1`, plural `sandboxclaims`, `spec.templateRef` + `spec.ttl`), which adopts a warm pod from the pool.
+2. It polls every 2 s until the claim reaches `phase: Bound`, then reads the pod name from `status.sandbox.name` (preferred) or `status.podName`.
+3. For a run-scoped command it registers the pod name in `PodNameRegistry` (keyed by run id) so preview/port-forward can find it later.
+4. It runs the command via pod-exec (the Kubernetes WebSocket exec API) against the `agentweaver-sandbox` container.
+5. **Cleanup differs by command kind:** ad-hoc commands delete the claim immediately; run-scoped commands retain the claim until run cleanup or TTL so preview stays available.
 
 Configuration is bound from the `Sandbox:Kubernetes` section:
 
@@ -85,15 +116,31 @@ Configuration is bound from the `Sandbox:Kubernetes` section:
 | --- | --- | --- |
 | `Namespace` | `agentweaver` | Namespace the claims and pods live in. |
 | `TemplateRef` | `agentweaver-sandbox` | The SandboxTemplate the warm pool is built from. |
-| `TimeoutSeconds` | `600` | Per-command timeout. |
+| `TimeoutSeconds` | `600` | Claim TTL; per-command timeouts are clamped below it so the controller cannot GC a pod mid-exec. |
 
 ### The `agentweaver-sandbox` image
 
-The warm pods run the image built from `apps/agentweaver-sandbox/Dockerfile`. It is based on `ubuntu:24.04` and ships the language runtimes agent workloads need: `git`, Python 3, Node.js/npm, and the .NET SDK 9.0. The container runs as non-root (uid/gid 1000) to match the SandboxTemplate `securityContext`. `readOnlyRootFilesystem` is enforced by the template; writable `emptyDir` mounts are provided at `/workspace` (agent work) and `/tmp` (tool scratch). The entrypoint is `sleep infinity` — the pod stays alive for pod-exec sessions and the agent drives all execution via exec rather than a long-running server process.
+The warm pods run the image built from `apps/agentweaver-sandbox/Dockerfile`. It ships the language runtimes agent workloads need: `git`, Python 3, Node.js/npm, and the .NET SDK. The container runs as non-root (uid/gid 1000) to match the SandboxTemplate `securityContext`. `readOnlyRootFilesystem` is enforced by the template; writable mounts are provided at `/workspace` (the shared workspace PVC) and `/tmp` (an `emptyDir`). Under pod-per-run the pod hosts a live A2A AgentHost runtime on container port `8088` rather than a `sleep infinity` placeholder, which is why the template requests materially more CPU/memory than the shell-only baseline.
 
-### Port-forwarding to a sandbox pod
+### Port-forwarding to a sandbox pod (preview)
 
-A run's sandbox pod can be reached for preview/debugging via the run port-forward endpoints, which start a `kubectl port-forward` to the pod: `POST /api/runs/{runId}/sandbox/port-forward` (body `{ "target_port": <int> }`), `GET /api/runs/{runId}/sandbox/port-forward` to list active sessions, and `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` to stop one. See the [API reference](./api.md).
+A run's sandbox pod can be reached for preview/debugging through the run port-forward endpoints, served by `PortForwardService`. The service shells out to `kubectl port-forward --address 127.0.0.1 pod/{podName} :{targetPort} -n {namespace}` (it does **not** use the Kubernetes API), parses the `Forwarding from 127.0.0.1:<port> ->` line to learn the chosen local port, and probes loopback TCP until the tunnel is ready.
+
+| Method & path | Body | Returns |
+| --- | --- | --- |
+| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <1..65535> }` | `{ session_id, local_port, target_port, pod_name, started_at }` |
+| `GET /api/runs/{runId}/sandbox/port-forward` | — | array of the above (active sessions for the run) |
+| `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` |
+
+Behavior and limits:
+
+- **Kubernetes-only.** The pod is located by run id via `PodNameRegistry`; if no pod is registered the call returns a conflict — *"the run must be `in_progress` with an active Kubernetes sandbox"*.
+- **Ownership-checked.** The run must exist and the caller must own it (otherwise `403`/`404`).
+- **Per-run and global caps.** Default **3** concurrent sessions per run (`Sandbox:PortForward:MaxConcurrentSessionsPerRun`, fallback `:MaxPerRun`) and **20** globally (`Sandbox:PortForward:MaxConcurrentSessionsGlobal`, fallback `:MaxGlobal`). Exceeding a cap returns `429`.
+- **In-memory, no TTL.** Sessions live only in process memory; there is no expiry. They are torn down explicitly: `DELETE`, run end (via `RunWatchLoopService`, which also unregisters the pod), the `kubectl` process exiting, or `PortForwardService.Dispose()` on shutdown.
+- **`kubectl` required.** The API host needs `kubectl` on `PATH` (or `Sandbox:KubectlPath`) and cluster access.
+
+> The backend returns a `local_port` on the API host, **not** a public URL. The web `PortForwardSessionDto` also carries optional `preview_url`/`previewUrl` fields, but the backend does not currently populate them — the UI says so explicitly when a proxied URL is absent. See the [Sandbox pods reference](./sandbox-pods.md#sandbox-preview-port-forward-feature-017) and the [API reference](./api.md).
 
 ## Configuring sandbox policy
 

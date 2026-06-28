@@ -52,6 +52,12 @@ Memory feels like a shared brain, but decisions are the authority layer. Memory 
 
 The project-level **Agents** page is the user's home for the team. It answers: "Who is working on this project, what are they responsible for, and can I trust their charter?"
 
+![Agents page roster with member cards and team actions](/screenshots/team-roster.png)
+
+> 📸 **Screenshot — `team-roster.png`**
+> *Shows:* the **Agents** page titled "Agents" / "The cast working on this project." with roster cards (avatar, agent name, role title, active/retired indicator, and **System agent** / **Project agent** badge), the **All** / **Active** / **Retired** filters, and the **Add member**, **Sync**, and **Cast team** actions.
+> *Path:* open a project → click **Agents** in the left rail → `/projects/:projectId/team`.
+
 The page title is **Agents** with the subtitle **The cast working on this project.** Its primary actions are:
 
 - **Add member**
@@ -71,6 +77,12 @@ Each roster card shows the avatar, agent name, role title, active or retired sta
 ### Agent detail drawer
 
 Clicking a roster card opens a drawer for that agent. The drawer has three tabs: **Overview**, **Charter**, and **Capabilities**.
+
+![Agent detail drawer with Overview, Charter, and Capabilities tabs](/screenshots/team-member-detail.png)
+
+> 📸 **Screenshot — `team-member-detail.png`**
+> *Shows:* the agent detail drawer (opened via `aria-label="Open details for {member.name}"`) with the **Overview**, **Charter**, and **Capabilities** tabs; the Overview tab shows **Model**, **Charter path**, and **Recent history**.
+> *Path:* `/projects/:projectId/team` → click a roster card.
 
 #### Overview
 
@@ -116,6 +128,12 @@ The experience keeps suggestion and commitment separate. Generating a proposal d
 
 The **Cast** step offers three tabs:
 
+![Casting wizard step 1 Cast with Formulate, Template, and Analyze tabs](/screenshots/casting-wizard-cast.png)
+
+> 📸 **Screenshot — `casting-wizard-cast.png`**
+> *Shows:* the **Cast a team** wizard on step **1. Cast** with the **Formulate**, **Template**, and **Analyze** tabs, the **Team size** control, the **Roles** checkboxes from the catalog, the **Universe** accordion (defaulting to "Random (any universe)"), and the primary action (**Formulate →**, **Analyze →**, or **Review**).
+> *Path:* `/projects/:projectId/team` → click **Cast team** → `/projects/:projectId/team/cast`.
+
 - **Formulate**: plain-language casting. The UI says **Sketch the team in plain language; AI picks a universe, team size, and required roles.** The user enters a goal, chooses **Team size**, optionally checks roles, and clicks **Formulate →**. MCP uses `team_cast` with `mode` of `free_text`.
 - **Template**: scenario casting. The wizard loads scenario templates, displays selectable cards, and selects the template's default roles. MCP discovers scenarios with `catalog_list_scenarios`, discovers roles with `catalog_list_roles`, and casts with `mode` of `scenario`.
 - **Analyze**: project-aware casting. The UI says **The system will analyze your project and suggest roles.** The user chooses **Team size** and clicks **Analyze →**. MCP uses `team_cast` with `mode` of `analysis`.
@@ -133,6 +151,12 @@ The wizard has a **Universe** accordion. Its dropdown defaults to **Random (any 
 ### Review proposal
 
 After **Review**, the wizard shows **Review proposal**. Each proposed member card includes proposed name, role title, optional justification, role summary, **View charter** / **Hide charter**, and **Remove**. Warnings appear as message bars, and the proposal can show **Why this team** when rationale is available.
+
+![Casting wizard Review proposal step with proposed member cards](/screenshots/casting-wizard-review.png)
+
+> 📸 **Screenshot — `casting-wizard-review.png`**
+> *Shows:* the **2. Review proposal** step heading "Review proposal" with proposed member cards (proposed name, role title, justification, **View charter** / **Hide charter**, **Remove**); when a team already exists, the **Augment — add new members to the existing team** vs **Recast — replace the existing team** choice; and the **Back** / **Cancel** / **Confirm** actions.
+> *Path:* in the casting wizard → complete step 1 → click **Review**.
 
 If a project already has a team, the wizard asks: **An existing team is present. How would you like to proceed?** The choices are:
 
@@ -184,9 +208,21 @@ It has two tabs:
 
 The UI makes memory feel collaborative without making every note authoritative.
 
+![Team Memory page Decisions tab with the decision inbox](/screenshots/memories-decisions.png)
+
+> 📸 **Screenshot — `memories-decisions.png`**
+> *Shows:* the **Team Memory** page titled "Team Memory" with the **Decisions** / **Agent Memory** tabs, the **Decisions** tab active showing finalized decisions and the proposed-decisions inbox (`aria-label="Proposed decisions awaiting Coordinator"`) with the **Merge**, **Promote**, and **Reject** actions.
+> *Path:* open a project → click **Memories** in the left rail → `/projects/:projectId/memories`.
+
 ### Agent Memory tab
 
 The **Agent Memory** tab shows individual memory entries across the project. When there are no entries, it says **No agent memory recorded yet.** Each item shows agent name, importance, type, created time, content, and **Update**. The creation form is labeled **Create memory entry** and includes **Agent name**, **Type**, **Content**, and **Create memory**.
+
+![Agent Memory tab with memory entries and the Create memory entry form](/screenshots/memories-agent-memory.png)
+
+> 📸 **Screenshot — `memories-agent-memory.png`**
+> *Shows:* the **Agent Memory** tab with project-wide memory entries (agent name, importance, type, created time, content, **Update**) and the **Create memory entry** form (`aria-label="Create memory entry"`) with **Agent name**, **Type**, **Content** fields and the **Create memory** button.
+> *Path:* `/projects/:projectId/memories` → click the **Agent Memory** tab.
 
 Through MCP, this maps to `memory_record`, `memory_list`, `memory_get`, and `memory_search`. The web page presents project-wide memory and edit flow; MCP adds precise retrieval by agent, type, tags, and entry ID.
 

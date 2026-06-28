@@ -104,6 +104,12 @@ Diagnostics answers: **is Agentweaver healthy enough to operate right now?** It 
 
 The page title is **Diagnostics** with subtitle **System and project health checks.** It provides:
 
+![Diagnostics page with Global and This project tabs and check cards](/screenshots/diagnostics-checks.png)
+
+> 📸 **Screenshot — `diagnostics-checks.png`**
+> *Shows:* the **Diagnostics** page titled "Diagnostics" / "System and project health checks." with the **Global** / **This project** tabs (`aria-label="Diagnostics scope"`), the **Auto-refresh** switch, the **Re-run** button, the **Updated** timestamp, and the check list (`aria-label="Diagnostics checks"`) header "Checks (n) · {ms} ms" with `pass` / `warn` / `fail` badges.
+> *Path:* open a project → click **Diagnostics** in the left rail → `/projects/:projectId/diagnostics`.
+
 - **Global** and **This project** tabs;
 - **Auto-refresh** switch;
 - **Re-run** button;
@@ -139,6 +145,12 @@ Checkpoint GC appears as operational state inside diagnostics. The Diagnostics p
 ## Heartbeat experience
 
 Heartbeat answers: **is background automation ticking, and did it act?** The coordinator heartbeat service runs on an interval and drives backlog pickup from Ready into active coordinator work.
+
+![Heartbeat page with Automations and Recent activity](/screenshots/heartbeat-status.png)
+
+> 📸 **Screenshot — `heartbeat-status.png`**
+> *Shows:* the **Heartbeat** page titled "Heartbeat" / "Background automation status and recent ticks." with the **Auto-refresh** switch and **Refresh** button, the **Automations** section, and the **Recent activity** table (`aria-label="Recent heartbeat ticks"`).
+> *Path:* open a project → click **Heartbeat** in the left rail → `/projects/:projectId/heartbeat`.
 
 ```mermaid
 sequenceDiagram
@@ -213,6 +225,12 @@ Flow answers: **what is each agent working on right now?** It is the live agent 
 
 The page title is **Flow**. The default subtitle is **What each agent is working on right now.** With an agent filter, it becomes **Live work and terminal-run archive for {agent}.** Flow auto-refreshes every five seconds and also provides **Refresh**.
 
+![Flow page with per-agent activity cards](/screenshots/flow-agents.png)
+
+> 📸 **Screenshot — `flow-agents.png`**
+> *Shows:* the **Flow** page titled "Flow" / "What each agent is working on right now." with the **Refresh** button and per-agent cards sorted by operational pressure (active, then queued, then blocked); with an agent selected, the **Previous work archive** section (`aria-label="Previous work archive"`) and the "Live work and terminal-run archive for {agent}." subtitle.
+> *Path:* open a project → click **Flow** in the left rail → `/projects/:projectId/flow`.
+
 Flow reads the project board's `agent_queues` projection and sorts agents by operational pressure: active work first, then queued work, then blocked work.
 
 ### Agent cards
@@ -267,6 +285,12 @@ The deeper model is layered: governance, filesystem containment, execution isola
 | **Outbound network** | Enables or blocks network access for sandboxed commands; disabled when sandboxing is off. |
 | **Allowed repository roots** | Shows recognized repository roots; the UI displays this list but does not edit it. |
 | **Blocked command patterns** | Shows destructive command patterns; the UI displays this list but does not edit it. |
+
+![Sandbox policy fields in Project Settings](/screenshots/sandbox-policy.png)
+
+> 📸 **Screenshot — `sandbox-policy.png`**
+> *Shows:* the **Sandbox policy** section (reached from project **Settings**) with the **Shell execution**, **Sandbox enabled**, and **Outbound network** switches, plus the read-only **Allowed repository roots** and **Blocked command patterns** lists.
+> *Path:* open a project → **Settings** → **Sandbox policy** → `/projects/:projectId/settings` (Sandbox policy section).
 
 The UI saves the full loaded policy so list fields are preserved even when the user only toggles a switch.
 

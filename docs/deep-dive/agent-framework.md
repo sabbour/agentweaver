@@ -6,7 +6,7 @@ Agentweaver does not own an orchestration engine. It builds on one: the **Micros
 
 The single most useful sentence for rebuilding this design is: **the run lifecycle is a MAF graph, the agent is a MAF leaf, and every "waits for your approval" gate is a MAF `RequestPort`.** Agentweaver's own code is mostly the nodes inside that graph, the translation of MAF's event stream into the live UI, and the human-facing seams around its suspend/resume points.
 
-This deep dive answers two questions: **what** MAF gives Agentweaver, and **why** Agentweaver builds on it instead of a bespoke engine. The companion [architecture view](../architecture/agent-framework.md) is the terse map; this is the reasoning.
+This deep dive answers two questions: **what** MAF gives Agentweaver, and **why** Agentweaver builds on it instead of a bespoke engine. For the wider picture, see the [system overview](./00-system-overview.md).
 
 Why not a bespoke engine? Three properties are hard to get right and MAF supplies them as primitives:
 

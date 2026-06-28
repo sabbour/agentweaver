@@ -152,7 +152,7 @@ Runtime binding supports prompt, peer-review, check gates with known gate kinds,
 
 ### The Default Workflow
 
-The default workflow encodes the standard run pipeline. It is embedded in code and can also be materialized into a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize a copy.
+The default workflow encodes the standard run pipeline. Its canonical source is the code-embedded `DefaultWorkflowTemplate` (id `default`, trigger `manual`), loaded once through the real loader as `BuiltInWorkflows.Default` (`BuiltInWorkflows.DefaultWorkflowId == "default"`). `DefaultWorkflowTemplate.TryMaterialize` can also write a copy to a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize it. The pipeline is `agent -> rai -> review -> merge -> scribe` (with terminal sinks for safety-failed, declined, and done).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -231,13 +231,13 @@ Execution hints resolve in a clear order. The `agent` and `charter` fields are t
 
 ### Source Precedence
 
-For a project, the registry builds a workflow set from:
+For a project, `WorkflowRegistry.Build` assembles a `ProjectWorkflowSet` from:
 
-1. the built-in default workflow,
-2. catalog library workflows embedded in the Squad catalog,
-3. project-authored `.yaml` / `.yml` files under `.agentweaver/workflows/`.
+1. the built-in default workflow (`BuiltInWorkflows.Default`, from `DefaultWorkflowTemplate`),
+2. catalog library workflows embedded in the Squad catalog (`CatalogReader.LoadAllWorkflowYamls`, loaded with `isBuiltIn: true`),
+3. project-authored `.yaml` / `.yml` files under `.agentweaver/workflows/` (`WorkflowRegistry.WorkflowsRelativePath`).
 
-The result is cached per project. An explicit sync rebuilds the set from disk. Invalid workflows remain visible in list responses with validation errors, but they are excluded from the available set.
+The result is cached per project in `WorkflowRegistry.GetOrLoad`; `WorkflowRegistry.Sync` is the only refresh path and rebuilds from disk (a sync that finds validation errors keeps the previous cache). Invalid workflows remain visible in `ProjectWorkflowSet.Results` with their errors, but `ProjectWorkflowSet.Available` excludes them.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -268,17 +268,17 @@ flowchart TD
     class Catalog,ProjectFiles,Cache data;
 ```
 
-The built-in default is always available. Catalog workflows are available without project-local files. A blueprint may restrict the allowed workflow ids for a project, while still keeping the built-in default as a safety fallback.
+The built-in default is always available. Catalog workflows are available without project-local files. A blueprint may restrict the allowed workflow ids for a project via `Project.AllowedWorkflowIds`; `WorkflowRegistry.FilterByAllowedSet` keeps only allowed ids **plus** the built-in `default`, which is always retained so a project never has zero workflows. An empty/absent allowed set means all workflows are returned (backward compatible).
 
-Reserved ids are protected. Project files cannot override built-in or catalog workflow ids. Duplicate ids are resolved deterministically, and invalid duplicates are surfaced as load errors rather than silently replacing a definition.
+Reserved ids are protected: `WorkflowRegistry.Build` adds the built-in `default` and every catalog id to a reserved set, so project files cannot override a built-in or catalog id (such a file becomes an invalid result). Duplicate ids are resolved deterministically in `WorkflowRegistry.AddResult`: among built-in/catalog collisions the higher semantic `Version` wins (ties keep the first-loaded source); among project files the first valid file wins and later duplicates are surfaced as invalid load errors rather than silently replacing a definition.
 
 ### Validation Layers
 
 Validation happens in layers:
 
-1. **YAML parse** — malformed YAML becomes a file-scoped invalid result.
+1. **YAML parse** — `WorkflowDefinitionLoader.Load` turns malformed YAML into a file-scoped invalid result.
 2. **Schema mapping** — trigger type, node type, start node, edge endpoints, branches, and references are checked.
-3. **Bindability dry-run** — the runtime binder checks whether every node and transition can map to real executor wiring.
+3. **Bindability dry-run** — `WorkflowRegistry.ValidateBindable` runs `RunWorkflowGraphBinder.GetBindabilityErrors` to check whether every node and transition can map to real executor wiring.
 4. **Runtime composition** — review policies are composed, and the final effective graph is bound before a run starts.
 
 This layered design lets the UI show useful authoring errors while preserving runtime safety.
@@ -287,13 +287,13 @@ This layered design lets the UI show useful authoring errors while preserving ru
 
 ### Trigger Types
 
-A workflow declares one trigger:
+A workflow declares one `WorkflowTrigger` (`apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs`):
 
-- **Manual** — eligible when a person or client explicitly starts the run.
-- **Heartbeat** — eligible when the coordinator heartbeat picks up ready backlog work.
-- **Event** — eligible for a named system event. The current supported event is `task-added-to-ready`.
+- **`Manual`** — eligible when a person or client explicitly starts the run.
+- **`Heartbeat`** — eligible when the coordinator heartbeat picks up ready backlog work.
+- **`Event`** — eligible for a named `WorkflowEventType`. The current supported event is `TaskAddedToReady`.
 
-The invocation context is derived from run origin. A backlog pickup run is treated as `Heartbeat`; other origins are treated as `Manual`.
+The invocation context is derived from run origin by `CoordinatorOrchestratorExecutor.ResolveInvocationKindAsync`. A `RunOrigin.BacklogPickup` run is treated as `WorkflowInvocationKind.Heartbeat`; other origins (and lookup failures) are treated as `WorkflowInvocationKind.Manual`.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -325,12 +325,12 @@ The important safety property is that trigger filtering happens before model sel
 
 ### Candidate Filtering
 
-The evaluator maps:
+The evaluator (`WorkflowTriggerEvaluator.IsEligible`) maps:
 
-- `Manual` invocation → only `manual` workflows.
-- `Heartbeat` invocation → `heartbeat` workflows plus `event` workflows whose event is `task-added-to-ready`.
+- `Manual` invocation → only `Manual`-trigger workflows.
+- `Heartbeat` invocation → `Heartbeat`-trigger workflows plus `Event`-trigger workflows whose event is `TaskAddedToReady`.
 
-A backlog task can carry a workflow override. The override is honored only if the workflow exists, is valid, and is eligible for the invocation. Otherwise the system logs the mismatch and continues with eligible selection or safe fallback behavior.
+`WorkflowTriggerEvaluator.Filter` preserves input order, so the default-first ordering survives. A backlog task can carry a `WorkflowOverrideId`. The override is honored only if the workflow exists, is valid, and is eligible for the invocation. Otherwise the system logs the mismatch and continues with eligible selection or safe fallback behavior.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -420,7 +420,7 @@ Blueprint generation can also invoke workflow generation when no library workflo
 
 ## Selection Logic
 
-Workflow selection chooses a process for a task. It is intentionally conservative: deterministic rules narrow the space first, and the model only chooses among eligible definitions.
+Workflow selection chooses a process for a task. It runs inside `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` and is intentionally conservative: deterministic rules narrow the space first (registry ordering, trigger eligibility, overrides), and `WorkflowSelector.SelectAsync` only chooses among 2+ eligible definitions.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -465,14 +465,14 @@ The selector prompt asks for process fit:
 - Prefer project/custom workflows when they perform the requested process.
 - If nothing fits, select the first listed workflow, which is the project default.
 
-The model must return JSON with a `selected` workflow id and a short `rationale`. The selector extracts the first JSON object, verifies that the selected id is one of the provided candidates, and falls back to the default on model failure, malformed JSON, or unknown ids.
+The model must return JSON with a `selected` workflow id and a short `rationale`. `WorkflowSelector.SelectAsync` extracts the first JSON object, verifies that the selected id is one of the provided candidates, and falls back to the default on model failure, malformed JSON, or unknown ids. The production model seam is `CopilotWorkflowSelectionModel` (a Copilot completion wrapper that returns `null` on failure, triggering the deterministic fallback). When two or more candidates are resolved, the coordinator emits a `coordinator.workflow_selected` event with the choice, rationale, `wasAutoSelected`, and an override hint.
 
 ### Overrides
 
 There are two override channels:
 
-- **Backlog task override** — persisted on the task before it is claimed. Pickup carries the override intent into the coordinator run, and selection resolves it against the registry and trigger eligibility.
-- **Conversational override** — a human can send `use {workflow-id}`. The coordinator checks for this pattern before normal task handling and uses the requested workflow if it is among the available eligible candidates.
+- **Backlog task override** — `BacklogTask.WorkflowOverrideId`, persisted on the task before it is claimed. `CoordinatorPickupService` prepends `use {id}` to the goal at pickup, and `SelectWorkflowAsync` also resolves the override id directly against the registry and trigger eligibility.
+- **Conversational override** — a human can send `use {workflow-id}`. `WorkflowSelector.TryParseOverride` checks for this pattern before normal selection and uses the requested workflow if it is among the available eligible candidates.
 
 An explicit override wins only inside the candidate safety boundary. It does not let a user or backlog item execute a workflow that the registry cannot resolve or the trigger evaluator rejects.
 

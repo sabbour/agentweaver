@@ -17,9 +17,9 @@ A Blueprint is a reusable, versioned definition of how a team works. It bundles 
 
 A Blueprint is **universe-agnostic**. It says "we need a Software Engineer role and a QA Engineer role." The casting algorithm then says "let's call them Neo and Trinity."
 
-## The four predefined Blueprints
+## The five predefined Blueprints
 
-Agentweaver ships four predefined Blueprints. Pick the one that most closely matches your team's work:
+Agentweaver ships five predefined Blueprints. Pick the one that most closely matches your team's work:
 
 ### Software Development
 
@@ -44,6 +44,12 @@ A team for product work — discovery, spec writing, roadmap planning, stakehold
 A combined team that spans product and engineering — from spec to shipped code. Roles cover the full delivery lifecycle: product, engineering, QA, and coordination. Useful for small, cross-functional teams that do both product and engineering work.
 
 **Best for:** Full-stack teams that own both spec and delivery.
+
+### AI Agent Engineering
+
+A team for building, evaluating, and hardening AI agents and agentic workflows — prompt and tool design, evaluation, and safety review.
+
+**Best for:** Teams developing agents, prompts, and agent-evaluation harnesses.
 
 ::: tip Fork to customize
 Start with the closest predefined Blueprint, then fork it to add a role, swap the default workflow, or tighten the sandbox policy. Forked Blueprints are independent — the original is unchanged.
@@ -131,18 +137,20 @@ Every agent's context for a run is compiled from four layers, in order of priori
 
 ### Decision types
 
-Agents submit entries to the **Decision Inbox** with one of five types:
+Agents submit entries to the **Decision Inbox** with a type:
 
-| Type | Who can submit | What it captures |
-|---|---|---|
-| `learning` | Any agent | Something learned from this run |
-| `pattern` | Any agent | A recurring approach or anti-pattern |
-| `update` | Any agent | An update to prior knowledge |
-| `architectural` | Coordinator only | A significant architectural decision |
-| `scope` | Coordinator only | A scope constraint or boundary decision |
+| Type | What it captures |
+|---|---|
+| `learning` | Something learned from this run |
+| `pattern` | A recurring approach or anti-pattern |
+| `update` | An update to prior knowledge |
+| `architectural` | A significant architectural decision |
+| `scope` | A scope constraint or boundary decision |
+| `process` | A working-process or convention decision |
+| `technical` | A concrete technical decision |
 
-::: warning Architectural and scope decisions are coordinator-reserved
-Non-coordinator agents that attempt to submit `architectural` or `scope` entries will be rejected by the platform. These decision types carry the highest authority and are reserved for the coordinator.
+::: tip Architectural and scope decisions are coordinator-reviewed
+Any agent can submit any inbox type. After a run, the **Scribe** auto-merges `learning`, `pattern`, and `update` entries into the ledger, but it leaves `architectural` and `scope` entries pending for the **Coordinator** to review and promote. These two carry team-wide authority, so they are merged deliberately rather than automatically.
 :::
 
 ### The Decision Inbox

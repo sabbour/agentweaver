@@ -195,7 +195,11 @@ child — never sideways. See [Coordinator Internals](../deep-dive/coordinator-i
 A2A (Agent2Agent) is the wire transport that **remotes a single agent turn** from
 the **worker** to an **AgentHost** inside a **sandbox pod**. It is execution
 transport, not agent-to-agent chat: the orchestration graph stays in the worker,
-and A2A carries only the leaf agent turn's output stream across the boundary.
+and A2A carries only the leaf agent turn's output stream across the boundary. On
+the worker the leaf is a `RemoteAgentProxy` (an `A2AAgent` over A2A **HTTP+JSON**);
+the pod hosts an `A2ATurnBridgeAgent` (`agentweaver-pod`) wrapping its
+`CopilotAIAgent`, exposed at `POST /a2a/agent/v1/message:stream` and
+`GET /a2a/agent/v1/card`.
 
 A2A has its own dedicated surfaces and is documented separately:
 

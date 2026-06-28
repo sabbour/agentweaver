@@ -168,11 +168,13 @@ log, and the coordinator graph — three durable views instead of an ephemeral c
 ## Where execution actually happens (and why it's invisible here)
 
 One more thing you *won't* see on these pages: the **A2A transport**. When an agent
-turn runs in a distributed deployment, a single turn is remoted from the worker to
-a sandbox pod over A2A. That is execution plumbing — *where* a turn runs — and it
-has nothing to do with how the team coordinates. The Decisions page, the Team
-Memory page, and the coordinator graph look exactly the same whether a turn ran
-locally or in a remote pod. If you want to understand that layer, see the
+turn runs in a distributed deployment (the opt-in `pod-per-run` execution mode), a
+single **leaf** turn is remoted from the worker to a sandbox pod over A2A, while the
+orchestration graph and its gates stay in the worker. That is execution plumbing —
+*where* a turn runs — and it has nothing to do with how the team coordinates. The
+Decisions page, the Team Memory page, and the coordinator graph look exactly the
+same whether a turn ran locally or in a remote pod. If you want to understand that
+layer, see the
 [A2A bridge deep dive](../deep-dive/a2a-bridge.md) and
 [A2A reference](../reference/a2a.md) — but it is intentionally absent from the
 coordination experience, because **A2A is not how agents talk to each other.**

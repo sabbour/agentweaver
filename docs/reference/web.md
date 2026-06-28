@@ -4,12 +4,18 @@ The Agentweaver web UI is a TypeScript React 19 SPA built with Vite. It uses Rea
 
 ## Configuration
 
-Copy `.env.example` to `.env` in `apps/web`, then set the Vite variables:
+The web UI authenticates users through GitHub OAuth and sends the resulting session token automatically — no static API key is required in the browser. Copy `.env.example` to `.env` in `apps/web`, then set the Vite variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VITE_API_URL` | `http://localhost:5000` | API base URL |
-| `VITE_API_KEY` | empty | Bearer key sent on every request |
+| `VITE_API_URL` | `http://localhost:5000` | API base URL. In container deployments this is injected at runtime as `/api` through `window.__AGENTWEAVER_CONFIG__`. |
+| `VITE_API_KEY` | empty | Optional bearer key for non-interactive use; unset by the Docker build and not needed for browser sign-in |
+
+### API client convention
+
+The shared client (`api/apiClient.ts`) is constructed from `API_URL` (resolved in `config.ts` from `window.__AGENTWEAVER_CONFIG__.API_URL`, then `VITE_API_URL`, then `http://localhost:5000`). In container deployments `API_URL` is `/api`.
+
+All client methods in `api/client.ts` call **relative paths without an `/api/` prefix** — for example `/runs`, `/runs/{id}/stream`, `/projects`, and `/auth/github`. The `/api` prefix comes from the base URL, so paths must not repeat it. Requests are sent with `credentials: 'include'`, and an `Authorization: Bearer <session-token>` header is added when a session token is present in `sessionStorage`.
 
 ## Develop and build
 
@@ -39,7 +45,7 @@ For production hosting, the Vite build output is served by the ASP.NET Core stat
 | `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, relink, delete |
 | `/projects/:projectId/team` | Team | Current team roster, member management, charter editor, and sync panel |
 | `/projects/:projectId/team/cast` | Casting wizard | Single-page casting wizard with Formulate, Template, and Analyze tabs |
-| `/projects/:projectId/memories` | Team Memory | Decisions and RAI audit trail recorded across runs |
+| `/projects/:projectId/memories` | Team Memory | Decisions, the decision inbox, and agent memory recorded across runs |
 | `/projects/:projectId/workflows` | Workflows | Workflow definitions and editing |
 | `/projects/:projectId/diagnostics` | Diagnostics | Project diagnostics |
 | `/projects/:projectId/heartbeat` | Heartbeat | Coordinator heartbeat status |
@@ -424,9 +430,9 @@ The team memory page (`/projects/:projectId/memories`) surfaces the durable know
 
 Two tabs:
 
-**Decisions & Memory** — decisions recorded by agents (via `submit_decision` / `decision_create`). Each entry shows title, type badge (architectural, process, scope, technical), agent badge, and creation time. Decisions are ordered newest-first.
+**Decisions** — finalized decisions recorded by agents (via `submit_decision` / `decision_create`) alongside proposed Decision Inbox entries pending review. Each entry shows title, type badge (architectural, scope, process, technical), agent badge, and creation time. Proposed entries can be merged, promoted, or rejected.
 
-**RAI Audit** — memory entries recorded by Rai (via `record_memory`). Each entry shows importance badge (high/medium/low), type, and content.
+**Agent Memory** — project memory entries (via `record_memory`). Each entry shows importance badge (high/medium/low), type, and content. You can create new entries and edit existing ones.
 
 Both tabs fetch live from the API; data is cached for the session tab switch.
 

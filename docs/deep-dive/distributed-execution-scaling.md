@@ -64,7 +64,7 @@ flowchart LR
 
 ## The phased rollout
 
-The scaling story does not land in one release. It is three phases, each independently shippable, each behind a flag that defaults to today's in-process behavior so any step can be reverted instantly.
+The scaling story did not land in one release. It is **three phases that are now implemented in the codebase**, each independently shippable and each gated by a flag (`Sandbox:AgentExecutionMode`, `Database:Provider`, `App:Role`) that defaults to the simple single-process shape, so any step can be reverted instantly.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -92,7 +92,7 @@ flowchart TD
 
 ### P1 — agent execution in pods (the OOM fix)
 
-P1 relocates only the heavy execution into sandbox pods over a thin agent bridge. It keeps a **single** orchestrating process and the existing SQLite file. This is deliberate and safe: the pod is a *compute satellite*, never a database writer. Every checkpoint and run-event write is proxied back through the one worker, which remains the sole owner of durable state. Because there is still exactly one writer, SQLite's single-writer invariant holds and nothing forces Postgres yet.
+P1 relocates only the heavy execution into sandbox pods over a thin agent bridge (the `RemoteAgentProxy` → AgentHost A2A seam, enabled by `Sandbox:AgentExecutionMode=pod-per-run`). It keeps a **single** orchestrating process and the existing SQLite file. This is deliberate and safe: the pod is a *compute satellite*, never a database writer. The `RemoteAgentProxy` carries no `ICheckpointStore` and the pod opens no database connection, so every checkpoint and run-event write is proxied back through the one worker, which remains the sole owner of durable state. Because there is still exactly one writer, SQLite's single-writer invariant holds and nothing forces Postgres yet.
 
 P1 stops the OOM on its own. The dominant per-run footprint — the live model session plus its tool buffers — leaves the API process and dies with the pod. The orchestration graph, the watch loop, and the bounded event history that stay behind are comparatively light.
 
@@ -100,17 +100,17 @@ The rule that keeps P1 single-writer-safe is precise: the pod must never open a 
 
 ### P2 — Azure Database for PostgreSQL Flexible Server
 
-P2 swaps the backing store from SQLite to **Azure Database for PostgreSQL Flexible Server** (the current, locked direction). This is the step that removes the single-writer constraint. Once a real multi-writer database is underneath, the ReadWriteOnce data volume can be dropped, the deployment can move from a recreate to a rolling update strategy, and `replicas` can exceed one.
+P2 makes the backing store **provider-aware**, with **Azure Database for PostgreSQL Flexible Server** as the multi-writer target (the current, locked direction). The provider is selected by `Database:Provider`: `postgres`/`postgresql` routes durable state through the EF Core `MemoryDbContext` and its EF-backed stores (`EfRunStore`, `EfRunRevisionStore`, `EfWorkflowRunStore`, `EfBacklogTaskStore`, `EfCastProposalStore`, and `EfRunEventStream`), while the default `sqlite` keeps the legacy single-writer SQLite stores. Once a real multi-writer database is underneath, the ReadWriteOnce data volume can be dropped, the deployment can move from a recreate to a rolling update strategy, and `replicas` can exceed one.
 
-P2 is mostly invisible to end users — the run/review model and the public API and event contracts do not change. What changes is *where* state lives and *who may write it concurrently*. The migration folds the previously separate raw stores into a single provider-agnostic data context so there is one connection story and one migration mechanism; the [data-layer reference](../reference/scaling-data-layer.md) covers exactly which stores move and how.
+P2 is mostly invisible to end users — the run/review model and the public API and event contracts do not change. What changes is *where* state lives and *who may write it concurrently*. The previously separate raw stores now fold into the single `MemoryDbContext` (which maps `runs`, `run_revisions`, `projects`, `backlog_tasks`, `workflow_runs`, and `cast_proposals` to Postgres tables and `model.Ignore<>()`s them on non-Npgsql providers), so there is one connection story and one migration mechanism; the [data-layer reference](../reference/scaling-data-layer.md) covers exactly which stores move and how.
 
 ### P3 — web/worker split + durable run leasing
 
-P3 takes the now-stateless tier and splits it by role, then adds the coordination primitive that lets many copies of the worker role run at once. This is where horizontal scale actually arrives, and it is the heart of the topology.
+P3 splits the now-stateless tier by role and adds the coordination primitive that lets many copies of the worker role run at once. The split is real today: `AppRole` reads `App:Role` (env `App__Role`, values `web`/`worker`), and `Program.cs` branches on `isWorker` to wire each tier's concerns. This is where horizontal scale actually arrives, and it is the heart of the topology.
 
 ## The web/worker deployment split
 
-Once SQLite is gone, the orchestrator's two jobs have very different scaling shapes, and it pays to separate them into two deployments built from the **same image**, differentiated only by a role flag.
+Once SQLite is gone, the orchestrator's two jobs have very different scaling shapes, and they are separated into two deployments built from the **same image**, differentiated only by the `App:Role` flag (`web` vs `worker`).
 
 - **Web tier** — serves the REST API, authentication, and the live event (SSE) relay to clients. It is stateless: it holds no run's orchestration graph in memory. It scales with *request and connection load* and can grow freely to N replicas.
 
@@ -167,9 +167,9 @@ flowchart TB
 
 ## Durable run leasing
 
-With more than one worker, the central question becomes: **how do N identical workers share one pool of runs without two of them grabbing the same run?** A blind read-modify-write cannot answer this. If two workers both read a run as "unowned" and both write themselves as owner, the last writer wins and the run is dispatched twice — the classic double-dispatch bug. (The orchestration codebase has exactly this hazard today in the path that flips a subtask to *dispatched*: it loads the row, mutates it, and saves, with no ownership guard. Under multiple replicas that is unsafe and must become guarded.)
+With more than one worker, the central question becomes: **how do N identical workers share one pool of runs without two of them grabbing the same run?** A blind read-modify-write cannot answer this. If two workers both read a run as "unowned" and both write themselves as owner, the last writer wins and the run is dispatched twice — the classic double-dispatch bug. (The run-claim path is now guarded by leasing, below; the analogous subtask-dispatch path — load row, mutate, save with no ownership guard — is **not yet** converted and remains the known multi-replica hazard.)
 
-The fix is a **durable lease** expressed as a *guarded compare-and-set* (CAS) on the work item's row. Instead of "read then write," a worker issues a single conditional update: claim this run **only if** it is currently unowned or its lease has expired, and stamp my identity and a fresh deadline in the same statement. The database guarantees that exactly one worker's update affects a row; every other worker sees zero rows changed and moves on. The winner — and only the winner — proceeds to execute.
+The fix is a **durable lease** expressed as a *guarded compare-and-set* (CAS) on the work item's row. This is implemented today as `IRunLeaseStore`: the Postgres implementation `PostgresRunLeaseStore` issues a single conditional `ExecuteUpdateAsync` against the `runs` table — claim this run **only if** `owner_id IS NULL OR lease_expires_at < now()`, stamping owner, a fresh deadline, an incremented `fencing_token`, and `attempt` in the same statement. The database guarantees that exactly one worker's update affects a row; every other worker sees zero rows changed and moves on. The winner — and only the winner — proceeds to execute. On non-Postgres single-replica deployments the binding is `NoOpRunLeaseStore`, where every claim trivially succeeds because there is no contention.
 
 Leasing rests on a small set of per-row ideas:
 
@@ -195,13 +195,28 @@ sequenceDiagram
     DB-->>B: rows = 1  (B re-claims — crash recovery)
 ```
 
-A second, related guarantee covers **child dispatch**: a coordinator that spawns child runs must do so *exactly once* per (coordinator, subtask, attempt), even if it is re-leased mid-flight to another worker. An idempotency record written in the same transaction that flips the subtask to *dispatched* makes redelivery safe — a duplicate attempt simply discovers the existing child and reuses it rather than spawning a second one.
+The lease *lifecycle* is owned by `RunWatchLoopService`: on claim it records the `(ownerId, fencingToken)`, runs a background renew loop at half the TTL (`LeaseTtl` = 5 minutes, renew every ~2.5 minutes), and releases on completion or drain. Terminal handlers and `FailRun` first re-check `IsLeaseOwnerAsync` so a worker whose lease was stolen does not finalize a run it no longer owns.
+
+> **Implemented vs. design.** Run-level leasing on the `runs` row (`owner_id`, `lease_expires_at`, `heartbeat_at`, `fencing_token`, `attempt`) is implemented. Extending the same guarded CAS to **subtask dispatch** — and the `(coordinator, subtask, attempt)` dispatch-idempotency record below — is **not yet implemented**; it remains the outstanding hardening item for safe multi-worker coordinator fan-out.
+
+A second, related guarantee covers **child dispatch** *(design target, not yet implemented)*: a coordinator that spawns child runs should do so *exactly once* per (coordinator, subtask, attempt), even if it is re-leased mid-flight to another worker. An idempotency record written in the same transaction that flips the subtask to *dispatched* would make redelivery safe — a duplicate attempt simply discovers the existing child and reuses it rather than spawning a second one.
 
 **Affinity is acceptable and even desirable.** Because a worker that holds a lease also holds that run's in-process orchestration graph and its HITL gates, work for a given run prefers to stay on its owning worker. Affinity is an optimization layered on top of leasing, not a replacement for it: the lease remains the source of truth, so if the owning worker dies, any other worker can still take over.
 
 ## Run-event fan-out under multiple replicas
 
 The live event stream is what makes a run watchable in real time. In a single process this is easy: the producer writes events into a process-local channel and the SSE relay reads from the same channel. The moment there are multiple replicas, that breaks — a run executes on worker A, but an SSE client may be connected to web pod B, whose local channel never sees A's events. Durability is fine because every event is written through to the shared database before it is acknowledged; what is lost is **live cross-replica delivery**.
+
+### What exists today: durable write-through + same-replica fan-out
+
+The Postgres path is `EfRunEventStream` (registered as `IRunEventStream` when `Database:Provider=postgres`). It mirrors the SQLite stream's two-layer shape:
+
+- **Durable write-through.** Every `AppendAsync` inserts the event into the `RunEvents` table inside a **serializable** transaction that computes `MAX(Sequence)+1` for the run, before the event is acknowledged. A unique `(RunId, Sequence)` index is the safety net; on a concurrent-append conflict the transaction retries (up to three attempts). This is what makes replay possible and gapless.
+- **In-process channel.** `SubscribeAsync` first **replays** durable rows after the caller's cursor from the database, then **tails** a bounded process-local channel for new events. Because the channel is per-process, a subscriber on a *different* replica does not receive live pushes from the producing worker — it sees new events only by replaying from the durable log on (re)subscribe.
+
+> **Design target, not yet implemented.** True live **cross-replica** delivery — a `LISTEN/NOTIFY` (or external-bus) cursor notification plus a low-frequency catch-up poll as a backstop — is the intended next step but is **not** in `EfRunEventStream` today. The durable log and the same-replica fast path below are what ship now; cross-replica live watching currently relies on durable replay.
+
+### The intended cross-replica mechanism
 
 The reconstruction principle is *durable-write-through plus cross-replica notification, with a polling backstop*:
 
