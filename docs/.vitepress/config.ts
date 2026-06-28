@@ -25,7 +25,13 @@ export default withMermaid({
     // relies on `{.class}`/`{#anchor}` syntax.
     attrs: { disable: true },
   },
-  mermaid: {},
+  mermaid: {
+    flowchart: {
+      useMaxWidth: false,
+      htmlLabels: true,
+      padding: 12,
+    },
+  },
   themeConfig: {
     logo: '/agentweaver.png',
     nav: [

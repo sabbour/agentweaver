@@ -1,0 +1,110 @@
+/*
+ * Mermaid diagram styling overrides for Agentweaver docs.
+ *
+ * The diagrams hard-code a per-diagram `%%{init}%%` that forces a static
+ * light "base" theme with light pastel node fills + dark (#242424) text.
+ * Those solid node cards read fine in BOTH light and dark mode, so we KEEP
+ * them. This file only fixes the things that are actually broken:
+ *
+ *   1. Tiny text  -> handled in config.ts (flowchart.useMaxWidth:false) plus
+ *      the horizontal-scroll wrapper below so wide diagrams keep natural size
+ *      instead of being shrunk to fit the column.
+ *   2. Clipped 2nd line of `<br/>` labels -> allow label foreignObjects/text
+ *      to overflow and give them a sane line-height.
+ *   3. Dark-mode dark-on-dark chrome (cluster bg/title, edge labels, arrows)
+ *      -> overridden ONLY under html.dark so light mode is untouched.
+ */
+
+/* ----------------------------------------------------------------------- */
+/* 1. Legibility: let wide diagrams scroll instead of shrinking            */
+/* ----------------------------------------------------------------------- */
+.vp-doc .mermaid {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* center narrow diagrams, left-align wide ones that overflow */
+  text-align: center;
+}
+
+.vp-doc .mermaid svg {
+  /* useMaxWidth:false already renders a natural width; make sure VitePress
+     base styles don't force it back to 100% and shrink the text. */
+  max-width: none !important;
+  height: auto;
+}
+
+/* ----------------------------------------------------------------------- */
+/* 2. Clipping: never clip the 2nd line of two-line <br/> labels           */
+/* ----------------------------------------------------------------------- */
+.mermaid .nodeLabel,
+.mermaid .edgeLabel,
+.mermaid .label,
+.mermaid .cluster-label,
+.mermaid foreignObject,
+.mermaid foreignObject > div,
+.mermaid foreignObject span {
+  overflow: visible;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.mermaid foreignObject {
+  /* give multi-line labels vertical room so the foreignObject height that
+     mermaid computes from a single line doesn't crop the wrapped text */
+  overflow: visible;
+}
+
+/* ----------------------------------------------------------------------- */
+/* 3. Dark mode chrome fixes (light mode left completely untouched)        */
+/* ----------------------------------------------------------------------- */
+
+/* Cluster / subgraph rectangles: dark fill with a visible border */
+html.dark .mermaid .cluster rect,
+html.dark .mermaid g.cluster rect {
+  fill: #2b2b2c !important;
+  stroke: #54545a !important;
+}
+
+/* Cluster / subgraph titles: light text so they're readable on dark fill */
+html.dark .mermaid .cluster-label,
+html.dark .mermaid .cluster-label div,
+html.dark .mermaid .cluster-label span,
+html.dark .mermaid .cluster text,
+html.dark .mermaid g.cluster text {
+  fill: #e6e6e6 !important;
+  color: #e6e6e6 !important;
+}
+
+/* Edge labels: the init forces a WHITE edgeLabelBackground box which makes
+   the (dark) edge-label text invisible-ish and looks wrong on dark. Replace
+   the box with a dark fill and light text. */
+html.dark .mermaid .edgeLabel rect,
+html.dark .mermaid .edgeLabel .label-container,
+html.dark .mermaid .edgeLabel foreignObject {
+  fill: #1f1f22 !important;
+}
+
+html.dark .mermaid .edgeLabel,
+html.dark .mermaid .edgeLabel p,
+html.dark .mermaid .edgeLabel span,
+html.dark .mermaid .edgeLabel div {
+  color: #e6e6e6 !important;
+  background: #1f1f22 !important;
+  fill: #e6e6e6 !important;
+}
+
+/* Arrows / connecting lines / markers: the init forces #605E5C which is too
+   faint on dark. Lighten so edges are visible. Node card borders are left
+   alone (they come from the pastel classDef and read fine). */
+html.dark .mermaid .edgePaths .path,
+html.dark .mermaid .flowchart-link,
+html.dark .mermaid .edgePath .path,
+html.dark .mermaid path.flowchart-link {
+  stroke: #a0a0a6 !important;
+}
+
+html.dark .mermaid marker path,
+html.dark .mermaid .arrowheadPath,
+html.dark .mermaid .marker {
+  fill: #a0a0a6 !important;
+  stroke: #a0a0a6 !important;
+}

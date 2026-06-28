@@ -28,7 +28,7 @@ Agentweaver remotes the **leaf**. This is the decision that makes everything els
 The crux question for any remoting design — "does the transport flatten our rich, typed event stream?" — is **avoided by construction**. Only the leaf agent's `AgentRunResponseUpdate` stream crosses, and that is exactly what A2A's streaming message surface carries natively.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     subgraph Worker["Worker process — MAF graph stays here"]
         Graph["MAF workflow graph"]
@@ -101,7 +101,7 @@ This `RunEvent` codec is the **only shim the bridge owns** — and it is require
 > **Honest scope note.** Today the side-channel `RunEvent`s are forwarded **in-band** as A2A `DataPart`s on the same `message:stream` — the simplest path, and the one the worker decoder already supports with no new infrastructure. Fanning RunEvents out over an external bus (Event Hub / Service Bus / Redis pub-sub) for higher scale is a deliberate future option, not what ships today.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     autonumber
     participant Boot as AgentHostStartupService (pod boot)
@@ -169,7 +169,7 @@ A2A `message:stream` has **no Last-Event-ID replay**. If the stream drops mid-tu
 Agentweaver's answer is not to ask A2A for replay it cannot give. Instead, on a mid-turn drop the worker **re-drives the whole turn from the last checkpoint**. Because checkpoints are durable and the session blob is serialized, re-driving is well-defined: restore, re-spawn, replay. Re-injection of the side-channel `RunEvent`s is sequence-based and idempotent, so re-driving a turn does not duplicate timeline entries. The turn is the unit of retry; the checkpoint is the recovery point.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Start["Turn starts"] --> CK1[("Worker CheckpointManager<br/>session blob + superstep state")]
     CK1 --> Stream["A2A message:stream in flight"]

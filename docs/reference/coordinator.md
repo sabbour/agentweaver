@@ -112,7 +112,7 @@ An override never escapes the candidate safety boundary: it cannot run a workflo
 Whenever the multi-candidate path runs, the coordinator emits a `coordinator.workflow_selected` event (`EmitWorkflowSelectedEvent`) carrying `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, an `overrideHint` (`Reply 'use {other-id}' to change...`), and the list of `available` workflows. If `SelectWorkflowAsync` throws anywhere, it logs a warning and returns the resolved project default so the caller always knows which workflow it is planning against.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Start([SelectWorkflowAsync])
     ResolveDefault[ResolveDefault<br/>project default = fallback]
