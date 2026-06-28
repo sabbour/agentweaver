@@ -47,4 +47,12 @@
     <InternalsVisibleTo Include="Agentweaver.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The GitHub Copilot agent definition materialized into each new project's
+         .github/agents/. It is a generated, byte-identical copy of the repo's
+         .github/agents/agentweaver.agent.md (see scripts/gen-docs.mjs); a unit test
+         and CI assert the two never drift. -->
+    <EmbeddedResource Include="Projects\Templates\agentweaver.agent.md" LogicalName="Agentweaver.Api.Projects.Templates.agentweaver.agent.md" />
+  </ItemGroup>
+
 </Project>
