@@ -68,6 +68,25 @@ public sealed class KubernetesSandboxOptions
     /// <c>AgentHost__RequireMtls</c>. Config key: <c>Sandbox:AgentHost:RequireMtls</c>.
     /// </summary>
     public bool RequireMtls { get; init; } = true;
+
+    // ── AgentHost readiness gate (A2A cold-start race) ───────────────────────
+
+    /// <summary>
+    /// Path the AgentHost exposes for liveness/readiness on <see cref="AgentHostPort"/>. The executor
+    /// polls <c>{scheme}://{podIP}:{port}{AgentHostHealthzPath}</c> after the claim binds and BEFORE
+    /// returning the A2A endpoint, so the worker never sends the first turn into the Kestrel boot
+    /// window (which would be refused). Default: <c>/healthz</c>.
+    /// </summary>
+    public string AgentHostHealthzPath { get; init; } = "/healthz";
+
+    /// <summary>
+    /// Maximum time to wait for the AgentHost to start serving <see cref="AgentHostHealthzPath"/>
+    /// before failing the launch deterministically. Default: 90s (covers cold-start Kestrel bind).
+    /// </summary>
+    public int AgentHostReadyTimeoutSeconds { get; init; } = 90;
+
+    /// <summary>Interval between AgentHost readiness probe attempts. Default: 1000ms.</summary>
+    public int AgentHostReadyPollIntervalMs { get; init; } = 1000;
 }
 
 /// <summary>
@@ -123,6 +142,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private readonly KubernetesSandboxOptions _options;
     private readonly ILogger<KubernetesSandboxExecutor> _logger;
     private readonly IPodNameRegistry? _podRegistry;
+    // Polls the AgentHost /healthz after bind and before returning the endpoint, closing the
+    // A2A cold-start race (pod Running ~20-30s before Kestrel binds :8088). Null in unit tests
+    // that only assert the claim body → readiness gate is skipped.
+    private readonly IAgentHostReadinessProbe? _readinessProbe;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -135,12 +158,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IKubernetes client,
         KubernetesSandboxOptions options,
         ILogger<KubernetesSandboxExecutor> logger,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null,
+        IAgentHostReadinessProbe? readinessProbe = null)
     {
         _client = client;
         _options = options;
         _logger = logger;
         _podRegistry = podRegistry;
+        _readinessProbe = readinessProbe;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -259,6 +284,36 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
         var endpointUrl = AgentHostEndpoint.Build(
             _options.RequireMtls, podIp, _options.AgentHostPort, _options.AgentHostA2APath);
+
+        // A2A cold-start gate: the claim binds when the pod is Running, but the AgentHost Kestrel
+        // listener takes ~20-30s more to bind :8088. Without this wait the worker's first A2A POST
+        // hits a closed port → "Connection refused" → the run fails mid-turn. Poll /healthz until the
+        // app is actually serving so a not-yet-ready pod is a deterministic LAUNCH failure instead.
+        if (_readinessProbe is not null)
+        {
+            var scheme = AgentHostEndpoint.Scheme(_options.RequireMtls);
+            var readinessUrl =
+                $"{scheme}://{podIp}:{_options.AgentHostPort}{_options.AgentHostHealthzPath}";
+
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: waiting for AgentHost readiness for run {RunId} at {Url}",
+                runId, readinessUrl);
+
+            try
+            {
+                await _readinessProbe.WaitUntilReadyAsync(readinessUrl, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"AgentHost pod '{podName}' for run '{runId}' did not become ready at {readinessUrl} " +
+                    $"within {_options.AgentHostReadyTimeoutSeconds}s; failing the launch.", ex);
+            }
+        }
 
         _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
 

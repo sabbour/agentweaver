@@ -18,13 +18,15 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IConfiguration _config;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IPodNameRegistry? _podRegistry;
+    private readonly IHttpClientFactory? _httpClientFactory;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
         _podRegistry = podRegistry;
+        _httpClientFactory = httpClientFactory;
     }
 
     public ISandboxExecutor Resolve()
@@ -73,13 +75,39 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 SandboxEgressCidrExclusions = ReadSandboxEgressCidrExclusions(),
                 RequireMtls = !string.Equals(
                     _config["Sandbox:AgentHost:RequireMtls"], "false", StringComparison.OrdinalIgnoreCase),
+                AgentHostHealthzPath = _config["Sandbox:Kubernetes:AgentHostHealthzPath"] ?? "/healthz",
+                AgentHostReadyTimeoutSeconds = int.TryParse(
+                    _config["Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds"], out int rt) ? rt : 90,
+                AgentHostReadyPollIntervalMs = int.TryParse(
+                    _config["Sandbox:Kubernetes:AgentHostReadyPollIntervalMs"], out int ri) ? ri : 1000,
             };
             var k8sLogger = _loggerFactory.CreateLogger<KubernetesSandboxExecutor>();
             WarnIfServiceCidrNotExcluded(sandboxOptions, logger);
+
+            // Readiness gate closes the A2A cold-start race (pod Running before Kestrel binds :8088).
+            // Requires the named HttpClient that can reach the pod IP; skipped (null) only if no
+            // IHttpClientFactory was injected (which would itself be a misconfiguration in-cluster).
+            IAgentHostReadinessProbe? readinessProbe = null;
+            if (_httpClientFactory is not null)
+            {
+                readinessProbe = new HttpAgentHostReadinessProbe(
+                    _httpClientFactory,
+                    TimeSpan.FromSeconds(sandboxOptions.AgentHostReadyTimeoutSeconds),
+                    TimeSpan.FromMilliseconds(sandboxOptions.AgentHostReadyPollIntervalMs),
+                    _loggerFactory.CreateLogger<HttpAgentHostReadinessProbe>());
+            }
+            else
+            {
+                logger.LogWarning(
+                    "SandboxExecutorRouter: no IHttpClientFactory available — AgentHost readiness gate disabled. " +
+                    "First A2A turns may race the cold-start Kestrel bind.");
+            }
+
             logger.LogInformation(
                 "SandboxExecutorRouter: selecting KubernetesSandboxExecutor (namespace={Namespace}, workspaceMountPath={WorkspaceMountPath})",
                 sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
-            return new KubernetesSandboxExecutor(k8sClient, sandboxOptions, k8sLogger, _podRegistry);
+            return new KubernetesSandboxExecutor(
+                k8sClient, sandboxOptions, k8sLogger, _podRegistry, readinessProbe);
         }
         catch (Exception ex)
         {
