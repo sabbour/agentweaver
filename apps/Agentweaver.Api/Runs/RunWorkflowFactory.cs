@@ -131,7 +131,8 @@ public sealed class RunWorkflowFactory
         WorkflowRegistry? workflowRegistry,
         ReviewPolicyRegistry? reviewPolicyRegistry,
         IRunEventStream? eventStream = null,
-        IBacklogTaskStore? backlogTaskStore = null)
+        IBacklogTaskStore? backlogTaskStore = null,
+        ICheckpointStoreFactory? checkpointStoreFactory = null)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
@@ -167,8 +168,11 @@ public sealed class RunWorkflowFactory
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
 
-        var store = ResilientCheckpointStore.Create(
-            _checkpointDir, _loggerFactory.CreateLogger<RunWorkflowFactory>());
+        // Production (Postgres) uses a shared, concurrency-safe checkpoint store so both replicas read
+        // and write the same checkpoints; local/dev (sqlite) falls back to the per-pod file store.
+        // The selector is optional so the convenience ctor / tests still get the file store.
+        var store = (checkpointStoreFactory ?? new FileCheckpointStoreFactory())
+            .Create("runs", _checkpointDir, _loggerFactory.CreateLogger<RunWorkflowFactory>());
         _checkpointManager = CheckpointManager.CreateJson(store);
     }
 

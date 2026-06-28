@@ -28,6 +28,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
     public DbSet<HeartbeatStatusRecord> HeartbeatStatuses => Set<HeartbeatStatusRecord>();
 
+    // Shared, concurrency-safe MAF workflow checkpoints (replaces the per-pod file store on Postgres).
+    // Postgres-only: local/dev (sqlite) still uses the file-based checkpoint store.
+    public DbSet<WorkflowCheckpointRecord> WorkflowCheckpoints => Set<WorkflowCheckpointRecord>();
+
     // Entities migrated from agentweaver.db (spec-018 P2)
     public DbSet<RunRecord> Runs => Set<RunRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
@@ -118,6 +122,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<BacklogTaskRecord>();
             model.Ignore<WorkflowRunRecord>();
             model.Ignore<CastProposalRecord>();
+            model.Ignore<WorkflowCheckpointRecord>();
             return;
         }
 
@@ -258,6 +263,26 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(c => c.ExpiresAt).HasColumnName("expires_at");
             e.Property(c => c.ProposalJson).HasColumnName("proposal_json");
             e.HasIndex(c => c.ProjectId).HasDatabaseName("IX_cast_proposals_project_id");
+        });
+
+        // Shared MAF workflow checkpoints. Each row is an independent, unique-PK checkpoint so the two
+        // API replicas write without contention (no exclusive file lock) and read each other's
+        // checkpoints via MVCC — genuine cross-pod resume. store_name partitions the runs/coordinator
+        // stores that previously lived in separate directories.
+        model.Entity<WorkflowCheckpointRecord>(e =>
+        {
+            e.ToTable("workflow_checkpoints")
+                .HasKey(c => new { c.StoreName, c.SessionId, c.CheckpointId });
+            e.Property(c => c.StoreName).HasColumnName("store_name");
+            e.Property(c => c.SessionId).HasColumnName("session_id");
+            e.Property(c => c.CheckpointId).HasColumnName("checkpoint_id");
+            e.Property(c => c.ParentCheckpointId).HasColumnName("parent_checkpoint_id");
+            e.Property(c => c.HasParentMetadata).HasColumnName("has_parent_metadata").HasDefaultValue(true);
+            e.Property(c => c.Payload).HasColumnName("payload").HasColumnType("jsonb");
+            e.Property(c => c.CreatedAt).HasColumnName("created_at");
+            e.Property(c => c.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(c => new { c.StoreName, c.SessionId })
+                .HasDatabaseName("IX_workflow_checkpoints_store_session");
         });
     }
 }

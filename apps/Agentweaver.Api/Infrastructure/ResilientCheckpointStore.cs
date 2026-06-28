@@ -38,7 +38,16 @@ public static class ResilientCheckpointStore
     /// <summary>Backoff between shared-store open attempts (rides out transient mid-write locks).</summary>
     private static readonly TimeSpan SharedOpenBackoff = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>Default store opener. Overridable in tests to simulate ctor failures.</summary>
+    private static FileSystemJsonCheckpointStore DefaultOpener(DirectoryInfo dir) => new(dir);
+
     public static FileSystemJsonCheckpointStore Create(string checkpointDir, ILogger logger)
+        => Create(checkpointDir, logger, DefaultOpener);
+
+    internal static FileSystemJsonCheckpointStore Create(
+        string checkpointDir,
+        ILogger logger,
+        Func<DirectoryInfo, FileSystemJsonCheckpointStore> openStore)
     {
         Directory.CreateDirectory(checkpointDir);
         var indexPath = Path.Combine(checkpointDir, "index.jsonl");
@@ -48,26 +57,31 @@ public static class ResilientCheckpointStore
         {
             try
             {
-                return new FileSystemJsonCheckpointStore(new DirectoryInfo(checkpointDir));
+                return openStore(new DirectoryInfo(checkpointDir));
             }
             catch (Exception ex) when (IsLockContention(ex))
             {
                 // Another replica/process owns the shared store. NOT corruption — never quarantine here.
                 if (attempt < SharedOpenAttempts)
                 {
-                    logger.LogWarning(
+                    logger.LogDebug(
                         "Checkpoint store {Path} is locked by another process (attempt {Attempt}/{Max}); retrying after {Backoff}ms.",
                         checkpointDir, attempt, SharedOpenAttempts, SharedOpenBackoff.TotalMilliseconds);
                     Thread.Sleep(SharedOpenBackoff);
                     continue;
                 }
 
-                logger.LogWarning(ex,
-                    "Checkpoint store {Path} is held by another replica after {Max} attempts; falling back to a "
-                    + "per-pod checkpoint directory so this pod can start. Cross-replica checkpoint resume is NOT "
-                    + "available with the file store (follow-up: DB-backed checkpoint store).",
-                    checkpointDir, SharedOpenAttempts);
-                return CreatePerPodStore(checkpointDir, logger);
+                logger.LogDebug(ex, "Checkpoint store {Path} still locked after {Max} attempts.", checkpointDir, SharedOpenAttempts);
+                return CreatePerPodStore(checkpointDir, logger, "lock contention", openStore);
+            }
+            catch (Exception ex) when (IsAccessDenied(ex))
+            {
+                // Shared volume is not readable/writable by this pod (e.g. RWX Azure Files perms). This is
+                // EXPECTED in some deployments and is NOT corruption — do not quarantine, do not log a
+                // stacktrace at fail. Fall back quietly to a per-pod directory; CreatePerPodStore emits a
+                // single concise warn describing where checkpoints actually landed.
+                logger.LogDebug(ex, "Checkpoint store {Path} is not accessible (permission denied).", checkpointDir);
+                return CreatePerPodStore(checkpointDir, logger, "permission denied", openStore);
             }
             catch (Exception ex)
             {
@@ -78,36 +92,48 @@ public static class ResilientCheckpointStore
                 QuarantineIndex(indexPath, logger);
                 try
                 {
-                    return new FileSystemJsonCheckpointStore(new DirectoryInfo(checkpointDir));
+                    return openStore(new DirectoryInfo(checkpointDir));
                 }
                 catch (Exception retryEx) when (IsLockContention(retryEx))
                 {
-                    logger.LogWarning(retryEx,
+                    logger.LogDebug(retryEx,
                         "Checkpoint store {Path} is locked after index quarantine; falling back to a per-pod directory.",
                         checkpointDir);
-                    return CreatePerPodStore(checkpointDir, logger);
+                    return CreatePerPodStore(checkpointDir, logger, "lock contention", openStore);
+                }
+                catch (Exception retryEx) when (IsAccessDenied(retryEx))
+                {
+                    logger.LogDebug(retryEx,
+                        "Checkpoint store {Path} is not accessible after index quarantine; falling back to a per-pod directory.",
+                        checkpointDir);
+                    return CreatePerPodStore(checkpointDir, logger, "permission denied", openStore);
                 }
                 catch (Exception retryEx)
                 {
                     logger.LogError(retryEx,
                         "Checkpoint store {Path} still failed after index quarantine; falling back to a per-pod directory.",
                         checkpointDir);
-                    return CreatePerPodStore(checkpointDir, logger);
+                    return CreatePerPodStore(checkpointDir, logger, "index still unreadable", openStore);
                 }
             }
         }
 
         // Unreachable in practice (the loop always returns), but keeps the API booting no matter what.
-        return CreatePerPodStore(checkpointDir, logger);
+        return CreatePerPodStore(checkpointDir, logger, "shared store unavailable", openStore);
     }
 
     /// <summary>
     /// Opens a checkpoint store in a per-pod sub-directory under the same volume, keyed by a unique
     /// per-pod id (<c>POD_NAME</c>/<c>HOSTNAME</c>, else a GUID), so a replica that lost the shared
-    /// lock still gets its own writable file store. Guaranteed not to throw: the last resort is a
-    /// unique temp directory, which cannot be locked by another process.
+    /// lock — or cannot access the shared volume — still gets its own writable file store. Emits exactly
+    /// ONE warn line describing the final location and is guaranteed not to throw: the last resort is a
+    /// unique temp directory, which cannot be locked or permission-blocked by another process.
     /// </summary>
-    private static FileSystemJsonCheckpointStore CreatePerPodStore(string checkpointDir, ILogger logger)
+    private static FileSystemJsonCheckpointStore CreatePerPodStore(
+        string checkpointDir,
+        ILogger logger,
+        string reason,
+        Func<DirectoryInfo, FileSystemJsonCheckpointStore> openStore)
     {
         var podId = ResolvePodId();
         var perPodDir = Path.Combine(checkpointDir, "replicas", podId);
@@ -115,23 +141,26 @@ public static class ResilientCheckpointStore
         {
             Directory.CreateDirectory(perPodDir);
             SanitizeIndex(Path.Combine(perPodDir, "index.jsonl"), logger);
-            var store = new FileSystemJsonCheckpointStore(new DirectoryInfo(perPodDir));
+            var store = openStore(new DirectoryInfo(perPodDir));
             logger.LogWarning(
-                "Pod {PodId} is using a per-pod checkpoint directory {Path} due to shared-store lock contention. "
-                + "Checkpoints written here are durable for THIS pod but are not shared across replicas.",
-                podId, perPodDir);
+                "Shared checkpoint store {Shared} not usable ({Reason}); using per-pod directory {Dir}. "
+                + "Checkpoints are durable for this pod but not shared across replicas (cross-replica resume needs a DB-backed store).",
+                checkpointDir, reason, perPodDir);
             return store;
         }
         catch (Exception ex)
         {
-            // Absolute last resort: a fresh unique temp directory. The API MUST start.
+            // Absolute last resort: a fresh unique temp directory. The API MUST start. This stays a
+            // single warn (not fail) — the per-pod warn above was never emitted because we threw first.
             var tempDir = Path.Combine(Path.GetTempPath(), $"agentweaver-checkpoints-{podId}-{Guid.NewGuid():N}");
-            logger.LogError(ex,
-                "Per-pod checkpoint directory {Path} could not be opened; falling back to temp directory {Temp}. "
-                + "Checkpoints will NOT persist across pod restarts.",
-                perPodDir, tempDir);
             Directory.CreateDirectory(tempDir);
-            return new FileSystemJsonCheckpointStore(new DirectoryInfo(tempDir));
+            var store = openStore(new DirectoryInfo(tempDir));
+            logger.LogWarning(
+                "Shared checkpoint store {Shared} not usable ({Reason}) and per-pod directory was not writable; "
+                + "using temporary directory {Temp}. Checkpoints will NOT persist across pod restarts.",
+                checkpointDir, reason, tempDir);
+            logger.LogDebug(ex, "Per-pod checkpoint directory {Dir} could not be opened.", perPodDir);
+            return store;
         }
     }
 
@@ -142,6 +171,24 @@ public static class ResilientCheckpointStore
     /// </summary>
     private static bool IsLockContention(Exception ex)
         => ex.Message.Contains("already in use by another process", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any inner exception) is a filesystem permission failure —
+    /// an <see cref="UnauthorizedAccessException"/> or an <see cref="IOException"/> reporting permission
+    /// denied. The MAF ctor wraps these as <c>InvalidOperationException("...Index corrupted") ---&gt;
+    /// UnauthorizedAccessException</c>, so we must walk the inner-exception chain. This is an EXPECTED
+    /// fallback condition (shared-volume perms), NOT genuine index corruption.
+    /// </summary>
+    private static bool IsAccessDenied(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is UnauthorizedAccessException) return true;
+            if (e is IOException io && io.Message.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
 
     /// <summary>Resolves a filesystem-safe, per-pod id from the pod's identity env vars, or a GUID.</summary>
     private static string ResolvePodId()
@@ -158,15 +205,22 @@ public static class ResilientCheckpointStore
         return string.IsNullOrWhiteSpace(safe) ? $"pod-{Guid.NewGuid():N}" : safe;
     }
 
-    /// <summary>Moves a (genuinely corrupt) index aside so the store can start fresh. Never throws.</summary>
-    private static void QuarantineIndex(string indexPath, ILogger logger)
+    /// <summary>
+    /// Moves a (genuinely corrupt) index aside so the store can start fresh. The destination name is
+    /// made unique per pod and per call (pod id + timestamp + GUID) and uses overwrite semantics, so it
+    /// can NEVER collide with a prior quarantine (the old fixed <c>.corrupt.&lt;unixSeconds&gt;</c> name threw
+    /// <c>IOException: already exists</c> on rapid restarts within the same second). Never throws.
+    /// </summary>
+    internal static void QuarantineIndex(string indexPath, ILogger logger)
     {
         if (!File.Exists(indexPath)) return;
-        var quarantine = $"{indexPath}.corrupt.{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
-        try { File.Move(indexPath, quarantine); }
+        var quarantine = $"{indexPath}.corrupt.{ResolvePodId()}.{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.{Guid.NewGuid():N}";
+        try { File.Move(indexPath, quarantine, overwrite: true); }
         catch (Exception moveEx)
         {
-            logger.LogError(moveEx, "Failed to quarantine corrupt checkpoint index {Path}.", indexPath);
+            // A quarantine failure must NOT cascade into another fail log — the caller already falls
+            // back to a per-pod/temp store regardless. Record at warn without a fail-level stacktrace.
+            logger.LogWarning("Could not quarantine corrupt checkpoint index {Path}: {Reason}", indexPath, moveEx.Message);
         }
     }
 
@@ -182,6 +236,13 @@ public static class ResilientCheckpointStore
         try
         {
             lines = File.ReadAllLines(indexPath);
+        }
+        catch (Exception ex) when (IsAccessDenied(ex))
+        {
+            // Expected when the shared volume is not readable by this pod — the caller will fall back to
+            // a per-pod store and emit a single warn there. Keep this quiet (Debug, no stacktrace at warn).
+            logger.LogDebug(ex, "Checkpoint index {Path} not accessible for sanitization (permission denied).", indexPath);
+            return;
         }
         catch (Exception ex)
         {

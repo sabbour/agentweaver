@@ -16,15 +16,18 @@ public sealed class CheckpointGcService : BackgroundService
 
     private readonly IRunStore _runStore;
     private readonly RunWorkflowFactory _factory;
+    private readonly ICheckpointStoreFactory _checkpointStoreFactory;
     private readonly ILogger<CheckpointGcService> _logger;
 
     public CheckpointGcService(
         IRunStore runStore,
         RunWorkflowFactory factory,
+        ICheckpointStoreFactory checkpointStoreFactory,
         ILogger<CheckpointGcService> logger)
     {
         _runStore = runStore;
         _factory = factory;
+        _checkpointStoreFactory = checkpointStoreFactory;
         _logger = logger;
     }
 
@@ -50,6 +53,18 @@ public sealed class CheckpointGcService : BackgroundService
 
     private async Task SweepAsync(CancellationToken ct)
     {
+        // Postgres: checkpoints live in the shared workflow_checkpoints table — purge rows for terminal
+        // runs (the "runs" store). The coordinator store is not GC'd today (matches the file behaviour).
+        if (_checkpointStoreFactory.IsDatabaseBacked)
+        {
+            var purged = await _checkpointStoreFactory
+                .PurgeTerminalAsync("runs", IsTerminalSessionAsync, ct)
+                .ConfigureAwait(false);
+            if (purged > 0)
+                _logger.LogInformation("GC: deleted {Count} checkpoint rows for terminal runs", purged);
+            return;
+        }
+
         var checkpointDir = _factory.CheckpointDirectory;
         if (!Directory.Exists(checkpointDir)) return;
 
@@ -74,6 +89,13 @@ public sealed class CheckpointGcService : BackgroundService
                 _logger.LogWarning(ex, "GC: failed to check/delete checkpoint for run {RunId}", runId);
             }
         }
+    }
+
+    private async ValueTask<bool> IsTerminalSessionAsync(string sessionId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(sessionId, out var parsedId)) return false; // unknown id -> keep
+        var run = await _runStore.GetAsync(parsedId, ct).ConfigureAwait(false);
+        return run is null || IsTerminal(run.Status);
     }
 
     private static bool IsTerminal(RunStatus status) =>

@@ -15,7 +15,7 @@ A rebuild should preserve the same separation of concerns: databases answer “w
 
 ## Architecture at a glance
 
-A single API instance is the only writer. The operational control plane lives in the hand-written `SqliteDb` (projects, runs, backlog tasks, revisions). The memory and orchestration plane lives in EF Core (`MemoryDbContext`), whose provider is selectable — Postgres for hosted deployments, SQLite by default — and is evolved with EF Core migrations. Run worktrees and MAF JSON checkpoints live on the workspace volume.
+A single API instance is the only writer. The operational control plane lives in the hand-written `SqliteDb` (projects, runs, backlog tasks, revisions). The memory and orchestration plane lives in EF Core (`MemoryDbContext`), whose provider is selectable — Postgres for hosted deployments, SQLite by default — and is evolved with EF Core migrations. Run worktrees live on the workspace volume. MAF JSON checkpoints are stored in the database on Postgres (the shared `workflow_checkpoints` table, replica-safe), and only fall back to JSON files on the workspace volume for the SQLite/dev file store.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -35,10 +35,11 @@ flowchart TB
         Steering[("steering_directives")]
         OAuthState[("mcp refresh tokens + jti + client registrations")]
         RunEvents[("RunEvents")]
+        Checkpoints[("workflow_checkpoints (MAF checkpoints, replica-safe)")]
     end
     subgraph vol["Workspace volume"]
         Worktrees["git worktrees / branches"]
-        Checkpoints[("FileSystem JSON checkpoint store")]
+        FileCkpt[("JSON checkpoint files (SQLite/dev fallback)")]
     end
 
     API --> Projects
@@ -55,6 +56,7 @@ flowchart TB
     Runs --> RunEvents
     Runs --> Worktrees
     Runs --> Checkpoints
+    Runs -.SQLite/dev.-> FileCkpt
     Plans --> Steering
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
@@ -67,7 +69,7 @@ flowchart TB
 
     class API core;
     class Migrations svc;
-    class Worktrees runtime;
+    class Worktrees,FileCkpt runtime;
     class Projects,Runs,Backlog,Revisions,Decisions,AgentMem,Plans,Steering,OAuthState,RunEvents,Checkpoints data;
 ```
 

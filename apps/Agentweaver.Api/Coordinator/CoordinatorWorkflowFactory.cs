@@ -52,7 +52,8 @@ public sealed class CoordinatorWorkflowFactory
         RunStreamStore streamStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ICheckpointStoreFactory? checkpointStoreFactory = null)
     {
         _drafter = drafter;
         _streamStore = streamStore;
@@ -62,7 +63,8 @@ public sealed class CoordinatorWorkflowFactory
 
         _checkpointDir = configuration["Coordinator:Checkpoints:Path"]
             ?? Path.Combine(AppPaths.DataDirectory, "coordinator-checkpoints");
-        var store = Agentweaver.Api.Infrastructure.ResilientCheckpointStore.Create(_checkpointDir, _logger);
+        var store = (checkpointStoreFactory ?? new FileCheckpointStoreFactory())
+            .Create("coordinator", _checkpointDir, _logger);
         _checkpointManager = CheckpointManager.CreateJson(store);
 
         // Phase 2 orchestrator: decompose + persist runs only after the human confirms the spec.

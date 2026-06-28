@@ -77,20 +77,42 @@ Because all of these are the same primitive, the suspend/resume plumbing is writ
 
 ## Checkpointing & durable resume
 
-MAF persists workflow state through a checkpoint store. Agentweaver uses MAF's `FileSystemJsonCheckpointStore`, wrapped by a `ResilientCheckpointStore` that hardens startup so the API **always boots**. It guards against two distinct hazards (`apps/Agentweaver.Api/Infrastructure/ResilientCheckpointStore.cs`):
+MAF persists workflow state through a checkpoint store — any implementation of `ICheckpointStore<JsonElement>`, which MAF exposes as the `JsonCheckpointStore` base class. Agentweaver selects the store at startup based on `Database:Provider` via `ICheckpointStoreFactory` (`apps/Agentweaver.Api/Infrastructure/ICheckpointStoreFactory.cs`):
 
-- **Corrupt index.** MAF parses the store's `index.jsonl` one JSON object per line at construction, so a single blank or partially-written line throws and would brick startup. The factory creates the checkpoint directory, sanitizes the index (dropping blank/unparseable lines after backing up the original), and quarantines an unrecoverable index instead of crash-looping.
-- **Multi-writer lock contention.** `FileSystemJsonCheckpointStore` takes an **exclusive process lock** on the checkpoint directory. The API runs `replicas: 2` with `HOME` on a shared RWX Azure Files volume, so the checkpoint directory is shared — only one pod can hold the lock, and the second pod's constructor throws `"already in use by another process"`. `ResilientCheckpointStore` detects this (it is *not* corruption, so the index is never quarantined), retries the shared open a few times with short backoff to ride out transient mid-write locks during a rolling update, then falls back to a **per-pod checkpoint sub-directory** under the same volume — `{checkpoints}/replicas/{POD_NAME}` (pod identity from the `POD_NAME` downward-API env var, else `HOSTNAME`, else a GUID) — so the replica gets its own writable store and goes Ready. The absolute last resort is a unique per-pod temp directory; `Create` is guaranteed never to throw.
+- **Production (Postgres) → a shared, concurrency-safe `PostgresJsonCheckpointStore`.** This is the default on hosted deployments and the correct fix for multi-replica operation. It derives from MAF's `JsonCheckpointStore` (so it plugs straight into `CheckpointManager.CreateJson(store)`) and persists every checkpoint as one row in the `workflow_checkpoints` table (`apps/Agentweaver.Api/Infrastructure/Ef/PostgresJsonCheckpointStore.cs`). Because each checkpoint is an **independent, unique-PK row**, the two API replicas write concurrently as plain `INSERT`s that never contend — there is **no exclusive lock** — and Postgres MVCC makes a committed checkpoint immediately visible to the other replica. That is genuine **cross-pod checkpoint sharing and resume**: a run suspended on pod A can be resumed from pod B.
+- **Local / dev (SQLite or no database) → the file store.** MAF's `FileSystemJsonCheckpointStore`, wrapped by `ResilientCheckpointStore` (`apps/Agentweaver.Api/Infrastructure/ResilientCheckpointStore.cs`), which hardens single-node startup so the API **always boots**. This path is no longer the production default; it remains for the single-writer dev experience and as a defensive safety net.
 
-The wrapped store is handed to a `CheckpointManager`, and the manager checkpoints around every suspension.
+### Why Postgres — the file store cannot be shared across replicas
 
-::: warning Shared cross-replica resume is a follow-up
-The per-pod fallback means each replica checkpoints to its own directory, so a run suspended on pod A is resumed from pod A's checkpoints. Cross-replica resume was never actually available under the single-writer file lock (only one pod could ever open the shared store). The durable long-term fix is a **DB-backed checkpoint store** (the same brokered store the A2A/distributed design already assumes); the file store stays per-pod until then.
+`FileSystemJsonCheckpointStore` takes an **exclusive process lock** on its directory. The API runs `replicas: 2` with `HOME` on a shared RWX Azure Files volume, so only one pod could ever hold that lock; the other was forced to a per-pod directory and the two replicas **never shared checkpoints** — cross-replica resume was impossible no matter how the volume permissions were set. Quieting the resulting log noise or fixing permissions only treated symptoms; the architectural fix is to move checkpoints into the database the app already runs, where concurrent writers are a first-class operation. The `workflow_checkpoints` schema:
+
+| Column | Purpose |
+| --- | --- |
+| `store_name` | Discriminator partitioning the two logical stores that were previously separate directories: `runs` (`RunWorkflowFactory`) and `coordinator` (`CoordinatorWorkflowFactory`). |
+| `session_id` | MAF session id — the RunId for the runs store. |
+| `checkpoint_id` | Unique GUID generated on create. |
+| `parent_checkpoint_id`, `has_parent_metadata` | Mirror MAF's FileSystem index semantics so the parent-scoped index query behaves identically. |
+| `payload` (`jsonb`) | The checkpoint document. |
+| `created_at`, `updated_at` | Timestamps. |
+
+Primary key `(store_name, session_id, checkpoint_id)`; index on `(store_name, session_id)`. Concurrency is guaranteed structurally: fresh-GUID checkpoint ids mean every create is a non-conflicting `INSERT`, so two replicas never collide and no global lock is needed. The store uses `IDbContextFactory<MemoryDbContext>` (a fresh context per call), so a single registered instance serves many concurrent runs. The migration is `Agentweaver.Api.Migrations.Postgres/Migrations/20260628140000_AddWorkflowCheckpoints.cs`, applied on startup by the same `MemoryDbContext.MigrateAsync()` as every other table.
+
+### The file store's startup safety net (dev / fallback only)
+
+When the file store is in use, `ResilientCheckpointStore` still guards three single-node hazards so the API never crash-loops:
+
+- **Corrupt index.** MAF parses `index.jsonl` one JSON object per line at construction, so a blank or partially-written line throws. The factory sanitizes the index (dropping unparseable lines after backing up the original) and quarantines an unrecoverable index instead of crash-looping. Genuine corruption is logged loudly (error) and quarantined; quarantine destinations are unique per pod and per call (`index.jsonl.corrupt.{podId}.{unixSeconds}.{guid}`, moved with overwrite) so rapid restarts cannot collide with `IOException: already exists`.
+- **Multi-writer lock contention** and **shared-volume permission denial.** If two processes share the directory or the volume is not writable, this is *not* corruption: `ResilientCheckpointStore` recognises it (walking the inner-exception chain for `IsAccessDenied`), skips quarantine, and falls back **quietly** (at most one concise `warn` per store, no `fail`/stacktrace) to a per-pod sub-directory so the node still boots. On Postgres these cases simply do not arise, because there is no shared file and no exclusive lock.
+
+The selected store is handed to a `CheckpointManager`, and the manager checkpoints around every suspension.
+
+::: tip Cross-replica resume is now real on Postgres
+On the production Postgres path, both replicas read and write the same `workflow_checkpoints` rows, so a run suspended on one pod resumes on the other. The previous per-pod file fallback (where each replica checkpointed to its own directory and cross-replica resume was impossible) applies only to the SQLite/dev file store.
 :::
 
 Two facts make resume robust:
 
-- **The runId is the MAF session id.** A run's id is used directly as MAF's session identifier, so a run's checkpoints live under a directory keyed by that id and the most recently written checkpoint file is the resume point. There is no separate mapping table to keep consistent.
+- **The runId is the MAF session id.** A run's id is used directly as MAF's session identifier, so a run's checkpoints are keyed by that id (the `session_id` column on Postgres, or a directory on the file store) and the most recent checkpoint is the resume point. There is no separate mapping table to keep consistent.
 - **A checkpoint carries both the superstep state and the serialized agent session**, including the correlation id of any suspended request port. Restoring a checkpoint rehydrates the graph *and* the agent, then continues from the gate.
 
 On process restart, the `WorkflowRestartService` reconciles interrupted runs. A run recorded as awaiting review is resumed from its latest checkpoint: it rebuilds the workflow shape, calls MAF's resume-from-checkpoint, and restarts the watch loop so the run lands back at its suspended gate. If no checkpoint exists, a stale review is failed closed, while a still-valid one re-emits a synthetic `review.requested` after revalidating the worktree. Coordinator runs still in their spec phase are recovered the same way through the `CoordinatorWorkflowFactory`, which resumes the suspended confirmation gate from its own checkpoint.
@@ -101,14 +123,14 @@ sequenceDiagram
     participant Graph as MAF workflow
     participant Port as review-gate RequestPort
     participant Watch as Watch loop
-    participant Store as Checkpoint store (FileSystemJson)
+    participant Store as Checkpoint store (Postgres workflow_checkpoints)
     participant Human as Reviewer
 
     Graph->>Port: route AgentTurnOutput → WorkflowReviewRequest
     Port-->>Watch: RequestInfoEvent (status PendingRequests)
     Watch->>Store: checkpoint (superstep state + serialized session)
     Watch-->>Human: review.requested (live stream closes at gate)
-    Note over Graph,Store: process may restart here — run is durable
+    Note over Graph,Store: process may restart here — and resume on EITHER replica
     Human->>Watch: approve / request-changes / decline
     Watch->>Store: load latest checkpoint (runId = session id)
     Watch->>Graph: resume, deliver WorkflowReviewDecision into the port
@@ -155,6 +177,6 @@ This is why the MAF-centric design here stays intact under distribution: no MAF 
 - The leaf is an `AIAgent`; production uses `CopilotAIAgent`, whose Copilot session the checkpoint manager serializes into the checkpoint.
 - MAF lifecycle events (`ExecutorInvoked/Completed/Failed`) are translated by the watch loop into `workflow.step` events that drive the live topology graph.
 - Every human gate is a `RequestPort`; reaching it emits a `RequestInfoEvent`, the workflow status becomes `PendingRequests`, and it suspends until a human responds.
-- Checkpoints use `FileSystemJsonCheckpointStore` wrapped by `ResilientCheckpointStore`; runId is the MAF session id; restart recovery resumes a suspended run from its latest checkpoint at the gate. The store ctor takes an exclusive lock, so under `replicas: 2` on the shared volume the losing replica falls back to a per-pod checkpoint dir (`{checkpoints}/replicas/{POD_NAME}`) rather than crash-looping — a DB-backed store is the follow-up for true cross-replica resume.
+- Checkpoints use a provider-selected `ICheckpointStore<JsonElement>`: on Postgres the shared `PostgresJsonCheckpointStore` (rows in `workflow_checkpoints`, no lock, cross-replica resume), on SQLite/dev the `FileSystemJsonCheckpointStore` wrapped by `ResilientCheckpointStore`. The runId is the MAF session id; restart recovery resumes a suspended run from its latest checkpoint at the gate. On Postgres both `replicas: 2` read/write the same rows; the old per-pod file fallback (where the losing replica took its own directory and cross-replica resume was impossible) applies only to the file store.
 - The coordinator's spec/confirm phase is MAF; dispatch and collective assembly (D3) are service-driven over DB rows, with no MAF graph and a `NoOpWorkflowContext` for direct executor calls.
 - A2A remotes only the `AIAgent` leaf; the MAF graph and all `WorkflowEvent`/`RequestPort` logic stay in the worker.
