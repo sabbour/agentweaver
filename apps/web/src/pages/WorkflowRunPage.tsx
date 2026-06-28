@@ -783,6 +783,15 @@ export function WorkflowRunPage() {
 
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
   const previewUrl = previewSession?.preview_url ?? previewSession?.previewUrl ?? null;
+  const keepaliveUrl = previewSession?.keepalive_url ?? previewSession?.keepaliveUrl ?? null;
+
+  useEffect(() => {
+    if (!keepaliveUrl) return;
+    const id = setInterval(() => {
+      apiClient.pingKeepalive(keepaliveUrl).catch(() => { /* ignore keepalive errors */ });
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [keepaliveUrl]);
 
   return (
     <div className={styles.root}>
@@ -968,6 +977,7 @@ export function WorkflowRunPage() {
                     <iframe
                       title="Sandbox preview"
                       src={previewUrl}
+                      referrerPolicy="no-referrer"
                       style={{ width: '100%', minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}
                     />
                   )}

@@ -716,6 +716,11 @@ export class AgentweaverApiClient {
     return this.request<{ session_id: string; stopped: boolean }>('DELETE', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward/${encodeURIComponent(sessionId)}`);
   }
 
+  async pingKeepalive(keepaliveUrl: string): Promise<void> {
+    const headers = this.authHeaders();
+    await fetch(keepaliveUrl, { method: 'POST', headers, credentials: 'include' });
+  }
+
   listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
     return this.request<PortForwardSessionDto[]>('GET', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward`);
   }
