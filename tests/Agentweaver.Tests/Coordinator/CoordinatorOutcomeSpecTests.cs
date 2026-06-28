@@ -127,7 +127,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
 
         // The gate has been consumed: no pending request remains for this run.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        pendingStore.Get(runId).Should().BeNull("confirm must atomically consume the pending gate");
+        (await pendingStore.GetAsync(runId)).Should().BeNull("confirm must atomically consume the pending gate");
     }
 
     // =========================================================================
@@ -183,7 +183,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // Drain the pending request directly, leaving the run live in the registry but with no
         // gate to consume. This is the precise condition the NoPendingGate branch guards.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        pendingStore.TryRemove(runId).Should().NotBeNull("the gate must be pending before draining");
+        (await pendingStore.TryRemoveAsync(runId)).Should().NotBeNull("the gate must be pending before draining");
 
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
@@ -215,14 +215,14 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // short delay (the watch loop would do this once the MAF runtime suspends). We re-arm with
         // the very same ExternalRequest so SendResponseAsync drives a real confirmation.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        var drained = pendingStore.TryRemove(runId);
+        var drained = await pendingStore.TryRemoveAsync(runId);
         drained.Should().NotBeNull("the gate must be pending before draining");
 
         const int reArmDelayMs = 350;
         _ = Task.Run(async () =>
         {
             await Task.Delay(reArmDelayMs);
-            pendingStore.Set(runId, drained!.Request, drained.OwnerUser);
+            await pendingStore.SetAsync(runId, drained!.Request, drained.OwnerUser);
         });
 
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
@@ -256,7 +256,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // Drain the gate (no re-arm) and advance the persisted spec out of awaiting_confirmation,
         // exactly as a completed confirm / dispatch hand-off would leave it.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        pendingStore.TryRemove(runId).Should().NotBeNull("the gate must be pending before draining");
+        (await pendingStore.TryRemoveAsync(runId)).Should().NotBeNull("the gate must be pending before draining");
 
         var scopeFactory = _factory.Services.GetRequiredService<IServiceScopeFactory>();
         using (var scope = scopeFactory.CreateScope())
@@ -345,7 +345,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
 
         // The owner's gate is still intact after the rejected attempts.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        pendingStore.Get(runId).Should().NotBeNull("a forbidden request must not consume the gate");
+        (await pendingStore.GetAsync(runId)).Should().NotBeNull("a forbidden request must not consume the gate");
     }
 
     // =========================================================================
@@ -416,7 +416,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
         while (DateTime.UtcNow < deadline)
         {
-            if (pendingStore.Get(runId) is not null) return;
+            if (await pendingStore.GetAsync(runId) is not null) return;
             await Task.Delay(50);
         }
 

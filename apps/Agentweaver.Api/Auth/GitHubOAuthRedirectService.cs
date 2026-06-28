@@ -1,9 +1,12 @@
-using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Auth;
@@ -16,6 +19,7 @@ namespace Agentweaver.Api.Auth;
 public sealed class GitHubOAuthRedirectService
 {
     private const string DefaultScopes = "repo read:user read:org";
+    private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
 
     private readonly string _baseUrl;
     private readonly string? _clientId;
@@ -24,15 +28,14 @@ public sealed class GitHubOAuthRedirectService
     private readonly string _scopes;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<GitHubOAuthRedirectService> _logger;
-
-    // In-memory CSRF state store: state token -> expiry
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _pendingStates = new();
 
     public GitHubOAuthRedirectService(
         IConfiguration configuration,
         IGitHubTokenStore tokenStore,
         IHttpClientFactory httpClientFactory,
+        IServiceScopeFactory scopeFactory,
         ILogger<GitHubOAuthRedirectService> logger)
     {
         _baseUrl = configuration["Auth:GitHub:BaseUrl"] ?? "https://github.com";
@@ -42,6 +45,7 @@ public sealed class GitHubOAuthRedirectService
         _scopes = configuration["Auth:GitHub:Scopes"] ?? DefaultScopes;
         _tokenStore = tokenStore;
         _httpClientFactory = httpClientFactory;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -57,8 +61,12 @@ public sealed class GitHubOAuthRedirectService
         !string.IsNullOrWhiteSpace(_callbackUrl) ? _callbackUrl
         : throw new GitHubNotConfiguredException("Auth:GitHub:CallbackUrl must be configured.");
 
-    /// <summary>Returns a GitHub OAuth authorization URL with a fresh CSRF state token.</summary>
-    public string BeginAuthorization()
+    /// <summary>
+    /// Returns a GitHub OAuth authorization URL with a fresh CSRF state token. The state is persisted
+    /// to <see cref="MemoryDbContext"/> (Postgres in prod, SQLite in dev) so the callback can validate
+    /// it on ANY replica, not just the pod that served this request.
+    /// </summary>
+    public async Task<string> BeginAuthorizationAsync(CancellationToken ct = default)
     {
         var clientId = RequireClientId();
         var callbackUrl = RequireCallbackUrl();
@@ -66,7 +74,16 @@ public sealed class GitHubOAuthRedirectService
         var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .Replace('+', '-').Replace('/', '_').TrimEnd('=');
 
-        _pendingStates[state] = DateTimeOffset.UtcNow.AddMinutes(10);
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OAuthStates.Add(new OAuthState
+            {
+                State = state,
+                ExpiresAt = DateTimeOffset.UtcNow.Add(StateLifetime),
+            });
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
 
         return $"{_baseUrl}/login/oauth/authorize" +
                $"?client_id={Uri.EscapeDataString(clientId)}" +
@@ -78,14 +95,46 @@ public sealed class GitHubOAuthRedirectService
     /// <summary>Exchanges an authorization code for a token. Returns (login, accessToken) on success.</summary>
     public async Task<(string Login, string AccessToken)> ExchangeCodeAsync(string code, string state, CancellationToken ct = default)
     {
-        // Validate CSRF state
-        if (!_pendingStates.TryRemove(state, out var expiry) || DateTimeOffset.UtcNow > expiry)
-            throw new InvalidOperationException("Invalid or expired OAuth state.");
+        var now = DateTimeOffset.UtcNow;
 
-        // Purge stale states
-        foreach (var key in _pendingStates.Keys.ToArray())
-            if (DateTimeOffset.UtcNow > _pendingStates.GetValueOrDefault(key))
-                _pendingStates.TryRemove(key, out _);
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+            // Atomic single-use CSRF claim across replicas. Read the row for its expiry snapshot, then
+            // conditionally delete by State only: exactly one caller's delete affects the row, so a
+            // replay (or a state armed on another pod that was already consumed) sees zero rows
+            // affected → reject. Expiry is enforced on the snapshot rather than in the DELETE predicate
+            // because the DateTimeOffset comparison is not translatable on SQLite (it is on Postgres);
+            // this mirrors the OAuth broker's claim. Guarantees at-most-once redemption across replicas.
+            var existing = await db.OAuthStates
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.State == state, ct)
+                .ConfigureAwait(false);
+
+            var claimed = existing is not null
+                && await db.OAuthStates
+                    .Where(s => s.State == state)
+                    .ExecuteDeleteAsync(ct).ConfigureAwait(false) > 0;
+
+            if (existing is null || !claimed || now > existing.ExpiresAt)
+                throw new InvalidOperationException("Invalid or expired OAuth state.");
+
+            // Best-effort purge of expired states; never let cleanup break the sign-in flow. The
+            // DateTimeOffset comparison is only translatable on Postgres (prod, where growth matters),
+            // so it is skipped on SQLite/dev — read-time expiry above remains authoritative.
+            if (db.Database.IsNpgsql())
+            {
+                try
+                {
+                    await db.OAuthStates.Where(s => s.ExpiresAt < now).ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Opportunistic purge of expired OAuth states failed; continuing.");
+                }
+            }
+        }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/login/oauth/access_token")
         {

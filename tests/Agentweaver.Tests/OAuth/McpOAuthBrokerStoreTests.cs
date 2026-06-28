@@ -55,6 +55,7 @@ public sealed class McpOAuthBrokerStoreTests : IDisposable
         var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
         var gitHub = new GitHubOAuthRedirectService(
             config, new NullGitHubTokenStore(), new NullHttpClientFactory(),
+            MemoryDbScopeFactory.ForSqlite(_connectionString),
             NullLogger<GitHubOAuthRedirectService>.Instance);
 
         return new McpOAuthBrokerService(

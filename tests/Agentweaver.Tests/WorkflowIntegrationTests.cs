@@ -77,7 +77,7 @@ public sealed class WorkflowIntegrationTests : IDisposable
 
         // Verify PendingRequestStore is populated (proves the watch loop processed the event).
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        var pending = pendingStore.Get(runId);
+        var pending = await pendingStore.GetAsync(runId);
         pending.Should().NotBeNull("PendingRequestStore must have the review request");
 
         // Approve the review.
@@ -319,7 +319,7 @@ public sealed class WorkflowIntegrationTests : IDisposable
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
-            pending = pendingStore.Get(runId);
+            pending = await pendingStore.GetAsync(runId);
             if (pending is not null) break;
             await Task.Delay(100);
         }

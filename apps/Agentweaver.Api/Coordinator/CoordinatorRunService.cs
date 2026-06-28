@@ -350,7 +350,7 @@ public sealed class CoordinatorRunService
             return CoordinatorGateOutcome.RunNotActive;
 
         // Atomic consume for replay/double-POST protection (mirrors the review endpoint).
-        var pending = _pendingStore.TryRemove(runId);
+        var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
         if (pending is null)
         {
             // The gate may simply not be armed YET (the ordering race described above). Wait for it
@@ -415,7 +415,7 @@ public sealed class CoordinatorRunService
                 return null;
             }
 
-            var pending = _pendingStore.TryRemove(runId);
+            var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
             if (pending is not null)
                 return pending;
         }
@@ -463,9 +463,9 @@ public sealed class CoordinatorRunService
                 case RequestInfoEvent rie:
                     // Suspended at the await-confirmation gate. The draft executor already emitted
                     // coordinator.outcome_spec and marked the entry awaiting-review.
-                    if (_pendingStore.Get(runId) is not null)
+                    if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is not null)
                         break;
-                    _pendingStore.Set(runId, rie.Request, ownerUser);
+                    await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
                     break;
 
                 case WorkflowOutputEvent woe:
@@ -724,8 +724,8 @@ public sealed class CoordinatorRunService
                     {
                         if (evt is RequestInfoEvent rie)
                         {
-                            if (_pendingStore.Get(runId) is null)
-                                _pendingStore.Set(runId, rie.Request, run.SubmittingUser);
+                            if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is null)
+                                await _pendingStore.SetAsync(runId, rie.Request, run.SubmittingUser, ct).ConfigureAwait(false);
                             break;
                         }
                     }

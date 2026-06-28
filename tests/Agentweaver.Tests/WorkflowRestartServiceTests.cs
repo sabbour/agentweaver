@@ -309,7 +309,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var scopeFactory = _memoryServiceProvider.GetRequiredService<IServiceScopeFactory>();
 
         var registry = new RunWorkflowRegistry();
-        var pendingStore = new PendingRequestStore();
+        var pendingStore = new PendingRequestStore(scopeFactory);
         var copilotClientFactory = new Agentweaver.AgentRuntime.Providers.GitHubCopilotClientFactory(
             config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
         var agentFactory = new Agentweaver.AgentRuntime.Workflow.WorkflowAgentFactory(
