@@ -463,3 +463,4 @@ Tool-call details can be large. The watch page truncates very large argument or 
 - [Board and Backlog](../guide/board.md)
 - [Run event stream](../run-event-stream.md)
 - [Events & Observability](../deep-dive/events-observability.md)
+- [Sandbox browser preview](./sandbox-browser-preview.md) — open a live HTTPS preview of a server an agent started inside its run's sandbox pod, from the run/watch view.

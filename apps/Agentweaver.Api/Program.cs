@@ -5,6 +5,7 @@ using k8s;
 using LibGit2Sharp;
 using Agentweaver.Api;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.SandboxExec;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
@@ -361,6 +362,42 @@ builder.Services.Configure<SandboxRuntimeOptions>(builder.Configuration.GetSecti
 
 // Port-forward service (017-preview): manages kubectl port-forward sessions per run.
 builder.Services.AddSingleton<PortForwardService>();
+
+// Gateway-direct browser preview (feat/sandbox-preview-proxy): Gateway -> per-preview HTTPRoute
+// -> per-run ClusterIP Service -> sandbox pod. Replaces the replica-unsafe in-cluster kubectl
+// port-forward leg. Ships DARK: when Sandbox:Preview:Enabled=false (default) the service reports
+// Enabled=false and the reaper idles, so default behaviour is unchanged.
+{
+    var previewOptions = builder.Configuration.GetSection("Sandbox:Preview").Get<SandboxPreviewOptions>()
+        ?? new SandboxPreviewOptions();
+    builder.Services.AddSingleton(previewOptions);
+
+    builder.Services.AddSingleton<ISandboxPreviewService>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SandboxPreviewService>();
+
+        // Build an in-cluster client only when enabled AND in-cluster; otherwise pass null so the
+        // service reports Enabled=false and every method short-circuits (no kubectl, no captive deps).
+        IKubernetes? k8sClient = null;
+        if (previewOptions.Enabled && SandboxExecutorFactory.IsInCluster)
+        {
+            try
+            {
+                k8sClient = new Kubernetes(KubernetesClientConfiguration.InClusterConfig());
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "SandboxPreviewService: in-cluster Kubernetes client init failed; preview disabled.");
+            }
+        }
+
+        return new SandboxPreviewService(k8sClient, previewOptions, logger);
+    });
+
+    // Replica-safe annotation-driven reaper. No-ops when preview disabled.
+    builder.Services.AddHostedService<SandboxPreviewReaperService>();
+}
 
 // Kubernetes runtime environment detection (pod name, in-cluster flag).
 builder.Services.AddSingleton<IKubernetesEnvironment, DefaultKubernetesEnvironment>();

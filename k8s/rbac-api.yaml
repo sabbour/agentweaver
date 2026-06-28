@@ -20,13 +20,39 @@ rules:
       - pods
     verbs:
       - get
+      - list
       - create
+      - patch
   - apiGroups:
       - ""
     resources:
       - pods/exec
     verbs:
       - create
+  # Dynamic per-preview Service objects — created/deleted by the API sandbox preview manager.
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+      - create
+      - delete
+      - patch
+      - update
+  # Dynamic per-preview HTTPRoute objects — created/deleted by the API sandbox preview manager.
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - httproutes
+    verbs:
+      - get
+      - list
+      - create
+      - delete
+      - patch
+      - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

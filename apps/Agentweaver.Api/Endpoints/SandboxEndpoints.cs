@@ -1,4 +1,5 @@
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Infrastructure;
 
@@ -9,14 +10,18 @@ public static class SandboxEndpoints
     public static void MapSandboxEndpoints(this WebApplication app)
     {
         // POST /api/runs/{runId}/sandbox/port-forward
-        // Starts a kubectl port-forward to the sandbox pod for the given run.
-        // Body: { "target_port": 3000 }
-        // Returns: { "session_id": "...", "local_port": 54321, "pod_name": "...", "started_at": "..." }
+        // Starts a browser preview for the run's sandbox pod on the requested target port.
+        //
+        // When Sandbox:Preview:Enabled=true (in-cluster), this provisions a Gateway-direct preview
+        // (per-preview HTTPRoute -> per-run ClusterIP Service -> sandbox pod) and returns
+        // preview_url + keepalive_url. Otherwise it falls back to the legacy kubectl port-forward
+        // (local-dev) path. Body: { "target_port": 3000 }.
         app.MapPost("/api/runs/{runId}/sandbox/port-forward", async (
             HttpContext httpContext,
             string runId,
             PortForwardRequest request,
             PortForwardService portForwardService,
+            ISandboxPreviewService previewService,
             IRunStore runStore,
             ILogger<Program> logger,
             CancellationToken ct) =>
@@ -33,6 +38,51 @@ public static class SandboxEndpoints
             if (!EndpointHelpers.IsOwner(httpContext, run))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
 
+            // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
+            if (previewService.Enabled)
+            {
+                // Preview ports are constrained to the gateway-only ingress range allowed by
+                // k8s/networkpolicy-sandbox.yaml (Sandbox:Preview:AllowedPortMin/Max) so we never
+                // provision a preview the NetworkPolicy would black-hole. The legacy kubectl
+                // fallback below is unaffected (still 1-65535).
+                if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
+                        request.TargetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = $"preview port must be between {previewService.AllowedPortMin} and {previewService.AllowedPortMax}.",
+                    });
+                }
+
+                try
+                {
+                    var preview = await previewService.StartPreviewAsync(
+                        runId, request.TargetPort, run.SubmittingUser, ct);
+
+                    return Results.Ok(new
+                    {
+                        session_id    = preview.Token,
+                        local_port    = 0,
+                        target_port   = preview.TargetPort,
+                        pod_name      = preview.PodName,
+                        started_at    = preview.StartedAt,
+                        preview_url   = preview.PreviewUrl,
+                        keepalive_url = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive",
+                    });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    logger.LogWarning(ex, "Preview start failed for run {RunId}", runId);
+                    return Results.Conflict(new { error = ex.Message });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Preview start error for run {RunId}", runId);
+                    return Results.Problem("Failed to start preview.", statusCode: 500);
+                }
+            }
+
+            // ── Legacy kubectl port-forward fallback (local dev) ─────────────────────────
             PortForwardSession session;
             try
             {
@@ -64,13 +114,14 @@ public static class SandboxEndpoints
             });
         });
 
-        // DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}
-        // Stops a running port-forward session.
-        app.MapDelete("/api/runs/{runId}/sandbox/port-forward/{sessionId}", async (
+        // POST /api/runs/{runId}/sandbox/preview/{token}/keepalive
+        // Bumps the preview's idle expiry (Sandbox:Preview path only). The keepalive_url returned
+        // by the start endpoint points here. Ownership-checked.
+        app.MapPost("/api/runs/{runId}/sandbox/preview/{token}/keepalive", async (
             HttpContext httpContext,
             string runId,
-            string sessionId,
-            PortForwardService portForwardService,
+            string token,
+            ISandboxPreviewService previewService,
             IRunStore runStore,
             ILogger<Program> logger,
             CancellationToken ct) =>
@@ -82,6 +133,65 @@ public static class SandboxEndpoints
             if (run is null) return Results.NotFound();
             if (!EndpointHelpers.IsOwner(httpContext, run))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+            if (!previewService.Enabled)
+                return Results.Conflict(new { error = "Gateway preview is not enabled." });
+
+            // M1: verify the capability token actually belongs to THIS run (replica-safe — reads the
+            // HTTPRoute's run annotation from the cluster) so a caller cannot keep alive another
+            // run's preview by presenting its own runId with a guessed/foreign token.
+            if (!await previewService.VerifyTokenForRunAsync(token, runId, ct))
+                return Results.NotFound(new { error = "Preview not found for this run." });
+
+            try
+            {
+                await previewService.KeepAliveAsync(token, ct);
+                return Results.Ok(new { token, kept_alive = true });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Preview keepalive error for run {RunId}", runId);
+                return Results.Problem("Failed to keep preview alive.", statusCode: 500);
+            }
+        });
+
+        // DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}
+        // Explicit user stop. For the preview path, sessionId is the capability token; this is the
+        // ONLY place a preview is deleted on demand (keep_after_run=true means run-end / pod-release
+        // do NOT delete it — the reaper handles expiry). Local-dev path stops the kubectl tunnel.
+        app.MapDelete("/api/runs/{runId}/sandbox/port-forward/{sessionId}", async (
+            HttpContext httpContext,
+            string runId,
+            string sessionId,
+            PortForwardService portForwardService,
+            ISandboxPreviewService previewService,
+            IRunStore runStore,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
+        {
+            if (!Agentweaver.Domain.RunId.TryParse(runId, out var parsedRunId))
+                return Results.BadRequest(new { error = "Invalid run id." });
+
+            var run = await runStore.GetAsync(parsedRunId, ct);
+            if (run is null) return Results.NotFound();
+            if (!EndpointHelpers.IsOwner(httpContext, run))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+            if (previewService.Enabled)
+            {
+                // M1: bind the token to THIS run before deleting so one run cannot delete another
+                // run's preview by presenting a foreign token (replica-safe annotation check).
+                if (!await previewService.VerifyTokenForRunAsync(sessionId, runId, ct))
+                    return Results.NotFound(new { error = "Preview not found for this run." });
+
+                // Idempotent (404 ignored inside the service); treat sessionId as the preview token.
+                await previewService.StopPreviewAsync(sessionId, ct);
+                return Results.Ok(new { session_id = sessionId, stopped = true });
+            }
 
             var stopped = portForwardService.Stop(runId, sessionId);
             if (!stopped)

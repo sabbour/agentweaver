@@ -73,6 +73,32 @@ export HOST="agentweaver.${DOMAIN#\*.}"
 echo "  Managed domain: ${DOMAIN}"
 echo "  Ingress host:   ${HOST}"
 
+# --- Preview gateway cert path (CONFIRMED 2026-06-28 by live spike) ---
+# AKS App Routing DefaultDomainCertificate does NOT support nested wildcards.
+# The DDC CRD has no spec.hostname field — it always issues *.{zone} regardless
+# of object name or target secret name.  status.domain is always *.{zone}.
+# Spike evidence: cert-preview-spike DDC issued CN=*.6a3de4fe60529400010f3fba.
+# westus2.staging.aksapp.io (not *.preview.{zone}); secret SAN confirmed same.
+#
+# Therefore we always take the single-label fallback path and reuse agentweaver-tls.
+# Preview hostnames: {token}-preview.{zone}  (e.g. swift-falcon-amber-k7m2...-preview.6a3de4fe...aksapp.io)
+# If AKS adds nested DDC support in the future, restore the probe below and update
+# PREVIEW_TLS_SECRET to a new cert-preview DDC secret + add the cert-preview DDC object.
+echo ""
+echo "Setting preview gateway hostname (single-label fallback — AKS nested DDC not supported)..."
+ZONE="${DOMAIN#\*.}"
+ZONE_SUFFIX="${ZONE}"
+PREVIEW_TLS_SECRET="agentweaver-tls"
+
+export PREVIEW_HOSTNAME="*.${ZONE_SUFFIX}"
+export PREVIEW_TLS_SECRET
+export SANDBOX_PREVIEW_ENABLED="true"
+export SANDBOX_PREVIEW_ZONE_SUFFIX="${ZONE_SUFFIX}"
+
+echo "  Preview hostname:    ${PREVIEW_HOSTNAME}"
+echo "  Preview TLS secret:  ${PREVIEW_TLS_SECRET}"
+echo "  ZoneSuffix (API):    ${ZONE_SUFFIX}"
+
 rm -rf "${RENDERED_DIR}"
 mkdir -p "${RENDERED_DIR}"
 
@@ -80,7 +106,7 @@ echo ""
 echo "Rendering manifests..."
 for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
   fname="$(basename "${yaml_file}")"
-  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID}' \
+  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX}' \
     < "${yaml_file}" > "${RENDERED_DIR}/${fname}"
   echo "  rendered: ${fname}"
 done
@@ -125,6 +151,7 @@ apply_rendered api-service.yaml
 apply_rendered frontend-service.yaml
 apply_rendered mcp-service.yaml
 apply_rendered gateway.yaml
+apply_rendered gateway-preview.yaml
 apply_rendered httproute-api.yaml
 apply_rendered httproute-frontend.yaml
 apply_rendered mcp-httproute.yaml
@@ -144,6 +171,13 @@ echo "Waiting for gateway/agentweaver-gateway to become Programmed (up to 3 min)
 kubectl wait \
   --for=condition=Programmed \
   gateway/agentweaver-gateway \
+  --namespace "${NAMESPACE}" \
+  --timeout=180s
+
+echo "Waiting for gateway/agentweaver-preview-gateway to become Programmed (up to 3 min)..."
+kubectl wait \
+  --for=condition=Programmed \
+  gateway/agentweaver-preview-gateway \
   --namespace "${NAMESPACE}" \
   --timeout=180s
 
@@ -190,10 +224,17 @@ echo "==================================================="
 echo " DEPLOYMENT COMPLETE"
 echo "==================================================="
 echo ""
-echo "  Frontend URL: https://${HOST}/"
-echo "  API URL:      https://${HOST}/api/"
-echo "  MCP URL:      https://${HOST}/mcp/"
-echo "  Gateway IP:   ${GATEWAY_IP}"
+echo "  Frontend URL:        https://${HOST}/"
+echo "  API URL:             https://${HOST}/api/"
+echo "  MCP URL:             https://${HOST}/mcp/"
+echo "  Gateway IP:          ${GATEWAY_IP}"
+echo ""
+echo "  Preview gateway:     ${PREVIEW_HOSTNAME} (TLS: ${PREVIEW_TLS_SECRET})"
+echo "  Preview zone suffix: ${ZONE_SUFFIX}"
+echo "  Sandbox__Preview__Enabled:          true"
+echo "  Sandbox__Preview__ZoneSuffix:       ${ZONE_SUFFIX}"
+echo "  Sandbox__Preview__GatewayName:      agentweaver-preview-gateway"
+echo "  Sandbox__Preview__GatewayNamespace: agentweaver"
 echo ""
 echo "  Next step:"
 echo "    bash scripts/aks/40-verify.sh"

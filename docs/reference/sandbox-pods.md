@@ -280,3 +280,5 @@ sequenceDiagram
 - [A2A reference](./a2a.md) — the `-preview` transport (experimental) that carries agent turns.
 - [Sandbox pod execution deep dive](../deep-dive/sandbox-pod-execution.md) — the reasoning.
 - [Sandbox pod execution experience](../experience/sandbox-pod-execution.md) — the user/operator view.
+- [Sandbox browser preview](../reference/sandbox-browser-preview.md) — preview routes (start/keepalive/stop)
+  that expose a pod-internal server over a public HTTPS reverse proxy.

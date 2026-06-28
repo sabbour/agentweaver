@@ -329,3 +329,7 @@ If rebuilding this subsystem from scratch, implement it in this order:
 - **Output can leak data.** Keep caps and redaction even when process isolation is strong.
 - **Directory listing has a narrow residual race.** The code documents a filename-only TOCTOU residual risk for listing; file reads/writes use stronger open-and-verify handling.
 - **Output caps apply to command and tool results.** The command/tool output cap in this subsystem is 4 MiB; keep that limit in place so a single large result cannot exhaust memory or flood the event stream. Image or attachment upload paths belong to other components and are out of scope for this repo-owned sandbox subsystem.
+
+## See also
+
+- [Sandbox browser preview](./sandbox-browser-preview.md) - exposing a server running inside a run's sandbox pod to the user over a public HTTPS reverse proxy (per-preview HTTPRoute -> per-run ClusterIP Service -> pod).
