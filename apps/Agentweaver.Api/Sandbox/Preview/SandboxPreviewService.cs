@@ -158,13 +158,14 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
         {
             _logger.LogInformation(
-                "SandboxPreviewService: HTTPRoute {Route} already exists for run {RunId} (idempotent)",
-                serviceName, runId);
+                "SandboxPreviewService: HTTPRoute already exists for run {RunId} (idempotent)", runId);
         }
 
+        // Never log the token or preview URL (the URL is an unauthenticated capability). A short,
+        // non-reversible fingerprint is logged for cross-line correlation; RunId is the safe key.
         _logger.LogInformation(
-            "SandboxPreviewService: started preview {Token} for run {RunId} -> pod {Pod} port {Port} ({Url})",
-            token, runId, podName, targetPort, previewUrl);
+            "SandboxPreviewService: started preview {Fingerprint} for run {RunId} -> pod {Pod} port {Port}",
+            Fingerprint(token), runId, podName, targetPort);
 
         return new PreviewSession(token, runId, podName, targetPort, previewUrl, now);
     }
@@ -192,13 +193,14 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 patch, HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural, serviceName,
                 cancellationToken: ct).ConfigureAwait(false);
             _logger.LogDebug(
-                "SandboxPreviewService: keepalive bumped preview {Token} idle expiry to {ExpiresAt}",
-                token, Rfc3339(expiresAt));
+                "SandboxPreviewService: keepalive bumped preview {Fingerprint} idle expiry to {ExpiresAt}",
+                Fingerprint(token), Rfc3339(expiresAt));
         }
         catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             _logger.LogInformation(
-                "SandboxPreviewService: keepalive for unknown preview {Token} ignored (404)", token);
+                "SandboxPreviewService: keepalive for unknown preview {Fingerprint} ignored (404)",
+                Fingerprint(token));
         }
 
         // TODO(morpheus): renew the backing SandboxClaim/pod TTL here once the claim-retention
@@ -215,7 +217,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         await DeleteHttpRouteIdempotentAsync(serviceName, ct).ConfigureAwait(false);
         await DeleteServiceIdempotentAsync(serviceName, ct).ConfigureAwait(false);
 
-        _logger.LogInformation("SandboxPreviewService: stopped preview {Token}", token);
+        _logger.LogInformation("SandboxPreviewService: stopped preview {Fingerprint}", Fingerprint(token));
     }
 
     public async Task<int> ReapAsync(CancellationToken ct = default)
@@ -249,8 +251,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 continue;
 
             _logger.LogInformation(
-                "SandboxPreviewService: reaping preview {Token} (run {Run}) reason={Reason}",
-                route.Token, route.SanitizedRun, decision);
+                "SandboxPreviewService: reaping preview {Fingerprint} (run {Run}) reason={Reason}",
+                Fingerprint(route.Token), route.SanitizedRun, decision);
 
             try
             {
@@ -260,7 +262,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "SandboxPreviewService: failed to reap preview {Token} (best-effort)", route.Token);
+                    "SandboxPreviewService: failed to reap preview {Fingerprint} (best-effort)",
+                    Fingerprint(route.Token));
             }
         }
 
@@ -331,8 +334,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
         {
             _logger.LogInformation(
-                "SandboxPreviewService: Service {Service} already exists (idempotent)",
-                service.Metadata.Name);
+                "SandboxPreviewService: Service {Fingerprint} already exists (idempotent)",
+                Fingerprint(service.Metadata.Name));
         }
     }
 
@@ -351,7 +354,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "SandboxPreviewService: could not delete HTTPRoute {Route} (best-effort)", name);
+                "SandboxPreviewService: could not delete HTTPRoute {Fingerprint} (best-effort)",
+                Fingerprint(name));
         }
     }
 
@@ -369,7 +373,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "SandboxPreviewService: could not delete Service {Service} (best-effort)", name);
+                "SandboxPreviewService: could not delete Service {Fingerprint} (best-effort)",
+                Fingerprint(name));
         }
     }
 
@@ -430,6 +435,16 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     private static string Rfc3339(DateTimeOffset value) =>
         value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Short, non-reversible fingerprint (first 4 bytes of SHA-256, hex) used for log correlation
+    /// WITHOUT ever emitting the secret token / capability URL into logs (Seraph requirement).
+    /// </summary>
+    private static string Fingerprint(string value)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
+    }
 
     private sealed record PreviewRouteInfo(string Token, string SanitizedRun, string? ExpiresAt, string? MaxUntil);
 }

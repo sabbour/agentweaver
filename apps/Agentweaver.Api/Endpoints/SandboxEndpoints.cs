@@ -135,7 +135,7 @@ public static class SandboxEndpoints
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Preview keepalive error for run {RunId} token {Token}", runId, token);
+                logger.LogError(ex, "Preview keepalive error for run {RunId}", runId);
                 return Results.Problem("Failed to keep preview alive.", statusCode: 500);
             }
         });

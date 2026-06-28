@@ -13,20 +13,16 @@ public class SandboxPreviewTests
     // ── PreviewToken ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Wordlist_has_enough_entropy_and_is_label_safe()
+    public void Wordlist_is_label_safe_but_words_are_cosmetic_only()
     {
-        // Wordlist >= 48 words. Combined brute-force space with the prescribed
-        // "3 words + 4 hex" format is Words^3 * 16^4; with 64 words that is ~2^34,
-        // far beyond an online-guessable space for a single capability URL.
+        // Words are a cosmetic prefix only — they contribute NO security entropy (Seraph).
+        // Security entropy comes entirely from the 128-bit CSPRNG suffix (see NewSuffix tests).
         PreviewToken.Words.Length.Should().BeGreaterThanOrEqualTo(48);
-
-        var bruteForceSpace = Math.Pow(PreviewToken.Words.Length, 3) * Math.Pow(16, 4);
-        bruteForceSpace.Should().BeGreaterThan(Math.Pow(2, 32));
 
         foreach (var word in PreviewToken.Words)
         {
             word.Should().MatchRegex("^[a-z]+$");
-            word.Should().NotBe(PreviewToken.Reserved);
+            PreviewToken.Reserved.Should().NotContain(word);
         }
 
         PreviewToken.Words.Distinct(StringComparer.Ordinal).Should()
@@ -34,7 +30,20 @@ public class SandboxPreviewTests
     }
 
     [Fact]
-    public void Generate_produces_valid_dns_label_shape()
+    public void NewSuffix_carries_at_least_64_bits_of_csprng_entropy()
+    {
+        // 16 bytes (128 bits) base32-encoded => 26 chars, well above the 13-char / 64-bit floor.
+        var suffix = PreviewToken.NewSuffix();
+        suffix.Length.Should().BeGreaterThanOrEqualTo(13);
+        suffix.Should().MatchRegex("^[a-z2-7]+$", "RFC 4648 lowercase base32 alphabet (a-z2-7)");
+
+        // Uniqueness across many draws is the practical entropy signal.
+        var suffixes = Enumerable.Range(0, 5000).Select(_ => PreviewToken.NewSuffix()).ToHashSet(StringComparer.Ordinal);
+        suffixes.Count.Should().Be(5000, "128-bit CSPRNG suffixes must not collide");
+    }
+
+    [Fact]
+    public void Generate_produces_valid_dns_label_with_csprng_suffix()
     {
         for (var i = 0; i < 500; i++)
         {
@@ -42,33 +51,37 @@ public class SandboxPreviewTests
 
             PreviewToken.IsValidLabel(token).Should().BeTrue($"'{token}' should be a valid DNS label");
             token.Length.Should().BeLessThanOrEqualTo(63);
-            token.Should().NotBe(PreviewToken.Reserved);
-            token.Should().MatchRegex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$");
+            PreviewToken.Reserved.Should().NotContain(token);
+            token.Should().MatchRegex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$");
 
+            // 3 cosmetic words + a base32 suffix joined by '-'.
             var parts = token.Split('-');
-            parts.Should().HaveCount(4, "three words plus a 4-hex suffix joined by '-'");
-            parts[3].Should().MatchRegex("^[0-9a-f]{4}$");
+            parts.Should().HaveCount(4);
+            parts[3].Should().MatchRegex("^[a-z2-7]{13,}$", "suffix must be >= 64 bits of base32");
         }
     }
 
     [Fact]
     public void Generate_is_highly_unlikely_to_collide()
     {
-        var tokens = Enumerable.Range(0, 2000).Select(_ => PreviewToken.Generate()).ToList();
+        var tokens = Enumerable.Range(0, 5000).Select(_ => PreviewToken.Generate()).ToList();
         tokens.Distinct(StringComparer.Ordinal).Count()
-            .Should().BeGreaterThan(1990, "tokens should be drawn from a large random space");
+            .Should().Be(5000, "128-bit CSPRNG suffix makes collisions astronomically unlikely");
     }
 
     [Theory]
     [InlineData(null, false)]
     [InlineData("", false)]
     [InlineData("agentweaver", false)]            // reserved
+    [InlineData("mcp", false)]                    // reserved
+    [InlineData("api", false)]                    // reserved
+    [InlineData("frontend", false)]               // reserved
     [InlineData("-leading", false)]
     [InlineData("trailing-", false)]
     [InlineData("Upper-Case", false)]
     [InlineData("has_underscore", false)]
     [InlineData("has.dot", false)]
-    [InlineData("swift-falcon-amber-7a3f", true)]
+    [InlineData("swift-falcon-amber-k7m2q9x4n8b3r6", true)]
     [InlineData("a", true)]
     public void IsValidLabel_enforces_dns_rules(string? token, bool expected) =>
         PreviewToken.IsValidLabel(token).Should().Be(expected);
