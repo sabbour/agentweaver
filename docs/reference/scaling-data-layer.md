@@ -1,16 +1,16 @@
 # Scaling Data Layer — Reference
 
-This reference is the exhaustive companion to the [Distributed execution & scaling deep dive](../deep-dive/distributed-execution-scaling.md). It documents the data and topology layer of horizontal scaling: the SQLite → Azure Database for PostgreSQL Flexible Server migration, the store inventory and how the raw stores unify into one context, the leasing schema additions, the run-event fan-out mechanism, the web/worker deployment topology, provisioning and connectivity, and the configuration flags that gate each phase.
+This reference is the exhaustive companion to the [Distributed execution & scaling deep dive](../deep-dive/distributed-execution-scaling.md). It documents the data and topology layer of horizontal scaling: the SQLite ↔ Azure Database for PostgreSQL Flexible Server **provider switch**, the store inventory and how the raw stores unify into one context, the leasing schema, the run-event stream, the web/worker deployment topology, provisioning and connectivity, and the configuration flags that gate each phase.
 
-The database target is **Azure Database for PostgreSQL Flexible Server** — the current, locked direction. Everything below is written in the present tense as that direction.
+The database target is **Azure Database for PostgreSQL Flexible Server** — the current, locked direction. The data layer is **provider-aware** (`Database:Provider`): `postgres`/`postgresql` routes durable state through the EF Core `MemoryDbContext` and EF-backed stores; the default `sqlite` keeps the legacy single-writer SQLite stores. Sections below note where a capability is implemented versus a documented design target.
 
 ## 1. Store inventory
 
-The starting point is two physical SQLite databases under the data directory: one holding the operational control plane reached through hand-written SQL, and one holding the memory/orchestration plane reached through the EF Core context. The migration's job is to bring both onto Postgres and, in the end state, behind **one** EF context and **one** database.
+The original shape was two physical SQLite databases under the data directory: one holding the operational control plane reached through hand-written SQL, and one holding the memory/orchestration plane reached through the EF Core context. Under Postgres both are unified behind **one** EF `MemoryDbContext` and **one** database; the SQLite providers retain the original split.
 
-### 1a. Raw-SQL stores (the real migration work)
+### 1a. Operational stores (raw SQLite → EF, now provider-aware)
 
-These six stores are hand-written SQL against the operational database. They use SQLite-specific idioms and must be ported into the EF context.
+These six stores began as hand-written SQL against the operational database. They now have **provider-aware** equivalents: under `Database:Provider=postgres` they are served by EF-backed stores over `MemoryDbContext` (`EfRunStore`, `EfRunRevisionStore`, `EfWorkflowRunStore`, `EfBacklogTaskStore`, `EfCastProposalStore`); under the default `sqlite` the legacy `Sqlite*` stores remain. The SQLite-specific idioms below describe the original raw form and how each maps onto Postgres/EF.
 
 | Store | Tables | Data held |
 | --- | --- | --- |
@@ -45,9 +45,9 @@ These already flow through the `Database:Provider` switch and carry generated EF
 
 Sandbox policy, workflows, and review policies are **file-based** under each project's `.agentweaver/` directory; the `projects` table only names a preset. They need no Postgres work, but they do raise a separate multi-replica concern (workspace files belong on a shared/RWX volume), which the topology section addresses.
 
-## 2. Porting the six raw stores into one EF context
+## 2. The six operational stores in one EF context
 
-The migration unifies the operational stores behind the EF Core context and retires the hand-written ADO.NET path, leaving **one provider switch, one connection story, one migration mechanism, one database**. The rationale:
+Under Postgres the operational stores are served behind the EF Core `MemoryDbContext` rather than the hand-written ADO.NET path, giving **one provider switch, one connection story, one migration mechanism, one database**. `MemoryDbContext` maps the migrated entities (`RunRecord`→`runs`, `RunRevisionRecord`→`run_revisions`, `ProjectRecord`→`projects`, `BacklogTaskRecord`→`backlog_tasks`, `WorkflowRunRecord`→`workflow_runs`, `CastProposalRecord`→`cast_proposals`) with explicit snake_case column names, and `model.Ignore<>()`s all six on non-Npgsql providers so the SQLite migration snapshot is unaffected. The rationale:
 
 1. **One provider switch.** The EF context already routes sqlite/sqlserver/postgres. The raw operational path has no provider abstraction; keeping it as raw Npgsql would mean maintaining two dialects by hand indefinitely.
 2. **One migration mechanism.** The bespoke `ALTER TABLE` bootstrap is replaced by EF migrations the team already operates for the memory database.
@@ -76,7 +76,7 @@ Postgres is strictly typed and MVCC-based, so several SQLite idioms do not trans
 
 ## 3. Leasing schema additions
 
-These columns make a row safely claimable by exactly one of N replicas. They are added to the run-owning rows — `runs`, `WorkPlans`, and `Subtasks`. The lease *lifecycle* (renew cadence, expiry sweep, hand-off) is the worker tier's; the storage is defined here. See the deep dive's [durable run leasing](../deep-dive/distributed-execution-scaling.md#durable-run-leasing) for the conceptual model.
+These columns make a row safely claimable by exactly one of N replicas. They are implemented today on the **`runs`** row (the `RunRecord` entity), which is what `PostgresRunLeaseStore` claims/renews/releases. Extending the same columns to `WorkPlans` and `Subtasks` for coordinator-level leasing is a **documented design target, not yet implemented**. The lease *lifecycle* (renew cadence, expiry sweep, hand-off) is the worker tier's (`RunWatchLoopService`, `LeaseTtl` = 5 min, renew at half-TTL); the storage is defined here. See the deep dive's [durable run leasing](../deep-dive/distributed-execution-scaling.md#durable-run-leasing) for the conceptual model.
 
 ### 3a. Lease / ownership columns
 
@@ -88,18 +88,19 @@ These columns make a row safely claimable by exactly one of N replicas. They are
 | `fencing_token` | `bigint NOT NULL DEFAULT 0` | Monotonic token bumped on every acquisition. Workers present it on writes; a stale token is rejected, preventing a zombie owner from clobbering a re-leased item. |
 | `attempt` | `int NOT NULL DEFAULT 0` | Acquisition/execution attempt counter; bounds retries. |
 
-### 3b. Idempotency for child dispatch
+### 3b. Idempotency for child dispatch *(design target — not yet implemented)*
 
-Child-run dispatch must be exactly-once per `(coordinator, subtask, attempt)` so a re-leased coordinator does not double-spawn children. A dispatch idempotency table keyed on `(coordinator_run_id, subtask_id, attempt)` records the resulting `child_run_id`. Dispatch inserts this row in the **same transaction** that flips the subtask to `dispatched`; a duplicate insert (`ON CONFLICT DO NOTHING`) means "already dispatched — reuse the existing child," making redelivery and re-lease safe.
+Child-run dispatch should be exactly-once per `(coordinator, subtask, attempt)` so a re-leased coordinator does not double-spawn children. The intended design is a dispatch-idempotency table keyed on `(coordinator_run_id, subtask_id, attempt)` recording the resulting `child_run_id`, inserted in the **same transaction** that flips the subtask to `dispatched`; a duplicate insert (`ON CONFLICT DO NOTHING`) means "already dispatched — reuse the existing child." This table and its guard do **not** exist in the schema yet.
 
-### 3c. Guarded CAS — extend the existing pattern to dispatch
+### 3c. Guarded CAS — implemented for runs/assembly/backlog; subtask dispatch outstanding
 
-Two places already do DB-level CAS correctly and serve as the template:
+Three places already do DB-level CAS correctly:
 
-- **Assembly CAS** — `UPDATE WorkPlans SET Status=Assembling WHERE Id=@id AND Status=AwaitingAssembly`; the single winner sees `rows > 0`.
+- **Run lease CAS** — `PostgresRunLeaseStore` issues `UPDATE runs SET owner_id=@me, lease_expires_at=@deadline, fencing_token=fencing_token+1, attempt=attempt+1 WHERE run_id=@id AND (owner_id IS NULL OR lease_expires_at < now())`; the single winner sees `rows > 0`.
+- **Assembly CAS** — `UPDATE WorkPlans SET Status=Assembling WHERE Id=@id AND Status=AwaitingAssembly`.
 - **Backlog claim CAS** — `UPDATE backlog_tasks SET state='claimed' ... WHERE state='ready' AND run_id IS NULL`.
 
-The known gap is **subtask dispatch**, which today is a read-modify-write with no owner or state guard — two replicas observing the same `pending` subtask both dispatch (the double-dispatch bug). The fix converts it to a guarded update that asserts expected state **and** ownership/fencing in one statement:
+The known gap is **subtask dispatch**, which is still a read-modify-write with no owner or state guard — two replicas observing the same `pending` subtask could both dispatch (the double-dispatch bug). The **not-yet-implemented** fix converts it to a guarded update that asserts expected state **and** ownership/fencing in one statement:
 
 ```
 UPDATE Subtasks
@@ -109,36 +110,37 @@ UPDATE Subtasks
    AND (owner_id IS NULL OR lease_expires_at < now());
 ```
 
-Only the replica that gets `rows == 1` spawns the child (and writes the `dispatch_idempotency` row in the same transaction). Every other path that blind-overwrites a subtask's status must adopt the same guarded, owner-aware form. The chief migration risk is missing one such writer — leaving a silent double-dispatch hole — so every status writer must be audited.
+Only the replica that gets `rows == 1` would spawn the child (and write the `dispatch_idempotency` row in the same transaction). Until that conversion lands, every blind subtask-status writer remains a double-dispatch hazard under multiple replicas and must be audited before scaling workers past one.
 
-## 4. Run-event fan-out mechanism
+## 4. Run-event stream
 
-The run-event stream is durable write-through plus in-process fan-out today: each event is synchronously inserted into the event log before it is acknowledged, then pushed into a process-local channel that subscribers replay-then-tail. A second in-memory per-process history store feeds the SSE polling loop. Both the channel and that history are **per-process**, so at more than one replica a client connected to one pod never receives events produced on another. Durability is unaffected (the log is shared); live cross-replica delivery is what breaks.
+### What exists today
 
-### Mechanism: notify + catch-up poll, with a same-replica fast path
+The run-event stream is durable write-through plus in-process fan-out. The Postgres implementation is `EfRunEventStream` (registered as `IRunEventStream` when `Database:Provider=postgres`; the SQLite path uses `SqliteRunEventStream`). Each `AppendAsync`:
 
-The Postgres design keeps durability identical and adds cross-replica delivery:
+1. **Durable write-through** — inserts the event into the `RunEvents` table inside a **serializable** transaction that computes `MAX(Sequence)+1` for the run, before acknowledging. The unique `(RunId, Sequence)` index is the safety net; on a concurrent-append conflict (`DbUpdateException`) the transaction rolls back and retries, up to three attempts.
+2. **In-process channel** — pushes the stamped event into a bounded (`capacity 1000`) process-local `Channel<RunEvent>`. `SubscribeAsync` first replays durable rows after the caller's cursor from the database, then tails this channel.
+
+Both the channel and the SSE history are **per-process**, so at more than one replica a client connected to one pod does not receive live pushes for events produced on another — it sees them only by replaying from the durable log on (re)subscribe. Durability is unaffected (the log is shared); **live cross-replica delivery is the gap.**
+
+### Mechanism: notify + catch-up poll *(design target — not yet implemented)*
+
+The intended Postgres design keeps durability identical and adds cross-replica delivery. **None of the following is implemented in `EfRunEventStream` yet** — it is the documented next step:
 
 1. **Durable write-through (unchanged).** Synchronous insert into the event log before ack.
-2. **Live push via `LISTEN/NOTIFY`.** On each durable insert the producer also issues `NOTIFY run_events, '<runId>:<sequence>'`. Each replica holds a `LISTEN run_events` connection; on a notify it wakes the relevant local subscribers, which then read the new rows from Postgres. The notification carries only the cursor, never the payload (payloads can exceed the NOTIFY size limit).
+2. **Live push via `LISTEN/NOTIFY`.** On each durable insert the producer would also issue `NOTIFY run_events, '<runId>:<sequence>'`. Each replica holds a `LISTEN run_events` connection; on a notify it wakes the relevant local subscribers, which then read the new rows from Postgres. The notification carries only the cursor, never the payload (payloads can exceed the NOTIFY size limit).
 3. **Catch-up poll backstop.** Every subscriber also runs a low-frequency poll (`SELECT ... WHERE RunId=@id AND Sequence > @cursor ORDER BY Sequence`). Because reads are cursor-based and the `(RunId, Sequence)` index is unique, catch-up is idempotent and gapless; a missed or undelivered notify can never strand a client, only delay it.
-4. **Same-replica fast path.** The per-process channel is retained purely as a latency optimization for a client that happens to be connected to the worker producing the events.
+4. **Same-replica fast path.** The per-process channel (which already exists) stays as a latency optimization for a client connected to the worker producing the events.
 
 `LISTEN/NOTIFY` requires **session-mode** connections — it does not pass through transaction-pooled PgBouncer. This must be reconciled with the pooling choice (§5): the wrong pooling mode silently disables live delivery, and the catch-up poll masks it as merely "slow," making the misconfiguration hard to detect.
 
 ### Sequence allocation under concurrency
 
-The current "select max(sequence)+1 ... returning" allocation is not safe when concurrent writers touch the same run under MVCC. Replace it with one of:
-
-- a per-run advisory lock around the max+1 insert, or
-- a dedicated per-run sequence/identity, or
-- relying on the unique `(RunId, Sequence)` index with an `ON CONFLICT` retry loop.
-
-The unique index is the durable safety net regardless of approach. If the worker tier guarantees exactly one writer per run via leasing, contention exists only across the rare re-lease boundary, and the advisory-lock approach is cheap and sufficient.
+`EfRunEventStream` implements the **serializable `MAX(Sequence)+1` with a unique-index retry loop** described above. The unique `(RunId, Sequence)` index is the durable safety net. If the worker tier guarantees exactly one writer per run via leasing, contention exists only across the rare re-lease boundary, which keeps the retry cheap. A per-run advisory lock or a dedicated per-run sequence are alternatives if contention ever warrants them.
 
 ## 5. Deployment topology — web vs worker
 
-Both tiers run from the **same image**, differentiated by a role flag (e.g. `Agentweaver__Role=web` vs `worker`). No second image is built or pushed.
+Both tiers run from the **same image**, differentiated by the role flag `App:Role` (env `App__Role`, values `web` vs `worker`; resolved by `AppRole` and branched on in `Program.cs`). No second image is built or pushed.
 
 ### Web tier
 
@@ -196,7 +198,7 @@ Each phase is reversible via a flag defaulting to today's behavior:
 | `Sandbox:ReleasePodOnSuspend` | `true` *(default)* / `false` | P1 tuning — release the pod when the graph suspends on a HITL gate or the coordinator idles; `false` keeps the pod warm for low-latency resume/debug. |
 | `Database:Provider` | `sqlite` *(default)* / `postgres` | P2 — selects the EF provider. Flip to `postgres` to cut over; flip back to `sqlite` to roll back. |
 | `ConnectionStrings:MemoryDb` / `Database:ConnectionString` | connection string | P2 — the Postgres connection (carries no secret under passwordless Entra auth). |
-| `Agentweaver:Role` | `web` / `worker` | P3 — selects the deployment role from the shared image. |
+| `App:Role` | `web` *(default)* / `worker` | P3 — selects the deployment role from the shared image (env `App__Role`; unset = `web`). |
 
 ## 8. Rollout sequencing
 

@@ -88,15 +88,15 @@ The originating branch now contains exactly the changes you approved.
 
 ## Review policy
 
-Each project has a **Review Policy** that governs which automated checks run before the human review step:
+Each project has a **Review Policy** that governs which gates run before merge. Policies are file-native YAML in `.agentweaver/review-policies/`, and support three step kinds:
 
-| Step | What it does |
+| Step kind | What it does |
 |---|---|
-| **Rubberduck** | Automated first-pass review — catches obvious issues before the RAI check |
-| **RAI** | Responsible AI safety check — may trigger automatic revision loops |
-| **Human review** | Your explicit approve/decline gate — always the final step |
+| `rai` | Responsible AI content-safety gate — may trigger automatic revision loops. On by default. |
+| `human-review` | Your explicit approve / decline / request-changes gate before any irreversible action. On by default. |
+| `rubberduck` | An optional request-changes-to-producer review loop that sends work back to the authoring agent for revision. Off by default. |
 
-Configure the active steps in [Project Settings → Review policy](./projects#review-policy).
+The shipped **default** policy is `rai` + `human-review`, mirroring the default workflow's baked-in gates. Configure the active policy in [Project Settings → Review policy](./projects#review-policy).
 
 ::: tip Human review is always present
 The human review step is mandatory and cannot be disabled. The platform enforces it regardless of review policy settings.

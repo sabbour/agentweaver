@@ -22,6 +22,12 @@ The project record and the workspace are separate. Renaming changes the record, 
 
 The **Project Gallery** is the landing page. The page title is **Projects** with the subtitle **Your Agentweaver projects.** It is where users scan work, create projects, and switch projects.
 
+![Project Gallery page with project cards and creation buttons](/screenshots/projects-gallery.png)
+
+> 📸 **Screenshot — `projects-gallery.png`**
+> *Shows:* the Projects page titled "Projects" / "Your Agentweaver projects." with at least one project card (each card shows an **Available** or **Unavailable** status badge and an **Open** button), highlighting the **Create blank project** and **Create from GitHub** buttons in the header.
+> *Path:* Sign in → navigate to `/projects`.
+
 When projects exist, the toolbar shows:
 
 - **Create blank project**
@@ -103,6 +109,12 @@ flowchart TD
 
 **Create blank project** starts a new Git repository under Agentweaver's control. The dialog title is **Create blank project**.
 
+![Create blank project dialog with Name and Repository folder fields](/screenshots/create-blank-project-dialog.png)
+
+> 📸 **Screenshot — `create-blank-project-dialog.png`**
+> *Shows:* the **Create blank project** dialog with the **Name** field (placeholder "My project") and the **Repository folder** field auto-filled (slugified) from the project name, plus the **Cancel** and **Create** buttons (the **Create** button reads **Creating** with a spinner while submitting).
+> *Path:* `/projects` → click **Create blank project**.
+
 Required fields:
 
 - **Name** with placeholder **My project**
@@ -117,6 +129,12 @@ Creation is for a new controlled workspace. The target directory must be empty o
 ### Create from GitHub
 
 **Create from GitHub** clones a repository and records its GitHub origin. The dialog title is **Create project from GitHub**.
+
+![Create project from GitHub dialog with Organization and Source repository pickers](/screenshots/create-from-github-dialog.png)
+
+> 📸 **Screenshot — `create-from-github-dialog.png`**
+> *Shows:* the **Create project from GitHub** dialog with the **Name** field, the **Organization** picker (`aria-label="Organization"`, showing avatars and an **Org** badge), the searchable **Source repository** field (`aria-label="Repository"`), and the auto-filled **Repository folder** field, plus **Cancel** / **Create**. If GitHub is not connected, the **Connect GitHub** action appears instead of the repository list.
+> *Path:* `/projects` → click **Create from GitHub**.
 
 Required fields:
 
@@ -254,6 +272,12 @@ The project Dashboard summarizes delivery metrics. The title is **Dashboard** an
 
 > Delivery metrics and the agent leaderboard.
 
+![Project Dashboard with throughput chart and agent leaderboard](/screenshots/project-dashboard.png)
+
+> 📸 **Screenshot — `project-dashboard.png`**
+> *Shows:* the **Dashboard** page titled "Dashboard" / "Delivery metrics and the agent leaderboard.", the **Refresh** button with last-updated time, the **Throughput (last 30 days)** section, and the **Agent leaderboard** table (`aria-label="Agent leaderboard"`).
+> *Path:* `/projects` → open a project → land on `/projects/:projectId`.
+
 It refreshes every 30 seconds and includes **Refresh**. When data is loaded, the header shows the last updated time and a refresh countdown.
 
 Summary cards show:
@@ -283,6 +307,12 @@ The Agent name links into a filtered project flow view, so the dashboard works a
 Project Settings changes the project record and project policies. The title is **Project settings** with subtitle:
 
 > Project configuration and pickup behavior.
+
+![Project Settings page with General, Sandbox policy, Review policy, and Danger Zone sections](/screenshots/project-settings.png)
+
+> 📸 **Screenshot — `project-settings.png`**
+> *Shows:* the **Project settings** page with the left rail sections **General** (project name, repository link, default model), **Sandbox policy**, **Review policy**, and **Danger Zone**, with the **General** section selected (the active section is deep-linked through the URL query).
+> *Path:* open a project → click **Settings** in the left rail → `/projects/:projectId/settings`.
 
 The left rail sections are:
 

@@ -114,6 +114,40 @@ Revision does not resume work. It returns the run to the awaiting-confirmation s
 
 This makes the experience predictable: every executable interpretation is confirmed exactly at the boundary where planning turns into dispatch.
 
+## Choosing the workflow
+
+Right after you confirm the spec, and before any subtasks appear, the coordinator picks **which workflow** (which run process) the work should follow. Most projects carry a single workflow, so this is invisible — that one workflow is used with no prompt and no extra step. The experience only becomes visible when a project offers more than one eligible workflow.
+
+### What decides the workflow
+
+You influence the choice in four ways, from strongest to softest:
+
+- **Backlog override.** A backlog task can pin a specific workflow. When the coordinator picks that task up, it uses the pinned workflow as long as it is valid and its trigger fits the pickup.
+- **Conversational override.** In a revision, reply with `use <workflow-id>` (for example `use bug-fix`). This wins over the coordinator's own pick, as long as the named workflow is one of the eligible candidates.
+- **Blueprint restriction.** A project's blueprint can limit the set of workflows available to the project (`AllowedWorkflowIds`) and set the default. The built-in `default` workflow always stays available as a safety net, so the project is never left with zero choices.
+- **Automatic selection.** When two or more workflows are eligible and you haven't named one, a Copilot-backed selector picks the best **process fit** for the goal and team, by what steps each workflow runs and what it produces — not by name similarity.
+
+### Manual vs backlog (heartbeat) invocation
+
+How the run started narrows the candidates before anything else, so a workflow only appears if its declared trigger matches:
+
+- **You started it (manual).** Only workflows with a `manual` trigger are considered.
+- **The heartbeat picked up a Ready task.** Only `heartbeat`-trigger workflows, plus event workflows that fire on "task added to Ready", are considered.
+
+A workflow whose trigger does not match the invocation is never selected, even if you name it. When nothing matches, the coordinator falls back to the project default rather than running a mismatched process.
+
+### What you'll see when the coordinator selects
+
+When a project has multiple eligible workflows, the coordinator surfaces its choice as a `coordinator.workflow_selected` event on the run stream. It carries:
+
+- `selectedId` and `selectedName` — the workflow it chose.
+- `rationale` — a one- or two-sentence reason for the pick (or an explanation of why it fell back to the default).
+- `wasAutoSelected` — `true` when the selector chose it, `false` when you named it with `use ...`.
+- `overrideHint` — a reminder you can reply `use {other-id}` to change it, listing the available ids.
+- `available` — the full list of workflows you could pick instead.
+
+If anything goes wrong (the model is unavailable, returns an unusable answer, or names a workflow that isn't available), the coordinator deterministically falls back to the project default and says so in the rationale — you are never left without a workflow. Single-workflow projects emit no such event, because there was nothing to choose.
+
 ## Work plan experience
 
 ### From confirmed intent to executable plan

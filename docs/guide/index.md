@@ -56,7 +56,7 @@ A **Project** is the top-level container — a git working directory bound to an
 
 ### Blueprints and casting
 
-A **Blueprint** is a reusable team definition: roles, workflows, review policy, and sandbox policy. When you instantiate a Blueprint into a project, the **casting algorithm** assigns named agents to each role — drawn from thematic universes like Matrix or Star Wars. Four predefined Blueprints ship with Agentweaver.
+A **Blueprint** is a reusable team definition: roles, workflows, review policy, and sandbox policy. When you instantiate a Blueprint into a project, the **casting algorithm** assigns named agents to each role — drawn from thematic universes like The Matrix or Star Wars. Five predefined Blueprints ship with Agentweaver.
 
 → [Agent Teams & Blueprints](./teams)
 

@@ -8,12 +8,22 @@ The API reads standard ASP.NET Core configuration sources. In local development,
 
 ### Storage and git settings
 
+Agentweaver stores its operational state (runs, projects, the per-run event log, team memory, and decisions) in a single EF Core database. The backend is selected with `Database:Provider`.
+
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Database:Path` | `agentweaver.db` in the app data directory | SQLite database file for runs and operational records (the per-event log is stored separately in the EF Core memory database) |
-| `Worktrees:BasePath` | `worktrees` under the app data directory | Root folder for per-run git worktrees |
+| `Database:Provider` | `sqlite` | Database backend: `sqlite`, `sqlserver`/`azuresql`, or `postgres`/`postgresql` |
+| `Database:Path` | data directory under `%LOCALAPPDATA%/agentweaver` | SQLite only — the directory of this path holds the `memory.db` file (the file name is always `memory.db`) |
+| `Database:ConnectionString` | none | Connection string fallback for SQL Server / PostgreSQL when no named connection string is set |
+| `ConnectionStrings:MemoryDb` | none | Connection string for SQL Server (`sqlserver`/`azuresql`); also a fallback for PostgreSQL |
+| `ConnectionStrings:Postgres` | none | Connection string for the PostgreSQL provider (uses the `Agentweaver.Api.Migrations.Postgres` migrations assembly) |
+| `Worktrees:BasePath` | `worktrees` under the data directory | Root folder for per-run git worktrees |
 | `Git:Author:Name` | `Agentweaver` | Author name for run commits and merge commits |
 | `Git:Author:Email` | `agentweaver@localhost` | Author email for run commits and merge commits |
+
+::: tip Default storage location
+With the default `sqlite` provider, the database file is `memory.db` inside the app data directory (`%LOCALAPPDATA%/agentweaver` on Windows, the platform-equivalent local application data folder elsewhere). See [Memory reference](/reference/memory) for the schema and provider details.
+:::
 
 ### Authentication settings
 
@@ -44,10 +54,12 @@ Some local samples still show `Providers:Foundry` with `DeploymentName`. The cur
 
 ## Web environment variables
 
+The web UI authenticates users through GitHub OAuth and sends the resulting session token automatically — it does not require a static API key.
+
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `VITE_API_URL` | No | `http://localhost:5000` | API base URL for the browser client |
-| `VITE_API_KEY` | Yes | empty | Bearer API key sent on every request |
+| `VITE_API_URL` | No | `http://localhost:5000` | API base URL for the browser client. In container deployments this is injected at runtime as `/api` via `window.__AGENTWEAVER_CONFIG__`. |
+| `VITE_API_KEY` | No | empty | Optional bearer key for non-interactive/local use. Not needed when signing in through the web UI; the Docker build deliberately unsets it. |
 
 ## Example local setup
 
@@ -57,5 +69,4 @@ $env:ASPNETCORE_ENVIRONMENT = "Local"
 
 ```dotenv
 VITE_API_URL=http://localhost:5000
-VITE_API_KEY=dev-local-key
 ```

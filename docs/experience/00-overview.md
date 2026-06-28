@@ -47,9 +47,21 @@ Agentweaver treats the backend as the source of truth. The web UI loads snapshot
 
 ## Web UI mental model
 
+![Overview page showing fleet activity at a glance](/screenshots/overview-fleet.png)
+
+> 📸 **Screenshot — `overview-fleet.png`**
+> *Shows:* the **Overview** page titled "Overview" with the subtitle "Fleet activity at a glance.", the **Refresh** button, and the **Live sessions**, **Active workflow runs**, **Active projects**, and **Recent activity** sections (tables carry `aria-label="Live sessions"` and `aria-label="Active workflow runs"`).
+> *Path:* Sign in → click **Overview** in the left rail (or navigate to `/overview`).
+
 The web UI is a signed-in, project-aware control room. It uses a persistent app shell so navigation, project switching, API health, GitHub identity, and the start-orchestration action remain available even when the user opens a deep run page.
 
 ### The app shell
+
+![Agentweaver signed-in app shell with left navigation rail, top bar, and main content](/screenshots/app-shell.png)
+
+> 📸 **Screenshot — `app-shell.png`**
+> *Shows:* the signed-in shell with the left navigation rail (`aria-label="Primary navigation"`) listing **Overview**, **Projects**, then the project-scoped **Dashboard**, **Board**, **Flow**, **Orchestrations**, **Workspace**, **Agents**, **Memories**, **Workflows**, **Settings**, **Diagnostics**, **Heartbeat**; the top bar with the project switcher, the `Alpha` badge, the API status dot, and GitHub sign-in; and the Overview page in the main content area.
+> *Path:* Sign in → land on `/overview`.
 
 The shell has three persistent areas:
 

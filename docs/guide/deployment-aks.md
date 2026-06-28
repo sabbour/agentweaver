@@ -4,7 +4,77 @@ title: Deploy to AKS
 
 # Deploy to AKS
 
-This guide covers deploying Agentweaver to Azure Kubernetes Service (AKS) using the numbered scripts in `scripts/aks/` and the Kubernetes manifests in `k8s/`.
+This guide covers deploying Agentweaver to Azure Kubernetes Service (AKS).
+
+## One-liner deploy (recommended)
+
+Run the full AKS provisioning — ACR, cluster, identity, Postgres, image builds, mTLS certs, and deployment — with a single command:
+
+```bash
+# macOS / Linux / WSL2
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
+```
+```powershell
+# Windows PowerShell (delegates to install.sh via WSL2)
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1'))) -Aks
+```
+
+**Optional flags:**
+
+| Flag (bash) | Flag (PowerShell) | Effect |
+|---|---|---|
+| `--skip-postgres` | `-SkipPostgres` | Skip Postgres provisioning (step 17) if it already exists |
+| `--skip-oauth-key` | `-SkipOauthKey` | Skip OAuth signing key provisioning (step 16) if it already exists |
+| `--image-tag <tag>` | `-ImageTag <tag>` | Use this image tag instead of the short git SHA (see [Redeploy](#redeploy--update)) |
+
+The installer will clone the repo to `~/agentweaver` if you don't already have a local checkout, then run all provisioning steps in order.
+
+> **Prerequisites before running:** `az login`, `kubectl`, `envsubst`, `openssl`, and the `aks-preview` Azure CLI extension. See [Prerequisites](#prerequisites) below for install links.
+
+### Redeploy / update
+
+Re-running the installer with `--image-tag` builds new images, pushes them, and redeploys — this is the standard update path:
+
+```bash
+# From a cloned checkout
+bash install.sh --aks --image-tag <new-git-sha>
+```
+```powershell
+.\install.ps1 -Aks -ImageTag <new-git-sha>
+```
+
+Or via one-liner (no local checkout required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks --image-tag <new-git-sha>
+```
+
+> **Never use `:latest`.** Image tags are immutable per build. The default is `git rev-parse --short HEAD`. Always pin to a specific SHA for reproducible, rollback-safe deployments.
+
+---
+
+<details>
+<summary><strong>Advanced: manual step-by-step installation</strong></summary>
+
+The one-liner above calls these 11 scripts internally, in order. Run them manually if you need to customise or resume a partial install:
+
+1. `scripts/aks/00-variables.sh` — shared environment variables (source, don't run directly)
+2. `scripts/aks/10-create-cluster.sh` — ACR + AKS cluster
+3. `scripts/aks/15-setup-identity.sh` — managed identity + Key Vault secrets
+4. `scripts/aks/16-provision-oauth-signing-key.sh` — OAuth signing key
+5. `scripts/aks/17-provision-postgres.sh` — Azure Database for PostgreSQL
+6. `scripts/aks/20-build-push-images.sh` — build and push container images (no local Docker required)
+7. `scripts/aks/gen-a2a-mtls-certs.sh` — A2A mTLS certificates *(must run before step 8)*
+8. `scripts/aks/30-deploy.sh` — apply all Kubernetes manifests
+9. `scripts/aks/40-verify.sh` — verify deployment health
+10. `scripts/aks/c3-scale-zero.sh` — scale to zero (optional cost-saving)
+11. `scripts/aks/c4-flip-postgres.sh` — flip to external Postgres (optional)
+
+The detailed walkthrough for each step follows below.
+
+</details>
+
+---
 
 ## Prerequisites
 

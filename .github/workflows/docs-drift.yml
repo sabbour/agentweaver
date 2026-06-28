@@ -1,0 +1,117 @@
+name: Docs Drift Check
+
+# Keeps documentation in sync with code without hand-prompting.
+#
+#   1. generated-staleness  — HARD FAIL if a committed generated reference
+#      (docs/reference/mcp-tools.md) is out of date vs. its source. This is
+#      deterministic and auto-fixable: run `node scripts/gen-docs.mjs` and commit.
+#
+#   2. curated-drift-nudge  — NON-BLOCKING. If a PR changes drift-prone code paths
+#      (API endpoints, MCP tools, blueprints, workflows) without touching docs/**,
+#      it posts a sticky reminder comment + a workflow warning. It never fails the
+#      build, so it nudges authors without blocking merges.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: docs-drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  generated-staleness:
+    name: Generated reference is in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify generated docs are up to date
+        run: |
+          node scripts/gen-docs.mjs --check
+
+  curated-drift-nudge:
+    name: Curated docs drift (warn only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect code-without-docs changes
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
+          echo "Changed files:"
+          echo "$changed"
+
+          # Drift-prone source paths whose changes usually require doc updates.
+          code_re='^(apps/Agentweaver\.Api/Endpoints/|apps/Agentweaver\.Api/Workflows/|apps/Agentweaver\.Api/Blueprints/|apps/Agentweaver\.Mcp/Tools/|packages/Agentweaver\.Squad/Catalog/Resources/blueprints/)'
+
+          code_changed="$(echo "$changed" | grep -E "$code_re" || true)"
+          docs_changed="$(echo "$changed" | grep -E '^docs/' | grep -v '^docs/node_modules/' || true)"
+
+          if [ -n "$code_changed" ] && [ -z "$docs_changed" ]; then
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+            {
+              echo 'files<<EOF'
+              echo "$code_changed"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+            echo "::warning title=Docs may be out of sync::Code in doc-relevant paths changed but no docs/** files were updated. See the PR comment for guidance."
+          else
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upsert reminder comment
+        if: steps.detect.outputs.drift == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- docs-drift-nudge -->';
+            const files = `${{ steps.detect.outputs.files }}`.trim();
+            const body = [
+              marker,
+              '### 📝 Docs sync reminder',
+              '',
+              'This PR changes code in doc-relevant paths but does not touch `docs/**`.',
+              'If this change adds or alters a feature, API endpoint, MCP tool, blueprint, or workflow,',
+              'please update the docs in the same PR (the **definition of done** includes docs).',
+              '',
+              '<details><summary>Changed source files</summary>',
+              '',
+              '```',
+              files,
+              '```',
+              '</details>',
+              '',
+              '**How to update fast**',
+              '- Invoke the `docs-sync` skill (`.copilot/skills/docs-sync/SKILL.md`) for the playbook.',
+              '- Regenerate auto-derived reference: `node scripts/gen-docs.mjs` then commit.',
+              '- Build to verify: `cd docs && npm ci && npm run build`.',
+              '',
+              '_This is a non-blocking reminder — it will not prevent merge. See `.github/DOCS_SYNC.md`._',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

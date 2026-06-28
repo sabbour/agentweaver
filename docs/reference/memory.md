@@ -23,10 +23,10 @@ Rendered as `## Boundaries and Decisions` with a note that these **take preceden
 
 | Field | Values |
 |-------|--------|
-| `Type` | `architectural` · `scope` · `process` · `pattern` |
-| `Status` | `active` · `superseded` · `rejected` |
+| `Type` | `architectural` · `scope` · `process` · `technical` |
+| `Status` | `active` · `superseded` · `archived` |
 
-Only `architectural` and `scope` decisions are injected (high-signal, team-wide). `process` and `pattern` decisions stay in the DB for Scribe bookkeeping.
+Only `architectural` and `scope` decisions are injected (high-signal, team-wide). `process` and `technical` decisions stay in the DB for Scribe bookkeeping.
 
 ### Layer 2 — Core context memories
 
@@ -70,7 +70,7 @@ Drop-box for agent-proposed decisions. Agents write here via `submit_inbox_entry
 
 | Field | Description |
 |-------|-------------|
-| `Type` | `architectural` · `scope` · `process` · `pattern` |
+| `Type` | `architectural` · `scope` · `process` · `pattern` · `learning` · `update` |
 | `Status` | `pending` → `merged` or `rejected` |
 
 Scribe only auto-merges `learning`, `pattern`, and `update` types. `architectural` and `scope` entries are left for coordinator review.

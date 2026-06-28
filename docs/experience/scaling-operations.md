@@ -58,6 +58,12 @@ The database connection is passwordless: pods authenticate using the cluster's w
 
 This is the reassuring part. **Across and after the cutover, the product an end user sees does not change.** The run and review model is the same, the REST and event-stream contracts are the same, and a developer who submits a run or watches it stream cannot tell whether they are hitting a single combined pod or a fleet of web and worker pods.
 
+![Overview page showing fleet-wide active projects and runs unchanged across pods](/screenshots/overview-active-projects.png)
+
+> 📸 **Screenshot — `overview-active-projects.png`**
+> *Shows:* the **Overview** page "Fleet activity at a glance." with the **Active workflow runs** and **Active projects** sections populated; the same view regardless of whether one combined pod or a web/worker fleet is serving it.
+> *Path:* sign in → **Overview** in the left rail → `/overview`.
+
 The one thing the system has to work to preserve is **live watching across pods**. A run executes on one worker pod, but a developer's browser may be connected to any web pod. The event stream makes this seamless: every event is durably written to the database before it is acknowledged, and each web pod is notified so it can relay events for runs it is not itself executing, with a steady catch-up read as a backstop. The net effect for the user is an unbroken live stream regardless of which pods are involved. As an operator you generally do not touch this — but it is why a run started before a web pod restarts is still fully watchable afterward.
 
 ## How runs survive replica restarts
@@ -96,6 +102,12 @@ A subtle but important guarantee sits underneath this: a former owner that was p
 ## The operator's mental checklist
 
 When you operate a scaled Agentweaver, these are the things worth watching:
+
+![Diagnostics Global tab with fleet health metrics](/screenshots/diagnostics-global-health.png)
+
+> 📸 **Screenshot — `diagnostics-global-health.png`**
+> *Shows:* the **Diagnostics** page on the **Global** tab with the fleet metrics **API version**, **Uptime**, **Total projects**, **Total runs**, and **Active runs**, plus the check cards with `pass` / `warn` / `fail` badges — the operator's quick confirmation that a scaled deployment is healthy.
+> *Path:* open any project → **Diagnostics** in the left rail → select the **Global** tab → `/projects/:projectId/diagnostics`.
 
 1. **Web replica count vs request load.** Too few web pods shows up as slow API responses or refused connections, not as failed runs. Scale web on request/connection pressure.
 2. **Worker replica count vs backlog.** The signal is queued, unleased run depth. A growing backlog with workers at their floor means scale up; an empty backlog means workers can scale toward their minimum (but not to zero).

@@ -32,6 +32,8 @@ features:
     details: Seven built-in YAML workflows cover software delivery, bug fixing, code review, content authoring, PM discovery, incident response, and agent evaluation. Add your own or generate one.
   - title: Persistent team memory
     details: Agents build on prior work through four memory layers — decisions, core context, learnings, and open session. A Scribe records what the team learned after every run.
+  - title: Sandbox browser preview
+    details: When an agent starts a dev server inside its isolated Kubernetes sandbox pod, open a live browser preview of it from the run view — a port-forward tunnel scoped to that one run's pod, with no egress widening. <a href="/docs/experience/sandbox-browser-preview">See it in action →</a>
   - title: Works the way you do
     details: Self-hosted. Runs with GitHub Copilot or Microsoft Foundry. Drive it from the web UI or any MCP-compatible client, including Copilot CLI.
 ---

@@ -86,13 +86,13 @@ Controls how agent commands execute and what they can reach. Options include:
 
 ### Review policy
 
-Choose which review steps gate the project's work:
+Choose which review steps gate the project's work. Review policies are file-native YAML in `.agentweaver/review-policies/`; the shipped default is RAI plus human review.
 
-| Step | Description |
+| Step kind | Description |
 |---|---|
-| **Rubberduck** | Automated first-pass review |
-| **RAI** | Responsible AI safety check |
-| **Human review** | Your explicit approve/reject gate |
+| `rai` | Responsible AI content-safety check (on by default) |
+| `human-review` | Your explicit approve / decline / request-changes gate (on by default) |
+| `rubberduck` | Optional request-changes-to-producer review loop (off by default) |
 
 ::: warning Human review is always available
 You can always inspect and act on a run's output regardless of review policy settings. The platform guarantees a human approval gate before anything merges.

@@ -37,6 +37,12 @@ The user-facing promise is simple: workflows answer **how should this run?** Bac
 
 The project **Workflows** page is reached from a project at **Workflows**. It is titled **Workflows** with the subtitle **Reusable pipeline definitions.** It shows discovered workflow definitions, validation status, source, trigger, and the effective default.
 
+![Workflows page with Active, Available, and Invalid workflow cards](/screenshots/workflows-list.png)
+
+> 📸 **Screenshot — `workflows-list.png`**
+> *Shows:* the **Workflows** page titled "Workflows" / "Reusable pipeline definitions." with the **Active workflow**, **Available workflows**, and **Invalid workflows** sections; cards carrying **Active** / **Valid** / **Invalid** / **Built-in** badges plus **Trigger** and **Source**; and the **New workflow**, **Generate workflow**, **Set as default**, and **Sync** actions.
+> *Path:* open a project → click **Workflows** in the left rail → `/projects/:projectId/workflows`.
+
 The page groups cards into three sections:
 
 | Section | What the user sees | What it means |
@@ -153,6 +159,12 @@ The coordinator selection model is process-fit oriented. It selects the workflow
 
 The per-run workflow graph is the live execution version of the workflow. It is reached at a workflow run page titled **Run** with the short run id beside it. Unlike the Workflows page graph, this graph carries status.
 
+![Per-run workflow graph with status-carrying node cards](/screenshots/per-run-workflow-graph.png)
+
+> 📸 **Screenshot — `per-run-workflow-graph.png`**
+> *Shows:* the per-run workflow graph on the **Run** page with node cards carrying **Pending** / **In Progress** / **Complete** / **Skipped** / **Failed** / **Revise** / **Awaiting** badges, role labels (AI Assistant, RAI Reviewer, Human Review, Merge Coordinator, Session Logger), and node actions such as **View execution**, **Review now**, **Browse files**, and **View memories**; loopback edges light up during revision.
+> *Path:* `/projects/:projectId/board` → open a run's **Workflow** view → `/projects/:projectId/runs/:runId/workflow`.
+
 The graph is seeded from persisted run state and then updated from the run event stream. If a graph descriptor is available, the UI renders the actual workflow nodes and edges. If not, it falls back to the standard pipeline shape.
 
 Node cards show:
@@ -174,6 +186,12 @@ Coordinator child runs use a trimmed graph: Agent → RAI → Assemble-ready. Hu
 ## The backlog board experience
 
 The board is the user's work queue. It presents intake tasks and run cards in one place.
+
+![Backlog board showing draggable Backlog and Ready task cards](/screenshots/backlog-ready.png)
+
+> 📸 **Screenshot — `backlog-ready.png`**
+> *Shows:* the board's intake columns **Backlog** ("Captured but not yet committed to.") and **Ready** ("Committed work that the coordinator and Ralph monitor may pick up next.") with draggable task cards, the **Capture a task into Backlog** capture bar and its **Add** button, and a task being dragged from Backlog into Ready.
+> *Path:* open a project → click **Board** → `/projects/:projectId/board`.
 
 | Column | Stage kind | Description shown in the UI | Who moves work there |
 |---|---|---|---|
@@ -289,6 +307,12 @@ Spec decomposition turns a markdown document in the project workspace into propo
 ### Web UI flow
 
 The board toolbar has **Import from workspace**. The user selects a workspace file and clicks **Preview tasks**. Agentweaver analyzes the markdown file and opens **Preview proposed backlog items**.
+
+![Preview proposed backlog items dialog from spec decomposition](/screenshots/decompose-preview-dialog.png)
+
+> 📸 **Screenshot — `decompose-preview-dialog.png`**
+> *Shows:* the **Preview proposed backlog items** dialog from spec decomposition, listing proposed task titles and descriptions, **Already exists** badges for duplicates, the empty-state "No actionable items found in this file.", and the **Create tasks** confirmation button.
+> *Path:* on `/projects/:projectId/workspace`, select a Markdown spec → **Import to backlog** (or board toolbar **Import from workspace** → **Preview tasks**).
 
 The preview dialog shows task titles, optional descriptions, **Already exists** badges for duplicates, a cap notice when extraction returns more than the cap, **No actionable items found in this file.** when empty, and **Create tasks** to confirm persistence.
 

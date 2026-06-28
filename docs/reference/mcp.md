@@ -6,6 +6,8 @@ The Agentweaver MCP server is **experimental**. Tool names, parameters, and beha
 
 The Agentweaver MCP server exposes all Agentweaver operations as structured tool calls over stdio. Any MCP-capable host (GitHub Copilot CLI, Claude, Cursor, Windsurf, etc.) can discover and invoke these tools automatically via the `.mcp.json` file at the repository root.
 
+> For a complete, always-up-to-date list of every tool name and its one-line description, see the auto-generated [MCP tool index](./mcp-tools.md). This page documents each tool's full parameters and return shape.
+
 ## Setup
 
 Set the required environment variable before starting any MCP host that uses the server:
@@ -499,7 +501,7 @@ List all available casting scenario templates.
 
 Memory is scoped to projects. Agents use the inbox to submit learnings; the coordinator merges them into decisions. `memory_export` writes the live DB state to `.squad/` and `.agentweaver/context/` files for Squad CLI interoperability.
 
-### `inbox_submit`
+### `decision_inbox_submit`
 
 Submit a decision or learning to the agent inbox.
 
@@ -517,7 +519,7 @@ Submit a decision or learning to the agent inbox.
 
 ---
 
-### `inbox_list`
+### `decision_inbox_list`
 
 List inbox entries for a project.
 
@@ -532,7 +534,7 @@ List inbox entries for a project.
 
 ---
 
-### `inbox_merge`
+### `decision_inbox_merge`
 
 Merge a pending inbox entry into team decisions.
 
@@ -545,7 +547,7 @@ Merge a pending inbox entry into team decisions.
 
 ---
 
-### `inbox_reject`
+### `decision_inbox_reject`
 
 Reject a pending inbox entry.
 
@@ -560,18 +562,36 @@ Reject a pending inbox entry.
 
 ### `decision_create`
 
-Create a team decision directly (coordinator / Scribe path).
+Create a team decision directly (coordinator path).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
 | `agent_name` | string | yes | Agent recording the decision |
-| `type` | string | yes | `architectural` \| `process` \| `scope` \| `technical` |
+| `type` | string | yes | `architectural` \| `scope` \| `process` \| `technical` |
 | `title` | string | yes | Short title |
 | `content` | string | yes | Full content |
 | `rationale` | string | no | Optional rationale |
 
 **Returns**: Created decision object.
+
+---
+
+### `squad_decide`
+
+Submit a team decision to the decision inbox from a squad agent. A convenience over `decision_inbox_submit` for agents recording a decision they want the coordinator to review and merge.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `agent_name` | string | yes | Agent submitting the decision |
+| `slug` | string | yes | Unique kebab-case slug for idempotency |
+| `type` | string | yes | `architectural` \| `scope` \| `process` \| `technical` \| `learning` \| `pattern` \| `update` |
+| `title` | string | yes | Short title |
+| `content` | string | yes | Full content |
+| `rationale` | string | no | Optional rationale |
+
+**Returns**: Created inbox entry with `id` and `status: "pending"`.
 
 ---
 
@@ -605,7 +625,7 @@ Update a decision's status or content.
 
 ---
 
-### `memory_add`
+### `memory_record`
 
 Add a memory entry for an agent.
 

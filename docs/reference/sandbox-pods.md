@@ -173,32 +173,44 @@ A run's executing pod name is tracked so the UI can show *where* a run is runnin
 
 ## Sandbox preview port-forward (Feature 017)
 
+> **Dedicated pages:** this feature now has its own [Reference](./sandbox-browser-preview.md),
+> [User Guide](../experience/sandbox-browser-preview.md), and
+> [Deep Dive](../deep-dive/sandbox-browser-preview.md). The summary below stays here for context within the
+> sandbox-pods surface.
+
 A **preview port-forward** exposes a port of a run's sandbox pod back through the API, so an operator can
 reach a server the agent started **inside** the pod (a dev server, a built app, a debug endpoint) as a
-live preview scoped to that one run's pod. It runs a `kubectl port-forward` from the run's sandbox pod to
-the API and hands back a local URL.
+live preview scoped to that one run's pod. `PortForwardService` shells out to
+`kubectl port-forward --address 127.0.0.1 pod/{podName} :{targetPort} -n {namespace}` (it does **not** use
+the Kubernetes API), parses the `Forwarding from 127.0.0.1:<port> ->` line to learn the local port, and
+probes loopback TCP until ready. The pod is the same one `KubernetesSandboxExecutor` provisions through
+the [agent-sandbox controller](../deep-dive/sandbox.md#the-agent-sandbox-controller-and-where-mxc-fits) —
+the preview tunnels into *that* pod, not an MXC local sandbox.
 
 This surface is **Kubernetes-only**: it tunnels through the [Kubernetes claim backend](./sandbox-setup.md#kubernetes-in-cluster)'s
 pod, located by run id via the [`PodNameRegistry`](#pod-naming-and-the-executing-pod-surface). On local/dev
-backends (no claim pod) there is nothing to forward, and the endpoints report that the run has no
-forwardable sandbox pod.
+backends (no claim pod) there is nothing to forward, and the start call fails with a conflict — *"the run
+must be `in_progress` with an active Kubernetes sandbox"*. Every call also verifies the run exists and the
+caller owns it (`403`/`404` otherwise).
 
 ### Endpoints
 
 | Method & path | Body | Returns | Effect |
 |---|---|---|---|
-| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <int> }` | `PortForwardSessionDto` | Starts a `kubectl port-forward` from the run's sandbox pod's `target_port` to the API, and returns the new session (including the local URL). |
+| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <1..65535> }` | `PortForwardSessionDto` | Starts a `kubectl port-forward` from the run's pod's `target_port` to a loopback port on the API, and returns the new session. `429` when a session cap is hit; `409` when the run has no active sandbox pod. |
 | `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists the active preview sessions for the run. |
-| `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | — | Stops the identified session and tears down its tunnel. |
+| `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Stops the identified session and tears down its tunnel. |
 
 ### `PortForwardSessionDto`
 
 | Field | Meaning |
 |---|---|
 | `session_id` | Identifier for this preview session; used as `{sessionId}` to stop it via `DELETE`. |
-| `pod_name` | The bound sandbox pod the tunnel targets (from `PodNameRegistry`). |
+| `local_port` | The loopback port **on the API host** that `kubectl` bound; what the API forwards from. The backend returns this port, **not** a public URL. |
 | `target_port` | The port **inside** the sandbox pod that is being forwarded. |
-| local URL | The API-local address that maps to the pod's `target_port` — what a user opens to see the preview. |
+| `pod_name` | The bound sandbox pod the tunnel targets (from `PodNameRegistry`). |
+| `started_at` | When the session started. |
+| `preview_url` / `previewUrl` | **Web-only, optional.** The frontend reads these to render an embedded iframe, but the backend does **not** currently populate them; the UI explicitly says so when no proxied URL is returned. |
 
 ### Behavior
 
@@ -208,23 +220,45 @@ forwardable sandbox pod.
   single bound pod, so a preview never crosses into another run's pod.
 - **Inbound only, no egress widening.** The tunnel is an inbound path the operator opens to the pod; it
   does **not** alter the pod's default-deny egress allowlist (see [Security properties](#security-properties)).
+- **Capped per run and globally.** Default **3** concurrent sessions per run
+  (`Sandbox:PortForward:MaxConcurrentSessionsPerRun`, fallback `:MaxPerRun`) and **20** globally
+  (`Sandbox:PortForward:MaxConcurrentSessionsGlobal`, fallback `:MaxGlobal`); exceeding either raises
+  `PortForwardLimitExceededException` → `429`.
+- **In-memory, no TTL.** Sessions live only in `PortForwardService`'s in-process maps (`_sessions` /
+  `_sessionsByRun`); there is no expiry timer. They end only on explicit `DELETE`, run end (via
+  `RunWatchLoopService`, which also unregisters the pod), the `kubectl` process exiting on its own, or
+  `Dispose()` at shutdown.
 - **Bounded by the pod.** A session is only valid while the run's pod is bound; releasing or replacing the
   pod (suspend/resume, run end) ends forwarding, and a new preview must be started against the re-claimed
   pod.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant User as User / operator
-    participant API as API
+    participant API as API (SandboxEndpoints)
+    participant PF as PortForwardService
     participant Reg as PodNameRegistry
+    participant K as kubectl
     participant Pod as Sandbox pod (run-bound)
     User->>API: POST /api/runs/{runId}/sandbox/port-forward { target_port }
-    API->>Reg: resolve runId → pod_name
-    API->>Pod: kubectl port-forward target_port
-    API-->>User: PortForwardSessionDto { session_id, pod_name, target_port, local URL }
-    User->>API: open local URL → reach server in pod
+    API->>API: validate port, run exists, caller owns run
+    API->>PF: StartAsync(runId, target_port)
+    PF->>Reg: TryGet(runId) → pod_name
+    alt no pod registered
+        Reg-->>PF: null
+        PF-->>API: InvalidOperationException → 409
+    else pod registered
+        PF->>K: kubectl port-forward --address 127.0.0.1 pod/{pod} :{target_port} -n {ns}
+        K->>Pod: tunnel target_port
+        K-->>PF: "Forwarding from 127.0.0.1:{local_port} ->"
+        PF->>PF: probe loopback TCP until ready
+        PF-->>API: PortForwardSession
+        API-->>User: { session_id, local_port, target_port, pod_name, started_at }
+    end
+    User->>API: open 127.0.0.1:{local_port} → reach server in pod
     User->>API: DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}
-    API->>Pod: tear down tunnel
+    API->>PF: Stop(runId, sessionId) → kill kubectl
 ```
 
 ## Security properties

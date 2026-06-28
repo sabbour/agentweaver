@@ -22,7 +22,7 @@ Keeping them distinct is the most important idea in this document: **A2A is
 execution transport, not a way for two agents to talk.**
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TB
     subgraph TEAM["Team-level coordination"]
         direction LR
@@ -131,7 +131,7 @@ are retained, not deleted, so the record explains not just what the team accepte
 but what it declined.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     A["Agent run<br/>observation"] --> I["DecisionInboxEntry<br/>durable proposal · pending"]
     I --> S{{"Scribe / review"}}
@@ -196,7 +196,7 @@ full decomposition logic is in the
 [Coordinator Internals](./coordinator-internals.md).
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     G["Goal"] --> O["OutcomeSpec<br/>intent contract"]
     O -->|"confirm"| WP["WorkPlan<br/>subtask DAG"]
@@ -268,12 +268,16 @@ When an agent turn runs in a distributed deployment, the **worker** keeps the
 entire orchestration graph — the workflow, the human-in-the-loop gates, the
 resume logic — in process. Only the **leaf agent turn** is sent over A2A to an
 **AgentHost** running inside a **sandbox pod**, which executes the model turn and
-its tools, then streams the turn's output back. The orchestration graph never
-crosses the boundary; A2A carries one turn's chat/output stream and nothing more.
-A2A is the sole worker→AgentHost wire transport for that seam.
+its tools, then streams the turn's output back. On the worker side the leaf is a
+`RemoteAgentProxy` (an `A2AAgent` over the A2A **HTTP+JSON** transport); the pod
+hosts an `A2ATurnBridgeAgent` (MAF name `agentweaver-pod`) wrapping its singleton
+`CopilotAIAgent`. `RemoteWorkflowAgentFactory` remotes **all four** workflow roles
+this way. The orchestration graph never crosses the boundary; A2A carries one
+turn's chat/output stream and nothing more. A2A is the sole worker→AgentHost wire
+transport for that seam.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     subgraph Worker["Worker"]
         WF["Orchestration graph<br/>gates · resume · assembly"]
@@ -373,7 +377,7 @@ is the price of keeping policy deliberate.
 ## Putting it together
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant H as Human
     participant C as Coordinator

@@ -23,6 +23,12 @@ When an unauthenticated user opens the web UI, Agentweaver first checks whether 
 
 The sign-in page is intentionally sparse:
 
+![Agentweaver sign-in page with logo, title, tagline, and Sign in with GitHub button](/screenshots/signin-page.png)
+
+> 📸 **Screenshot — `signin-page.png`**
+> *Shows:* the unauthenticated sign-in page with the `/agentweaver.png` logo, the **Agentweaver** title, the tagline **Build workflows from specialized agents**, and the single dark **Sign in with GitHub** button (the button navigates to `/auth/github/authorize` on click).
+> *Path:* Open Agentweaver while signed out → the `SignInPage` renders at `/`.
+
 - the Agentweaver logo;
 - the title **Agentweaver**;
 - the tagline **Build workflows from specialized agents**;
@@ -92,6 +98,12 @@ Every API request made by the web client asks the session token provider for the
 ### Signed-in shell
 
 Once signed in, the user sees the normal Agentweaver shell: left navigation, top bar, project switcher, status dot, and the GitHub account trigger. The GitHub account trigger shows the user's avatar and login. Opening it reveals **Sign out**.
+
+![Top bar showing the signed-in GitHub account trigger and sign-out menu](/screenshots/signed-in-topbar.png)
+
+> 📸 **Screenshot — `signed-in-topbar.png`**
+> *Shows:* the shell top bar with the `Alpha` badge, the project switcher, the API status dot, and the GitHub account trigger opened to reveal the avatar, login, and the **Sign out** action.
+> *Path:* Sign in → click the GitHub account trigger in the top-right of the top bar.
 
 The project gallery becomes the first practical onboarding step. If projects exist, the gallery shows project cards and creation actions. If no projects exist, it says:
 
@@ -209,6 +221,12 @@ The startup auth gate clears local session auth when the server does not confirm
 ### The sign-in page shows an error
 
 GitHub callback errors appear below **Sign in with GitHub**. Common causes are a denied GitHub authorization, a missing callback parameter, an expired state, interrupted code exchange, or required organization membership not being proven. Retrying usually fixes interrupted flows. If the error is about organization membership, the GitHub account must be added to the required organization or given access through the relevant SAML / team policy.
+
+![Sign-in page showing a GitHub authentication error message below the button](/screenshots/signin-error.png)
+
+> 📸 **Screenshot — `signin-error.png`**
+> *Shows:* the sign-in page with red error text rendered below the **Sign in with GitHub** button, sourced from the `auth=error&reason=...` query parameters after a failed GitHub callback.
+> *Path:* Open `/?auth=error&reason=Authentication%20failed.` (or return from GitHub with a denied/expired authorization).
 
 ### The GitHub project picker asks to connect
 

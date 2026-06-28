@@ -57,7 +57,7 @@ The operational wins are isolation and memory relief: the heavyweight model sess
 
 A few mental models keep distributed execution easy to reason about.
 
-**The pod is disposable; the run is durable.** Pods come and go. Durable resume does not live in the pod or in the A2A connection — it lives in Agentweaver's checkpoint store. When a run suspends on a review gate or a coordinator idles, the pod can be **checkpointed and released**, and a warm pod is re-claimed and rehydrated on resume. A user watching the run sees a normal pause at a gate, not a pod lifecycle event.
+**The pod is disposable; the run is durable.** Pods come and go. Durable resume does not live in the pod or in the A2A connection — it lives in the worker's checkpoint state (the worker's `CheckpointManager` plus the serialized session blob; the pod holds no database connection). When a run suspends on a review gate or a coordinator idles, the per-run pod can be **checkpointed and released** (`RunWatchLoopService` calls `ReleaseAgentHostPodAsync` when `Sandbox:ReleasePodOnSuspend=true`), and a fresh per-run pod is launched and rehydrated on resume. A user watching the run sees a normal pause at a gate, not a pod lifecycle event.
 
 **A dropped connection re-drives a turn, it does not lose it.** A2A's live stream has no mid-stream replay. If a pod or its connection drops mid-turn, the worker re-drives that turn from the last checkpoint. To a watcher this looks like the turn continuing; the timeline does not duplicate, because re-injection is idempotent. There is no manual recovery step for the common case.
 
@@ -67,11 +67,11 @@ A few mental models keep distributed execution easy to reason about.
 
 ```mermaid
 flowchart TD
-    Turn[Agent turn starts] --> Pod[Claim / warm pod]
+    Turn[Agent turn starts] --> Pod[Launch / claim per-run pod]
     Pod --> Run[Stream turn over A2A]
     Run -->|completes| Commit[Turn output committed]
     Run -->|suspend on review gate| Release[Checkpoint + release pod]
-    Release -->|human resumes| Rehydrate[Re-claim warm pod, rehydrate]
+    Release -->|human resumes| Rehydrate[Re-launch per-run pod, rehydrate]
     Rehydrate --> Run
     Run -->|mid-turn drop| Redrive[Re-drive from last checkpoint]
     Redrive --> Pod

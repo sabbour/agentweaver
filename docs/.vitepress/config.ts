@@ -1,19 +1,5 @@
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
-// Shared group prepended to every sidebar so all top-level documentation
-// sections are reachable from the left table of contents on any page
-// (VitePress sidebars are otherwise scoped to a single path prefix).
-const docSections = {
-  text: 'Documentation',
-  items: [
-    { text: 'Guide', link: '/guide/' },
-    { text: 'Reference', link: '/reference/api' },
-    { text: 'Architecture', link: '/architecture/overview' },
-    { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
-    { text: 'Experience', link: '/experience/' },
-  ],
-}
-
 export default withMermaid({
   title: 'Agentweaver',
   description: 'Orchestrate AI agent teams that build and ship code — with full observability and human oversight at every step.',
@@ -26,21 +12,29 @@ export default withMermaid({
     // relies on `{.class}`/`{#anchor}` syntax.
     attrs: { disable: true },
   },
-  mermaid: {},
+  mermaid: {
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      padding: 12,
+    },
+  },
   themeConfig: {
     logo: '/agentweaver.png',
+    // Top navbar is the section switcher; the right-hand outline/aside is
+    // disabled globally so content and diagrams use the full page width.
+    aside: false,
+    outline: false,
     nav: [
-      { text: 'Guide', link: '/guide/' },
-      { text: 'Reference', link: '/reference/api' },
-      { text: 'Architecture', link: '/architecture/overview' },
+      { text: 'Getting Started', link: '/guide/' },
+      { text: 'User Guide', link: '/experience/00-overview' },
       { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
-      { text: 'Experience', link: '/experience/' },
+      { text: 'Reference', link: '/reference/api' },
     ],
     sidebar: {
       '/guide/': [
-        docSections,
         {
-          text: 'Guide',
+          text: 'Concepts',
           items: [
             { text: 'What is Agentweaver?', link: '/guide/' },
             { text: 'Authentication', link: '/guide/authentication' },
@@ -55,14 +49,20 @@ export default withMermaid({
         {
           text: 'Setup',
           items: [
-            { text: 'Getting started', link: '/guide/getting-started' },
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Deploy to AKS', link: '/guide/deployment-aks' },
+            { text: 'AKS Architecture', link: '/architecture-aks' },
+          ],
+        },
+        {
+          text: 'Getting Started',
+          items: [
+            { text: 'Getting started', link: '/guide/getting-started' },
+            { text: 'Example walkthroughs', link: '/guide/example-scenarios' },
           ],
         },
       ],
       '/reference/': [
-        docSections,
         {
           text: 'Reference',
           items: [
@@ -74,50 +74,41 @@ export default withMermaid({
             { text: 'Memory', link: '/reference/memory' },
             { text: 'Agent communication', link: '/reference/agent-communication' },
             { text: 'Sandbox pods', link: '/reference/sandbox-pods' },
+            { text: 'Sandbox browser preview', link: '/reference/sandbox-browser-preview' },
             { text: 'Sandbox setup', link: '/reference/sandbox-setup' },
             { text: 'A2A transport', link: '/reference/a2a' },
             { text: 'Scaling & data layer', link: '/reference/scaling-data-layer' },
           ],
         },
       ],
-      '/architecture/': [
-        docSections,
-        {
-          text: 'Architecture',
-          items: [
-            { text: 'Overview', link: '/architecture/overview' },
-            { text: 'Agent Framework (MAF)', link: '/architecture/agent-framework' },
-            { text: 'Sandbox', link: '/architecture/sandbox' },
-            { text: 'Sandboxed execution', link: '/architecture/sandboxed-execution' },
-            { text: 'Events', link: '/architecture/events' },
-            { text: 'AKS Architecture', link: '/architecture-aks' },
-          ],
-        },
-      ],
       '/experience/': [
-        docSections,
         {
-          text: 'Experience',
+          text: 'Web',
           items: [
             { text: 'Overview', link: '/experience/00-overview' },
             { text: 'Onboarding & auth', link: '/experience/onboarding-auth' },
             { text: 'Projects', link: '/experience/projects' },
-            { text: 'Runs, board & watch', link: '/experience/runs-board-watch' },
+            { text: 'Runs board & watch', link: '/experience/runs-board-watch' },
             { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
-            { text: 'Review, workspace & merge', link: '/experience/review-workspace-merge' },
-            { text: 'Team, casting & memory', link: '/experience/team-casting-memory' },
+            { text: 'Review workspace & merge', link: '/experience/review-workspace-merge' },
+            { text: 'Team casting & memory', link: '/experience/team-casting-memory' },
             { text: 'Workflows & backlog', link: '/experience/workflows-backlog' },
             { text: 'Operations', link: '/experience/operations' },
             { text: 'Sandbox pod execution', link: '/experience/sandbox-pod-execution' },
+            { text: 'Sandbox browser preview', link: '/experience/sandbox-browser-preview' },
             { text: 'Distributed agents (A2A)', link: '/experience/a2a-distributed-agents' },
             { text: 'Scaling & operations', link: '/experience/scaling-operations' },
             { text: 'Agent communication', link: '/experience/agent-communication' },
+          ],
+        },
+        {
+          text: 'MCP (Experimental)',
+          items: [
             { text: 'MCP client', link: '/experience/mcp-client' },
           ],
         },
       ],
       '/deep-dive/': [
-        docSections,
         {
           text: 'Foundations',
           items: [
@@ -144,6 +135,8 @@ export default withMermaid({
           items: [
             { text: 'Sandbox', link: '/deep-dive/sandbox' },
             { text: 'Sandbox pod execution', link: '/deep-dive/sandbox-pod-execution' },
+            { text: 'Sandbox browser preview', link: '/deep-dive/sandbox-browser-preview' },
+            { text: 'Sandboxed execution', link: '/deep-dive/sandboxed-execution' },
             { text: 'A2A bridge', link: '/deep-dive/a2a-bridge' },
             { text: 'Git integration', link: '/deep-dive/git-integration' },
             { text: 'MCP server', link: '/deep-dive/mcp-server' },

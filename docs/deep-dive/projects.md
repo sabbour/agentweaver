@@ -249,7 +249,7 @@ See also: [Team & casting](./team-casting.md).
 
 Sandboxes execute work while constrained to the configured workspace mount. In Kubernetes, both the API and sandbox template mount the same persistent workspace volume. That gives sandboxes access to the project/worktree files they need while keeping them inside the expected storage boundary.
 
-See also: `docs/architecture/sandbox.md`.
+See also: [sandbox.md](./sandbox.md).
 
 ## API surface in concepts
 

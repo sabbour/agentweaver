@@ -98,6 +98,12 @@ The Artifact Browser is the reviewer's file-focused lens on a run. It appears as
 
 The **Changes** tab is the default review tab. It shows **Branch Changes** with total added and removed line counts, then a flat changed-file list. Each changed file row shows:
 
+![Review Changes tab showing branch changes and the changed-file list](/screenshots/review-changes-tab.png)
+
+> 📸 **Screenshot — `review-changes-tab.png`**
+> *Shows:* the **Changes** tab as the default review tab, with the **Branch Changes** header (total added/removed lines), a changed-file list where each row has a filename, `+12` / `-3` counts, and an `A` / `M` / `D` status badge with a status-colored icon.
+> *Path:* open a run awaiting review → **Changes** tab on the run's artifact view.
+
 - the file name;
 - added and removed line counts, such as `+12` and `-3`;
 - a status badge: `A` for added, `M` for modified, `D` for deleted;
@@ -116,6 +122,12 @@ Clicking a file in **Files** opens the same file viewer modal, but unchanged fil
 ### File viewer modal
 
 The modal is the focused reading surface. It opens at a large viewport size, has a **Close** button, and preserves the distinction between changed and unchanged files.
+
+![File viewer modal showing a diff with Diff, Preview, and Source toggles](/screenshots/review-file-viewer.png)
+
+> 📸 **Screenshot — `review-file-viewer.png`**
+> *Shows:* the file viewer modal (titled **Execution {shortId}**) opened from a changed-file row, defaulting to the **Diff** view, with **Preview** available for Markdown and **Source** for unchanged files, plus the close icon (`aria-label="Close"`) and footer **Close** button.
+> *Path:* in the **Changes** or **Files** tab → click a file row.
 
 Changed files show:
 
@@ -201,6 +213,12 @@ sequenceDiagram
 The **Workspace** page is a project-scoped, read-only file browser. It is not the review decision surface and it does not expose commit or merge controls. It exists so users can browse the project repository and active run worktrees without leaving Agentweaver.
 
 The page header says **Workspace** and the subtitle explains the scope: **Browse the project repository and active run worktrees, read-only.** The breadcrumb leads from **Projects** to the project and then to **Workspace**. The toolbar shows the current branch with a branch icon and a **Branch or worktree** dropdown.
+
+![Workspace page with file tree, read-only viewer, and branch dropdown](/screenshots/workspace-browser.png)
+
+> 📸 **Screenshot — `workspace-browser.png`**
+> *Shows:* the **Workspace** page titled "Workspace" / "Browse the project repository and active run worktrees, read-only.", the toolbar with the **Current branch** label (`aria-label="Current branch"`) and the **Branch or worktree** dropdown (`aria-label="Branch or worktree"`), the left file tree, the right read-only viewer, and the **Import to backlog** button shown when a Markdown file is selected.
+> *Path:* open a project → click **Workspace** in the left rail → `/projects/:projectId/workspace`.
 
 The dropdown contains the base project ref and any browsable run worktrees or coordinator assembly refs. Non-base refs can show a run-status badge, such as running, dispatched, completed, merged, failed, merge_failed, blocked, or parked. Selecting a different ref reloads the file tree and clears the open file.
 

@@ -158,7 +158,9 @@ The ladder, top to bottom:
 - **`lxc-native-linux`** — the Linux fallback when bubblewrap is absent but `lxc-exec` is present.
 - **`kubernetes-sandbox-claim` (K8s)** — selected automatically in-cluster. Each command runs in a warm
   pod obtained through a `SandboxClaim` custom resource (`extensions.agents.x-k8s.io/v1alpha1`), with Kata
-  VM isolation and a NetworkPolicy egress allowlist.
+  VM isolation and a NetworkPolicy egress allowlist. This is provisioned by the upstream **agent-sandbox
+  controller**, a distinct runtime from MXC — see [The agent-sandbox controller (MXC vs. the
+  controller)](#the-agent-sandbox-controller-mxc-vs-the-controller) below.
 - **`direct` (Passthrough)** — the last resort, chosen **only when nothing else is available**. It runs
   the command directly on the host with **no isolation layer**; the shell still runs, relying on whatever
   isolation the surrounding deployment already provides.
@@ -195,6 +197,70 @@ turn runs in-process and commands isolate via MXC or bubblewrap; in-cluster they
 runs in its own pod and commands isolate via the Kata-pod claim. The contract a reader has to remember is
 single: *one command in, one uniform result out, isolation chosen per host and announced by
 `sandbox.selected`.*
+
+## The agent-sandbox controller (MXC vs. the controller)
+
+In-cluster, the sandbox pod a run executes in is not created by Agentweaver directly and is **not** MXC.
+It is provisioned by the upstream **agent-sandbox controller** ([`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox)),
+which Agentweaver installs in `scripts/aks/10-create-cluster.sh` (default `v0.4.6`). The naming overlap
+trips people up, so pin it down:
+
+- **MXC** = `Sabbour.Mxc.Sdk` / `wxc-exec.exe`, the **local-host** command-isolation runtime behind the
+  `processcontainer`, WSL, and `lxc-exec` executors. It runs on a laptop or non-cluster host and has no
+  controller and no CRDs.
+- **agent-sandbox controller** = the **in-cluster** operator that turns a `SandboxClaim` into a bound,
+  Kata-isolated pod. The in-cluster `ISandboxExecutor` (`KubernetesSandboxExecutor`) talks only to this
+  controller's CRDs; there is no MXC binary in the cluster.
+
+So "how is the sandbox implemented with MXC?" has two honest answers depending on tier: **locally**, a
+command is isolated by MXC spawning a `wxc-exec.exe` sandbox process; **in-cluster**, a command (or a
+whole agent turn) runs in a pod the agent-sandbox controller bound for the run. Both present the identical
+`ISandboxExecutor` contract.
+
+### How the controller provisions a run's pod
+
+The three CRDs (all `extensions.agents.x-k8s.io/v1alpha1`) Agentweaver applies are:
+
+- **`SandboxTemplate`** (`k8s/sandbox-template.yaml`, `agentweaver-sandbox`) — the pod shape and hardening:
+  `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, read-only root
+  filesystem, `/workspace` PVC, and the A2A listener on container port `8088`.
+- **`SandboxWarmPool`** (`k8s/sandbox-warmpool.yaml`, `replicas: 3`) — keeps warm pods pre-built from that
+  template so a claim binds without a cold start.
+- **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.templateRef` and
+  `spec.ttl`. The controller adopts a warm pod and reports binding in the claim's `status`.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+sequenceDiagram
+    participant Exec as KubernetesSandboxExecutor
+    participant Claim as SandboxClaim (CR)
+    participant Ctrl as agent-sandbox controller
+    participant Pool as SandboxWarmPool
+    participant Pod as Kata sandbox pod
+    participant Reg as PodNameRegistry
+    Exec->>Claim: CreateClaimAsync(templateRef, ttl)
+    Claim->>Ctrl: reconcile new claim
+    Ctrl->>Pool: adopt a warm pod
+    Pool-->>Pod: pod assigned to claim
+    Ctrl-->>Claim: status.phase = Bound,<br/>status.sandbox.name = pod
+    loop poll every 2s
+        Exec->>Claim: WaitForBoundAsync (read status)
+    end
+    Claim-->>Exec: phase Bound → pod name
+    Exec->>Reg: Register(runId, podName)
+    opt AgentHost pod-per-run
+        Exec->>Pod: GetPodIpAsync → status.podIP
+        Exec->>Reg: RegisterAgentEndpoint(http[s]://podIP:8088/a2a/agent)
+    end
+    Note over Exec,Ctrl: claim delete (ad-hoc) or TTL →<br/>controller GCs pod + service
+```
+
+The executor reads the pod name from `status.sandbox.name` (the agent-sandbox controller's shape) and
+falls back to `status.podName`. For pod-per-run AgentHost pods it then polls the pod's `status.podIP` to
+build the A2A endpoint. Agentweaver never deletes pods itself — it deletes the *claim* (or lets the TTL
+expire) and the controller garbage-collects the pod and its service. Anything not visible in these
+manifests or the executor code (controller replica count, leader election, image, RBAC of the controller
+itself) is **operationally configured by the agent-sandbox release**, not specified by Agentweaver.
 
 ## The hybrid pod-granularity model
 
@@ -288,14 +354,26 @@ Default-deny egress governs traffic *out* of the pod. A separate, deliberate pat
 (a dev server, a built app, a debug endpoint), the run's pod can expose that port back through the API on
 demand, so a human can open a live preview scoped to exactly that run's pod.
 
-This is **Kubernetes-only** — it tunnels through the Kubernetes claim backend's pod, located by run id via
-the same `PodNameRegistry` the pod pill uses. It is initiated explicitly per port, lists and stops
-cleanly, and never widens the pod's own egress allowlist; it is an inbound tunnel the operator opens, not
-a capability the sandboxed agent can grant itself. The endpoints, the `PortForwardSessionDto` shape, and
-the K8s-only behavior are in
+This is **Kubernetes-only** — it tunnels through the agent-sandbox controller's pod, located by run id via
+the same `PodNameRegistry` the pod pill uses. The implementation (`PortForwardService`) shells out to
+`kubectl port-forward --address 127.0.0.1 pod/{podName} :{targetPort} -n {namespace}` (not the Kubernetes
+API), parses the chosen loopback port from kubectl's `Forwarding from 127.0.0.1:<port> ->` line, and
+probes TCP until ready. It returns a **`local_port` on the API host — not a public URL**; the web client's
+optional `preview_url`/`previewUrl` fields are not populated by the backend, and the UI says so honestly
+when no proxied URL is returned.
+
+The path is initiated explicitly per port, lists and stops cleanly, and never widens the pod's own egress
+allowlist; it is an inbound tunnel the operator opens, not a capability the sandboxed agent can grant
+itself. Sessions are tracked **in memory with no TTL** — capped at a default 3 per run and 20 globally —
+and are cleaned up explicitly (operator `DELETE`, run end via `RunWatchLoopService`, the kubectl process
+exiting, or shutdown). The endpoints, the `PortForwardSessionDto` shape, and the K8s-only behavior are in
 [Sandbox pods reference › preview port-forward](../reference/sandbox-pods.md#sandbox-preview-port-forward-feature-017);
 the user-facing flow is in
 [the experience doc](../experience/sandbox-pod-execution.md#sandbox-preview-reaching-a-server-inside-the-pod).
+
+> **Dedicated pages:** the browser preview now has its own first-class docs —
+> [Deep Dive](./sandbox-browser-preview.md), [Reference](../reference/sandbox-browser-preview.md), and
+> [User Guide](../experience/sandbox-browser-preview.md).
 
 ## The execution-mode flag and rollback
 

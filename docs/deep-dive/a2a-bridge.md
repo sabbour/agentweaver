@@ -28,7 +28,7 @@ Agentweaver remotes the **leaf**. This is the decision that makes everything els
 The crux question for any remoting design — "does the transport flatten our rich, typed event stream?" — is **avoided by construction**. Only the leaf agent's `AgentRunResponseUpdate` stream crosses, and that is exactly what A2A's streaming message surface carries natively.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     subgraph Worker["Worker process — MAF graph stays here"]
         Graph["MAF workflow graph"]
@@ -40,12 +40,12 @@ flowchart LR
         Proxy --> Stream
     end
     subgraph Pod["Sandbox pod — Kata-isolated"]
-        Host["AgentHost<br/>MapA2A-hosted leaf"]
+        Host["AgentHost<br/>A2ATurnBridgeAgent (MapA2AHttpJson)"]
         Copilot["CopilotAIAgent → Copilot SDK"]
         Tools["tool / shell / file exec"]
         Host --> Copilot --> Tools
     end
-    Proxy -- "A2A message:stream — leaf turn only" --> Host
+    Proxy -- "A2A message:stream (HTTP+JSON) — leaf turn only" --> Host
     Host -- "updates + token deltas + RunEvent DataParts" --> Proxy
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
@@ -72,13 +72,20 @@ The bridge is a pair of components on either side of the A2A wire.
 
 `RemoteAgentProxy` is an `AIAgent`. It is a **drop-in replacement** for the concrete leaf agent the worker's turn executor used to hold directly. The executor still calls the same surface — set up the agent, run the turn, stream updates — and never learns that the agent is now remote. Instead of holding a heavy Copilot SDK session, the proxy forwards each call over A2A and **re-emits** the pod's event and token-delta stream locally, so the rest of the worker graph (and the SSE relay to the browser) is unchanged.
 
-This proxy is realized by the framework-native A2A client (`A2AAgent : AIAgent`, or `IA2AClient.AsAIAgent()`) rather than a bespoke HTTP proxy. The `AIAgent` surface comes for free; the only thing Agentweaver writes is a thin adapter that maps its custom turn-setup parameters (worktree, repo, run id, model id, system prompt) onto the A2A init message.
+In code this proxy is `RemoteAgentProxy : IWorkflowTurnAgent`. It is realized by the framework-native A2A client — a `Microsoft.Agents.AI.A2A.A2AAgent` wrapping an `A2AHttpJsonClient` — rather than a bespoke HTTP proxy. The transport is A2A's **HTTP+JSON** profile (`MapA2AHttpJson` on the host, `A2AHttpJsonClient` on the worker), **not** JSON-RPC: the two A2A client transports are not interchangeable, and the JSON-RPC `A2AClient` would 404 against the HTTP+JSON routes. The only thing Agentweaver writes is a thin adapter that maps its turn-setup parameters (`AgentSetupParams`: worktree, repo, run id, model id, system prompt, project/agent identity, API broker URL/key, user id, and the per-turn `IsRevision` flag) onto the A2A message — encoded as the first `DataContent` part of the turn message, not a separate init call. `RemoteWorkflowAgentFactory` returns a `RemoteAgentProxy` for **all four** workflow roles (worker, RAI, Rubberduck, Scribe); the proxy holds **no** `ICheckpointStore` and the pod has **no** database connection.
 
 ### AgentHost (server side, in-pod)
 
-`AgentHost` is a minimal process baked into the sandbox image. It does **not** run a MAF graph. It hosts the leaf `CopilotAIAgent` directly via `MapA2A(agent, path, agentCard)` and exposes exactly two HTTP endpoints: the streaming message endpoint and the agent card. It receives a forwarded turn, sets up the real Copilot session, runs the turn, and streams agent updates and token deltas back. All tool, shell, and file execution happens **inside** the pod, where it is already Kata-isolated.
+`Agentweaver.AgentHost` is a minimal per-run process baked into the sandbox image. It does **not** run a MAF graph. It hosts a singleton `CopilotAIAgent`, but it does not expose it directly: the agent registered with the A2A server is `A2ATurnBridgeAgent` (a `DelegatingAIAgent` whose MAF name is `agentweaver-pod`), wired via `builder.AddAIAgent(name, factory, Singleton).AddA2AServer(...)` and mounted with `app.MapA2AHttpJson(builder, A2APath)`. The default path is `/a2a/agent`, so it exposes exactly two HTTP endpoints — `POST /a2a/agent/v1/message:stream` and `GET /a2a/agent/v1/card` — on port `8088` by default.
 
-MAF therefore stays **in-process on the worker only**. The pod is just a hosted leaf agent.
+The bridge exists to close two gaps a direct `CopilotAIAgent` registration would leave open:
+
+- **Inbound:** it decodes the inbound message's first `AgentSetupParams` `DataPart` and forwards its `IsRevision` flag into `CopilotAIAgent.RunTurnAsync`, so a revision turn resumes the session instead of starting fresh.
+- **Outbound:** it installs a per-turn channel as the runner's stream writer and re-emits each pod-side `RunEvent` back over A2A as a `DataContent` part, interleaved with the assistant text.
+
+The **run-scoped** setup — provisioning the real Copilot session, governance, and working directory — runs **once at pod startup**: `AgentHostStartupService` reads `AgentHostOptions` (injected as env vars at claim time), calls `CopilotAIAgent.SetupAsync` to completion, and only then flips a readiness flag. Until that flag is set, the listener returns `503` (with a `/healthz` liveness probe). The bridge never re-runs `SetupAsync`; it only swaps the per-turn stream writer and passes the per-turn `isRevision`. All tool, shell, and file execution happens **inside** the pod, where it is already Kata-isolated.
+
+MAF therefore stays **in-process on the worker only**. The pod is just a hosted leaf agent behind a thin bridge.
 
 ## 3. What actually crosses the wire
 
@@ -87,35 +94,37 @@ Only two things travel from worker to pod and back:
 1. **The turn input** — forwarded onto an A2A streaming message.
 2. **The agent's output** — its streaming updates and token deltas, returned over the same stream.
 
-There is one subtlety. Agentweaver's agent emits **rich `RunEvent`s** through a *side-channel* (a recording writer), not through the `AIAgent` return stream. Those events are what populate the run timeline. They must be encoded as A2A **`DataPart`s** on the streaming message and decoded back into `RunEvent`s on the worker, where they flow into the run stream store and out to the browser as SSE.
+There is one subtlety. Agentweaver's agent emits **rich `RunEvent`s** through a *side-channel* (a recording writer), not through the `AIAgent` return stream. Those events are what populate the run timeline. They are encoded as A2A **`DataContent` parts** (media type `application/x-agentweaver-run-event+json`) on the streaming message by the pod and decoded back into `RunEvent`s on the worker, where they flow into the run stream store and out to the browser as SSE. Both ends share one codec, `RunEventDataPartCodec`. (The per-turn `AgentSetupParams` payload uses a sibling media type, `application/x-agentweaver-agent-setup+json`.)
 
 This `RunEvent` codec is the **only shim the bridge owns** — and it is required by *any* transport. Even a hand-rolled HTTP/2+SSE design would have to serialize the same side-channel across the process boundary. A2A is not adding a translation tax here; it is supplying a standard envelope (`DataPart`) for a serialization that has to happen regardless. Because Agentweaver owns both ends — same team, same framework, same language — the encoding is lossless.
 
+> **Honest scope note.** Today the side-channel `RunEvent`s are forwarded **in-band** as A2A `DataPart`s on the same `message:stream` — the simplest path, and the one the worker decoder already supports with no new infrastructure. Fanning RunEvents out over an external bus (Event Hub / Service Bus / Redis pub-sub) for higher scale is a deliberate future option, not what ships today.
+
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     autonumber
+    participant Boot as AgentHostStartupService (pod boot)
     participant Graph as MAF graph (worker)
-    participant Proxy as RemoteAgentProxy (A2AAgent)
-    participant Host as AgentHost (MapA2A, pod)
+    participant Proxy as RemoteAgentProxy (A2AAgent + A2AHttpJsonClient)
+    participant Host as A2ATurnBridgeAgent (MapA2AHttpJson, pod)
     participant Agent as CopilotAIAgent (pod)
     participant Stream as RunStreamStore → SSE
 
+    Boot->>Agent: SetupAsync once at startup (run-scoped config), gate readiness
     Graph->>Proxy: SetupAsync(worktree, repo, runId, model, prompt)
-    Proxy->>Host: A2A init message (contextId)
-    Host->>Agent: SetupAsync (real Copilot session)
-    Graph->>Proxy: RunStreamingAsync(turn input)
-    Proxy->>Host: POST v1/message:stream
-    Host->>Agent: drive the turn
+    Proxy->>Proxy: resolve pod endpoint, create A2A session (contextId = runId)
+    Graph->>Proxy: RunTurnAsync(task, isRevision)
+    Proxy->>Host: POST /a2a/agent/v1/message:stream<br/>[AgentSetupParams DataPart (IsRevision) + task TextPart]
+    Host->>Agent: RunTurnAsync(task, isRevision)
     loop streaming updates
-        Agent-->>Host: AgentRunResponseUpdate + token deltas
-        Agent-->>Host: RunEvent (side-channel)
-        Host-->>Proxy: SSE chunk (updates + RunEvent DataParts)
+        Agent-->>Host: text deltas + RunEvent (side-channel)
+        Host-->>Proxy: SSE chunk (text + RunEvent DataParts)
         Proxy-->>Stream: re-inject in arrival order (monotonic seq)
     end
     Agent-->>Host: turn complete
     Host-->>Proxy: stream end
-    Proxy-->>Graph: AgentTurnOutput
+    Proxy-->>Graph: turn output text
     Note over Graph,Stream: worktree commit + diff stay on the worker (shared PVC)
 ```
 
@@ -145,7 +154,7 @@ This is the most important honesty in the design.
 
 A2A maintains a server-side conversation history keyed by `contextId`. That history is **ephemeral by design** — it lives in the pod's memory and dies with the pod. It is **not** durable resume. Agentweaver **deliberately bypasses it**.
 
-Durable resume stays where it has always been: on Agentweaver's **DB-backed `ICheckpointStore`**, plus the **serialized `CopilotAIAgent` session blob**. The reasoning:
+Durable resume stays where it has always been: on the worker's **`CheckpointManager`** (file-backed in P1, DB-backed in P2), plus the **serialized `CopilotAIAgent` session blob**. The reasoning:
 
 - The Copilot session already produces a serializable session blob. The pod forwards that blob to the worker, which persists it through a brokered, DB-backed checkpoint store — never on one pod's local disk.
 - Any worker can then read the same checkpoint. On pod death, the worker re-claims the run, restores the latest checkpoint blob, re-attaches or re-spawns a pod, and replays the session by deserializing it.
@@ -160,9 +169,9 @@ A2A `message:stream` has **no Last-Event-ID replay**. If the stream drops mid-tu
 Agentweaver's answer is not to ask A2A for replay it cannot give. Instead, on a mid-turn drop the worker **re-drives the whole turn from the last checkpoint**. Because checkpoints are durable and the session blob is serialized, re-driving is well-defined: restore, re-spawn, replay. Re-injection of the side-channel `RunEvent`s is sequence-based and idempotent, so re-driving a turn does not duplicate timeline entries. The turn is the unit of retry; the checkpoint is the recovery point.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
-    Start["Turn starts"] --> CK1[("ResilientCheckpointStore<br/>session blob + superstep state")]
+    Start["Turn starts"] --> CK1[("Worker CheckpointManager<br/>session blob + superstep state")]
     CK1 --> Stream["A2A message:stream in flight"]
     Stream -->|"stream completes"| Done["Commit turn output"]
     Stream -->|"mid-turn drop — no Last-Event-ID replay"| Reclaim["Worker re-claims run"]
@@ -206,7 +215,7 @@ A2A is a cross-vendor standard, which makes standardizing on it strategically so
 - No MAF event crosses the wire; therefore no MAF↔A2A translation layer exists.
 - Use A2A **message-mode only** — never open an A2A task.
 - The `RunEvent` side-channel codec (encode as `DataPart`, decode back) is the only owned shim, and it is transport-independent.
-- Durable resume is Agentweaver's DB-backed checkpoint store plus the serialized session blob. A2A `contextId` history is ephemeral and bypassed.
+- Durable resume is the worker's `CheckpointManager` (file-backed in P1, DB-backed in P2) plus the serialized session blob. A2A `contextId` history is ephemeral and bypassed.
 - A mid-turn drop re-drives the turn from the last checkpoint; re-injection is idempotent and sequence-based.
 - A2A is the sole wire transport. The rollback is the `in-api` flag, not a second protocol.
 - The preview dependency is pinned by version+hash and gated behind the execution-mode flag.
