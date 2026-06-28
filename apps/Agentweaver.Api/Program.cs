@@ -483,6 +483,17 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
     }
 }
 
+// Checkpoint store backend: Postgres deployments use a shared, concurrency-safe store so both API
+// replicas read/write the same checkpoints (no exclusive file lock, no shared-volume permission
+// dependency, genuine cross-pod resume). SQLite/dev falls back to the per-pod file store.
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    if (_provider is "postgres" or "postgresql")
+        builder.Services.AddSingleton<ICheckpointStoreFactory, PostgresCheckpointStoreFactory>();
+    else
+        builder.Services.AddSingleton<ICheckpointStoreFactory, FileCheckpointStoreFactory>();
+}
+
 // Run lease store: Postgres CAS-based for multi-replica; no-op for SQLite (single-replica safe).
 {
     var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";

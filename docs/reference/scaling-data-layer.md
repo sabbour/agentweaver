@@ -40,6 +40,7 @@ These already flow through the `Database:Provider` switch and carry generated EF
 | `SubtaskDependency` | Subtask DAG edges. |
 | `SteeringDirective` | Queued/applied steering directives. |
 | `McpRefreshToken` / `McpRevokedJti` / `McpClientRegistration` | MCP OAuth state with their respective unique keys. |
+| `WorkflowCheckpointRecord` | Shared MAF workflow checkpoints (`workflow_checkpoints`), PK `(store_name, session_id, checkpoint_id)`, `jsonb` payload. Postgres-only (`model.Ignore<>()`d on SQLite); replaces the per-pod file checkpoint store so both `replicas: 2` share checkpoints with no exclusive lock (see the [Agent Framework deep dive](../deep-dive/agent-framework.md#checkpointing-durable-resume)). |
 
 ### 1c. Not a database (no migration)
 
