@@ -2,6 +2,25 @@
 
 Use this guide to stand up the API, submit a run, watch it live, and approve the result.
 
+## Install (one command)
+
+The installer checks prerequisites, installs web and .NET dependencies, and launches the dev environment:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/asabbour/agentweaver/main/install.sh | bash
+```
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/asabbour/agentweaver/main/install.ps1 | iex
+```
+
+Both commands will clone the repo to `~/agentweaver` if you don't already have a local checkout. If you have already cloned the repo, run `bash install.sh` (or `.\install.ps1`) from the repo root instead.
+
+After the installer completes, skip to [Configure the API](#1-configure-the-api) below.
+
+---
+
 ## Prerequisites
 
 You need these tools before you start:

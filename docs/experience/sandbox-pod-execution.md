@@ -144,6 +144,10 @@ What to expect:
 The endpoints and the `PortForwardSessionDto` fields behind the dialog are in the
 [reference](../reference/sandbox-pods.md#sandbox-preview-port-forward-feature-017).
 
+> **Dedicated pages:** see the [Sandbox browser preview User Guide](./sandbox-browser-preview.md) for the
+> full step-by-step, the [Reference](../reference/sandbox-browser-preview.md) for the API, and the
+> [Deep Dive](../deep-dive/sandbox-browser-preview.md) for how the tunnel works.
+
 ## Suspend and resume, from the user's view
 
 Pod-per-run uses a **hybrid** lifecycle: the pod stays warm while an agent is actively reasoning, but it

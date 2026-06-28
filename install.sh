@@ -50,8 +50,25 @@ done
 # ── Locate repo root ───────────────────────────────────────────────────────────
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 # When piped through bash, BASH_SOURCE[0] may be empty; fall back to cwd.
+
+# NOTE: AGENTWEAVER_REPO_URL is ASSUMED — no remote is configured in this local repo.
+# The value below is the expected GitHub location. If you are using a fork, override:
+#   AGENTWEAVER_REPO_URL=https://github.com/YOUR_ORG/agentweaver.git curl -fsSL ... | bash
+AGENTWEAVER_REPO_URL="${AGENTWEAVER_REPO_URL:-https://github.com/asabbour/agentweaver.git}"
+
 if [[ ! -f "${INSTALL_DIR}/agentweaver.sln" && ! -f "${INSTALL_DIR}/global.json" ]]; then
-  die "install.sh must be run from (or piped while cwd is) the agentweaver repo root."
+  # ── Bootstrap: running piped (curl | bash) outside a checkout ───────────────
+  if ! command -v git &>/dev/null; then
+    die "git is not installed and no checkout was found. Install git then re-run."
+  fi
+  CLONE_DIR="${HOME}/agentweaver"
+  if [[ -f "${CLONE_DIR}/agentweaver.sln" || -f "${CLONE_DIR}/global.json" ]]; then
+    info "Found existing checkout at ${CLONE_DIR} — using it."
+  else
+    info "No checkout found. Cloning ${AGENTWEAVER_REPO_URL} → ${CLONE_DIR}"
+    git clone --depth 1 "${AGENTWEAVER_REPO_URL}" "${CLONE_DIR}"
+  fi
+  exec bash "${CLONE_DIR}/install.sh" "$@"
 fi
 REPO_ROOT="${INSTALL_DIR}"
 AKS_DIR="${REPO_ROOT}/scripts/aks"

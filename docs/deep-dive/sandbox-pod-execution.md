@@ -371,6 +371,10 @@ exiting, or shutdown). The endpoints, the `PortForwardSessionDto` shape, and the
 the user-facing flow is in
 [the experience doc](../experience/sandbox-pod-execution.md#sandbox-preview-reaching-a-server-inside-the-pod).
 
+> **Dedicated pages:** the browser preview now has its own first-class docs —
+> [Deep Dive](./sandbox-browser-preview.md), [Reference](../reference/sandbox-browser-preview.md), and
+> [User Guide](../experience/sandbox-browser-preview.md).
+
 ## The execution-mode flag and rollback
 
 Everything above is gated behind a single flag so the change is reversible at any moment:

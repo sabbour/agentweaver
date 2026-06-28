@@ -248,7 +248,7 @@ A shell command can hang, or a client can disconnect. The claim TTL gives the co
 
 ### Why run IDs map to pod names
 
-Run-scoped commands may need preview/debug support. When a command belongs to an Agentweaver run, the executor derives a stable claim name from the run ID and records the bound pod name. Preview endpoints can then locate the sandbox pod and establish `kubectl port-forward` sessions. Those sessions are bound to loopback, limited per run and globally, and cleaned up when the run lifecycle ends.
+Run-scoped commands may need preview/debug support. When a command belongs to an Agentweaver run, the executor derives a stable claim name from the run ID and records the bound pod name. Preview endpoints can then locate the sandbox pod and establish `kubectl port-forward` sessions. Those sessions are bound to loopback, limited per run and globally, and cleaned up when the run lifecycle ends. This is the foundation of the [sandbox browser preview](./sandbox-browser-preview.md) — see its [User Guide](../experience/sandbox-browser-preview.md) and [Reference](../reference/sandbox-browser-preview.md).
 
 ### Why ad-hoc and run-scoped cleanup differ
 

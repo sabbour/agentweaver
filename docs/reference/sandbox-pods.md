@@ -173,6 +173,11 @@ A run's executing pod name is tracked so the UI can show *where* a run is runnin
 
 ## Sandbox preview port-forward (Feature 017)
 
+> **Dedicated pages:** this feature now has its own [Reference](./sandbox-browser-preview.md),
+> [User Guide](../experience/sandbox-browser-preview.md), and
+> [Deep Dive](../deep-dive/sandbox-browser-preview.md). The summary below stays here for context within the
+> sandbox-pods surface.
+
 A **preview port-forward** exposes a port of a run's sandbox pod back through the API, so an operator can
 reach a server the agent started **inside** the pod (a dev server, a built app, a debug endpoint) as a
 live preview scoped to that one run's pod. `PortForwardService` shells out to

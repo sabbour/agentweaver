@@ -68,6 +68,11 @@ if ($Aks -and $Local) { Fail "-Aks and -Local are mutually exclusive." }
 $Mode = if ($Aks) { "aks" } else { "local" }
 
 # ── Locate repo root ───────────────────────────────────────────────────────────
+# NOTE: RepoUrl is ASSUMED — no remote is configured in this local repo.
+# If you are using a fork, set $env:AGENTWEAVER_REPO_URL before running.
+$RepoUrl = if ($env:AGENTWEAVER_REPO_URL) { $env:AGENTWEAVER_REPO_URL } `
+           else { "https://github.com/asabbour/agentweaver.git" }
+
 $RepoRoot = $PSScriptRoot
 if (-not $RepoRoot) {
     # Piped via iex — use the current directory
@@ -75,7 +80,23 @@ if (-not $RepoRoot) {
 }
 if (-not (Test-Path (Join-Path $RepoRoot "agentweaver.sln")) -and
     -not (Test-Path (Join-Path $RepoRoot "global.json"))) {
-    Fail "install.ps1 must be run from (or iex'd while the working directory is) the agentweaver repo root."
+    # ── Bootstrap: not inside a checkout — clone first ───────────────────────
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Fail "git is not installed and no checkout was found. Install git from https://git-scm.com/ then re-run."
+    }
+    $CloneDir = Join-Path $HOME "agentweaver"
+    if ((Test-Path (Join-Path $CloneDir "agentweaver.sln")) -or
+        (Test-Path (Join-Path $CloneDir "global.json"))) {
+        Write-Info "Found existing checkout at $CloneDir — using it."
+    } else {
+        Write-Info "No checkout found. Cloning $RepoUrl → $CloneDir"
+        git clone --depth 1 $RepoUrl $CloneDir
+        if ($LASTEXITCODE -ne 0) { Fail "git clone failed. Check your network and the repo URL." }
+    }
+    $RepoRoot = $CloneDir
+    # Re-invoke the cloned copy with the same parameters
+    & (Join-Path $CloneDir "install.ps1") @PSBoundParameters
+    exit $LASTEXITCODE
 }
 
 Write-Host ""
