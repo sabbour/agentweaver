@@ -42,10 +42,10 @@ public sealed class SandboxPreviewServiceClusterTests
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
-        // GET SandboxClaim -> Bound, pod resolved from status.sandbox.name.
+        // GET SandboxClaim -> Ready condition True, pod resolved from status.sandbox.name.
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
-            """{"apiVersion":"extensions.agents.x-k8s.io/v1alpha1","kind":"SandboxClaim","metadata":{"name":"c"},"status":{"phase":"Bound","sandbox":{"name":"agenthost-pod-zzz"}}}""");
+            """{"apiVersion":"extensions.agents.x-k8s.io/v1alpha1","kind":"SandboxClaim","metadata":{"name":"c"},"status":{"conditions":[{"type":"Ready","status":"True","reason":"Bound","message":"sandbox ready","lastTransitionTime":"2026-06-28T06:00:00Z"}],"sandbox":{"name":"agenthost-pod-zzz"}}}""");
         // Pod patch, Service create, HTTPRoute create all succeed (echoed).
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/", """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-zzz"}}""");
         handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
@@ -71,7 +71,7 @@ public sealed class SandboxPreviewServiceClusterTests
         var handler = new FakeKubeHandler();
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
-            """{"kind":"SandboxClaim","metadata":{"name":"c"},"status":{"phase":"Pending"}}""");
+            """{"kind":"SandboxClaim","metadata":{"name":"c"},"status":{"conditions":[{"type":"Ready","status":"False","reason":"Pending","message":"provisioning","lastTransitionTime":"2026-06-28T06:00:00Z"}]}}""");
 
         var svc = NewService(handler);
 

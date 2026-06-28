@@ -43,31 +43,58 @@ public static class SandboxClaimConventions
 
     /// <summary>
     /// Extracts the bound pod name from a SandboxClaim object's <c>status</c>: returns the pod
-    /// name only when <c>status.phase == "Bound"</c> and a pod name is present at
-    /// <c>status.sandbox.name</c> (primary) or <c>status.podName</c> (fallback); otherwise
-    /// <see langword="null"/> (claim not yet bound). Pure — safe to unit test without a cluster.
+    /// name only when the claim is ready and a pod name is present at <c>status.sandbox.name</c>;
+    /// otherwise <see langword="null"/> (claim not yet bound). Pure — safe to unit test without
+    /// a cluster.
+    ///
+    /// <para>
+    /// The agent-sandbox CRD (v1alpha1/v1beta1) has <b>no</b> <c>status.phase</c> field — the
+    /// controller signals readiness via a <c>Ready</c> <b>condition</b>
+    /// (<c>status.conditions[?(@.type=='Ready')].status == "True"</c>). The bound pod name is the
+    /// Sandbox object's name at <c>status.sandbox.name</c> (Sandbox name == pod name).
+    /// </para>
     /// </summary>
     public static string? TryGetBoundPodName(JsonElement root)
     {
         if (!root.TryGetProperty("status", out var status))
             return null;
 
-        var phase = status.TryGetProperty("phase", out var p) ? p.GetString() : null;
-        if (phase != "Bound")
+        if (!IsReady(status))
             return null;
 
-        string? podName = null;
-
-        // status.sandbox.name is the primary field (agent-sandbox controller shape).
+        // status.sandbox.name is the bound pod name (Sandbox object name == pod name).
         if (status.TryGetProperty("sandbox", out var sandbox) &&
             sandbox.TryGetProperty("name", out var sn))
-            podName = sn.GetString();
+        {
+            var podName = sn.GetString();
+            return string.IsNullOrEmpty(podName) ? null : podName;
+        }
 
-        if (string.IsNullOrEmpty(podName) &&
-            status.TryGetProperty("podName", out var pn))
-            podName = pn.GetString();
+        return null;
+    }
 
-        return string.IsNullOrEmpty(podName) ? null : podName;
+    /// <summary>
+    /// Returns <see langword="true"/> when the claim's <c>status</c> carries a <c>Ready</c>
+    /// condition with <c>status == "True"</c>. This is the authoritative readiness signal for the
+    /// agent-sandbox CRD (there is no <c>status.phase</c>).
+    /// </summary>
+    private static bool IsReady(JsonElement status)
+    {
+        if (!status.TryGetProperty("conditions", out var conditions) ||
+            conditions.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var cond in conditions.EnumerateArray())
+        {
+            if (cond.TryGetProperty("type", out var type) &&
+                string.Equals(type.GetString(), "Ready", StringComparison.Ordinal) &&
+                cond.TryGetProperty("status", out var s))
+            {
+                return string.Equals(s.GetString(), "True", StringComparison.Ordinal);
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

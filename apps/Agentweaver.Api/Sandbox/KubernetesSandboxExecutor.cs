@@ -286,8 +286,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                templateRef = _options.AgentHostTemplateRef,
-                ttl = $"{_options.TimeoutSeconds}s",
+                sandboxTemplateRef = new { name = _options.AgentHostTemplateRef },
+                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds },
                 // Per-run env vars for Agentweaver.AgentHost (injected into the pod spec
                 // by the sandbox controller if it supports the `env` field; otherwise the
                 // template or a mounted ConfigMap carries the static config and the runId
@@ -348,8 +348,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                templateRef = _options.TemplateRef,
-                ttl = $"{_options.TimeoutSeconds}s",
+                sandboxTemplateRef = new { name = _options.TemplateRef },
+                lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds },
             },
         };
 
@@ -359,8 +359,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
-    /// Polls every 2 s until <c>status.phase == "Bound"</c>; returns the pod name
-    /// from <c>status.sandbox.name</c> (preferred) or <c>status.podName</c>.
+    /// Polls every 2 s until the claim's <c>Ready</c> condition is <c>True</c>; returns the bound
+    /// pod name from <c>status.sandbox.name</c>.
     /// </summary>
     private async Task<string> WaitForBoundAsync(string claimName, CancellationToken ct)
     {

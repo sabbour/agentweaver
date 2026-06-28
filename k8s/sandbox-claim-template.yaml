@@ -6,5 +6,7 @@ metadata:
   name: run-{runId}
   namespace: agentweaver
 spec:
-  templateRef: agentweaver-sandbox
-  ttl: 600s
+  sandboxTemplateRef:
+    name: agentweaver-sandbox
+  lifecycle:
+    ttlSecondsAfterFinished: 600
