@@ -1,64 +1,85 @@
-# Data & Persistence — Deep Dive
+# Data & Persistence — Conceptual Deep Dive
 
-## Purpose & Scope
+## Purpose and Mental Model
 
-Agentweaver persists two related kinds of state:
+Agentweaver persists more than rows in a database. It persists the state needed to coordinate long-running agent work, recover after restarts, explain why work happened, and safely turn isolated file changes into repository changes.
 
-- **Operational/domain state**: projects, runs, workflow run envelopes, backlog tasks, run revisions, run event streams, and git worktree metadata.
-- **Team memory/orchestration state**: decisions, decision inbox entries, agent memory, open sessions, outcome specs, work plans, subtasks, steering directives, and MCP OAuth persistence.
+Think of the data layer as four cooperating persistence systems:
 
-This document focuses on the domain model in `packages/Agentweaver.Domain`, the API persistence layer in `apps/Agentweaver.Api`, the memory subsystem, git worktree persistence, and the Kubernetes data lifecycle.
+1. **Operational control plane** — the authoritative record of projects, runs, workflow envelopes, backlog tasks, review revisions, cast proposals, and merge state.
+2. **Memory and orchestration plane** — decisions, draft decisions, agent memories, sessions, run-event history, coordinator plans, steering directives, and MCP OAuth state.
+3. **Git state** — branches and worktrees that hold the actual file changes produced by agent runs.
+4. **Kubernetes storage lifecycle** — persistent volumes, SQLite files, migration startup, and backups.
 
-## Domain Model
+A rebuild should preserve the same separation of concerns: databases answer “what is the system state?”, git answers “what file state did this run produce?”, and exported `.squad` / `.agentweaver` files make selected memory visible to humans and agents.
 
-The core domain package uses small records/enums for durable concepts rather than EF entities. The principal records are:
+## Design Goals
 
-- `Project`: a persisted project with `ProjectId`, origin, working directory, default branch, owner, default model provider settings, lifecycle state, backlog pickup settings, workflow/review policy settings, sandbox profile, blueprint provenance, and allowed workflow ids (`packages/Agentweaver.Domain/Project.cs:3-14`, `packages/Agentweaver.Domain/Project.cs:16-68`).
-- `Run`: a single agent execution with repository/branch/model/task/user fields, status, timestamps, result, worktree path/branch, tree hash, diff, merge conflicts, project/model/team metadata, workflow linkage, merge commit, parent/subtask linkage, origin, retry provenance, and archive timestamp (`packages/Agentweaver.Domain/Run.cs:7-23`, `packages/Agentweaver.Domain/Run.cs:24-63`).
-- `WorkflowRun`: a stable job envelope for user-submitted work; it can point to one shared orchestration worktree for multi-agent workflows (`packages/Agentweaver.Domain/WorkflowRun.cs:3-22`).
-- `BacklogTask`: a project-scoped task with state, lexicographic order key, accountable capturer, claim/run linkage, workflow override, archive timestamp, and source-file idempotency marker (`packages/Agentweaver.Domain/BacklogTask.cs:3-28`, `packages/Agentweaver.Domain/BacklogTask.cs:30-42`).
-- `RunEvent`: an ordered event payload for run streaming (`packages/Agentweaver.Domain/RunEvent.cs:1-3`).
-- `RunStatus`: includes normal lifecycle states plus transient `Committing`/`Merging`, terminal `Merged`/`Declined`/`MergeFailed`, and child-run `AssembleReady` (`packages/Agentweaver.Domain/RunStatus.cs:3-33`).
-- `ProjectProviderSettings` stores the default model source and optional Copilot/Foundry model ids (`packages/Agentweaver.Domain/ProjectProviderSettings.cs:3-8`).
-- `SandboxPolicy` describes per-repository shell/network/destructive-command policy defaults (`packages/Agentweaver.Domain/SandboxPolicy.cs:3-13`, `packages/Agentweaver.Domain/SandboxPolicy.cs:23-40`, `packages/Agentweaver.Domain/SandboxPolicy.cs:79-89`).
+The persistence design optimizes for a single Agentweaver API instance coordinating many durable workflows:
+
+- **Recoverable runs**: after a process restart, Agentweaver should know which runs exist, where their worktrees are, what status they were in, and what events already happened.
+- **Auditable decisions**: durable team decisions and rejected/merged inbox items should explain the current operating rules.
+- **Safe isolation**: unapproved agent changes should live outside the main branch until review and merge.
+- **Low operational burden**: SQLite avoids running an external database for the default deployment.
+- **Clear write ownership**: the Kubernetes deployment uses one API replica and a ReadWriteOnce data volume, matching SQLite’s single-writer model.
+- **Evolvable memory schema**: the memory/orchestration model changes faster than the control-plane schema, so it uses EF Core migrations rather than hand-written SQL everywhere.
+
+The main trade-off is deliberate: simple local durability and easy deployment are favored over horizontal write scaling. If Agentweaver needed active-active API replicas, the SQLite/RWO assumptions would need to be revisited.
+
+## Conceptual Domain Model
+
+Agentweaver’s durable domain has two halves: **work execution** and **team memory**.
+
+### Work execution concepts
+
+- **Project**: a repository workspace plus its Agentweaver settings. It defines where work happens, which branch is default, who owns it, what model/provider defaults apply, which workflows are allowed, and what sandbox/review policies are active.
+- **Workflow run**: a stable envelope for a user-submitted job. A workflow can create one or many child runs and may own a shared orchestration worktree.
+- **Run**: one concrete agent execution. It records the prompt/task, model choice, submitting user, status, timestamps, worktree path, worktree branch, produced tree hash, diff, merge result, parent/child linkage, retry origin, and archive state.
+- **Backlog task**: a project-scoped unit of future work. It can move from backlog to ready to claimed, and a claimed task points to at most one run.
+- **Run revision**: immutable review feedback against a run. Revisions are append-only because they are part of the audit trail.
+- **Run event**: an ordered event in a run’s stream. Events power live UI updates and restart-safe replay.
 
 ```mermaid
 classDiagram
     class Project {
       ProjectId Id
-      string WorkingDirectory
+      string WorkspaceLocation
       string DefaultBranch
-      ProjectProviderSettings ProviderSettings
-      ProjectState State
-      string? DefaultWorkflowId
-      string? ActiveReviewPolicyName
+      string ModelDefaults
+      string WorkflowReviewPolicy
+      string SandboxProfile
     }
     class WorkflowRun {
-      string Id
-      ProjectId ProjectId
-      string Task
-      string? OrchestrationWorktreePath
+      WorkflowRunId Id
+      ProjectId Project
+      string UserTask
+      string SharedOrchestrationWorktree
     }
     class Run {
       RunId Id
-      ProjectId? ProjectId
-      string? WorkflowRunId
-      string? ParentRunId
-      string? SubtaskId
-      RunStatus Status
-      string? WorktreePath
-      string? WorktreeBranch
-      string? TreeHash
-      string? MergedCommitHash
+      Status
+      string TaskAndModel
+      string WorktreePathAndBranch
+      string ResultTreeHash
+      string MergeOutcome
+      string ParentSubtaskLinkage
     }
     class BacklogTask {
-      BacklogTaskId Id
-      ProjectId ProjectId
-      BacklogTaskState State
+      TaskId Id
+      ProjectId Project
+      State
       string OrderKey
-      RunId? RunId
+      RunId ClaimedRun
+    }
+    class RunRevision {
+      RunId Run
+      int RevisionNumber
+      string Reviewer
+      string SanitizedComment
+      string PreviousTreeHash
     }
     class RunEvent {
+      RunId Run
       int Sequence
       string Type
       object Payload
@@ -68,206 +89,371 @@ classDiagram
     Project "1" --> "many" Run
     Project "1" --> "many" BacklogTask
     WorkflowRun "1" --> "many" Run
-    BacklogTask "0..1" --> "0..1" Run
+    Run "1" --> "many" RunRevision
     Run "1" --> "many" RunEvent
     Run "1" --> "many" Run : parent/child
+    BacklogTask "0..1" --> "0..1" Run
 ```
 
-### Memory/orchestration entities
+### Team memory and orchestration concepts
 
-The EF-backed memory model lives in `apps/Agentweaver.Api/Memory`:
-
-- `Decision`: active/superseded/archived team decisions, optionally self-linked by `SupersededById`; tags are comma-separated (`apps/Agentweaver.Api/Memory/Decision.cs:5-18`).
-- `DecisionInboxEntry`: draft decisions/learnings/patterns/updates with status `pending`, `merged`, or `rejected`, and an optional link to the promoted decision (`apps/Agentweaver.Api/Memory/DecisionInboxEntry.cs:5-19`).
-- `AgentMemory`: per-agent memory entries of type `core_context`, `learning`, `pattern`, or `update`; `Tags` uses comma delimiters and `cross-team` enables cross-agent sharing (`apps/Agentweaver.Api/Memory/AgentMemory.cs:5-16`).
-- `SessionContext`: one project session record with focus, active issues JSON, summary, serialized state, and start/end timestamps (`apps/Agentweaver.Api/Memory/SessionContext.cs:5-15`).
-- `OutcomeSpec`, `WorkPlan`, `Subtask`, `SubtaskDependency`, and `SteeringDirective` persist coordinator planning, decomposition, dependencies, assembly, recovery, and human steering state (`apps/Agentweaver.Api/Memory/OutcomeSpec.cs:5-18`, `apps/Agentweaver.Api/Memory/WorkPlan.cs:5-34`, `apps/Agentweaver.Api/Memory/Subtask.cs:5-53`, `apps/Agentweaver.Api/Memory/SubtaskDependency.cs:5-10`, `apps/Agentweaver.Api/Memory/SteeringDirective.cs:5-15`).
+- **Decision**: an accepted rule or fact for the project. Architectural and scope decisions become “boundaries” and outrank other memory.
+- **Decision inbox entry**: a proposed decision, learning, pattern, or update. It remains durable whether merged or rejected, so the team can audit why something did or did not become policy.
+- **Agent memory**: reusable context associated with a named agent. Some entries are private to that agent; entries tagged `cross-team` can be injected into other agents’ context.
+- **Session context**: the current work focus for a project. It captures active issues, summary, and serialized state. At most one session should be considered “current” for a project.
+- **Outcome spec / work plan / subtask / dependency**: coordinator planning records. They describe what successful completion means, how the work was decomposed, how subtasks depend on each other, and how assembly/recovery should proceed.
+- **Steering directive**: human guidance injected into an active coordinator workflow.
+- **MCP OAuth state**: refresh tokens, revoked JWT IDs, and dynamic client registrations needed for MCP authentication flows.
 
 ```mermaid
 erDiagram
-    PROJECT ||--o{ DECISION : scopes
-    PROJECT ||--o{ DECISION_INBOX : scopes
-    PROJECT ||--o{ AGENT_MEMORY : scopes
-    PROJECT ||--o{ SESSION_CONTEXT : scopes
-    PROJECT ||--o{ OUTCOME_SPEC : scopes
-    OUTCOME_SPEC ||--o{ WORK_PLAN : owns
+    PROJECT ||--o{ DECISION : owns
+    PROJECT ||--o{ DECISION_INBOX : reviews
+    PROJECT ||--o{ AGENT_MEMORY : remembers
+    PROJECT ||--o{ SESSION_CONTEXT : tracks
+    PROJECT ||--o{ OUTCOME_SPEC : defines
+    OUTCOME_SPEC ||--o{ WORK_PLAN : plans
     WORK_PLAN ||--o{ SUBTASK : decomposes
-    SUBTASK ||--o{ SUBTASK_DEPENDENCY : depends
-    SUBTASK ||--o{ SUBTASK_DEPENDENCY : required_by
+    SUBTASK ||--o{ SUBTASK_DEPENDENCY : depends_on
     DECISION ||--o{ DECISION : supersedes
     DECISION ||--o{ DECISION_INBOX : promoted_from
 
     DECISION {
-      int Id PK
-      string ProjectId
-      string AgentName
-      string Type
-      string Status
-      int SupersededById FK
+      int id PK
+      string project_id
+      string agent_name
+      string type
+      string status
+      int superseded_by_id FK
     }
     DECISION_INBOX {
-      int Id PK
-      string ProjectId
-      string Slug UK
-      string Status
-      int DecisionId FK
+      int id PK
+      string project_id
+      string slug UK
+      string type
+      string status
+      int decision_id FK
     }
     AGENT_MEMORY {
-      int Id PK
-      string ProjectId
-      string AgentName
-      string Type
-      string Importance
-      string SessionId
-      string Tags
+      int id PK
+      string project_id
+      string agent_name
+      string type
+      string importance
+      string tags
+      string session_id
     }
     SESSION_CONTEXT {
-      int Id PK
-      string ProjectId
-      string SessionId UK
-      string FocusArea
-      string SerializedState
-      datetime EndedAt
+      int id PK
+      string project_id
+      string session_id UK
+      string focus_area
+      string active_issues_json
+      datetime ended_at
+    }
+    OUTCOME_SPEC {
+      int id PK
+      string project_id
+      string coordinator_run_id
+    }
+    WORK_PLAN {
+      int id PK
+      int outcome_spec_id FK
+      string coordinator_run_id
+      string assembly_stage
+    }
+    SUBTASK {
+      int id PK
+      int work_plan_id FK
+      string status
+      string agent_name
+    }
+    SUBTASK_DEPENDENCY {
+      int subtask_id FK
+      int depends_on_subtask_id FK
     }
 ```
 
-## Persistence Layer
+## Why Two SQLite Databases?
 
-Agentweaver currently has **two SQLite-backed persistence tracks**:
+Agentweaver uses two SQLite-backed stores by default:
 
-1. **Main operational SQLite (`agentweaver.db`)** uses hand-written ADO.NET stores via `Microsoft.Data.Sqlite`. `SqliteDb` owns the file, creates schema, applies idempotent `ALTER TABLE` migrations, enables WAL, foreign keys, and a busy timeout per connection (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:5-11`, `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:15-35`, `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:38-48`, `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:53-58`). It creates core tables for `runs`, append-only `run_revisions`, `projects`, `workflow_runs`, and `backlog_tasks` (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:186-288`). `SqliteProjectStore`, `SqliteRunStore`, `SqliteWorkflowRunStore`, and `SqliteBacklogTaskStore` are registered as singletons in `Program.cs` (`apps/Agentweaver.Api/Program.cs:63-66`, `apps/Agentweaver.Api/Program.cs:157-159`, `apps/Agentweaver.Api/Program.cs:175-177`).
-2. **EF Core memory database (`memory.db`)** uses `MemoryDbContext`. It is registered as scoped and defaults to SQLite at `memory.db` next to `Database:Path`; configuration can switch to SQL Server or PostgreSQL (`apps/Agentweaver.Api/Program.cs:213-239`). The API package references EF Core SQLite plus SQL Server/PostgreSQL providers (`apps/Agentweaver.Api/Agentweaver.Api.csproj:12-18`). On startup the API opens the SQLite EF connection, sets WAL and busy timeout, handles pre-migration databases, and then always runs `MigrateAsync()` (`apps/Agentweaver.Api/Program.cs:267-324`). The API Dockerfile builds a `MemoryDbContext` EF migration bundle, and the Kubernetes API deployment runs that bundle in an initContainer before the app starts (`apps/Agentweaver.Api/Dockerfile:17-26`, `k8s/api-deployment.yaml:36-68`).
+1. **`agentweaver.db`** for stable operational state.
+2. **`memory.db`** for memory, orchestration, run events, and OAuth state.
 
-`MemoryDbContext` exposes DbSets for decisions, inbox, memory, session context, run events, outcome specs, work plans, subtasks, subtask dependencies, steering directives, and MCP OAuth tables (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:7-21`). Its model configuration adds key indexes and relationships:
+This split is intentional. The control-plane store is hand-written SQL and conservative: it owns the core lifecycle facts that must be updated predictably during run orchestration. The memory/orchestration plane evolves more quickly and benefits from EF Core’s model relationships and migrations. Keeping it in a separate file avoids coupling EF migrations to the ADO.NET store.
 
-- decisions by `(ProjectId, Status)` and `(ProjectId, AgentName)`, plus optional self-FK `SupersededById` (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:25-31`);
-- inbox by `(ProjectId, Status)`, unique `(ProjectId, Slug)`, and optional FK to `Decision` (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:32-38`);
-- agent memory by `(ProjectId, AgentName)` and `(ProjectId, Type)` (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:39-40`);
-- sessions by `(ProjectId, EndedAt)` and unique `(ProjectId, SessionId)` (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:41-42`);
-- run events by `RunId` and unique `(RunId, Sequence)` (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:43-44`);
-- outcome/work-plan/subtask/dependency cascade/restrict relationships (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:45-72`);
-- steering and MCP OAuth indexes (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:73-80`).
+SQLite is a good fit for the current deployment because:
 
-### Durable run events
+- Agentweaver runs as a **single API writer**.
+- Kubernetes mounts the data volume as **ReadWriteOnce**.
+- WAL mode allows readers and one writer to coexist better than rollback journal mode.
+- Busy timeouts make short write contention less fragile.
+- The database files are easy to mount, inspect, and back up.
 
-Run event persistence is intentionally in `memory.db`, not `agentweaver.db`. `SqliteRunEventStream` implements a two-layer stream: synchronous SQLite write-through for durability, then an in-process bounded channel for low-latency fan-out (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:12-29`). Its constructor derives the same `memory.db` path as `Program.cs` (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:61-75`), and each append writes before publishing (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:87-94`). Replays read persisted rows in sequence order (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:230-259`).
+The cost is that SQLite is not a distributed coordination system. Cross-pod writes, multi-replica API deployments, and high write concurrency would require a server database or a different locking model.
 
-## Schema & Migrations
+## Operational Store: `agentweaver.db`
 
-### EF Core migrations (`memory.db`)
+The operational store is the source of truth for the run control plane. If rebuilding Agentweaver, design this database around **state transitions and invariants**, not around object persistence.
 
-| Migration | Adds / changes | Source |
-|---|---|---|
-| `20260616063937_AddRunEvents` | Creates `AgentMemory`, `DecisionInbox`, `Decisions`, `RunEvents`, `SessionContexts`; adds indexes for memory, inbox, decisions, run events, and sessions. | `apps/Agentweaver.Api/Migrations/20260616063937_AddRunEvents.cs:14-167` |
-| `20260617194113_AddOutcomeSpec` | Creates `OutcomeSpecs` and `(ProjectId, CoordinatorRunId)` index. | `apps/Agentweaver.Api/Migrations/20260617194113_AddOutcomeSpec.cs:14-41` |
-| `20260617224038_AddCoordinatorWorkPlan` | Creates `SteeringDirectives`, `WorkPlans`, `Subtasks`, `SubtaskDependencies`; wires FKs from work plans to outcome specs and subtasks/dependencies to subtasks. | `apps/Agentweaver.Api/Migrations/20260617224038_AddCoordinatorWorkPlan.cs:14-145` |
-| `20260618092606_AddWorkPlanAssemblyStage` | Adds nullable `AssemblyStage` and `AssemblyStartedAt` to `WorkPlans`. | `apps/Agentweaver.Api/Migrations/20260618092606_AddWorkPlanAssemblyStage.cs:14-24` |
-| `20260622232717_AddSubtaskRecovery` | Adds `RecoveryAttempts` and `RecoveryGuidance` to `Subtasks`. | `apps/Agentweaver.Api/Migrations/20260622232717_AddSubtaskRecovery.cs:13-24` |
-| `20260625004704_AddSubtaskAgentCharter` | Adds nullable `AgentCharter` to `Subtasks`. | `apps/Agentweaver.Api/Migrations/20260625004704_AddSubtaskAgentCharter.cs:8-17` |
-| `20260625192342_AddWorkPlanWorkflowId` | Adds nullable `WorkflowId` to `WorkPlans`. | `apps/Agentweaver.Api/Migrations/20260625192342_AddWorkPlanWorkflowId.cs:8-17` |
-| `20260625210254_FixMissingSchemaFields` | Adds `SessionContexts.SerializedState`, `Decisions.SupersededById`, `DecisionInbox.DecisionId`, `AgentMemory.SessionId`; changes inbox uniqueness to `(ProjectId, Slug)`; adds FKs for promoted and superseded decisions. | `apps/Agentweaver.Api/Migrations/20260625210254_FixMissingSchemaFields.cs:13-70` |
-| `20260626174307_AddMcpRefreshTokens` | Creates `McpRefreshTokens` and `McpRevokedJtis` with token/jti/expiry indexes. | `apps/Agentweaver.Api/Migrations/20260626174307_AddMcpRefreshTokens.cs:14-79` |
-| `20260626175343_AddMcpClientRegistrations` | Creates `McpClientRegistrations` and unique `ClientId` index. | `apps/Agentweaver.Api/Migrations/20260626175343_AddMcpClientRegistrations.cs:14-35` |
+It should hold:
 
-Current EF schema summary: `memory.db` contains team memory (`Decisions`, `DecisionInbox`, `AgentMemory`, `SessionContexts`), durable event stream (`RunEvents`), coordinator planning (`OutcomeSpecs`, `WorkPlans`, `Subtasks`, `SubtaskDependencies`, `SteeringDirectives`), and MCP OAuth/token registration state (`McpRefreshTokens`, `McpRevokedJtis`, `McpClientRegistrations`) as exposed by `MemoryDbContext` (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:9-21`).
+- **Projects**: repository/workspace identity and project-level defaults.
+- **Runs**: lifecycle state, worktree metadata, results, tree hashes, diffs, merge conflicts, review wait accounting, parent/subtask links, retry provenance, and archive state.
+- **Workflow runs**: durable envelopes around user-submitted workflows, including shared orchestration worktree metadata.
+- **Backlog tasks**: ordered project work items, claim state, and run linkage.
+- **Run revisions**: immutable review feedback history.
+- **Cast proposals**: persisted casting proposals that should survive API restarts.
 
-### Main SQLite schema (`agentweaver.db`)
+### Consistency model
 
-The hand-written schema creates:
+Operational writes should be small, explicit, and guarded by invariants:
 
-- `runs`: run lifecycle and review/worktree columns (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:186-206`). Later idempotent migrations add result/worktree/tree/diff/project/model/team/workflow/merge/parent/subtask/review/origin/retry/archive columns (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:60-95`, `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:126-129`). `SqliteRunStore.InsertAsync` persists the domain run fields into that table (`apps/Agentweaver.Api/Infrastructure/SqliteRunStore.cs:19-58`).
-- `run_revisions`: append-only review revision history, protected by no-update/no-delete triggers (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:208-229`).
-- `projects`: project metadata and model defaults, later extended with heartbeat, workflow, review policy, sandbox, blueprint, and allowed workflow fields (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:231-247`, `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:96-124`). `SqliteProjectStore.InsertAsync` writes the extended project shape (`apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs:19-62`).
-- `workflow_runs`: stable workflow envelopes, later extended with `orchestration_worktree_path` for shared coordinator worktrees (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:249-256`, `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:133-136`). `SqliteWorkflowRunStore` writes and reads that orchestration path (`apps/Agentweaver.Api/Infrastructure/SqliteWorkflowRunStore.cs:11-26`, `apps/Agentweaver.Api/Infrastructure/SqliteWorkflowRunStore.cs:29-63`).
-- `backlog_tasks`: project-scoped board tasks with FK to projects, ordered-state indexes, uniqueness for unclaimed order keys, and one-task-to-at-most-one-run invariant (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:258-286`). `SqliteBacklogTaskStore` documents project scoping, conditional updates, order-key retry, and atomic claim+reserve behavior (`apps/Agentweaver.Api/Infrastructure/SqliteBacklogTaskStore.cs:8-13`).
-- `cast_proposals`: persisted cast proposals (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:138-151`).
+- **Run status changes are controlled transitions**, not arbitrary updates. Merge and review flows rely on compare-and-set style behavior so two actors do not advance the same run inconsistently.
+- **Backlog claiming is atomic**: moving a task into a claimed state and reserving the associated run must happen together or not at all.
+- **A backlog task can point to at most one run**. This prevents duplicated execution for the same claimed task.
+- **Active backlog order keys are unique per project/state** for unclaimed work, so ordered board operations remain deterministic.
+- **Run revisions are append-only**. Review comments are evidence and should not be silently edited or deleted.
+- **Worktree metadata is durable before work begins**. If the process restarts, the system can find or recreate the run’s worktree from stored path/branch data.
 
-## Memory Layers
+### Migration approach
 
-The verified memory hierarchy has four layers, assembled by `MemoryContextCompiler`: **decisions**, **core context**, **learnings/patterns**, and **current open session** (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:7-11`, `apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:54-90`). It applies item and approximate token budgets from `MemoryContext:*` or `Memory:*`, defaulting to 20 items and ~4000 tokens (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:14-16`, `apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:44-52`).
+The operational database uses a bootstrap-and-patch model:
 
-### 1. Decisions / boundaries
+1. Create missing tables if they do not exist.
+2. Apply idempotent schema changes for newer columns or indexes.
+3. Ignore “already exists” outcomes where safe.
 
-Active `architectural` and `scope` decisions are loaded first, sorted by creation time, and rendered as `## Boundaries and Decisions`; the emitted text explicitly says these are non-negotiable and take precedence (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:54-62`, `apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:189-203`). `CompileDecisionsAsync` can render only this layer for child worker prompts (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:163-187`).
+This model is simple and robust for additive SQLite changes. Its trade-off is that complex schema refactors require extra care because there is no full migration history table for this store.
 
-Decisions can be created directly or promoted from the inbox. Direct creation normalizes comma-delimited tags and exports memory files after saving (`apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:276-318`). Inbox submission upserts a pending entry by `(ProjectId, Slug)` and exports after writes (`apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:34-98`). Merge/promote wraps promotion in a transaction, creates the active `Decision`, links `DecisionInbox.DecisionId`, and exports (`apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:131-160`, `apps/Agentweaver.Api/Memory/DecisionPromotion.cs:23-49`). Rejection retains audit history by setting `Status = "rejected"` rather than deleting (`apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:195-219`).
+Where this lives: `apps/Agentweaver.Api/Infrastructure`, `packages/Agentweaver.Domain`.
 
-### 2. Core context
+## Memory and Orchestration Store: `memory.db`
 
-Agent charters seed `AgentMemory` entries of type `core_context` and `high` importance when casting adds non-built-in team members (`apps/Agentweaver.Api/Casting/CastingService.cs:1121-1138`). The compiler loads only the target agent's `core_context` entries for layer 2 (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:64-71`).
+`memory.db` is named after memory, but it is broader than that. It stores human/team memory, durable run events, coordinator planning, steering directives, and MCP OAuth state.
 
-### 3. Learnings / patterns
+It should hold:
 
-High-importance `learning` and `pattern` entries are selected for the target agent, plus cross-agent entries tagged with `,cross-team,` (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:73-83`). Candidate memories are sorted by importance and recency, then bounded by item count and approximate character budget (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:119-150`).
+- **Decisions** and **decision inbox** entries.
+- **Agent memory** and **session context**.
+- **Run events** for replayable streams.
+- **Outcome specs**, **work plans**, **subtasks**, and **subtask dependencies**.
+- **Steering directives**.
+- **OAuth refresh tokens**, revoked JWT IDs, and MCP client registrations.
 
-Workers are instructed to record only significant reusable learnings/patterns and notable decisions via the `WorkerMemoryProtocol`, which is appended to worker prompts (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:35-52`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:551-559`). The memory endpoint records entries with normalized comma-delimited tags, optional session id, default importance `medium`, and exports after saving (`apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:92-133`).
+### Why EF Core here?
 
-After terminal project runs, `PostRunScribeService` closes the memory flywheel: it auto-merges pending `learning`, `pattern`, and `update` inbox entries created during the run, leaves architectural/scope items for review, appends the run outcome to the open session summary, and exports the updated memory (`apps/Agentweaver.Api/Runs/PostRunScribeService.cs:9-17`, `apps/Agentweaver.Api/Runs/PostRunScribeService.cs:40-125`). The watch loop fires this service after merged/completed/no-change/declined/failed terminal paths, but child `AssembleReady` runs explicitly skip scribe/merge/cleanup (`apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:252-267`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:281-290`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:308-322`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:373-384`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:388-402`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:325-370`).
+The memory schema is relational and evolves frequently. EF Core gives this side of the system:
 
-### 4. Open session
+- explicit entity relationships;
+- indexes for common project/status/agent lookups;
+- migrations with history;
+- a path to SQL Server or PostgreSQL for this database when deployment needs outgrow SQLite;
+- simpler transactional code for inbox promotion and planning updates.
 
-The current open `SessionContext` is the most recent row for a project with `EndedAt == null`; it contributes focus area, active issues, and summary (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:85-114`). Creating a session closes existing open sessions in the same transaction, enforces unique `(ProjectId, SessionId)`, and exports (`apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:182-238`). Updating the current or named session can alter focus, active issues, summary, serialized state, or end the session, then exports (`apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:240-274`, `apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:325-355`). Casting starts an initial session if none is open (`apps/Agentweaver.Api/Casting/CastingService.cs:1141-1156`).
+SQLite remains the default provider. SQL Server and PostgreSQL support are configuration options for the EF-backed store, but the production Kubernetes deployment still uses SQLite.
 
-### Filesystem export/import
+### Core invariants
 
-Although SQLite is authoritative for API reads, memory is mirrored to repository files. `MemoryExportHelpers.TryExportAsync` materializes decisions, pending inbox, agent memory, and the current session, then calls `SquadMemoryExporter` (`apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:442-473`). The exporter writes:
+A rebuild should preserve these rules:
 
-- `.squad/decisions.md` and `.squad/decisions/inbox/{slug}.md` (`packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:46-78`);
-- `.squad/agents/{agent}/history.md` for `learning` and `update` entries (`packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:81-102`);
-- `.squad/identity/now.md` for the current session (`packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:105-112`);
-- `.agentweaver/context/boundaries.md` for architectural/scope decisions (`packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:115-140`);
-- `.agentweaver/context/patterns.md` for pattern memories (`packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:143-162`).
+- **Decision inbox slug uniqueness is project-wide**. The same slug should identify one proposed item within a project regardless of agent.
+- **Rejected inbox items are retained**. Rejection is a status transition, not deletion.
+- **Merging an inbox entry is transactional**. Creating the accepted decision, linking the inbox row, and marking it merged must succeed together.
+- **Decisions can supersede decisions**. Supersession keeps old decisions explainable while establishing the new active rule.
+- **Session IDs are unique per project**. The “current” session is the most recent non-ended session.
+- **Tags are normalized with delimiter semantics**. Tag filters depend on matching whole tags, especially `cross-team`.
+- **Subtask dependencies restrict deletion of depended-on subtasks** while allowing a work plan to cascade-delete its owned subtasks.
+- **OAuth token and client identifiers are indexed/unique where replay or duplication would be unsafe**.
 
-The import path scans `.squad/decisions/inbox/*.md`, parses front matter, and inserts missing pending inbox rows (`apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:404-437`, `packages/Agentweaver.Squad/Memory/SquadMemoryImporter.cs:16-31`, `packages/Agentweaver.Squad/Memory/SquadMemoryImporter.cs:34-72`).
+### Migration approach
 
-## Git Integration
+The EF database uses normal EF migrations. In production, an init container runs the migration bundle before the API container starts, and the API also runs migrations during startup. This gives two safety nets: schema is prepared before normal serving, and an already-started API can still apply any pending migrations in development or nonstandard deployments.
 
-Git repositories are part of project persistence. Blank projects are initialized with an empty initial commit on the default branch, and GitHub-origin projects are cloned using an ephemeral access token that is not stored or logged (`apps/Agentweaver.Api/Git/ProjectGitInitializer.cs:7-13`, `apps/Agentweaver.Api/Git/ProjectGitInitializer.cs:23-55`, `apps/Agentweaver.Api/Git/ProjectGitInitializer.cs:57-90`). The project row stores the working directory and default branch (`packages/Agentweaver.Domain/Project.cs:5-10`, `apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs:25-45`).
+A migration-history guard keeps EF startup deterministic when a database already has memory tables but lacks the expected EF history marker. It seeds the marker, creates the missing run-event table, and then lets normal migrations continue.
 
-### Worktree-per-run isolation
+Where this lives: `apps/Agentweaver.Api/Memory`, `apps/Agentweaver.Api/Migrations`, `apps/Agentweaver.Api/Program.cs`.
 
-`WorktreeManager` is the git integration point for run artifacts. Its class contract states that each run gets a dedicated branch and worktree checked out from the originating branch, isolating changes until an approved merge (`apps/Agentweaver.Api/Git/WorktreeManager.cs:15-20`). The base path defaults to `<AppPaths.DataDirectory>/worktrees` unless `Worktrees:BasePath` is configured (`apps/Agentweaver.Api/Git/WorktreeManager.cs:44-49`). Branch names are `agentweaver/{runId}` (`apps/Agentweaver.Api/Git/WorktreeManager.cs:59-59`).
+## Durable Run Event Streams
 
-For ordinary runs, `RunOrchestrator.StartRunAsync` calls `AddWorktree`, then persists `WorktreePath` and `WorktreeBranch` into the run row before starting the workflow (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:76-107`). Reserved project runs use the same pattern through `UpdateToInProgressAsync` (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:230-270`). Revisions reuse the existing worktree and branch, so requested changes build on prior commits (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:316-356`).
+Run events are persisted in `memory.db`, not just kept in memory. The design is a two-layer stream:
 
-`AddWorktree` validates the repository, creates `agentweaver/{runId}` at the originating branch tip if missing, and adds a git worktree directory named by run id (`apps/Agentweaver.Api/Git/WorktreeManager.cs:108-141`). `CommitChanges` stages run changes, filters child-subtask output to declared paths when possible, and returns the committed tree hash (`apps/Agentweaver.Api/Git/WorktreeManager.cs:144-170`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:172-215`). Diffs and file lists are computed between the originating branch and worktree branch (`apps/Agentweaver.Api/Git/WorktreeManager.cs:298-309`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:584-620`).
+1. **Durable write-through**: append the event row to SQLite and assign/record its run-local sequence number.
+2. **Live fan-out**: publish the same event to an in-process channel for active subscribers.
 
-### Coordinator shared worktree
+The ordering matters: an event is written to SQLite before subscribers can observe it. That means a client may miss a live channel message, but it should not miss the event permanently.
 
-For coordinator child runs, isolation differs by design. `StartChildRunAsync` reuses the coordinator's shared worktree so child agents can read each other's produced files (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:149-157`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:160-186`). `GetOrProvisionOrchestrationWorktreeAsync` stores the shared worktree on the coordinator run, recreates it via `EnsureWorktree` if the physical directory was lost, and serializes first provisioning with a semaphore (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:755-799`). The workflow-run store also has an `orchestration_worktree_path` field for the envelope (`apps/Agentweaver.Api/Infrastructure/SqliteWorkflowRunStore.cs:11-26`, `apps/Agentweaver.Api/Infrastructure/SqliteWorkflowRunStore.cs:29-63`).
+Subscribers use a **replay-then-tail** pattern:
 
-`EnsureWorktree` is the recovery path for persisted worktree metadata whose physical directory disappeared; it prunes stale git admin entries, removes the throw-away branch created by libgit2 worktree add, and recreates the worktree from the persisted branch (`apps/Agentweaver.Api/Git/WorktreeManager.cs:61-106`).
+1. Create or find the live channel.
+2. Replay persisted rows after the caller’s cursor.
+3. Tail the channel.
+4. Skip any channel event already delivered during replay.
+5. Stop cleanly after terminal event types.
 
-### Merge and cleanup
+The live channel is bounded. If a subscriber is slow or absent, live copies can be dropped; durability is still preserved by SQLite. This is the key design trade-off: the channel optimizes latency, while the database guarantees recovery.
 
-Merge is protected by `RepositoryMergeLock` plus run-store CAS transitions. `MergeCoordinator.ExecuteMergeAsync` starts by acquiring the repository lock and transitioning the run to `Merging`, then calls `MergeWorktree` (`apps/Agentweaver.Api/Runs/MergeCoordinator.cs:29-57`, `apps/Agentweaver.Api/Runs/MergeCoordinator.cs:77-97`). `MergeWorktree` verifies the approved tree hash, detects idempotent already-merged branches, and either hard-resets a checked-out originating branch or updates refs only when safe/appropriate (`apps/Agentweaver.Api/Git/WorktreeManager.cs:864-923`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:925-997`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:999-1044`). On success the run is marked merged, the merged commit hash is persisted, and the worktree/branch are removed (`apps/Agentweaver.Api/Runs/MergeCoordinator.cs:100-124`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:1047-1088`). On conflict the worktree is preserved for manual inspection and conflicting paths are stored in the run row (`apps/Agentweaver.Api/Runs/MergeCoordinator.cs:136-159`).
+The essential invariant is **unique `(run_id, sequence)`**. It makes replay deterministic and lets clients resume from “last event I saw.”
 
-## Backup & Data Lifecycle
+Where this lives: `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs`, `apps/Agentweaver.Api/Memory`.
 
-Production mounts two PVCs:
+## Decisions, Memory, and Context Assembly
 
-- `agentweaver-data`: `ReadWriteOnce`, premium managed CSI, 10Gi; mounted at `/data` by the API and backup job (`k8s/pvc-data.yaml:1-12`, `k8s/api-deployment.yaml:144-146`, `k8s/backup-cronjob.yaml:40-58`).
-- `agentweaver-workspace`: `ReadWriteMany`, Azure Files CSI premium, 50Gi; mounted at `/workspace` for project workspaces (`k8s/pvc-workspace.yaml:1-12`, `k8s/api-deployment.yaml:147-148`).
+The memory layer is not a generic note store. It is a priority-ordered context compiler for agents.
 
-The API sets `Database__Path=/data/agentweaver.db`, `HOME=/data`, and `Workspace__Path=/workspace`; `memory.db` defaults to the same `/data` directory because `Program.cs` derives it from `Database:Path` (`k8s/api-deployment.yaml:91-108`, `apps/Agentweaver.Api/Program.cs:232-237`). The deployment uses one API replica with `Recreate`, which existing docs attribute to SQLite single-writer behavior on the RWO PVC (`docs/deep-dive/infra-deployment.md:78-84`).
+The compiler builds context in this order:
 
-The backup CronJob runs daily at `17 3 * * *`, installs `sqlite`, creates `/data/backups`, runs SQLite `.backup` on `/data/agentweaver.db`, and deletes `agentweaver-*.db` backups older than 14 days (`k8s/backup-cronjob.yaml:1-12`, `k8s/backup-cronjob.yaml:33-39`). It mounts the same `agentweaver-data` PVC at `/data` as the API, but the backup command is file-specific rather than a directory/PVC snapshot (`k8s/backup-cronjob.yaml:40-58`, `k8s/api-deployment.yaml:144-146`, `k8s/api-deployment.yaml:186-189`).
+1. **Active architectural and scope decisions** — rendered as non-negotiable boundaries.
+2. **Agent core context** — durable charter-like information for the target agent.
+3. **High-importance learnings and patterns** — selected for the target agent, plus cross-team memories shared by tag.
+4. **Current open session** — focus area, active issues, and summary.
 
-Verified: `memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the checked-in CronJob. In production the API sets `Database__Path=/data/agentweaver.db`, and `Program.cs` derives SQLite `memory.db` from the directory of that configured path, so the EF database resolves to `/data/memory.db` (`k8s/api-deployment.yaml:91-108`, `apps/Agentweaver.Api/Program.cs:232-237`). `SqliteRunEventStream` derives the same `/data/memory.db` path (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:61-75`). Because the CronJob only runs `.backup` for `/data/agentweaver.db` and prunes only `agentweaver-*.db`, it misses the separate `memory.db` file that holds decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/token registration tables (`k8s/backup-cronjob.yaml:33-39`, `apps/Agentweaver.Api/Memory/MemoryDbContext.cs:9-21`).
+This ordering is the most important conceptual rule. Decisions are first because they constrain all work. Session context is last because it is useful but should not override boundaries or durable agent knowledge.
 
-## Gotchas & Invariants
+```mermaid
+flowchart TD
+    A[Accepted architectural/scope decisions] --> B[Agent core context]
+    B --> C[High-importance learnings and patterns]
+    C --> D[Current open session]
+    D --> E[Compiled prompt context]
 
-- **Two databases, two migration systems.** Main operational state is in hand-written SQLite schema/idempotent alters; EF Core `MigrateAsync` governs `memory.db` (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:53-157`, `apps/Agentweaver.Api/Program.cs:213-239`, `apps/Agentweaver.Api/Program.cs:321-324`).
-- **SQLite is default, not the only EF provider.** `MemoryDbContext` defaults to SQLite but supports SQL Server and PostgreSQL through `Database:Provider` (`apps/Agentweaver.Api/Program.cs:213-238`).
-- **`memory.db` holds more than "memory".** It also stores durable run events, coordinator planning tables, and MCP OAuth refresh/client state (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:13-21`).
-- **Run revisions are append-only.** `run_revisions` has triggers that abort updates and deletes (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:208-229`).
-- **Run events are durable before live fan-out.** `SqliteRunEventStream` writes to SQLite before channel publication and replays from SQLite on reconnect (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:87-94`, `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:127-150`).
-- **DateTimeOffset ordering is often client-side.** The memory compiler and endpoints call out SQLite translation limitations and sort sessions/decisions in memory (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:54-62`, `apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:85-90`, `apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:168-172`).
-- **Tags are comma-delimited with sentinel commas.** Writers normalize tags as `,tag,` and filters look for `,{tag},`; cross-team memory relies on `,cross-team,` (`apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:108-112`, `apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:75-79`).
-- **Inbox slug uniqueness is project-wide.** The current EF config and migration use unique `(ProjectId, Slug)`, not `(ProjectId, AgentName, Slug)` (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:32-33`, `apps/Agentweaver.Api/Migrations/20260625210254_FixMissingSchemaFields.cs:13-55`).
-- **Decision boundaries outrank all other memory.** The compiler renders decisions first and labels them non-negotiable (`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:54-62`, `apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:194-203`).
-- **Children get decisions, not the full memory stack.** Child prompts include charter, architectural/scope decisions, and worktree boundaries; core context/learnings/session are deliberately excluded (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:470-505`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:561-598`).
-- **Scribe is non-blocking.** `PostRunScribeService` catches/logs failures and must not affect terminal run status (`apps/Agentweaver.Api/Runs/PostRunScribeService.cs:9-17`, `apps/Agentweaver.Api/Runs/PostRunScribeService.cs:127-130`).
-- **Worktree metadata can outlive physical directories.** `EnsureWorktree` exists for cases where DB/git branch state persists but ephemeral physical worktree directories disappear (`apps/Agentweaver.Api/Git/WorktreeManager.cs:61-106`).
-- **Successful merges delete worktrees; conflicts preserve them.** Success calls `RemoveWorktree`; conflict logs preservation for manual inspection (`apps/Agentweaver.Api/Runs/MergeCoordinator.cs:114-115`, `apps/Agentweaver.Api/Runs/MergeCoordinator.cs:148-152`).
-- **Backlog active ordering excludes archived items.** The unique `(project_id, state, order_key)` index only applies to `backlog`/`ready` and `archived_at IS NULL` (`apps/Agentweaver.Api/Infrastructure/SqliteDb.cs:278-282`).
+    A -.highest priority.-> E
+    D -.lowest priority.-> E
+```
+
+### Decision inbox logic
+
+The inbox is a review buffer between “an agent observed something” and “the team accepts this as durable policy.”
+
+- Agents can submit proposed decisions, learnings, patterns, and updates.
+- Pending entries remain visible for review.
+- Promotion creates an accepted decision and marks the inbox entry merged.
+- Rejection preserves the entry for audit.
+- Routine learnings/patterns/updates can be auto-merged by the post-run scribe; architectural and scope boundaries should remain more review-oriented.
+
+This prevents every agent thought from becoming policy while still preserving potentially valuable observations.
+
+### Memory selection logic
+
+Agent memory has two audiences:
+
+- **Targeted memory**: injected only for the named agent.
+- **Cross-team memory**: injected for other agents when explicitly tagged for sharing.
+
+Selection is bounded by item count and approximate token budget. Rebuild this as a deterministic selection problem: score by importance, prefer newer items where scores match, and stop before exceeding the budget. This keeps prompts useful and bounded.
+
+### Sessions
+
+A session is the durable “what are we doing right now?” record for a project. Starting a new session ends older open sessions. Updating a session changes focus, active issues, summary, serialized state, or marks it ended. The compiler uses the most recent open session.
+
+### Export/import mirror
+
+SQLite is authoritative for API reads, but selected memory is mirrored to files so humans and agents can inspect it in the workspace:
+
+- `.squad/decisions.md` for accepted decisions;
+- `.squad/decisions/inbox/{slug}.md` for pending inbox entries;
+- `.squad/agents/{agent}/history.md` for agent history;
+- `.squad/identity/now.md` for current session focus;
+- `.agentweaver/context/boundaries.md` for architectural/scope boundaries;
+- `.agentweaver/context/patterns.md` for reusable patterns.
+
+Export runs after memory mutations and after the post-run scribe pass. Import reads inbox files and creates missing pending rows. Treat files as a human/agent-facing mirror, not as the primary database.
+
+Where this lives: `apps/Agentweaver.Api/Memory`, `apps/Agentweaver.Api/Endpoints`, `packages/Agentweaver.Squad/Memory`.
+
+## Git as Persistent Run State
+
+Agentweaver does not store file changes in SQLite. It stores metadata in SQLite and lets git store the actual content graph.
+
+For a normal run:
+
+1. Create a branch for the run from the originating branch.
+2. Check out that branch in a dedicated worktree.
+3. Persist the worktree path and branch on the run before agent work starts.
+4. Let the agent modify files inside that isolated worktree.
+5. Commit the result and persist the produced tree hash/diff.
+6. Merge only after review/approval and safety checks.
+
+This provides strong isolation: unreviewed changes are real git changes, but they are not on the main project branch.
+
+### Revisions
+
+A revision reuses the existing run worktree and branch. That is intentional: reviewer feedback should apply on top of the prior candidate result, not start from scratch unless the run is retried as a new run.
+
+### Coordinator shared worktrees
+
+Coordinator workflows have a different isolation rule. Child runs can share the coordinator’s orchestration worktree so one child can read files produced by another child. The database stores the shared worktree path on the workflow/coordinator metadata so orchestration can resume or recover.
+
+The trade-off is explicit: ordinary runs maximize isolation; coordinator child runs allow controlled collaboration inside a shared workspace.
+
+### Merge consistency
+
+Merge is guarded by both database state and repository locking:
+
+- acquire a repository-level merge lock;
+- transition the run into a merging state;
+- verify the approved tree hash still matches what is being merged;
+- detect idempotent already-merged cases;
+- update the target branch safely;
+- persist the merged commit hash and terminal status;
+- remove the worktree on success;
+- preserve the worktree and conflict list on merge failure.
+
+The tree hash check is important: it binds human approval to a specific file tree. Without it, a worktree could change after approval but before merge.
+
+### Recovery
+
+Worktree metadata may outlive the physical directory. This can happen if the database and git branch remain but the worktree folder is removed. The recovery path should prune stale git worktree administration data and recreate the worktree from the persisted branch.
+
+Where this lives: `apps/Agentweaver.Api/Git`, `apps/Agentweaver.Api/Runs`, `apps/Agentweaver.Api/Infrastructure`.
+
+## Kubernetes Storage and Backups
+
+The production deployment uses two persistent volumes:
+
+- **`agentweaver-data`**: ReadWriteOnce, mounted at `/data`. It holds `agentweaver.db`, `memory.db`, app home data, and default data-directory artifacts.
+- **`agentweaver-workspace`**: ReadWriteMany, mounted at `/workspace`. It holds project workspaces.
+
+The API deployment uses one replica and a `Recreate` strategy. That matches the SQLite/RWO model: one writer owns the database volume, and rollout waits for the old pod to release the disk before the new pod attaches it.
+
+`Database__Path=/data/agentweaver.db` points the operational store at `/data`. The EF SQLite memory database derives its default path from the same directory, so it resolves to `/data/memory.db`. The run-event stream uses that same `memory.db` location.
+
+### Backup model
+
+The backup CronJob runs SQLite’s `.backup` command for `/data/agentweaver.db` and writes timestamped backups under `/data/backups`, pruning matching `agentweaver-*.db` files older than 14 days.
+
+`memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the backup CronJob. The CronJob backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not separately back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables. Loss of the PVC therefore loses `memory.db` entirely, so treat that database as not separately backed up.
+
+Backups are also written under the same `/data` PVC. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but it offers no protection against loss of the entire PVC: if the volume is destroyed, both the database and its co-located backups go with it. Durable protection requires an external volume snapshot or off-cluster backup policy.
+
+Where this lives: `k8s/api-deployment.yaml`, `k8s/pvc-data.yaml`, `k8s/pvc-workspace.yaml`, `k8s/backup-cronjob.yaml`.
+
+## Rebuild Checklist and Invariants
+
+If rebuilding Agentweaver’s data layer from these concepts, preserve these decisions first:
+
+1. **Separate operational state from memory/orchestration state** unless you deliberately migrate both to one coherent server database.
+2. **Keep run lifecycle transitions explicit and guarded**. Do not let arbitrary writes mutate terminal or merge states.
+3. **Persist worktree path/branch before agent execution** so in-flight work can be recovered.
+4. **Use git for file content and SQLite for metadata**. Do not duplicate large diffs as the only source of truth.
+5. **Make review revisions append-only**.
+6. **Make run events durable before live publication** and replay by sequence.
+7. **Treat decisions as higher priority than all other memory**.
+8. **Keep inbox rejection/audit history** rather than deleting rejected proposals.
+9. **Bound memory injection** by importance, recency, item count, and approximate prompt budget.
+10. **Close older open sessions when starting a new session** for the same project.
+11. **Use repository-level locking and tree-hash verification for merges**.
+12. **Align deployment topology with database semantics**: one SQLite writer on an RWO PVC, or move to a server database before scaling writers.
+13. **Back up every authoritative database file**. In the production deployment that means `agentweaver.db` and `memory.db`, not just the operational database.
+
+## Common Gotchas
+
+- `memory.db` is not just memory; it also holds run events, coordinator planning, steering, and OAuth state.
+- The two databases have different migration systems: hand-written additive schema setup for `agentweaver.db`, EF migrations for `memory.db`.
+- SQLite WAL improves concurrency but does not make SQLite a multi-writer distributed database.
+- File exports are mirrors. The API should read authoritative memory from SQLite.
+- Child coordinator runs intentionally receive a narrower context than full agents: team boundaries and task-specific instructions matter more than bloating every child prompt with all memory layers.
+- A missing worktree directory is recoverable only if the database metadata and git branch still exist.
+- Successful merges clean up worktrees; conflicted merges preserve them for inspection.
+- The backup CronJob covers `agentweaver.db` only.

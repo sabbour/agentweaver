@@ -1,302 +1,456 @@
-# System Overview — Deep Dive
+# System Overview — Conceptual Deep Dive
 
-## Purpose & Scope
+## Purpose and Mental Model
 
-Agentweaver is a self-hosted orchestration platform for AI-assisted project work. At its narrowest, it takes a natural-language task, creates an isolated git worktree, runs an agent, streams every step, and keeps the produced diff behind a human review gate before merge (`README.md:3`, `apps/Agentweaver.Api/README.md:7`). At its broadest, it runs a coordinator-led team: the coordinator drafts an `OutcomeSpec`, waits for confirmation, decomposes a `WorkPlan` into a dependency graph, launches child runs, assembles their branches, performs RAI review, gates the integrated diff, merges once, and records team memory (`docs/index.md:24-36`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:29-52`).
+Agentweaver is a self-hosted control system for AI-assisted software work. Its core job is to turn an intent such as "make this change" or "coordinate a team on this outcome" into a controlled sequence of repository operations: isolate the work, let an agent act, record what happened, evaluate the result, ask a human before irreversible changes, merge only when approved, and preserve reusable learning.
 
-This page is the top-level map. It covers:
+The easiest way to understand the system is to separate three concerns:
 
-- deployed entry points: web UI, REST API, and MCP server;
-- core backend orchestration and persistence;
-- agent runtime, tools, sandboxing, and provider integration;
-- AKS topology and deployment assets;
-- the end-to-end single-run and coordinator-run lifecycles.
+1. **Intent plane** — humans, the web UI, and MCP clients describe goals, inspect progress, answer questions, and approve or reject outcomes.
+2. **Control plane** — the API owns durable state, workflow orchestration, permissions, events, review gates, recovery, merge coordination, and memory.
+3. **Execution plane** — agent runtimes, model providers, git worktrees, and sandboxes do the actual work under policies chosen by the control plane.
 
-For detailed subsystem treatment, see the sibling deep dives linked from `docs/deep-dive/README.md`.
-
-## System Context
+This separation is deliberate. Models are useful but non-deterministic, so Agentweaver keeps authority in deterministic services: persistent stores define truth, review gates define who may approve, merge locks define when repository history changes, and sandbox policy defines what tools may touch.
 
 ```mermaid
 flowchart LR
-    User[Human reviewer / operator]
-    Web[React + Fluent web UI]
-    McpClient[MCP-compatible client<br/>Copilot CLI / VS Code / assistant]
-    Gateway[AKS Gateway API<br/>TLS + HTTPRoutes]
-    Api[Agentweaver.Api<br/>ASP.NET Core]
-    Mcp[Agentweaver.Mcp<br/>MCP resource server]
-    Runtime[Agent runtime<br/>MAF + Copilot / Foundry]
-    Git[Git repository<br/>worktrees + branches]
-    Copilot[GitHub Copilot SDK]
-    Foundry[Microsoft Foundry / Azure OpenAI]
-    Sandbox[Kata / mxc / bwrap sandbox]
-    Data[(SQLite / MemoryDb<br/>runs, events, memory)]
-    KV[Azure Key Vault<br/>CSI secrets]
-    AKS[AKS cluster]
+    Human[Human operator / reviewer]
+    MCPClient[MCP client<br/>Copilot CLI / VS Code / assistants]
+    Web[Web UI]
+    API[Agentweaver API<br/>control plane]
+    Runtime[Agent runtime<br/>workflow agents]
+    Sandbox[Sandboxed tools<br/>files + shell]
+    Git[Git repo<br/>worktrees + branches]
+    Events[(Durable events)]
+    Memory[(Decisions + memory)]
+    Providers[Model providers<br/>Copilot / Foundry paths]
 
-    User --> Web
-    User --> McpClient
-    Web -->|REST + SSE| Gateway
-    McpClient -->|MCP over HTTP or stdio| Gateway
-    Gateway -->|/api /auth /oauth| Api
-    Gateway -->|/mcp| Mcp
-    Mcp -->|Bearer-authenticated REST + SSE| Api
-    Api --> Runtime
-    Runtime -->|model turns| Copilot
-    Runtime -->|model turns| Foundry
-    Runtime -->|tool calls| Sandbox
-    Api --> Git
-    Api --> Data
-    Mcp --> KV
-    Api --> KV
-    AKS -. hosts .- Gateway
-    AKS -. hosts .- Api
-    AKS -. hosts .- Mcp
-    AKS -. hosts .- Web
-    AKS -. warms .- Sandbox
+    Human --> Web
+    Human --> MCPClient
+    Web --> API
+    MCPClient --> API
+    API --> Runtime
+    Runtime --> Providers
+    Runtime --> Sandbox
+    Sandbox --> Git
+    API --> Events
+    API --> Memory
+    API --> Git
+    Events --> Web
+    Events --> MCPClient
+    Memory --> Runtime
 ```
 
-Key context facts:
+The platform is not just a chat wrapper around an agent. It is closer to a CI/CD-style orchestrator for agentic changes: every run has identity, state, events, a workspace, a review boundary, and a terminal result.
 
-- The web UI is deliberately thin: it submits runs, streams steps, renders review screens, and calls the backend API for all behavior (`apps/web/README.md:3-6`).
-- The MCP server is also a thin facade: it exposes Agentweaver capabilities to MCP clients and forwards authenticated calls to the API (`apps/Agentweaver.Mcp/README.md:3`, `apps/Agentweaver.Mcp/AgentweaverApiClient.cs:15-24`).
-- The API is the source of truth for orchestration, events, persistence, auth, worktrees, and merges (`docs/architecture/overview.md:3-8`, `apps/Agentweaver.Api/Program.cs:62-86`).
-- Models are provider-selectable. The dispatcher sends `ModelSource.GitHubCopilot` to the Copilot runner and `ModelSource.MicrosoftFoundry` to the Foundry runner (`packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:17-31`).
-- On AKS, the gateway routes `/api`, `/auth`, and OAuth discovery/token paths to the API, `/mcp` to the MCP service, and everything else to the frontend (`k8s/httproute-api.yaml:1-15`, `k8s/mcp-httproute.yaml:40-46`, `k8s/httproute-frontend.yaml:1-14`).
+## Architectural Responsibilities
 
-## Component Inventory
+### Thin clients, thick control plane
 
-| Component | Path | Language / runtime | Responsibility |
-| --- | --- | --- | --- |
-| Root solution | `agentweaver.sln` | .NET solution | Groups the API, MCP app, tests, and packages; the solution currently includes `Agentweaver.Api`, `Agentweaver.Mcp`, and six package projects (`agentweaver.sln:8-27`). |
-| Shared .NET build policy | `Directory.Build.props` | MSBuild | Enables nullable references, implicit usings, latest analysis, and warnings-as-errors for .NET projects (`Directory.Build.props:1-7`). |
-| API host | `apps/Agentweaver.Api` | ASP.NET Core on .NET 10 | Main service: REST endpoints, auth, run orchestration, SQLite stores, workflow services, memory DB, project/casting/blueprint/workflow services, sandbox routing, and hosted recovery/heartbeat jobs (`apps/Agentweaver.Api/README.md:1-15`, `apps/Agentweaver.Api/Program.cs:62-245`). |
-| Projects & workspaces | `apps/Agentweaver.Api/Projects` | ASP.NET Core application services + LibGit2Sharp | Project lifecycle service for blank projects, GitHub-backed projects, provider defaults, relinking moved workspaces, and read-only project workspace browsing (`apps/Agentweaver.Api/Projects/ProjectService.cs:11-16`, `apps/Agentweaver.Api/Projects/ProjectService.cs:48-90`, `apps/Agentweaver.Api/Projects/ProjectService.cs:117-200`, `apps/Agentweaver.Api/Projects/ProjectService.cs:231-280`, `apps/Agentweaver.Api/Projects/ProjectWorkspaceService.cs:45-52`). |
-| Team & casting engine | `packages/Agentweaver.Squad`, `apps/Agentweaver.Api/Casting`, `apps/Agentweaver.Api/Blueprints` | .NET class libraries + API services + Copilot-assisted generation | Catalog/blueprint/team engine for universes, naming, role selection, charter compilation, proposals, `.squad/` persistence, blueprint validation/generation, and memory import/export (`apps/Agentweaver.Api/Casting/CastingService.cs:16-20`, `apps/Agentweaver.Api/Casting/CastingService.cs:100-190`, `apps/Agentweaver.Api/Casting/CastingService.cs:420-588`, `apps/Agentweaver.Api/Casting/CastingService.cs:795-824`, `apps/Agentweaver.Api/Blueprints/BlueprintService.cs:17-24`, `packages/Agentweaver.Squad/Catalog/CatalogReader.cs:8-13`, `packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:6-10`). |
-| MCP host | `apps/Agentweaver.Mcp` | ASP.NET Core + ModelContextProtocol on .NET 10 | MCP server for backlog, blueprints, catalog, coordinator, diagnostics, GitHub auth, memory, projects, runs, sandbox policy, teams, workflows, and workspace tools; supports stdio and HTTP transports (`apps/Agentweaver.Mcp/README.md:44-197`, `apps/Agentweaver.Mcp/Program.cs:59-105`). |
-| Static frontend host | `apps/Agentweaver.Web` | ASP.NET Core on .NET 10 | Production static-file host for the built React SPA and generated docs, including SPA fallback and VitePress clean-URL handling (`apps/Agentweaver.Web/Program.cs:1-73`, `apps/Agentweaver.Web/Agentweaver.Web.csproj:8-9`). |
-| Web UI source | `apps/web` | React 19, TypeScript, Vite, Fluent 2 | Browser client for submit/watch/review flows, project/casting/coordinator screens, and API access through `src/api/client.ts` (`apps/web/README.md:1-7`, `apps/web/package.json:6-26`). |
-| Sandbox base image | `apps/agentweaver-sandbox` | Ubuntu container image | Base image for sandbox pods; includes git, build tools, Python, Node/npm, .NET, runs as UID 1000, and sleeps for command exec (`apps/agentweaver-sandbox/Dockerfile:1-36`). |
-| Domain package | `packages/Agentweaver.Domain` | .NET class library | Core records/enums/interfaces for runs, projects, model source, sandbox policy, backlog, auth token stores, approval/question gates, and project workspace abstractions (`packages/Agentweaver.Domain/Run.cs:3-64`, `packages/Agentweaver.Domain/Project.cs:3-69`, `packages/Agentweaver.Domain/SandboxPolicy.cs:7-90`). |
-| Agent runtime | `packages/Agentweaver.AgentRuntime` | .NET class library + MAF + Copilot SDK + Microsoft.Extensions.AI | Registers provider runners, workflow agents, RAI/Scribe executors, sandbox governance, loopback Agentweaver tools, and model-provider dispatch (`packages/Agentweaver.AgentRuntime/AgentRuntimeServiceCollectionExtensions.cs:16-36`, `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:6-33`). |
-| Agent tools | `packages/Agentweaver.AgentTools` | .NET class library | Builds sandboxed `AIFunction` tools: file read/search/edit/create/patch, shell command, intent/outcome reporting, and question escalation (`packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:15-44`). |
-| Sandbox filesystem | `packages/Agentweaver.SandboxFs` | .NET class library + Agent Governance Toolkit backend | Path containment, symlink/junction rejection, open-then-verify file I/O, and AGT external policy backend (`packages/Agentweaver.SandboxFs/SandboxPathValidator.cs:9-16`, `packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs:6-14`, `packages/Agentweaver.SandboxFs/SandboxedFileTools.cs:5-10`). |
-| Sandbox execution | `packages/Agentweaver.SandboxExec` | .NET class library + mxc/bwrap/LXC integrations | Selects command-execution backends by platform and exposes `ISandboxExecutor`; local order is Windows process container, WSL, Linux bwrap, Linux LXC, then direct fallback (`packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:6-14`, `packages/Agentweaver.SandboxExec/Agentweaver.SandboxExec.csproj:7-36`). |
-| Squad package | `packages/Agentweaver.Squad` | .NET class library + embedded resources | Team/casting/blueprint catalog, `.squad/` reader/writer, charter/history files, memory import/export, and project signal scanning (`packages/Agentweaver.Squad/Catalog/CatalogReader.cs:8-13`, `packages/Agentweaver.Squad/Squad/SquadReader.cs:14-18`, `packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:6-10`). |
-| Kubernetes manifests | `k8s` | Kubernetes YAML | Namespace, services, deployments, Gateway/HTTPRoutes, PVCs, CSI Key Vault secret providers, network policies, RBAC, backup cronjob, sandbox templates, and sandbox warm pool (`k8s/api-deployment.yaml:1-203`, `k8s/gateway.yaml:1-39`, `k8s/sandbox-template.yaml:1-56`). |
-| AKS scripts | `scripts/aks` | Bash + Azure CLI + kubectl | Provision cluster/ACR, set identity, build/push four images, render/apply manifests, and verify pods/routes/secrets/sandbox CRDs (`scripts/aks/10-create-cluster.sh:4-11`, `scripts/aks/20-build-push-images.sh:4-11`, `scripts/aks/30-deploy.sh:42-170`, `scripts/aks/40-verify.sh:21-117`). |
+The web UI and MCP server are intentionally thin. They adapt user interactions into API calls, render state, and stream events, but they do not decide run state, workflow progression, or merge behavior. This keeps all clients consistent: approving a review through the browser and approving through an MCP tool should affect the same durable gate in the same way.
 
-## Runtime Topology on AKS
+The API is the authority because it can combine information that no client should own alone: project configuration, run status, reviewer identity, workflow checkpoints, persistent events, worktree paths, merge locks, memory, and recovery jobs. If a process restarts, the API can reconstruct enough state to continue or safely expose a fallback decision path.
 
-```mermaid
-flowchart TB
-    Internet[Users and MCP clients] --> Gw[Gateway: agentweaver-gateway<br/>HTTPS :443]
+### Isolation before execution
 
-    Gw --> ApiRoute[HTTPRoute: /api /auth /.well-known /oauth]
-    Gw --> McpRoute[HTTPRoute: /mcp and MCP metadata]
-    Gw --> FrontRoute[HTTPRoute: /]
+Agentweaver assumes generated changes are untrusted until reviewed. A run therefore works in an isolated git worktree instead of directly on the target branch. The model sees tools that are scoped to that worktree, and command execution passes through a sandbox executor. This gives the system a clean unit of work: the diff between the original branch state and the worktree result.
 
-    ApiRoute --> ApiSvc[Service: agentweaver-api :8080]
-    McpRoute --> McpSvc[Service: agentweaver-mcp :8080]
-    FrontRoute --> FrontSvc[Service: agentweaver-frontend :80 -> :8080]
+This design has several advantages:
 
-    ApiSvc --> ApiPod[API pod<br/>1 replica, Recreate]
-    McpSvc --> McpPod[MCP pod<br/>1 replica]
-    FrontSvc --> FrontPods[Frontend pods<br/>2 replicas]
+- The original branch remains untouched while the agent explores and edits.
+- The review artifact is concrete: a diff, tree hash, and branch/worktree output.
+- Failed or declined work can be discarded without contaminating the main workspace.
+- Merge conflicts become explicit workflow states rather than hidden side effects.
 
-    ApiPod --> DataPVC[(agentweaver-data PVC<br/>RWO 10Gi)]
-    ApiPod --> WorkspacePVC[(agentweaver-workspace PVC<br/>RWX 50Gi)]
-    ApiPod --> CSI[Secrets Store CSI<br/>agentweaver-secrets]
-    McpPod --> McpCSI[Secrets Store CSI<br/>agentweaver-mcp-secrets]
+The trade-off is operational complexity. Worktrees, locks, sandboxes, cleanup, and recovery all have to be managed. Agentweaver accepts that complexity because it is the price of making model-written repository changes auditable and reversible.
 
-    ApiPod --> SandboxClaim[SandboxClaim<br/>run-{runId}]
-    SandboxClaim --> WarmPool[SandboxWarmPool<br/>3 warm sandboxes]
-    WarmPool --> SandboxPod[Kata VM sandbox pod<br/>agentweaver-sandbox]
-    SandboxPod --> WorkspacePVC
+### Durable events plus live fan-out
 
-    ApiPod --> GitHub[GitHub / Copilot / OAuth]
-    ApiPod --> OTel[OTLP collector]
-    McpPod --> ApiSvc
-```
+A run is both a state machine and a story. Operators need the live story while it is happening, and recovery needs the durable story after restarts. Agentweaver therefore treats events as write-through: first persist the event, then fan it out to live subscribers.
 
-Topology notes:
-
-- The public entry point is `agentweaver-gateway`, an Application Routing/Istio Gateway with a single HTTPS listener and managed TLS secret (`k8s/gateway.yaml:1-39`).
-- API, MCP, and frontend are separate Deployments and ClusterIP Services. The API is one replica with `Recreate` because SQLite is single-writer on an RWO PVC (`k8s/api-deployment.yaml:10-14`, `k8s/api-service.yaml:1-18`); frontend runs two replicas (`k8s/frontend-deployment.yaml:9-31`); MCP runs one replica (`k8s/mcp-deployment.yaml:9-47`).
-- The API mounts `/data` from `agentweaver-data` and `/workspace` from `agentweaver-workspace`; workspace provider is configured as `persistent-volume`, and sandbox backend as `kubernetes` (`k8s/api-deployment.yaml:90-114`, `k8s/pvc-data.yaml:1-12`, `k8s/pvc-workspace.yaml:1-12`).
-- Secrets come from Azure Key Vault via CSI. The API secret provider exposes API key, GitHub OAuth credentials, and the MCP OAuth signing key; the MCP secret provider exposes MCP auth/user secrets (`k8s/secret-provider-class.yaml:1-42`, `k8s/secretprovider-mcp.yaml:1-37`).
-- The sandbox warm pool is a first-class CRD resource. The template uses `runtimeClassName: kata-vm-isolation`, a read-only root filesystem, non-root UID 1000, and the shared workspace PVC (`k8s/sandbox-template.yaml:1-56`, `k8s/sandbox-warmpool.yaml:1-12`). Per run, `KubernetesSandboxExecutor` creates a `SandboxClaim` from `sandbox-claim-template.yaml` with a 600-second TTL (`k8s/sandbox-claim-template.yaml:1-11`).
-- Network policy starts from default deny for app pods and sandbox pods, then opens targeted DNS, app-internal, gateway, GitHub HTTPS, and MCP-to-API paths (`k8s/networkpolicy-default-deny.yaml:1-197`, `k8s/networkpolicy-sandbox.yaml:1-50`).
-
-## End-to-End Run Lifecycle
+The invariant is that the durable event log is the source of truth. The in-memory stream is an optimization for low-latency UI and MCP updates. If a client reconnects with a last-seen event id, the system can resume from memory when possible or fall back to persisted events.
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant UI as Web UI / MCP client
-    participant API as Agentweaver.Api
-    participant Coord as CoordinatorRunService
-    participant DB as SQLite + MemoryDb
-    participant Orch as RunOrchestrator
-    participant Runtime as MAF workflow + Agent runtime
-    participant Sandbox as Worktree + sandbox tools
-    participant RAI as Rai
-    participant Gate as Review gate
-    participant Git as Git repo
-    participant Scribe as Scribe / memory exporter
+    participant Step as Workflow step
+    participant Store as Durable event store
+    participant Live as Live stream fan-out
+    participant UI as UI / MCP client
 
-    User->>UI: Submit goal or task
-    UI->>API: POST /api/runs or /api/projects/{id}/orchestrations
-    alt single-agent run
-        API->>Orch: StartRunAsync
-        Orch->>Git: create per-run worktree branch
-        Orch->>DB: insert run + create stream
-        Orch->>Runtime: start full workflow
-        Runtime->>Sandbox: governed file/shell tools
-        Runtime->>DB: append run events before live fan-out
-        Runtime->>Git: commit worktree, compute tree hash + diff
-        Runtime->>RAI: review produced diff
-        RAI-->>Runtime: GREEN/YELLOW/REVISE/RED
-        Runtime->>Gate: review.requested
-        User->>UI: approve / request changes / decline
-        UI->>API: POST /api/runs/{id}/review
-        API->>Runtime: resume pending RequestPort
-        alt approved
-            Runtime->>Git: merge worktree branch
-            Runtime->>Scribe: update session/memory/export
-            Scribe->>DB: memory + decisions + session context
-        else request changes
-            Runtime->>Sandbox: revise in same run/session
-        else declined
-            API->>DB: terminal declined
-        end
-    else coordinator run
-        API->>Coord: StartCoordinatorRunAsync
-        Coord->>DB: parent run + OutcomeSpec draft
-        Coord-->>UI: coordinator.outcome_spec
-        User->>UI: confirm or revise OutcomeSpec
-        UI->>API: confirm/revise endpoint
-        API->>Coord: resume confirmation gate
-        Coord->>DB: confirmed OutcomeSpec + WorkPlan DAG
-        Coord->>Orch: dispatch ready child runs
-        par independent frontier
-            Orch->>Runtime: child run A (agent + RAI only)
-            Orch->>Runtime: child run B (agent + RAI only)
-        end
-        Runtime->>DB: child assemble_ready / failed / rai_flagged
-        Coord->>Git: build integration branch from child branches
-        Coord->>RAI: collective RAI on aggregate diff
-        Coord->>Gate: one collective review
-        User->>UI: approve / request changes / decline
-        alt approved
-            Coord->>Git: one collective merge
-            Coord->>Scribe: one collective Scribe pass
-            Scribe->>DB: memory and decision promotion/export
-        else request changes
-            Coord->>DB: reset affected subtasks
-            Coord->>Orch: redispatch selected frontier
-        else declined or RAI blocked
-            Coord->>DB: terminal failed/declined
-        end
-    end
+    Step->>Store: append event with ordered id
+    Store-->>Step: persisted
+    Step->>Live: publish same event
+    Live-->>UI: stream event
+    UI-->>Store: reconnect / replay if needed
 ```
 
-### Single-agent lifecycle
+### Human gates protect irreversible actions
 
-1. `POST /api/runs` validates `task`, `repository_path`, `originating_branch`, and `model_source`, canonicalizes the repository path, creates a `Run` in `Pending`, seeds run options, and calls `RunOrchestrator.StartRunAsync` (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:33-98`).
-2. `RunOrchestrator` creates a git worktree, resolves an agent charter from `.squad/agents/{name}/charter.md` when present, inserts the run, creates a live stream entry, builds memory context, and starts the MAF workflow (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:76-147`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:444-549`).
-3. `RunWorkflowFactory` builds the default full pipeline around an agent turn, RAI, human review, merge, and Scribe (`apps/Agentweaver.Api/Workflows/DefaultWorkflowTemplate.cs:31-41`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-803`).
-4. `AgentTurnExecutor` sets up the agent, runs the turn, commits worktree changes, computes the diff and tree hash, and returns `AgentTurnOutput` (`packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:64-153`).
-5. `RaiTurnExecutor` reviews the diff and can pass, request revision, or mark content safety failed; RED maps to `ContentSafetyFlagged` (`packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:11-18`, `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:117-194`).
-6. Human review is owner-scoped and at-most-once. The endpoint consumes a pending RequestPort entry, sends the decision back into the workflow, emits visible review/merge/revision events, or uses a direct fallback after restart (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:685-850`).
-7. Merge uses `MergeCoordinator`, which acquires a repository merge lock, CAS-transitions the run to merging, invokes `IWorktreeOperations.MergeWorktree`, records success/conflict/failure, and removes the worktree after a successful merge (`apps/Agentweaver.Api/Runs/MergeCoordinator.cs:11-27`, `apps/Agentweaver.Api/Runs/MergeCoordinator.cs:77-180`).
-8. Scribe runs best-effort after terminal states. It sees memory tools (`list_inbox`, `merge_inbox_entry`, `update_session`, `export_memory`) and must not fail the workflow if it crashes (`packages/Agentweaver.AgentRuntime/Workflow/ScribeTurnExecutor.cs:10-16`, `packages/Agentweaver.AgentRuntime/Workflow/ScribeTurnExecutor.cs:42-56`, `packages/Agentweaver.AgentRuntime/Workflow/ScribeTurnExecutor.cs:158-203`).
+Agentweaver distinguishes between reversible agent work and irreversible repository changes. Editing inside a worktree is reversible. Merging into the target branch is not. The workflow therefore stops at a human review gate before merge.
 
-### Coordinator lifecycle
+The review gate is not just a UI screen. Conceptually it is a resumable workflow port with a single pending decision. A valid reviewer can approve, request changes, or decline. The workflow consumes that decision exactly once and then moves forward. This prevents duplicated approvals, stale decisions, and accidental merges after restarts.
 
-1. `CoordinatorRunService.StartCoordinatorRunAsync` creates a parent run with `AgentName = "Coordinator"`, persists it, and activates the coordinator workflow (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:95-143`).
-2. The coordinator spec phase drafts and persists an `OutcomeSpec` with states `drafting`, `awaiting_confirmation`, `confirmed`, or `declined`; confirmation/revision resumes a pending RequestPort (`apps/Agentweaver.Api/Memory/OutcomeSpec.cs:5-19`, `apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:302-386`).
-3. When a confirmed run has a persisted work plan with subtasks, the coordinator does not finalize. It abandons the spec-phase workflow and hands off to dispatch/observe (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:471-536`).
-4. `CoordinatorDispatchService` loads the `WorkPlan`, marks it dispatching, emits topology, dispatches ready subtasks in parallel when scopes do not conflict, observes each child stream, and hands off to assembly when all subtasks are terminal (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:37-64`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:161-260`).
-5. Child runs intentionally share the coordinator worktree and use a trimmed pipeline: agent + RAI, then `AssembleReady`; they skip per-child review, merge, and Scribe because review happens on the integrated output (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:149-223`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:720-752`, `packages/Agentweaver.Domain/RunStatus.cs:25-32`).
-6. `CoordinatorAssemblyService` runs one collective pipeline: eligibility gate, integration branch, collective RAI, one human review, one merge, and one Scribe (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:29-52`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:225-315`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:345-433`).
-7. On approval, assembly merges once, runs collective Scribe, promotes coordinator-endorsed architectural/scope decisions, marks the plan complete, terminalizes the run, and completes the stream (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:439-555`). On request changes, it resets inferred subtasks and re-dispatches (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:612-647`).
+### Team memory closes the loop
 
-## Core Architecture Themes
+Each run can teach the system something: a pattern, a decision, a constraint, a session summary, or a caution for future agents. Agentweaver stores those facts in a structured memory database and exports selected views into project-local `.squad` and context files. Future prompts can then include concise, project-specific knowledge instead of relying on model memory or chat history.
 
-### API as orchestration boundary
+The important distinction is between **draft knowledge** and **accepted knowledge**. Agents can submit candidate decisions into an inbox. A Scribe or coordinator can later promote, reject, or export them. That gives the system a learning loop without letting every transient model observation become permanent project policy.
 
-The API registers concrete stores, orchestration services, recovery services, coordinator services, runtime services, project/casting/blueprint/workflow services, and endpoint groups in one host (`apps/Agentweaver.Api/Program.cs:62-245`, `apps/Agentweaver.Api/Program.cs:263-384`). Existing architecture docs explicitly describe this as a single ASP.NET Core process and the single source of truth for run state (`docs/architecture/overview.md:3-8`).
+Where this lives: `apps/Agentweaver.Api`, `apps/Agentweaver.Mcp`, `apps/web`, `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.AgentTools`, `packages/Agentweaver.SandboxFs`, `packages/Agentweaver.SandboxExec`, `packages/Agentweaver.Squad`.
 
-### Event stream: durable write-through plus live fan-out
+## Major Subsystems and How They Fit
 
-Every run event is both persisted and fanned out. `SqliteRunEventStream` is the durable layer and `RunStreamStore` is the low-latency in-memory live layer (`docs/architecture/events.md:3-12`). The SSE endpoint resumes from `Last-Event-ID` against the live stream when possible, otherwise replays from the durable `RunEvents` table, and the REST `/events` endpoint exposes persisted event rows (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:314-500`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:502-546`).
-
-### Memory and decision flywheel
-
-The memory database stores decisions, decision inbox entries, agent memory, sessions, run events, coordinator specs/plans/subtasks/dependencies, steering directives, and MCP OAuth records (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:7-22`). Worker prompts include a concise memory protocol instructing agents to record significant reusable learnings and submit important decisions (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:35-52`). The runtime injects loopback API tools including `submit_decision`, `record_memory`, `list_decisions`, `get_memory`, `merge_inbox_entry`, and `export_memory` (`packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs:18-38`, `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs:57-189`). Export writes `.squad/decisions.md`, pending inbox markdown, agent histories, `.squad/identity/now.md`, and `.agentweaver/context/` boundary/pattern files (`packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:30-44`, `packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:46-163`).
-
-### Sandbox and governance
-
-Tool execution is fail-closed and layered:
-
-1. `SandboxGovernance` loads an AGT policy with `defaultAction: Deny` and asserts that property at run start (`packages/Agentweaver.AgentRuntime/SandboxGovernance.cs:18-29`, `packages/Agentweaver.AgentRuntime/SandboxGovernance.cs:56-101`).
-2. `SandboxPolicyBackend` independently recognizes only known file/search/shell/prevalidated tools and denies unknown tools or missing path arguments (`packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs:14-52`, `packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs:60-80`, `packages/Agentweaver.SandboxFs/SandboxPolicyBackend.cs:147-199`).
-3. `run_command` must also pass the executor gate: real isolation is required unless the operator explicitly selected `direct` (`packages/Agentweaver.AgentRuntime/SandboxGovernance.cs:110-148`).
-4. File tools perform path validation and open-then-verify to defeat traversal and reparse-point escapes (`packages/Agentweaver.SandboxFs/SandboxPathValidator.cs:9-16`, `packages/Agentweaver.SandboxFs/SandboxPathValidator.cs:23-50`, `packages/Agentweaver.SandboxFs/SandboxPathValidator.cs:143-163`).
-
-On AKS, `SandboxExecutorRouter` selects `KubernetesSandboxExecutor` when configured or in-cluster and refuses to fall back to local execution if Kubernetes initialization fails (`apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:8-15`, `apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:30-83`).
-
-### Providers and tools
-
-The current production MAF agent path centers on `CopilotAIAgent`, which wraps the GitHub Copilot SDK, persists SDK session state into workflow checkpoints, disables config discovery, registers Agentweaver/sandbox tools, and uses a deterministic `agentweaver-run-{runId}` session id (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:18-40`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:238-264`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:291-352`). The legacy `GitHubCopilotAgentRunner` and the Foundry runner both still implement `IAgentRunner`; the dispatcher can route by `ModelSource` (`packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs:16-28`, `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs:13-31`, `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:17-31`).
-
-Unverified: the coordinator code currently creates coordinator and child runs with `ModelSource.GitHubCopilot` (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:116-132`). Microsoft Foundry support exists for direct `IAgentRunner` dispatch, but this overview did not verify a coordinator path that selects Foundry for coordinator turns.
-
-## Tech Stack
-
-| Layer | Technology | Evidence |
+| Subsystem | Problem it solves | Design logic |
 | --- | --- | --- |
-| Backend runtime | .NET 10, ASP.NET Core | API, MCP, and frontend host target `net10.0` (`apps/Agentweaver.Api/Agentweaver.Api.csproj:34-38`, `apps/Agentweaver.Mcp/Agentweaver.Mcp.csproj:1-14`, `apps/Agentweaver.Web/Agentweaver.Web.csproj:1-12`). |
-| Workflow engine | Microsoft Agents AI Workflows / MAF | API and runtime reference `Microsoft.Agents.AI.Workflows`, and `RunWorkflowFactory` builds/starts streaming workflows (`apps/Agentweaver.Api/Agentweaver.Api.csproj:19`, `packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj:14`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:21-24`). |
-| Model providers | GitHub Copilot SDK; Microsoft.Extensions.AI / Azure.AI.OpenAI / Foundry | Runtime references Copilot SDK, Microsoft Agents AI GitHub Copilot, Azure OpenAI, and Microsoft.Extensions.AI (`packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj:11-18`). |
-| Git operations | LibGit2Sharp | API and Squad package reference LibGit2Sharp; merge/worktree code calls `WorktreeManager` and `MergeWorktree` (`apps/Agentweaver.Api/Agentweaver.Api.csproj:11`, `packages/Agentweaver.Squad/Agentweaver.Squad.csproj:10`, `apps/Agentweaver.Api/Runs/MergeCoordinator.cs:92-104`). |
-| Persistence | SQLite by default, EF Core MemoryDb with SQL Server/PostgreSQL options | API references EF Core SQLite/SQL Server/PostgreSQL and Microsoft.Data.Sqlite; MemoryDb provider switch supports sqlite, sqlserver/azuresql, and postgres/postgresql (`apps/Agentweaver.Api/Agentweaver.Api.csproj:12-20`, `apps/Agentweaver.Api/Program.cs:213-239`). |
-| Web UI | React 19, TypeScript, Vite 8, Fluent UI v9, React Router | `apps/web/package.json:6-26` and `apps/web/README.md:1-7`. |
-| Docs site | VitePress | Frontend Dockerfile builds docs with `npx vitepress build .` (`apps/web/Dockerfile:10-17`). |
-| MCP | ModelContextProtocol.AspNetCore | MCP csproj references `ModelContextProtocol.AspNetCore` and Program maps MCP transport (`apps/Agentweaver.Mcp/Agentweaver.Mcp.csproj:9-13`, `apps/Agentweaver.Mcp/Program.cs:59-105`). |
-| Sandbox governance | Microsoft Agent Governance Toolkit + custom backend | Runtime and SandboxFs reference `Microsoft.AgentGovernance`, and `SandboxGovernance` creates a `GovernanceKernel` with custom backend (`packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj:12`, `packages/Agentweaver.SandboxFs/Agentweaver.SandboxFs.csproj:8-10`, `packages/Agentweaver.AgentRuntime/SandboxGovernance.cs:67-101`). |
-| Sandbox execution | mxc, WSL/bwrap/LXC, Kubernetes Sandbox Claims, Kata VM | SandboxExec references `Sabbour.Mxc.Sdk` and bundles executor binaries; local factory and AKS manifests document selection/runtime (`packages/Agentweaver.SandboxExec/Agentweaver.SandboxExec.csproj:7-36`, `packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:6-14`, `k8s/sandbox-template.yaml:16-56`). |
-| AKS ingress | Gateway API + Application Routing Istio | `k8s/gateway.yaml:1-39`, `scripts/aks/10-create-cluster.sh:4-11`. |
-| Secrets | Azure Key Vault Secrets Store CSI + Workload Identity | `k8s/api-deployment.yaml:23-28`, `k8s/secret-provider-class.yaml:1-42`, `scripts/aks/10-create-cluster.sh:8-10`. |
-| Observability | OTLP env vars, durable events, diagnostics endpoints | API deployment exports OTLP settings (`k8s/api-deployment.yaml:134-141`), and Program maps diagnostics/metrics endpoints (`apps/Agentweaver.Api/Program.cs:380-381`). |
+| API host | Centralizes orchestration, authorization, persistence, streaming, projects, memory, review, and merge behavior. | Keep authoritative state in one backend boundary so every client observes the same run lifecycle. |
+| Web UI | Lets humans start work, watch progress, manage projects/teams, and review outcomes. | Keep presentation separate from orchestration; the UI renders backend truth rather than inventing its own workflow. |
+| MCP host | Exposes Agentweaver capabilities to assistants and developer tools. | Make the same backend available to agentic clients without duplicating business logic. |
+| Agent runtime | Converts workflow steps into model turns and governed tool calls. | Encapsulate model-provider mechanics behind a workflow interface so orchestration can reason in steps, gates, and outputs. |
+| Agent tools | Provide file, search, edit, patch, shell, reporting, and escalation functions. | Give agents useful capabilities while keeping each capability policy-checkable. |
+| Sandbox filesystem and execution | Prevent tool calls from escaping the intended workspace or running with unintended authority. | Layer policy checks: tool allowlists, path containment, symlink/reparse protection, and executor isolation. |
+| Git/worktree services | Isolate changes and merge them safely. | Treat a run's output as a branchable, reviewable artifact with explicit merge coordination. |
+| Team/casting engine | Creates and persists named agents, charters, blueprints, and team context. | Make roles explicit so multi-agent work is reproducible rather than ad hoc. |
+| Memory and decisions | Stores reusable knowledge, current session context, and decision records. | Separate transient run output from durable project intelligence. |
+| AKS deployment | Runs the platform with ingress, persistent storage, secrets, and isolated sandbox pods. | Split public services from execution sandboxes and externalize credentials/storage through cloud-native primitives. |
+
+A rebuild should preserve the boundaries more than the exact classes. The crucial pattern is that external clients never directly operate on worktrees, memory files, or model sessions. They request intent changes from the API, and the API coordinates deterministic services around probabilistic model work.
+
+## Single-Agent Run Lifecycle
+
+A single-agent run is the smallest complete unit of Agentweaver work. It starts with a task and ends in one of a few terminal outcomes: merged, declined, failed, content-safety flagged, no changes, or similar terminal states.
+
+```mermaid
+flowchart TD
+    Submit[Submit task + project + branch + options]
+    Validate[Validate request and canonicalize repository]
+    Worktree[Create isolated worktree and run branch]
+    Context[Build prompt context<br/>agent charter + memory + task]
+    Agent[Agent turn uses governed tools]
+    Commit[Commit worktree changes and compute diff]
+    RAI[Responsible AI review]
+    Safety{RAI result}
+    Review[Human review gate]
+    Decision{Reviewer decision}
+    Merge[Merge under repository lock]
+    Scribe[Scribe updates memory/session/export]
+    Done[Terminal run]
+    Revise[Revise in same run]
+
+    Submit --> Validate --> Worktree --> Context --> Agent --> Commit --> RAI --> Safety
+    Safety -- green/yellow --> Review
+    Safety -- revise --> Revise --> Agent
+    Safety -- red --> Done
+    Safety -- no changes --> Scribe --> Done
+    Review --> Decision
+    Decision -- approve --> Merge --> Scribe --> Done
+    Decision -- request changes --> Revise
+    Decision -- decline --> Done
+```
+
+### What each stage is for
+
+1. **Submission and validation** make the task explicit and bind it to a repository, branch, project, requester, model source, and run options. This is the moment an ambiguous user intent becomes a durable run.
+2. **Worktree creation** creates a private editing surface. From this point forward, agent file changes are isolated from the branch being protected.
+3. **Context construction** gives the model only the operating instructions it needs: the task, optional named-agent charter, relevant memory, sandbox policy, and workflow expectations.
+4. **Agent execution** lets the model inspect, edit, run commands, and ask questions through governed tools. The model does not get raw host authority; it gets mediated capabilities.
+5. **Commit and diff production** freeze the agent's output into a reviewable artifact. A diff is easier to review, test, merge, and audit than a stream of individual edits.
+6. **RAI review** acts as an automated quality and safety checkpoint. It can pass, require revision, or stop the run if the output is unacceptable.
+7. **Human review** preserves human authority over repository changes. Even a passing RAI result does not merge by itself.
+8. **Merge coordination** serializes writes to the target repository and turns conflicts into workflow outcomes instead of race conditions.
+9. **Scribe** captures durable lessons after the outcome is known. It is best-effort because memory updates should enrich the system, not invalidate a completed merge.
+
+### Key invariants
+
+- A run should have one durable identity and one ordered event stream.
+- Agent edits should happen inside the run workspace, not directly on the protected branch.
+- The produced diff should be reviewed before merge.
+- Review decisions should be consumed at most once.
+- Merges should be serialized per repository.
+- Memory/Scribe failures should not retroactively fail an otherwise completed run.
+
+Where this lives: `apps/Agentweaver.Api/Runs`, `apps/Agentweaver.Api/Endpoints`, `apps/Agentweaver.Api/Workflows`, `packages/Agentweaver.AgentRuntime/Workflow`.
+
+## Coordinator Run Lifecycle
+
+A coordinator run exists for work that is too broad for one linear agent pass. It adds planning, dependency management, parallel child execution, and collective assembly.
+
+The key idea is to move from a vague goal to a confirmed contract before agents start editing. The coordinator first drafts an **OutcomeSpec**: desired outcome, scope, assumptions, and clarifying questions. A human can revise or confirm that spec. Only after confirmation does the system decompose work into a **WorkPlan**: subtasks, dependencies, assigned agents, isolation hints, and assembly strategy.
+
+```mermaid
+flowchart TD
+    Goal[Human goal or ready backlog item]
+    Draft[Draft OutcomeSpec]
+    Confirm{Human confirms?}
+    ReviseSpec[Revise spec]
+    Plan[Create WorkPlan DAG]
+    Frontier[Find ready dependency frontier]
+    Children[Dispatch child runs in parallel]
+    Observe[Observe child terminal states]
+    Ready{All usable outputs ready?}
+    Assemble[Build integration branch]
+    CollectiveRAI[Review aggregate diff]
+    CollectiveReview[One human review]
+    Merge[One collective merge]
+    CollectiveScribe[One collective Scribe pass]
+    Done[Coordinator terminal]
+    Rework[Reset affected subtasks]
+
+    Goal --> Draft --> Confirm
+    Confirm -- no --> ReviseSpec --> Draft
+    Confirm -- yes --> Plan --> Frontier --> Children --> Observe --> Ready
+    Ready -- no / failed frontier --> Rework --> Frontier
+    Ready -- yes --> Assemble --> CollectiveRAI --> CollectiveReview
+    CollectiveReview -- approve --> Merge --> CollectiveScribe --> Done
+    CollectiveReview -- request changes --> Rework
+    CollectiveReview -- decline --> Done
+```
+
+### Why coordinator children do not each merge
+
+Child runs are workers, not final approvers. They produce candidate branches, diffs, and RAI-reviewed outputs. They intentionally skip per-child human review, merge, and Scribe. The coordinator then assembles all child outputs into one integration branch and asks for one review of the whole change.
+
+That design prevents a common multi-agent failure mode: independently "correct" child changes that conflict or form an incoherent whole. By reviewing and merging once, Agentweaver treats the user-visible outcome as the unit of approval.
+
+### Dependency frontier model
+
+The WorkPlan is a DAG. A subtask can run when all of its dependencies are done and its declared scope does not conflict with other subtasks being launched in the same frontier. This allows safe parallelism without pretending every task is independent.
+
+The frontier model gives three useful properties:
+
+- **Deterministic recovery** — after a restart, the system can recompute which subtasks are pending, running, failed, or ready for assembly.
+- **Bounded parallelism** — only dependency-ready, non-conflicting work launches together.
+- **Targeted rework** — if review requests changes, the coordinator can reset affected subtasks instead of discarding the entire plan.
+
+### Coordinator invariants
+
+- No child work starts until the OutcomeSpec is confirmed or unattended policy explicitly allows confirmation.
+- A WorkPlan should be persisted before dispatch so recovery can resume from durable intent.
+- Child runs should finish in assembly-ready states, not merge independently.
+- Collective assembly should run RAI and human review on the aggregate diff.
+- The coordinator should produce at most one final merge for the plan.
+
+Where this lives: `apps/Agentweaver.Api/Coordinator`, `apps/Agentweaver.Api/Memory`, `apps/Agentweaver.Api/Runs`, `packages/Agentweaver.Domain`.
+
+## Workflow Model
+
+Agentweaver represents work as workflows rather than hard-coded endpoint scripts. Conceptually, a workflow is a graph of named nodes: agent turns, RAI checks, human gates, merge steps, Scribe steps, and terminals. Edges define how outputs move through the graph.
+
+The default full workflow is intentionally conservative:
+
+```mermaid
+flowchart LR
+    Agent[Agent] --> RAI[RAI]
+    RAI -- needs revision --> Agent
+    RAI -- safety failed --> Blocked[Terminal: safety blocked]
+    RAI -- no changes --> Scribe[Scribe]
+    RAI -- reviewable --> Review[Human review]
+    Review -- request changes --> Agent
+    Review -- declined --> Declined[Terminal: declined]
+    Review -- approved --> Merge[Merge]
+    Merge -- conflict / blocked --> Review
+    Merge -- merged --> Scribe
+    Scribe --> Done[Terminal: done]
+```
+
+The workflow abstraction matters because it gives project authors and future features a vocabulary for changing process without rewriting orchestration primitives. However, Agentweaver does not blindly execute arbitrary graph nodes. Runtime binding classifies nodes by supported type and gate semantics, then maps them to known executors. Unsupported nodes fail closed. That preserves extensibility without allowing a malformed workflow to bypass review, RAI, or merge policy.
+
+Trade-off: workflow graphs add indirection. The payoff is that single-agent runs, coordinator child runs, and future project-authored workflows can share the same execution concepts while choosing different pipelines. For example, coordinator child runs use a trimmed agent-plus-RAI pipeline because their review and merge happen later at collective assembly.
+
+Where this lives: `apps/Agentweaver.Api/Workflows`, `apps/Agentweaver.Api/Runs`, `packages/Agentweaver.AgentRuntime/Workflow`.
+
+## Data, State, and Recovery
+
+Agentweaver stores several kinds of state because each answers a different recovery question.
+
+| State kind | Question it answers | Conceptual owner |
+| --- | --- | --- |
+| Run rows | What work exists, who requested it, where is its workspace, and what is its current status? | Run store |
+| Run events | What happened, in what order, and what should clients replay? | Event stream |
+| Workflow checkpoints | If a workflow paused or the process restarted, where can execution resume? | Workflow runtime / API |
+| Request ports / review gates | Is the system waiting for a human decision, and who may provide it? | Workflow gate services |
+| Memory and decisions | What project knowledge should survive beyond this run? | Memory database |
+| Coordinator specs/plans/subtasks | What was promised, how was it decomposed, and which work remains? | Coordinator persistence |
+| Project/workspace records | Which repositories and defaults are known to the system? | Project services |
+
+The recovery strategy follows from the separation of live and durable state. Live streams, in-memory workflow registrations, and active process handles are useful while the service is running, but the durable records must be sufficient to avoid lying to users after a restart. When the process comes back, recovery services can inspect run statuses, pending gates, child run outcomes, and persisted plans to decide whether to resume, expose a fallback action, or mark a run failed.
+
+The most important invariant is monotonicity: once a durable event or state transition is recorded, clients should not observe a contradictory story later. Recovery may add compensating events, but it should not pretend earlier events never happened.
+
+## Memory and Decision Flywheel
+
+Agentweaver's memory system is a structured feedback loop:
+
+```mermaid
+flowchart LR
+    Run[Run produces observations]
+    Tools[Agent memory tools]
+    Inbox[Decision inbox<br/>draft proposals]
+    Memory[(Memory DB)]
+    Review[Coordinator / Scribe / human policy]
+    Decisions[Accepted decisions]
+    Export[Project context export]
+    Future[Future run prompt context]
+
+    Run --> Tools
+    Tools --> Inbox
+    Tools --> Memory
+    Inbox --> Review --> Decisions --> Memory
+    Memory --> Export --> Future
+```
+
+This loop separates three categories of knowledge:
+
+- **Session context** — what is currently being worked on and what matters right now.
+- **Agent memory** — reusable observations, patterns, and learnings scoped to an agent or shared through tags.
+- **Decisions** — durable architectural, process, scope, or technical choices that should constrain future work.
+
+The inbox is the safety valve. Agents may propose decisions, but promotion is explicit. This avoids memory pollution while still capturing important discoveries before they disappear from the run transcript.
+
+Exports make memory portable. Instead of burying all context in a database, Agentweaver regenerates human-readable project artifacts such as decisions, pending inbox entries, agent history, current session context, and boundary/pattern files. A rebuild should preserve this bidirectional shape: structured database for correctness and queryability; file exports for transparency, review, and prompt context.
+
+Where this lives: `apps/Agentweaver.Api/Memory`, `packages/Agentweaver.Squad/Memory`, `.squad`, `.agentweaver/context`.
+
+## Sandbox and Tool Governance
+
+Agentweaver treats every model tool call as a request, not a right. The governance stack is layered so a single missed check is less likely to become a workspace escape.
+
+```mermaid
+flowchart TD
+    Model[Model requests tool call]
+    Tool[Registered Agentweaver tool]
+    Policy[Governance policy<br/>default deny]
+    Backend[Tool-specific backend checks]
+    Path[Path containment<br/>open then verify]
+    Exec[Sandbox executor gate]
+    Workspace[Run worktree]
+    Deny[Denied]
+
+    Model --> Tool --> Policy
+    Policy -- unknown / disallowed --> Deny
+    Policy -- allowed --> Backend
+    Backend -- invalid args --> Deny
+    Backend -- file tool --> Path
+    Backend -- shell tool --> Exec
+    Path -- safe --> Workspace
+    Exec -- isolated --> Workspace
+```
+
+Key concepts:
+
+- **Default deny**: if a tool or operation is not recognized, it should not run.
+- **Capability-specific validation**: file reads, searches, edits, patches, and shell commands need different checks.
+- **Path containment**: paths must resolve inside the intended workspace, including protection against symlinks, junctions, and time-of-check/time-of-use tricks.
+- **Executor isolation**: shell commands should run in a real sandbox unless the operator explicitly selected direct local execution.
+- **AKS sandbox claims**: in Kubernetes, runs claim isolated sandbox capacity rather than executing commands inside the API container.
+
+The trade-off is that some legitimate commands may need extra configuration or policy support. Agentweaver prefers that friction over silent privilege expansion.
+
+Where this lives: `packages/Agentweaver.AgentTools`, `packages/Agentweaver.SandboxFs`, `packages/Agentweaver.SandboxExec`, `apps/Agentweaver.Api/Sandbox`, `k8s/sandbox-*`.
+
+## Model Providers and Agent Roles
+
+Agentweaver distinguishes between **workflow orchestration** and **model execution**. Workflow orchestration decides when an agent turn should happen, what context it receives, which tools are available, and what to do with its output. Model execution is the provider-specific mechanism for producing that turn.
+
+The production worker path centers on a Copilot-backed workflow agent that can persist session state, use registered tools, and stream progress. There are also runner abstractions for direct provider dispatch, including GitHub Copilot and Microsoft Foundry paths. The architectural intent is provider substitution behind stable run and workflow contracts, not provider-specific behavior leaking into every subsystem.
+
+Foundry support exists for direct runner dispatch, while the coordinator path is Copilot-oriented: coordinator turns run through the Copilot-backed workflow agent. Provider substitution applies at the runner boundary, so adding a Foundry coordinator path would extend the same contract rather than reshape orchestration.
+
+Named agents add another layer above providers. A role such as reviewer, planner, or specialist is defined by charter, memory, and assignment. The same model provider can behave differently depending on that role context. This is why casting and charters are first-class: they make team behavior reproducible.
+
+## AKS Runtime Topology
+
+In AKS, Agentweaver separates public services, persistent state, secrets, and sandbox execution.
+
+```mermaid
+flowchart TB
+    Internet[Users and MCP clients] --> Gateway[Gateway API<br/>HTTPS]
+
+    Gateway --> ApiRoute["/api /auth OAuth routes"]
+    Gateway --> McpRoute["/mcp and MCP metadata"]
+    Gateway --> FrontRoute["/ frontend"]
+
+    ApiRoute --> ApiSvc[API service]
+    McpRoute --> McpSvc[MCP service]
+    FrontRoute --> FrontSvc[Frontend service]
+
+    ApiSvc --> ApiPod[API pod<br/>single writer]
+    McpSvc --> McpPod[MCP pod]
+    FrontSvc --> FrontPods[Frontend pods]
+
+    ApiPod --> DataPVC[(Data PVC<br/>run + memory stores)]
+    ApiPod --> WorkspacePVC[(Workspace PVC<br/>repos + worktrees)]
+    ApiPod --> Secrets[Key Vault via CSI]
+    McpPod --> McpSecrets[Key Vault via CSI]
+
+    ApiPod --> Claim[Per-run SandboxClaim]
+    Claim --> WarmPool[Warm sandbox pool]
+    WarmPool --> SandboxPod[Kata VM sandbox pod]
+    SandboxPod --> WorkspacePVC
+
+    ApiPod --> External[GitHub / Copilot / Foundry / OAuth]
+    ApiPod --> Telemetry[OTLP collector]
+    McpPod --> ApiSvc
+```
+
+### Why the topology looks this way
+
+- **Gateway routing** gives one public HTTPS entry point while keeping API, MCP, and frontend as independently deployable services.
+- **A single API writer** matches the default SQLite persistence model. Horizontal API scaling would require a database and locking strategy designed for multiple writers.
+- **Separate data and workspace volumes** distinguish application state from repository working files. They have different access patterns and backup concerns.
+- **Key Vault CSI** keeps secrets out of images and manifests while making them available to pods at runtime.
+- **Warm sandbox capacity** reduces run startup latency while preserving per-run isolation.
+- **Network policy** should start from deny-by-default and then open only DNS, ingress, app-internal, GitHub/provider, and MCP-to-API paths required for operation.
+
+This deployment is optimized for correctness and isolation before scale-out. The most obvious scaling pressure points are API single-writer persistence, workspace PVC throughput, sandbox pool capacity, and model-provider rate limits.
+
+Where this lives: `k8s`, `scripts/aks`, `apps/agentweaver-sandbox`.
+
+## Tech Stack Rationale
+
+| Layer | Technology | Why it fits Agentweaver |
+| --- | --- | --- |
+| Backend services | .NET / ASP.NET Core | Strong fit for long-lived services, dependency injection, streaming endpoints, hosted recovery jobs, and typed domain models. |
+| Workflow runtime | Microsoft Agents / MAF-style workflows | Provides a resumable graph model for agent turns, request ports, gates, and streaming execution. |
+| Model providers | GitHub Copilot SDK and Microsoft Foundry-related abstractions | Allows GitHub-native agent work while leaving a provider abstraction for alternate enterprise model backends. |
+| Persistence | SQLite plus EF Core-backed memory store options | SQLite keeps self-hosted/local deployment simple; the memory layer is structured enough to evolve toward server databases. |
+| Git operations | LibGit2Sharp-style repository APIs | Enables programmatic worktree, branch, diff, and merge operations without shelling out for every repository action. |
+| Web UI | React, TypeScript, Vite, Fluent UI | Good fit for a live operational UI with review forms, timelines, project screens, and reusable Microsoft-style components. |
+| MCP | Model Context Protocol over stdio/HTTP | Lets external assistants use Agentweaver as a tool surface while reusing API authorization and orchestration. |
+| Sandbox governance | Agent Governance Toolkit plus custom policy backend | Combines a default-deny policy engine with Agentweaver-specific file and command semantics. |
+| Sandbox execution | Local executors and Kubernetes sandbox claims | Supports developer machines and production AKS without changing the conceptual run contract. |
+| AKS ingress and secrets | Gateway API, workload identity, Key Vault CSI | Uses cloud-native primitives for routing and secret delivery rather than embedding deployment-specific secrets in code. |
+| Observability | Durable events, diagnostics endpoints, OTLP | Makes the run timeline both user-visible and operator-debuggable. |
+
+The common theme is pragmatic layering. Agentweaver uses simple local-first primitives where they reduce setup cost, then wraps them in boundaries that can be replaced when scale or deployment requirements grow.
 
 ## Glossary
 
 | Term | Meaning |
 | --- | --- |
-| Agentweaver | The platform as a whole: API, MCP server, web UI, runtime, sandboxing, team memory, and AKS deployment. |
-| Run | A persisted unit of agent execution with repository, branch, task, status, worktree branch/path, diff/tree hash, reviewer, and optional parent/subtask metadata (`packages/Agentweaver.Domain/Run.cs:3-64`). |
-| Single-agent run | A run started directly from a task; it creates its own worktree and uses the full workflow: agent, RAI, human review, merge, Scribe. |
-| Coordinator run | A parent run with `AgentName = "Coordinator"` that drafts an OutcomeSpec, creates a WorkPlan, dispatches child runs, and manages collective assembly (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:95-143`). |
-| OutcomeSpec | Persisted coordinator contract containing goal, desired outcome, scope, assumptions, optional clarifying questions, and status (`apps/Agentweaver.Api/Memory/OutcomeSpec.cs:5-19`). |
-| WorkPlan | Persisted decomposition attached to an OutcomeSpec; stores selected workflow, status, assembly stage, isolation summary, and integration branch (`apps/Agentweaver.Api/Memory/WorkPlan.cs:5-35`). |
-| Subtask | A WorkPlan node assigned to an agent with scope, phase, isolation hint, status, child run id, optional bespoke charter, and recovery guidance (`apps/Agentweaver.Api/Memory/Subtask.cs:5-54`). |
-| DAG / frontier | The dependency graph of subtasks and the currently ready pending nodes. `CoordinatorDispatchService` dispatches ready frontier nodes while respecting declared dependency and file-scope conflicts (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:222-243`). |
-| AssembleReady | Terminal status for coordinator child runs after agent+RAI; it hands the child branch/tree/diff to collective assembly and deliberately skips child-level review/merge/Scribe (`packages/Agentweaver.Domain/RunStatus.cs:25-32`). |
-| Collective assembly | Coordinator-owned pipeline over all child outputs: eligibility, integration branch, aggregate RAI, one human review, one merge, one Scribe (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:29-52`). |
-| Sandbox | The per-run execution boundary. Locally it is mxc/WSL/bwrap/LXC/direct depending on host; on AKS it is a per-run SandboxClaim into Kata VM sandbox pods (`packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:6-14`, `k8s/sandbox-template.yaml:1-56`). |
-| Worktree | Git worktree created for a run or shared by coordinator children; all file tools and commits operate inside it (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:76-147`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:149-223`). |
-| Blueprint | Catalog-defined project/team template with roster, workflows, review policy, and sandbox profile (`packages/Agentweaver.Squad/Catalog/CatalogReader.cs:111-160`). |
-| Casting | The `.squad/` team selection and role/charter system; SquadReader/Writer read/write canonical casting, team, charter, history, and routing artifacts (`packages/Agentweaver.Squad/Squad/SquadReader.cs:14-18`, `packages/Agentweaver.Squad/Squad/SquadWriter.cs:8-14`). |
-| Charter | Markdown instructions for a named agent, usually read from `.squad/agents/{name}/charter.md` and injected into the run system prompt (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:444-466`). |
-| MCP | Model Context Protocol facade exposing Agentweaver tools to assistants; HTTP mode validates inbound bearer tokens and forwards the caller token to the API (`apps/Agentweaver.Mcp/README.md:29-42`, `apps/Agentweaver.Mcp/Program.cs:59-105`). |
-| RAI | Responsible AI reviewer agent that inspects produced diffs and returns GREEN/YELLOW/REVISE/RED (`packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:11-18`, `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:128-136`). |
-| Scribe | Post-run memory keeper that merges inbox entries, updates session summary, exports memory, and is best-effort (`packages/Agentweaver.AgentRuntime/Workflow/ScribeTurnExecutor.cs:10-16`, `packages/Agentweaver.AgentRuntime/Workflow/ScribeTurnExecutor.cs:166-174`). |
-| Decision inbox | Pending decision/memory entries stored in MemoryDb and exported to `.squad/decisions/inbox`; Scribe/Coordinator promote entries into decisions (`apps/Agentweaver.Api/Memory/MemoryDbContext.cs:9-17`, `packages/Agentweaver.Squad/Memory/SquadMemoryExporter.cs:46-79`). |
-| Review gate | Human-in-the-loop gate for single-agent output or collective assembly. Single runs use a MAF RequestPort; collective assembly uses `AssemblyReviewGate` keyed by coordinator run id (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:685-850`, `apps/Agentweaver.Api/Coordinator/AssemblyReviewGate.cs:5-13`). |
+| Agentweaver | The whole platform: API, web UI, MCP host, runtime, tools, sandboxing, memory, and deployment assets. |
+| Run | A durable unit of agent work tied to a task, repository, branch, workspace, status, events, and output artifact. |
+| Single-agent run | A direct run that uses the full pipeline: worktree, agent, RAI, human review, merge, and Scribe. |
+| Coordinator run | A parent run that turns a goal into a confirmed OutcomeSpec, WorkPlan, child runs, assembly, review, merge, and Scribe. |
+| OutcomeSpec | The human-confirmed contract for a coordinator run: desired outcome, scope, assumptions, and clarification state. |
+| WorkPlan | The persisted DAG of coordinator subtasks, dependencies, assignments, isolation hints, and assembly status. |
+| Subtask | One node in a WorkPlan, assigned to an agent and eventually represented by a child run. |
+| DAG / frontier | The dependency graph and the set of currently runnable subtasks whose prerequisites are complete. |
+| AssembleReady | The child-run terminal state meaning the child output is ready for collective coordinator assembly, not independently merged. |
+| Collective assembly | The coordinator phase that integrates child outputs, reviews the aggregate diff, asks for one human decision, and merges once. |
+| Worktree | An isolated git working directory for a run's changes. It protects the target branch until review and merge. |
+| Sandbox | The execution boundary for model tools, including file containment and command isolation. |
+| Blueprint | A reusable project/team template that can define roster, workflow, review, and sandbox expectations. |
+| Casting | The process of selecting and persisting named agents, roles, charters, and team context for a project. |
+| Charter | Role-specific instructions for a named agent, injected into that agent's run context. |
+| MCP | Model Context Protocol surface that lets external assistants call Agentweaver capabilities. |
+| RAI | Responsible AI review step that evaluates produced diffs and can pass, request revision, or block. |
+| Scribe | Best-effort post-run memory keeper that updates session context, promotes or records learnings, and exports memory artifacts. |
+| Decision inbox | Holding area for proposed decisions before they become accepted project memory. |
+| Review gate | Human-in-the-loop workflow pause where an authorized reviewer approves, requests changes, or declines. |
+| Memory export | Regeneration of human-readable project context files from structured memory and decision records. |
 
-## Gaps and Unverified Areas
+## Known limitations and scope
 
-- Unverified: Foundry support is present in `IAgentRunner` dispatch and `FoundryAgentRunner`, but the current coordinator path observed here hard-codes GitHub Copilot for coordinator runs.
-- Unverified: The docs homepage says seven built-in YAML workflows exist (`docs/index.md:31-32`), while the code path read for this overview exposes a code-embedded default workflow and project-authored workflows. This overview does not enumerate all embedded catalog workflow resources.
-- The architecture docs still describe a "single ASP.NET Core process" backend (`docs/architecture/overview.md:3`), while AKS runs API, MCP, and frontend as separate processes. Reconciled interpretation: API/run orchestration remains single-hosted inside `Agentweaver.Api`; clients are separate thin processes.
+- Foundry is wired into direct runner dispatch, while the coordinator path is Copilot-oriented. Coordinator turns run through the Copilot-backed workflow agent.
+- Agentweaver ships a default embedded workflow and loads additional catalog and project workflows separately. The workflow model and the default pipeline are documented here; individual embedded catalog workflow resources are defined alongside their projects.
+- The control plane is a single authoritative backend even though AKS deploys API, MCP, and frontend as separate processes. API and run orchestration remain the single source of truth; MCP and frontend are thin client-facing processes that render and forward backend state.

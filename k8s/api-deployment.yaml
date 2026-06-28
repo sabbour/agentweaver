@@ -156,6 +156,16 @@ spec:
             # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
             - name: Auth__Mcp__AllowGitHubPassthrough
               value: "true"
+            # GitHub token store — persists per-user OAuth tokens in Key Vault so the
+            # API can exchange them for on-behalf-of calls (spec 006).
+            # Requires "Key Vault Secrets Officer" on agentweaver-api-identity
+            # (granted by scripts/aks/15-setup-identity.sh).
+            # WorkloadIdentityCredential resolves automatically from the webhook-injected
+            # AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_FEDERATED_TOKEN_FILE env vars.
+            - name: Auth__TokenStore__Provider
+              value: keyvault
+            - name: Auth__TokenStore__KeyVaultUri
+              value: https://${KEYVAULT_NAME}.vault.azure.net
             - name: OTEL_SERVICE_NAME
               value: agentweaver-api
             - name: OTEL_RESOURCE_ATTRIBUTES

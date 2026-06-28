@@ -1,136 +1,341 @@
-# MCP Server — Deep Dive
+# MCP Server — Conceptual Deep Dive
 
-## Purpose & Scope (MCP RS vs the API's OAuth AS)
+::: warning Experimental
+The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
+:::
 
-`Agentweaver.Mcp` is the Model Context Protocol (MCP) surface for Agentweaver. It can run in two transports:
+Agentweaver's MCP server is an endpoint that tools can call, uses standards-based OAuth discovery, and preserves the caller's identity all the way to the Agentweaver API. The sections below explain its design as rebuildable ideas, so an engineer who has never seen Agentweaver could recreate the same behavior.
 
-- **stdio mode** (`--stdio`) for local MCP hosts.
-- **HTTP mode** at `/mcp`, where the process is an OAuth 2.1 **Resource Server (RS)** and protects tool calls with bearer authentication.
+## 1. The mental model: MCP is the tool door, the API is the authority
 
-The MCP process does **not** issue OAuth tokens. Token issuance lives in `Agentweaver.Api`, which hosts the OAuth 2.1 **Authorization Server (AS)** endpoints: RFC 8414 metadata, `/oauth/authorize`, `/oauth/token`, `/oauth/jwks`, `/oauth/register`, and `/oauth/revoke` (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:7-20`, `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:28-67`, `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:69-243`, `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:245-338`).
+Agentweaver has two separate responsibilities that are easy to conflate:
 
-The boundary is:
+- **The MCP server is an OAuth Resource Server (RS).** It hosts the `/mcp` resource and decides whether a request is allowed to invoke MCP tools. It does not issue OAuth tokens, run a login UI, store refresh tokens, or decide long-term identity policy.
+- **The Agentweaver API is the OAuth Authorization Server (AS).** It owns the login flow, dynamic client registration, refresh-token rotation, revocation, GitHub organization checks, JWT signing keys, and the business API that tools ultimately call.
 
-- **AS (`Agentweaver.Api`)**: brokers GitHub login, enforces GitHub org membership before issuing codes/tokens, signs short-lived JWT access tokens, publishes JWKS, rotates refresh tokens, and denylists revoked access-token `jti`s (`apps/Agentweaver.Api/Program.cs:123-133`, `apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:101-117`, `apps/Agentweaver.Api/Auth/OAuth/McpOAuthBrokerService.cs:168-210`, `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:7-20`, `apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:15-24`).
-- **RS (`Agentweaver.Mcp`)**: advertises protected-resource metadata, challenges unauthenticated MCP calls with RFC 9728 discovery information, validates Agentweaver-minted JWTs offline using the AS JWKS, and forwards the caller's bearer token to the API for per-user identity (`apps/Agentweaver.Mcp/Program.cs:75-105`, `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:51-125`, `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:11-17`, `apps/Agentweaver.Mcp/AgentweaverApiClient.cs:43-59`).
+The split matters because MCP clients already understand OAuth-style Resource Server behavior. When a client reaches a protected resource without credentials, the resource should tell the client where to discover authorization metadata. The client then obtains a token from the Authorization Server and retries the Resource Server with `Authorization: Bearer ...`.
 
-Production pins issuer/audience to the public host on both sides. The MCP RS refuses to start in Production if `Auth:Mcp:Issuer` or `Auth:Mcp:Audience` is missing (`apps/Agentweaver.Mcp/Program.cs:13-32`), and the API AS has the same fail-fast guard for `Auth:OAuth:Issuer`/`Auth:OAuth:Audience` because MCP forwards public-host JWTs to the API over an internal service address (`apps/Agentweaver.Api/Security/OAuthConfigGuard.cs:3-18`, `apps/Agentweaver.Api/Security/OAuthConfigGuard.cs:21-50`).
+Agentweaver keeps the MCP server intentionally thin:
 
-## Protected Resource Metadata (RFC 9728: paths, document shape, why both bare + /mcp forms)
+1. Authenticate the caller at the MCP boundary.
+2. Expose Agentweaver capabilities as MCP tools.
+3. Forward the caller's bearer token to the backend API.
+4. Let the API enforce durable authorization, revocation, and data access.
 
-In HTTP mode, the MCP RS serves RFC 9728 protected-resource metadata without authentication at both:
+That design avoids a confused-deputy problem. If MCP used only a shared service key when calling the API, every tool call would appear to come from the MCP service. Instead, MCP forwards the user's own token whenever it has one, so the API sees the real caller and can apply user-specific policy.
 
-- `GET /.well-known/oauth-protected-resource`
-- `GET /.well-known/oauth-protected-resource/mcp`
+Key invariants to preserve when rebuilding:
 
-Both routes return the same document (`apps/Agentweaver.Mcp/Program.cs:79-100`). The returned shape is:
+- MCP HTTP mode protects tool calls as a Resource Server.
+- The API issues and validates Agentweaver OAuth tokens as the Authorization Server.
+- The access token audience is the MCP resource, normally `https://HOST/mcp`.
+- Hosted deployments pin issuer and audience to the public host, even when services talk to each other over internal cluster addresses.
+- The same bearer token that unlocked MCP is propagated downstream to the API.
 
-```json
-{
-  "resource": "https://HOST/mcp",
-  "authorization_servers": ["https://HOST"],
-  "bearer_methods_supported": ["header"],
-  "scopes_supported": ["mcp:invoke"],
-  "resource_documentation": "https://HOST/docs"
-}
-```
+**Where this lives**
 
-The issuer is `Auth:Mcp:Issuer` when configured; otherwise it is derived from the incoming request scheme and host. The `resource` is always `{issuer}/mcp` (`apps/Agentweaver.Mcp/Program.cs:82-97`).
+- `apps/Agentweaver.Mcp`
+- `apps/Agentweaver.Api/Auth/OAuth`
+- `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`
+- `apps/Agentweaver.Api/Security`
 
-The server exposes both the bare and `/mcp`-suffixed forms because path-aware clients such as Copilot CLI / VS Code probe the resource-suffixed well-known URI. The code comment calls this out directly (`apps/Agentweaver.Mcp/Program.cs:79-81`), and the Kubernetes `HTTPRoute` also routes both exact paths to the MCP service for client compatibility (`k8s/mcp-httproute.yaml:27-39`).
+## 2. Runtime shape: local stdio and hosted HTTP solve different problems
 
-The bearer middleware explicitly bypasses auth for `/healthz` and any `/.well-known/oauth-protected-resource*` path, so clients can discover metadata before they possess a token (`apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:51-59`).
+The MCP server supports two transport modes.
 
-## Bearer Token Validation (McpBearerTokenMiddleware: JWT validation, JWKS fetch, audience/issuer, jti)
+### stdio mode
 
-The HTTP middleware protects all non-health, non-protected-resource-metadata MCP requests (`apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:51-60`). Missing bearer credentials return `401` with a `WWW-Authenticate` challenge that includes `resource_metadata="{issuer}/.well-known/oauth-protected-resource"`; invalid credentials add `error="invalid_token"` (`apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:61-69`, `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:162-177`).
+Stdio mode is for local MCP hosts that spawn the process and talk over standard input/output. There is no public HTTP resource to protect, so this mode does not run the HTTP bearer middleware. When a tool needs to call the API and there is no inbound HTTP bearer token, the client wrapper can fall back to configured credentials.
 
-Validation order:
+### HTTP mode
 
-1. **Static Agentweaver API key fast path** for automation/CI. Keys are read from `Auth:ApiKey`/`Auth:User` or `Auth:Keys:*` (`apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:73-81`, `apps/Agentweaver.Mcp/McpApiKeyRegistry.cs:5-13`, `apps/Agentweaver.Mcp/McpApiKeyRegistry.cs:18-37`).
-2. **Agentweaver OAuth access token**. The middleware calls `McpAccessTokenValidator`, which first rejects non-JWT-shaped tokens, resolves issuer/audience, fetches signing keys, validates RS256 signature, `iss`, `aud`, lifetime, and extracts `sub`, `gh_login`, `jti`, and `org` (`apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:83-94`, `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:45-94`).
-3. **Transitional raw GitHub token path**, enabled unless `Auth:Mcp:AllowGitHubPassthrough=false`, validates with `GET https://api.github.com/user` and caches results (`apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:96-131`, `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs:134-160`).
+HTTP mode exposes `/mcp` as a network resource. This is the hosted integration point for clients such as Copilot CLI or VS Code. In this mode, every MCP request flows through bearer-token middleware before reaching tool dispatch, except health checks and OAuth discovery metadata.
 
-JWT details:
+The HTTP transport is intentionally stateless. Each request gets its own HTTP scope so the validated inbound token remains available during tool execution. That matters because the tool layer is mostly a proxy: it receives an MCP tool invocation, calls the Agentweaver API, and should forward the caller's token rather than losing context on a detached session loop.
 
-- The RS resolves issuer from `Auth:Mcp:Issuer`, falling back to the request host; audience from `Auth:Mcp:Audience`, falling back to `{issuer}/mcp` (`apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:52-54`, `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:123-139`).
-- JWKS comes from `Auth:Mcp:JwksUri` when set, otherwise `{issuer}/oauth/jwks`, and is cached for 10 minutes (`apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:96-114`).
-- The validator permits only RS256 with 30 seconds of clock skew (`apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:59-70`).
-- `jti` is extracted by the MCP RS, but the authoritative denylist check happens in the API after the MCP server forwards the same bearer token downstream. The API validates the Agentweaver JWT, rejects denied `jti`s, and sets caller context for per-user authorization (`apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:83-87`, `apps/Agentweaver.Mcp/AgentweaverApiClient.cs:43-59`, `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:168-190`, `apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:139-160`).
+The control flow is:
 
-The AS mints these JWTs with `sub`, `scope=mcp:invoke`, `gh_login`, `jti`, optional `org`, `iss`, `aud`, `iat`, `nbf`, and `exp`; default lifetime is 15 minutes (`apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:23-27`, `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:77-107`). `/oauth/jwks` publishes the public RSA key as `{ kty, use, alg, kid, n, e }` (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:56-67`, `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs:127-140`).
+1. Client sends an MCP request to `/mcp`.
+2. Middleware authenticates or challenges.
+3. MCP SDK dispatches the requested tool.
+4. The tool calls the Agentweaver API through a shared client wrapper.
+5. The wrapper chooses the user's inbound bearer token when present; otherwise it falls back to configured service credentials for contexts like stdio.
+6. The API performs its own validation and business operation.
 
-## Client Discovery Chain (mermaid sequenceDiagram: client -> /mcp 401 -> protected-resource metadata -> AS metadata -> authorize/token -> /mcp with bearer)
+**Trade-off:** stateless HTTP keeps identity propagation simple and reliable per request. If a future feature needs long-lived server-side MCP sessions, it must explicitly preserve caller identity across session work rather than relying on ambient HTTP context.
+
+**Where this lives**
+
+- `apps/Agentweaver.Mcp/Program.cs`
+- `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
+
+## 3. Standards-based discovery: how an unauthenticated client learns where to log in
+
+A generic MCP client should not need hard-coded Agentweaver OAuth URLs. The standards flow lets the protected resource advertise enough information for the client to bootstrap itself.
+
+Agentweaver uses two complementary discovery documents:
+
+1. **RFC 9728 Protected Resource Metadata**, served by the MCP Resource Server.
+2. **RFC 8414 Authorization Server Metadata**, served by the Agentweaver API Authorization Server.
+
+### 3.1 The Resource Server challenge
+
+When a client calls `/mcp` without a usable token, the MCP server returns `401 Unauthorized` with a `WWW-Authenticate: Bearer ...` challenge. The important part is the `resource_metadata` parameter. It points the client at the protected-resource metadata document.
+
+Conceptually, the challenge says:
+
+> "This is a bearer-protected MCP resource. Before you can call it, discover this resource's OAuth metadata here."
+
+The response should not require authentication; otherwise a client would need a token in order to learn how to get a token.
+
+### 3.2 Protected Resource Metadata (RFC 9728)
+
+The MCP server publishes metadata for the `/mcp` resource. The document communicates four facts:
+
+- **resource**: the exact protected resource identifier, e.g. `https://HOST/mcp`.
+- **authorization_servers**: the issuer(s) that can issue tokens for that resource, e.g. `https://HOST`.
+- **bearer_methods_supported**: Agentweaver expects bearer tokens in the HTTP `Authorization` header.
+- **scopes_supported**: the logical permission needed for MCP invocation, currently `mcp:invoke`.
+
+The resource identifier is not just a URL for routing; it is also the OAuth audience. A token minted for a different audience should not unlock MCP.
+
+### 3.3 Authorization Server Metadata (RFC 8414)
+
+After reading the Resource Server metadata, the client discovers the Authorization Server metadata. That document advertises the authorization endpoint, token endpoint, JWKS endpoint, registration endpoint, revocation endpoint, supported grant types, and PKCE requirements.
+
+Agentweaver's AS is deliberately public-client friendly: MCP clients use authorization code + PKCE, not a client secret. The server supports S256 PKCE and rejects weaker or missing challenge methods. The GitHub client secret stays server-side because the API brokers the GitHub login internally.
+
+### 3.4 The path-suffixed well-known gotcha
+
+The most important routing gotcha is that well-known discovery paths are **not** children of `/mcp`.
+
+For a protected resource `https://HOST/mcp`, path-aware clients may probe well-known URLs like:
+
+- `https://HOST/.well-known/oauth-protected-resource`
+- `https://HOST/.well-known/oauth-protected-resource/mcp`
+- `https://HOST/.well-known/oauth-authorization-server`
+- `https://HOST/.well-known/oauth-authorization-server/mcp`
+
+This follows the well-known URI convention for issuers/resources with path components: the path suffix is appended after the well-known name. A Kubernetes route that only forwards `PathPrefix /mcp` will never deliver `/.well-known/...` requests to the MCP service. Agentweaver therefore routes the bare and `/mcp`-suffixed protected-resource metadata paths explicitly, before the `/mcp` prefix route.
+
+This is a standards-compliance and interoperability decision, not a cosmetic duplicate. Some clients probe the suffixed form; serving only the bare form breaks those clients even though the resource itself is `/mcp`.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant C as MCP client
-    participant RS as Agentweaver.Mcp (Resource Server)
-    participant AS as Agentweaver.Api (Authorization Server)
+    participant RS as Agentweaver.Mcp<br/>Resource Server
+    participant AS as Agentweaver.Api<br/>Authorization Server
     participant GH as GitHub
 
-    C->>RS: POST /mcp (no bearer)
-    RS-->>C: 401 WWW-Authenticate: Bearer resource_metadata="https://HOST/.well-known/oauth-protected-resource"
-    C->>RS: GET /.well-known/oauth-protected-resource[/mcp]
+    C->>RS: POST /mcp without bearer token
+    RS-->>C: 401 WWW-Authenticate<br/>resource_metadata=https://HOST/.well-known/oauth-protected-resource
+    C->>RS: GET /.well-known/oauth-protected-resource or /mcp-suffixed variant
     RS-->>C: resource=https://HOST/mcp<br/>authorization_servers=[https://HOST]
-    C->>AS: GET /.well-known/oauth-authorization-server[/mcp]
-    AS-->>C: authorization_endpoint, token_endpoint, jwks_uri, scopes, PKCE S256
-    C->>AS: GET /oauth/authorize?response_type=code&code_challenge_method=S256&resource=https://HOST/mcp
-    AS->>GH: Redirect user to GitHub OAuth
-    GH-->>AS: GitHub callback code
-    AS->>AS: Enforce org membership; issue single-use auth code
-    AS-->>C: Redirect to client redirect_uri?code=...
-    C->>AS: POST /oauth/token (code + code_verifier)
-    AS-->>C: Bearer JWT access_token (+ refresh_token)
-    C->>RS: POST /mcp Authorization: Bearer access_token
-    RS->>AS: GET /oauth/jwks (or configured internal JWKS URI), cached
-    RS->>RS: Validate RS256 + iss + aud + exp
-    RS->>AS: Forward bearer to Agentweaver API tool endpoint
-    AS->>AS: Validate JWT and jti denylist
-    AS-->>RS: API response
+    C->>AS: GET /.well-known/oauth-authorization-server or /mcp-suffixed variant
+    AS-->>C: authorize/token/JWKS/register/revoke metadata<br/>PKCE S256, code grant, public client
+    C->>AS: GET /oauth/authorize<br/>code_challenge=S256, resource=https://HOST/mcp
+    AS->>GH: Redirect user through GitHub OAuth
+    GH-->>AS: GitHub callback
+    AS->>AS: Check org membership and create single-use code
+    AS-->>C: Redirect to client with authorization code
+    C->>AS: POST /oauth/token with code_verifier
+    AS-->>C: Bearer access token signed by AS
+    C->>RS: POST /mcp with Authorization: Bearer token
+    RS->>AS: Fetch JWKS if cache is cold
+    RS->>RS: Validate signature, issuer, audience, lifetime
+    RS->>AS: Invoke Agentweaver API with same bearer token
+    AS->>AS: Validate token, jti denylist, caller policy
+    AS-->>RS: API result
     RS-->>C: MCP tool result
 ```
 
-The AS metadata advertises the authorize, token, registration, JWKS, and revocation endpoints, supports only `response_types_supported=["code"]`, `grant_types_supported=["authorization_code","refresh_token"]`, `code_challenge_methods_supported=["S256"]`, and public clients with `token_endpoint_auth_methods_supported=["none"]` (`apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs:28-55`). The OAuth overview in `docs/mcp-oauth.md` documents the same AS/RS split and token claim intent (`docs/mcp-oauth.md:5-15`, `docs/mcp-oauth.md:27-60`, `docs/mcp-oauth.md:114-127`).
+**Where this lives**
 
-## Exposed MCP Tools / Capabilities
+- `apps/Agentweaver.Mcp/Program.cs`
+- `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
+- `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`
+- `docs/mcp-oauth.md`
+- `k8s/mcp-httproute.yaml`
 
-Tool classes are discovered from the MCP assembly (`WithToolsFromAssembly`) and exposed over the selected transport (`apps/Agentweaver.Mcp/Program.cs:59-71`). Most tools are thin proxies over the Agentweaver API; the client wrapper forwards the validated inbound bearer token when present, falling back to the configured shared key only in contexts without an inbound HTTP request, such as stdio (`apps/Agentweaver.Mcp/AgentweaverApiClient.cs:43-59`).
+## 4. Bearer tokens: what is accepted, why, and how identity survives
 
-| Capability area | Tools | Source |
+The MCP HTTP boundary accepts bearer credentials through a layered strategy. The order is intentional: cheap deterministic checks happen before expensive or transitional checks.
+
+### 4.1 No token: challenge, do not guess
+
+If there is no bearer token, MCP returns a discovery challenge. It does not redirect, start GitHub login itself, or invent a local login flow. Resource Servers should tell the client how to discover authorization; clients decide how to run the flow.
+
+### 4.2 Automation keys: machine-to-machine compatibility
+
+A configured automation key can authenticate automation and CI callers. This pre-shared-key path is a fast in-memory lookup for controlled service contexts, but it is not the preferred user identity model for interactive MCP clients.
+
+### 4.3 Agentweaver OAuth access tokens: the primary standards path
+
+Agentweaver-minted access tokens are signed JWTs. The API Authorization Server issues them after the client completes authorization code + PKCE and the API confirms GitHub organization membership.
+
+The important claims are conceptual rather than implementation-specific:
+
+- **iss**: the public Authorization Server issuer.
+- **aud**: the MCP resource, normally `https://HOST/mcp`.
+- **sub / gh_login**: the GitHub-backed user identity.
+- **scope**: includes `mcp:invoke`.
+- **org**: captures the organization context checked at issuance.
+- **jti**: a unique token identifier used for revocation denylisting.
+- **exp / nbf / iat**: short-lived token timing, with a small validation clock skew.
+
+The MCP Resource Server validates these tokens offline with the AS public keys from JWKS. Offline validation keeps normal MCP requests fast and avoids a network call to the Authorization Server for every tool invocation. The trade-off is key caching: the Resource Server must refresh JWKS periodically and respect `kid`/key rotation behavior.
+
+Validation should fail closed unless all of these are true:
+
+- The token is structurally a JWT.
+- The signature validates with an AS-published RSA signing key.
+- The algorithm is the expected asymmetric signing algorithm.
+- The issuer equals the configured public issuer.
+- The audience equals the MCP resource.
+- The token lifetime is valid.
+- A usable subject identity is present.
+
+### 4.4 Raw GitHub tokens: transitional compatibility
+
+Agentweaver still has a gated compatibility path for raw GitHub bearer tokens. The MCP server validates them by asking GitHub for the current user and caches the result briefly. This is intentionally transitional: once clients use Agentweaver-minted OAuth tokens, this path can be disabled.
+
+The design trade-off is clear:
+
+- It eases migration for existing clients.
+- It adds an external dependency and does not provide Agentweaver's audience-bound JWT properties.
+- It should not be expanded into the long-term authentication model.
+
+### 4.5 Revocation and the `jti` denylist
+
+MCP extracts the token identity, including `jti`, but the API owns the authoritative denylist. That is because the API owns OAuth token lifecycle: refresh-token rotation, revocation, and durable storage. MCP forwards the bearer token to the API; the API then rejects tokens whose `jti` has been revoked before natural expiry.
+
+This works because current MCP tools are proxies to the API. If future MCP tools perform sensitive local work without calling the API, they must either perform the same denylist check or avoid relying solely on MCP-side JWT validation.
+
+### 4.6 Public issuer/audience pinning
+
+In Kubernetes, the browser and MCP clients use the public host, while pods call each other through internal service names. If either service derives issuer or audience from the internal request host, tokens will stop matching.
+
+Example failure mode:
+
+1. The AS mints a token with `aud=https://public.example/mcp`.
+2. MCP forwards it to `http://agentweaver-api:8080`.
+3. The API derives expected audience as `http://agentweaver-api:8080/mcp`.
+4. Validation fails even though the user has a valid public token.
+
+The fix is to pin issuer and audience to public values in Production on both services. MCP may still fetch JWKS from the internal API service for efficiency; JWKS location is transport, not token identity.
+
+**Where this lives**
+
+- `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
+- `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs`
+- `apps/Agentweaver.Mcp/McpApiKeyRegistry.cs`
+- `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
+- `apps/Agentweaver.Api/Auth/OAuth`
+- `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
+- `k8s/mcp-deployment.yaml`
+- `k8s/api-deployment.yaml`
+
+## 5. The MCP tool surface: a protocol adapter over Agentweaver capabilities
+
+The MCP server does not try to duplicate Agentweaver business logic. It exposes a tool vocabulary and translates MCP calls into API calls. This is the right boundary because:
+
+- MCP clients need stable, discoverable tool names and JSON schemas.
+- The API remains the source of truth for projects, runs, teams, memory, workflows, and policies.
+- Authentication and authorization stay consistent because tool calls use the same API path as other clients.
+- New capabilities can be added by adding API endpoints and thin MCP adapters, rather than building a second domain model inside MCP.
+
+A rebuild should preserve this pattern:
+
+1. Define one tool group per product capability.
+2. Keep each tool method small: validate MCP-facing arguments, call the API, return the API result.
+3. Avoid hidden side effects in MCP that bypass API authorization or audit behavior.
+4. Let the MCP SDK generate protocol schemas from tool declarations.
+5. Forward the caller's bearer token for every backend call when one exists.
+
+### Capability map
+
+| Area | Conceptual purpose | Representative tools |
 |---|---|---|
-| Projects | `project_list`, `project_get`, `project_create`, `project_rename`, `project_relink`, `project_delete`, `project_configure`, `project_list_runs` | `apps/Agentweaver.Mcp/Tools/ProjectTools.cs:13-132` |
-| Runs | `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_get_file`, `run_retry`, `run_archive` | `apps/Agentweaver.Mcp/Tools/RunTools.cs:19-160` |
-| Coordinator orchestration | `coordinator_start`, outcome-spec get/confirm/revise, work-plan/children reads, `coordinator_steer`, `orchestration_topology` | `apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:12-119` |
-| Backlog / board | capture/edit/delete/move/reorder/archive board tasks, settings, workflow stages, `send_all_backlog_to_ready`, `backlog_decompose_spec` | `apps/Agentweaver.Mcp/Tools/BacklogTools.cs:27-240` |
-| Memory / decisions / sessions | decision inbox submit/list/merge/reject, direct decisions, `squad_decide`, memory record/list/get/search/export/import, session start/current/update | `apps/Agentweaver.Mcp/Tools/MemoryTools.cs:23-246` |
-| Team casting | `team_get`, `team_cast`, `team_member_add`, `team_member_retire`, `team_member_get_charter` | `apps/Agentweaver.Mcp/Tools/TeamTools.cs:12-111` |
-| GitHub auth helpers | `github_status`, `github_signout`, `github_signin` device flow | `apps/Agentweaver.Mcp/Tools/GitHubAuthTools.cs:13-39` |
-| Workspace browsing | `list_project_workspace_refs`, `list_project_workspace`, `get_project_workspace_file` | `apps/Agentweaver.Mcp/Tools/WorkspaceTools.cs:13-68` |
-| Workflows | `workflows_list`, `workflow_get`, `workflows_sync`, `workflow_generate`, `workflow_save` | `apps/Agentweaver.Mcp/Tools/WorkflowTools.cs:19-101` |
-| Blueprints / catalog | `list_blueprints`, `validate_blueprint`, `blueprint_generate`, `catalog_list_roles`, `catalog_list_scenarios` | `apps/Agentweaver.Mcp/Tools/BlueprintTools.cs:14-52`, `apps/Agentweaver.Mcp/Tools/CatalogTools.cs:12-24` |
-| Diagnostics / sandbox | `diagnostics_get`, `heartbeat_status`, `sandbox_policy_get`, `sandbox_policy_set` | `apps/Agentweaver.Mcp/Tools/DiagnosticsTools.cs:12-24`, `apps/Agentweaver.Mcp/Tools/SandboxPolicyTools.cs:12-29` |
+| Projects | Create, inspect, configure, relink, rename, delete projects and list their runs. | `project_list`, `project_get`, `project_create`, `project_configure`, `project_list_runs` |
+| Runs | Submit agent work, monitor status/live events, review, inspect artifacts, retry, archive. | `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_retry` |
+| Coordinator orchestration | Start coordinator runs, confirm/revise outcome specs, inspect work plans and child runs, steer active work. | `coordinator_start`, `coordinator_outcome_spec_confirm`, `coordinator_work_plan_get`, `coordinator_steer`, `orchestration_topology` |
+| Backlog and board | Manage tasks through backlog/ready/problem/review/active/done flows and project pickup settings. | `backlog_capture_task`, `backlog_get_board`, `backlog_move_to_ready`, `send_all_backlog_to_ready`, `backlog_set_settings` |
+| Memory, decisions, sessions | Submit and merge decision inbox entries, record/search memory, export/import `.squad` state, track sessions. | `decision_inbox_submit`, `decision_inbox_merge`, `squad_decide`, `memory_record`, `memory_search`, `session_start` |
+| Team casting | Inspect and evolve a project's agent roster and role charters. | `team_get`, `team_cast`, `team_member_add`, `team_member_retire`, `team_member_get_charter` |
+| GitHub auth helpers | Help clients inspect or start GitHub sign-in state where Agentweaver exposes that flow. | `github_status`, `github_signin`, `github_signout` |
+| Workspace browsing | Let clients list project workspace references, browse files, and fetch file contents through controlled API paths. | `list_project_workspace_refs`, `list_project_workspace`, `get_project_workspace_file` |
+| Workflows | Discover, validate, generate, sync, and save workflow definitions. | `workflows_list`, `workflow_get`, `workflows_sync`, `workflow_generate`, `workflow_save` |
+| Blueprints and catalog | List scenario/role catalogs and generate or validate project blueprints. | `list_blueprints`, `validate_blueprint`, `blueprint_generate`, `catalog_list_roles` |
+| Diagnostics and sandbox policy | Expose operational status and repository sandbox policy settings. | `diagnostics_get`, `heartbeat_status`, `sandbox_policy_get`, `sandbox_policy_set` |
 
-Unverified: the generated protocol-level tool list may include schema details from the MCP SDK beyond the static C# attributes above; this document only records the source-declared tool names and descriptions.
+Beyond the static tool names and descriptions summarized here, the protocol-level schema may include additional MCP SDK-generated metadata.
 
-## Hosting & Routing (mcp-service, mcp-httproute, /mcp/health rewrite, network policy)
+**Where this lives**
 
-The MCP Kubernetes `Service` is `agentweaver-mcp` in namespace `agentweaver`, selects pods labeled `app: agentweaver-mcp`, and exposes TCP port `8080` as a ClusterIP (`k8s/mcp-service.yaml:1-18`).
+- `apps/Agentweaver.Mcp/Tools`
+- `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
 
-`HTTPRoute` exposes three public routing shapes on `${HOST}`:
+## 6. Kubernetes routing: expose `/mcp`, but do not hide discovery
 
-1. `Exact /mcp/health` rewrites to internal `/healthz` before sending to `agentweaver-mcp:8080` (`k8s/mcp-httproute.yaml:14-26`). The app maps `/healthz` to `{ "status": "healthy" }` in HTTP mode (`apps/Agentweaver.Mcp/Program.cs:75-78`).
-2. Exact `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` route to the MCP RS unauthenticated (`k8s/mcp-httproute.yaml:27-39`).
-3. `PathPrefix /mcp` routes MCP protocol traffic to `agentweaver-mcp:8080` (`k8s/mcp-httproute.yaml:40-46`).
+The Kubernetes design has one public host and routes selected paths to the MCP service.
 
-The deployment pins MCP RS OAuth validation to the public host with `Auth__Mcp__Issuer=https://${HOST}` and `Auth__Mcp__Audience=https://${HOST}/mcp`, but fetches JWKS from the internal API service (`Auth__Mcp__JwksUri=http://agentweaver-api:8080/oauth/jwks`) to avoid public gateway hairpinning (`k8s/mcp-deployment.yaml:48-64`). Its probes hit `/healthz` on port `8080` (`k8s/mcp-deployment.yaml:76-89`).
+```mermaid
+flowchart LR
+    Client[MCP client] --> Gateway[Gateway / HTTPRoute]
+    Gateway -->|Exact /mcp/health| HealthRewrite[Rewrite to /healthz]
+    HealthRewrite --> McpSvc[agentweaver-mcp Service]
+    Gateway -->|Exact /.well-known/oauth-protected-resource| McpSvc
+    Gateway -->|Exact /.well-known/oauth-protected-resource/mcp| McpSvc
+    Gateway -->|PathPrefix /mcp| McpSvc
+    McpSvc --> McpPod[Agentweaver.Mcp pod]
+    McpPod -->|API calls + JWKS fetch| ApiSvc[agentweaver-api Service]
+```
 
-`secretprovider-mcp.yaml` mounts MCP-related secrets from Azure Key Vault (`mcp-api-key`, `mcp-auth-api-key`, `mcp-auth-user`) into the Kubernetes secret `agentweaver-mcp-secrets` (`k8s/secretprovider-mcp.yaml:16-37`). The network policy selects `app: agentweaver-mcp` pods and allows ingress on TCP `8080` only from the Gateway pod selector and the `aks-istio-ingress` namespace selector (`k8s/networkpolicy-mcp.yaml:8-24`).
+There are three important routing shapes:
 
-## Gotchas (the well-known path-aware discovery routing issue and its fix)
+1. **Health:** public `/mcp/health` is rewritten to the pod's internal `/healthz`. This gives operators a stable public health URL without making the app serve health under the MCP protocol path.
+2. **Discovery:** exact well-known protected-resource paths go to MCP and are unauthenticated. They must be explicit because they are outside `/mcp`.
+3. **MCP protocol:** `PathPrefix /mcp` carries normal MCP traffic to the MCP service.
 
-- **Well-known paths are not under `/mcp`.** A route that only matches `PathPrefix /mcp` will never send `/.well-known/oauth-protected-resource` to the MCP service. The fix is the exact-match `HTTPRoute` rule for both protected-resource metadata paths before the `/mcp` prefix rule (`k8s/mcp-httproute.yaml:27-46`).
-- **Path-aware clients probe the suffixed form.** Copilot CLI / VS Code compatibility requires `/.well-known/oauth-protected-resource/mcp`; serving only the bare path breaks discovery for those clients (`apps/Agentweaver.Mcp/Program.cs:79-100`, `k8s/mcp-httproute.yaml:27-36`).
-- **Pin public issuer/audience in hosted deployments.** If MCP or API derives issuer/audience from internal gateway/service hosts, AS-minted tokens with `aud=https://HOST/mcp` fail validation on internal calls. Both processes have Production guards for this (`apps/Agentweaver.Mcp/Program.cs:13-32`, `apps/Agentweaver.Api/Security/OAuthConfigGuard.cs:3-18`).
-- **MCP validates JWTs, API enforces revoked `jti`s.** The MCP RS extracts `jti` but does not own the denylist. It forwards the bearer token to the API, where `McpRefreshTokenStore.IsJtiDeniedAsync` rejects revoked access tokens (`apps/Agentweaver.Mcp/McpAccessTokenValidator.cs:83-87`, `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs:168-190`, `apps/Agentweaver.Api/Auth/OAuth/McpRefreshTokenStore.cs:153-160`).
+The deployment pins Resource Server identity configuration:
+
+- `Auth:Mcp:Issuer` is the public host issuer.
+- `Auth:Mcp:Audience` is the public MCP resource.
+- `Auth:Mcp:JwksUri` can point at the internal API service to avoid public-gateway hairpinning.
+
+This distinction is crucial: issuer and audience describe token identity and must be public/stable; JWKS URI is just where the pod fetches signing keys and may be internal.
+
+**Where this lives**
+
+- `k8s/mcp-service.yaml`
+- `k8s/mcp-httproute.yaml`
+- `k8s/mcp-deployment.yaml`
+- `k8s/secretprovider-mcp.yaml`
+
+## 7. Rebuild checklist
+
+If you were recreating Agentweaver's MCP server from scratch, build in this order:
+
+1. **Define the MCP resource identity.** Choose the public resource URI, e.g. `https://HOST/mcp`, and treat it as the JWT audience.
+2. **Implement the Authorization Server separately.** Publish RFC 8414 metadata, run authorization code + PKCE, broker GitHub login server-side, enforce org membership before issuing codes, sign short-lived RS256 JWTs, publish JWKS, support refresh and revocation.
+3. **Implement the Resource Server discovery surface.** Serve RFC 9728 protected-resource metadata unauthenticated at both bare and path-suffixed well-known URLs.
+4. **Challenge correctly.** Return `401 WWW-Authenticate: Bearer ... resource_metadata="..."` for unauthenticated MCP requests.
+5. **Validate bearer tokens at MCP.** Accept configured automation keys if needed, validate Agentweaver JWTs offline with JWKS, and gate the transitional raw GitHub token path behind configuration.
+6. **Propagate caller identity.** Store the accepted bearer token in request context and forward it to the API for every tool call.
+7. **Keep tools thin.** Use MCP as a protocol adapter, not as a second implementation of Agentweaver's domain logic.
+8. **Pin hosted OAuth identity.** In Production, fail startup if issuer/audience are missing or host-derived. Internal service DNS must not change token identity.
+9. **Route discovery explicitly.** Kubernetes or gateway routing must send `/.well-known/...` paths to the right service; `/mcp` prefix routing is not enough.
+10. **Test with a generic client.** Verify the full flow: unauthenticated `/mcp` challenge, protected-resource metadata, AS metadata, PKCE login, token redemption, MCP call with bearer, downstream API call with the same bearer.
+
+## 8. Common failure modes and the invariant that prevents each one
+
+| Failure mode | Why it happens | Preventing invariant |
+|---|---|---|
+| Client cannot discover OAuth metadata | Gateway only routes `/mcp`, but well-known URLs are outside that prefix. | Route bare and `/mcp`-suffixed well-known paths explicitly. |
+| Token validates locally but fails in cluster | One service derived issuer/audience from an internal host. | Pin issuer and audience to public values in Production. |
+| API sees every tool call as the MCP service | MCP used a shared backend key instead of the caller's token. | Forward the accepted bearer token to the API. |
+| Revoked access token still passes MCP JWT validation | Offline JWT validation cannot see a central denylist by itself. | API performs authoritative `jti` denylist checks on forwarded tokens. |
+| Existing automation cannot call MCP | Only OAuth JWTs are accepted. | Keep automation keys as an explicit machine-to-machine path. |
+| Raw GitHub tokens become permanent architecture | Migration path is left enabled without a sunset. | Gate GitHub passthrough by configuration and prefer Agentweaver-minted audience-bound tokens. |
+| Future local MCP tool bypasses authorization | Tool performs sensitive work without calling the API. | Either keep tools as API proxies or add equivalent local authorization and revocation checks. |

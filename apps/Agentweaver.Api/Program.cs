@@ -1,4 +1,6 @@
 using System.Text.Encodings.Web;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
 using k8s;
 using LibGit2Sharp;
 using Agentweaver.Api;
@@ -132,7 +134,23 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
 
 // GitHub auth (token store + scope provider + device flow service)
-builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
+var tokenStoreProvider = builder.Configuration["Auth:TokenStore:Provider"];
+var kvUri = builder.Configuration["Auth:TokenStore:KeyVaultUri"];
+if (string.Equals(tokenStoreProvider, "keyvault", StringComparison.OrdinalIgnoreCase)
+    && !string.IsNullOrWhiteSpace(kvUri))
+{
+    var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
+    var kvSecretStore = new KeyVaultSecretStore(secretClient);
+    var diskFs = new FileSystemGitHubTokenStore(); // migration source AND mirror
+    var kvTokenStore = new KeyVaultGitHubTokenStore(kvSecretStore, diskFallback: diskFs, diskMirror: diskFs);
+    var cachedTokenStore = new CachingGitHubTokenStore(kvTokenStore);
+    builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
+    builder.Services.AddSingleton<IGitHubTokenStore>(cachedTokenStore);
+}
+else
+{
+    builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
+}
 builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
 builder.Services.AddSingleton<IGitHubAccessTokenProvider, GitHubTokenRefreshService>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();

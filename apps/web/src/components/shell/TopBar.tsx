@@ -1,4 +1,4 @@
-import { makeStyles, tokens } from '@fluentui/react-components';
+import { makeStyles, tokens, Badge } from '@fluentui/react-components';
 import { GitHubSignIn } from '../GitHubSignIn';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
@@ -52,6 +52,9 @@ export function TopBar({
   return (
     <header className={styles.topBar}>
       <div className={styles.left}>
+        <Badge appearance="outline" color="warning" title="Agentweaver is alpha software under active development.">
+          Alpha
+        </Badge>
         <ProjectSwitcher
           projectId={projectId}
           pathname={pathname}

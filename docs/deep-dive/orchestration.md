@@ -1,191 +1,648 @@
-# Orchestration Engine — Deep Dive
+# Orchestration Engine — Conceptual Deep Dive
 
-## Purpose & Scope
+## Purpose & Mental Model
 
-Agentweaver has two related orchestration paths:
+Agentweaver orchestration answers one question: **how does a high-level goal become safe, reviewable, mergeable work performed by a team of agents?**
 
-1. **Coordinator team orchestration** turns a human goal or Ready backlog task into a confirmed `OutcomeSpec`, a persisted `WorkPlan` DAG, child runs, collective assembly, review, merge, and scribe recording.
-2. **Run workflow orchestration** binds a declarative `WorkflowDefinition` onto the live Microsoft Agent Framework (MAF) run graph. The live worker path is `RunWorkflowFactory` → `AgentTurnExecutor` → `CopilotAIAgent`, not `GitHubCopilotAgentRunner`: `RunWorkflowFactory` creates an `AgentTurnExecutor` around a per-run worker agent (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-373`), `AgentTurnExecutor` calls `SetupAsync` and `RunTurnAsync` on that agent (`packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:64-107`), and the production `WorkflowAgentFactory` builds that worker as `CopilotAIAgent` (`packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentFactory.cs:47-49`).
+The engine is intentionally split into two layers:
 
-`GitHubCopilotAgentRunner` is still used by non-MAF, single-prompt runtime calls such as model-assisted casting through the `IAgentRunner` path (`apps/Agentweaver.Api/Infrastructure/AgentweaverAgentRuntime.cs:29-41`, `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:17-31`). `FoundryAgentRunner` is also wired only behind that dispatcher: `ModelSource.MicrosoftFoundry` maps to `_foundry.ExecuteAsync(...)` (`packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs:27-32`). Casting and blueprint internals are intentionally summarized here only; see [team-casting.md](team-casting.md).
+1. **Coordinator orchestration** decides *what should happen*. It turns an ambiguous goal or backlog item into a confirmed outcome, decomposes that outcome into a dependency-aware plan, assigns work to team members, and assembles the results.
+2. **Run workflow orchestration** decides *how each run moves through gates*. It applies a declarative workflow to live execution: agent work, safety review, human review, merge, and scribe recording.
 
-Verified Foundry gap: the live orchestration path does not currently select a Foundry workflow agent. Standalone/project run submission can store `ModelSource.MicrosoftFoundry` on the `Run` (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:44-52`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:65-76`; `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:498-517`, `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:550-567`), and `RunOrchestrator` carries that value into `AgentTurnInput` (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:108-121`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:276-289`; `packages/Agentweaver.AgentRuntime/Workflow/WorkflowMessages.cs:4-23`). From there, `RunWorkflowFactory` uses `IWorkflowAgentFactory.CreateWorkerAgent()` and production DI returns `CopilotAIAgent`; `AgentTurnExecutor` invokes that agent without dispatching on `input.ModelSource` (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:350-373`, `packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentFactory.cs:47-49`, `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:64-107`). Coordinator-originated parent, pickup, and child runs are even narrower: they set `ModelSource = ModelSource.GitHubCopilot` directly (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:116-128`, `apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:55-65`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:402-414`).
-
-## Coordinator Flow
-
-The coordinator flow is split into a checkpointed MAF spec/confirmation phase and service-driven dispatch/assembly phases. `CoordinatorWorkflowFactory` builds the first graph as `draft -> await-confirmation RequestPort -> confirm-terminal | revise-loop` (`apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:17-31`). On confirm, it calls `CoordinatorOrchestratorExecutor.OrchestrateAsync` (`apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:146-160`).
+The split matters. Planning and decomposition need durable state, idempotency, and team-level reasoning. Individual run execution needs streaming, review gates, restart loops, and terminal status handling. Keeping those concerns separate lets Agentweaver recover from partial progress without re-asking the model to re-invent the plan.
 
 ```mermaid
 flowchart TD
-    Goal[Human goal or Ready backlog task]
-    Draft[Coordinator drafts OutcomeSpec]
-    Confirm{Human or unattended confirm?}
-    Revise[Revise feedback]
-    Spec[(OutcomeSpec: awaiting_confirmation -> confirmed)]
-    Select[Select eligible workflow]
-    Decompose[Decompose into subtask drafts]
-    Plan[(WorkPlan: planned + Subtasks pending + Dependencies)]
-    Dispatch[Dispatch ready DAG frontier]
-    Children[Child runs: agent + RAI]
+    Request[Human request or Ready backlog task]
+    Coordinator[Coordinator orchestration<br/>understand, confirm, decompose]
+    Plan[(OutcomeSpec + WorkPlan DAG)]
+    Dispatch[Dispatch ready subtasks]
+    ChildRuns[Child runs<br/>agent work + safety gate]
     Assembly[Collective assembly]
-    Review[Review gates]
-    Merge[Merge]
-    Scribe[Scribe]
-    Done[Terminal coordinator run]
+    Workflow[Run workflow orchestration<br/>review, merge, scribe]
+    Result[Reviewed merged outcome + recorded learnings]
 
-    Goal --> Draft --> Confirm
-    Confirm -- revise --> Revise --> Draft
-    Confirm -- confirm --> Spec --> Select --> Decompose --> Plan --> Dispatch
-    Dispatch --> Children --> Assembly --> Review --> Merge --> Scribe --> Done
+    Request --> Coordinator --> Plan --> Dispatch --> ChildRuns --> Assembly --> Workflow --> Result
 ```
 
-Key persistence contracts:
+A useful rebuilding rule is: **the coordinator owns intent and coordination; workflows own execution gates.**
 
-- `OutcomeSpec` stores the project/run goal, desired outcome, scope, assumptions, optional clarifying questions, and status (`drafting | awaiting_confirmation | confirmed | declined`) (`apps/Agentweaver.Api/Memory/OutcomeSpec.cs:5-18`).
-- `WorkPlan` points back to the `OutcomeSpec`, stores the coordinator run id, optional selected `WorkflowId`, status, assembly stage, and integration branch (`apps/Agentweaver.Api/Memory/WorkPlan.cs:5-35`).
-- `Subtask` rows store assigned agent, selected model, phase, advisory isolation, child run id, optional bespoke `AgentCharter`, recovery guidance, and status (`pending | dispatched | running | rai_flagged | assemble_ready | completed | failed`) (`apps/Agentweaver.Api/Memory/Subtask.cs:5-54`).
-- `SubtaskDependency` rows encode DAG edges as `SubtaskId -> DependsOnSubtaskId` (`apps/Agentweaver.Api/Memory/SubtaskDependency.cs:5-10`).
+Casting and Blueprints feed orchestration with team shape, role charters, workflow defaults, and review-policy defaults. They are summarized here only; the detailed explanation lives in [team-casting.md](team-casting.md).
 
-`CoordinatorOrchestratorExecutor` is idempotent: if a `WorkPlan` already exists for the coordinator run, it returns without re-planning (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:103-130`). Otherwise it selects a workflow, decomposes the confirmed spec, breaks dependency cycles, assigns roster agents/models, persists the plan, and emits `coordinator.work_plan` (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:132-167`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:1034-1148`).
+Live workflow execution is Copilot-backed. Some non-workflow single-prompt paths dispatch through other model runners, but the live workflow worker path does not switch worker implementation based on the run's model source. Rebuilds that need Foundry-backed live workflows add that dispatch point explicitly.
 
-After a confirmed plan exists, `CoordinatorRunService` hands off to `CoordinatorDispatchService` when the plan has subtasks (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:500-535`). Dispatch advances the frontier with `SubtaskFrontier.ReadyPending`, starts child runs, observes terminal events, and moves the plan to assembly when all subtasks settle (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:37-64`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:222-300`).
+## Core Design Invariants
 
-## Workflow Model
+These invariants are the backbone of the system:
 
-A workflow is a validated, declarative run graph with:
+- **Persist decisions before doing work.** The requested outcome and work plan are stored before child runs are launched. Recovery starts from persisted intent, not from chat history.
+- **Confirm ambiguity at the boundary.** The coordinator may draft, revise, and ask for confirmation before committing a plan. Once confirmed, later components can assume the outcome is intentional.
+- **Use declarative graphs for policy.** Workflows describe nodes, gates, and edges. Runtime code binds those declarations to executable steps and fails closed when a step cannot be safely bound.
+- **Advance only the ready frontier.** Subtasks form a DAG. A subtask can run only after its dependencies are complete, so parallelism is safe and deterministic.
+- **Separate child work from collective responsibility.** Child runs produce reviewed pieces. The parent coordinator assembles, reviews, merges, and records the combined outcome.
+- **Make gates explicit and durable.** Safety, human review, merge, and terminal states are visible run states and stream events, not hidden control flow.
+- **Prefer idempotent recovery over clever replay.** If a plan already exists, reuse it. If a run already reached a gate, resume from that gate. If a stream disconnects, replay durable events.
 
-- `Trigger` (`Manual`, `Heartbeat`, or `Event`) (`apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:7-17`, `apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:68-75`).
-- `Start`, `Nodes`, `Edges`, and optional board `Stages` (`apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:151-176`).
-- Node fields for `Type`, render `Role`/`Kind`, review `GateKind`, `Agent`, `Prompt`, inline `Charter`, `Target`, `Steps`, and `Branches` (`apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:77-125`).
+## Coordinator Orchestration
 
-The API code has exactly one **built-in** workflow in `BuiltInWorkflows`: `default` (`apps/Agentweaver.Api/Workflows/BuiltInWorkflows.cs:11-28`). Catalog/library workflows are loaded separately by `WorkflowRegistry` alongside the built-in default and project-authored `.agentweaver/workflows` files (`apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:26-31`, `apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:103-123`).
+### Problem It Solves
 
-The default workflow is code-embedded YAML. It is a behavior-preserving conversion of the original run pipeline: `agent`, `rai`, `review`, `merge`, `scribe`, plus plumbing terminals (`apps/Agentweaver.Api/Workflows/DefaultWorkflowTemplate.cs:23-45`, `apps/Agentweaver.Api/Workflows/DefaultWorkflowTemplate.cs:48-108`).
+A user often gives Agentweaver a goal, not a task list. The coordinator converts that goal into something a team can execute safely:
+
+- What exact outcome are we trying to produce?
+- What assumptions or constraints define success?
+- Which parts can run independently?
+- Which specialist should own each part?
+- What must be reviewed before changes merge?
+
+Without this layer, every agent run would independently interpret the same broad request. That leads to duplicated work, conflicting edits, and unclear ownership.
+
+### OutcomeSpec: The Intent Contract
+
+The first durable artifact is the **OutcomeSpec**. Conceptually, it is the contract between the requester and the system.
+
+It captures:
+
+- the original goal,
+- the desired outcome,
+- scope and exclusions,
+- assumptions,
+- clarifying questions or revision feedback,
+- and whether the outcome is still being drafted, awaiting confirmation, confirmed, or declined.
+
+The important design choice is that confirmation happens before decomposition is treated as authoritative. The coordinator can draft an interpretation, receive revision feedback, and loop until the requester or unattended policy confirms it.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Drafting
+    Drafting --> AwaitingConfirmation: coordinator proposes outcome
+    AwaitingConfirmation --> Drafting: requester asks for revision
+    AwaitingConfirmation --> Confirmed: approved or unattended-confirmed
+    AwaitingConfirmation --> Declined: rejected
+    Confirmed --> [*]
+    Declined --> [*]
+```
+
+Rebuild guidance: treat the OutcomeSpec as the **source of truth for intent**. Do not let individual worker agents reinterpret the original request independently once the spec is confirmed.
+
+### WorkPlan: The Execution Contract
+
+After confirmation, the coordinator creates a **WorkPlan**. The WorkPlan is the execution contract for the parent coordinator run.
+
+It stores:
+
+- the confirmed OutcomeSpec it implements,
+- the selected workflow,
+- subtask records,
+- dependency edges between subtasks,
+- assembly state,
+- and any integration branch or coordination metadata.
+
+Each subtask includes its assigned agent, model choice, charter/context, isolation intent, status, child run id, and any recovery guidance.
+
+The plan is a DAG because ordering is a correctness constraint. If subtask B depends on subtask A, B should not start merely because an agent is free. This allows safe parallelism: every tick can dispatch all currently-ready nodes while preserving required sequencing.
 
 ```mermaid
 flowchart LR
-    Agent[agent<br/>prompt/live] --> Rai[rai<br/>check: gate_kind=rai]
-    Rai -- revise --> Agent
-    Rai -- safety-failed --> Safety[terminal-safety-failed]
-    Rai -- no-changes --> Scribe[scribe]
-    Rai -- review --> Review[review<br/>check: gate_kind=human-review]
-    Review -- request-changes --> Agent
-    Review -- declined --> Declined[terminal-declined]
-    Review -- approved --> Merge[merge]
-    Merge -- blocked --> Review
-    Merge -- merged --> Scribe
-    Scribe --> Done[done]
+    Spec[(Confirmed OutcomeSpec)] --> Plan[(WorkPlan)]
+    Plan --> A[Subtask A<br/>no dependencies]
+    Plan --> B[Subtask B<br/>no dependencies]
+    A --> C[Subtask C<br/>depends on A]
+    B --> D[Subtask D<br/>depends on B]
+    C --> E[Assembly]
+    D --> E
 ```
 
-At runtime, authored workflows are not executed by trusting node ids. The binder classifies nodes by type and gate kind (`apps/Agentweaver.Api/Workflows/NodeClassifier.cs:53-99`), resolves primary executors from pre-built real executor bindings (`apps/Agentweaver.Api/Workflows/NodeExecutorRegistry.cs:5-19`, `apps/Agentweaver.Api/Workflows/NodeExecutorRegistry.cs:22-90`), and expands logical edges into the live MAF graph (`apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:46-64`). Unsupported runtime node types fail closed instead of partially wiring (`apps/Agentweaver.Api/Workflows/NodeExecutorRegistry.cs:68-78`).
+Rebuild guidance: store the plan before dispatch. If the coordinator crashes after planning but before child runs start, it should resume from the persisted WorkPlan rather than ask a model to decompose again.
 
-## Workflow Selection & Triggers
+### Coordinator Control Flow
 
-Triggers are enforced during selection. `WorkflowTriggerEvaluator` maps:
+The coordinator flow has two phases:
 
-- Manual invocation → only `WorkflowTriggerType.Manual`.
-- Heartbeat invocation → `WorkflowTriggerType.Heartbeat` plus `Event(TaskAddedToReady)`.
+1. **Model-assisted planning phase** — draft and confirm the OutcomeSpec, select a workflow, decompose the work, and persist the WorkPlan.
+2. **Service-driven execution phase** — dispatch ready subtasks, watch child runs, assemble results, and advance the parent run through review and merge gates.
 
-That mapping is explicit in `IsEligible` (`apps/Agentweaver.Api/Workflows/WorkflowTriggerEvaluator.cs:17-47`) and `Filter` preserves candidate ordering (`apps/Agentweaver.Api/Workflows/WorkflowTriggerEvaluator.cs:49-60`).
+```mermaid
+sequenceDiagram
+    participant User
+    participant Coordinator
+    participant Store as Durable Store
+    participant Dispatcher
+    participant Child as Child Runs
+    participant Parent as Parent Run
 
-Coordinator selection flow:
+    User->>Coordinator: goal or backlog task
+    Coordinator->>Coordinator: draft OutcomeSpec
+    Coordinator-->>User: request confirmation or revision
+    User-->>Coordinator: confirm
+    Coordinator->>Store: persist confirmed OutcomeSpec
+    Coordinator->>Coordinator: select workflow and decompose DAG
+    Coordinator->>Store: persist WorkPlan + subtasks + dependencies
+    Dispatcher->>Store: read ready DAG frontier
+    Dispatcher->>Child: launch child runs
+    Child-->>Dispatcher: completed, failed, or assemble-ready
+    Dispatcher->>Store: update subtask statuses
+    Dispatcher->>Parent: hand off to assembly when all settle
+```
 
-1. Resolve project default as deterministic fallback.
-2. Load available workflows.
-3. Resolve invocation kind: `RunOrigin.BacklogPickup` becomes `Heartbeat`; everything else is manual (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:297-322`).
-4. Honor a backlog workflow override only if it is available and trigger-eligible (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:210-244`).
-5. Filter candidates by `WorkflowTriggerEvaluator`.
-6. If only one eligible workflow remains, skip the LLM selector.
-7. Otherwise run `IWorkflowSelector`, emit `coordinator.workflow_selected`, and persist the selected id into `WorkPlan.WorkflowId` (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:248-274`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:325-348`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:1051-1058`).
+The coordinator is designed to be idempotent. If it is asked to orchestrate a run that already has a WorkPlan, it does not create a second plan. That invariant prevents duplicate child runs and conflicting DAGs.
 
-The selector itself skips single-workflow projects, builds a process-fit prompt, parses JSON, validates the selected id, and falls back to the default on model/parse errors (`apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:80-133`, `apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:157-188`).
+### Decomposition Logic
 
-`RunWorkflowFactory` repeats trigger-aware workflow resolution for the actual full run graph: it derives manual vs heartbeat from the persisted run origin, checks backlog overrides, prefers the configured default if eligible, otherwise picks the first eligible workflow or fails validation (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1279-1318`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1321-1377`).
+A good decomposition algorithm should produce subtasks that are:
 
-## Run Lifecycle & State Machine
+- **owned** by one agent,
+- **bounded** enough to complete independently,
+- **ordered** by explicit dependencies,
+- **labeled** with intended isolation or file ownership,
+- and **recoverable** with enough guidance to retry or inspect failures.
 
-`RunOrchestrator.StartRunAsync` creates a worktree, resolves the agent charter, inserts the run as `InProgress`, creates the live stream entry, builds `AgentTurnInput`, starts the workflow through `RunWorkflowFactory`, registers it, and starts the watch loop (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:76-120`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:384-393`). Reserved backlog/coordinator runs follow the same launch pattern after their row already exists (`apps/Agentweaver.Api/Runs/RunOrchestrator.cs:230-300`).
+Agentweaver treats dependency edges and file/isolation hints as coordination data. The dependency graph is the hard ordering rule. Isolation hints are advisory: they help avoid conflicts and guide dispatch, but they are not a substitute for merge conflict handling or review.
 
-`RunWorkflowFactory.StartAsync` resolves the effective definition for full runs, uses the trimmed child pipeline for coordinator child runs, emits the per-run workflow graph, and starts MAF streaming (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1217-1237`). Child runs deliberately stop at `AssembleReady` after agent + RAI, with no per-child review/merge/scribe (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:446-460`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:325-370`).
+Cycle breaking is essential. Model-generated plans can accidentally create circular dependencies. A production coordinator should detect cycles and either remove weak edges, ask for clarification, or fail before dispatch. Dispatching a cyclic plan would deadlock because no frontier can become ready.
+
+### Dispatch and Assembly
+
+The dispatcher repeatedly asks: **which pending subtasks have all dependencies completed?** Those subtasks form the ready frontier.
+
+For each ready subtask, it launches a child run. Child runs are intentionally trimmed: they perform agent work and safety review, then stop at an assemble-ready boundary. They do not each perform human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
+
+```mermaid
+flowchart TD
+    Pending[Pending subtasks]
+    Frontier[Ready frontier<br/>all dependencies complete]
+    Launch[Launch child runs]
+    Safety[Child safety gate]
+    AssembleReady[Assemble-ready child outputs]
+    AllSettled{All subtasks settled?}
+    Assembly[Parent assembly]
+    ParentReview[Parent review and merge]
+
+    Pending --> Frontier --> Launch --> Safety --> AssembleReady --> AllSettled
+    AllSettled -- no --> Pending
+    AllSettled -- yes --> Assembly --> ParentReview
+```
+
+Assembly is where the coordinator turns independent child outputs into one coherent result. This is also where conflicts, missing pieces, and cross-subtask inconsistencies should be detected before the parent enters review and merge gates.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Coordinator/`
+- `apps/Agentweaver.Api/Memory/`
+
+## Workflows and Trigger Evaluation
+
+### Workflow as Policy Graph
+
+A workflow is not just a list of functions. It is a policy graph that describes how a run should progress through work, checks, review, merge, and terminal states.
+
+A workflow definition answers:
+
+- What starts the graph?
+- Which node performs agent work?
+- Which gates can send work back for revision?
+- Which failures are terminal?
+- Which path means success?
+- Which trigger types are allowed to use this workflow?
+
+The default conceptual workflow is:
+
+```mermaid
+flowchart LR
+    Agent[Agent work] --> Rai[Responsible AI gate]
+    Rai -- revise --> Agent
+    Rai -- safety failed --> SafetyFailed[Terminal: safety failed]
+    Rai -- no changes --> Scribe[Scribe]
+    Rai -- needs review --> Human[Human review]
+    Human -- request changes --> Agent
+    Human -- declined --> Declined[Terminal: declined]
+    Human -- approved --> Merge[Merge]
+    Merge -- blocked --> Human
+    Merge -- merged --> Scribe
+    Scribe --> Done[Done]
+```
+
+The important idea is that loops are first-class. Safety or review can return work to the producer. Merge can return to review if blocked. Terminal failures are explicit exits, not exceptions swallowed by the runtime.
+
+### Trigger Eligibility
+
+Triggers protect workflows from being used in the wrong context.
+
+Agentweaver distinguishes these invocation modes conceptually:
+
+- **Manual** — a user starts a run directly.
+- **Heartbeat** — the background coordinator picks up ready backlog work.
+- **Event** — a workflow reacts to a named system event, such as a task becoming ready.
+
+Selection must filter by trigger before model selection or defaults are applied. A manual-only workflow should not run unattended from the heartbeat loop. A heartbeat-only workflow should not be chosen by a direct user run unless explicitly allowed.
+
+```mermaid
+flowchart TD
+    Invocation[Invocation context]
+    Manual{Manual start?}
+    Heartbeat{Heartbeat pickup?}
+    ManualEligible[Manual workflows only]
+    HeartbeatEligible[Heartbeat workflows + matching event workflows]
+    Override[Optional workflow override]
+    Default[Project default fallback]
+    Selector[Selector if multiple eligible]
+    Selected[Selected workflow]
+
+    Invocation --> Manual
+    Invocation --> Heartbeat
+    Manual -- yes --> ManualEligible --> Override
+    Heartbeat -- yes --> HeartbeatEligible --> Override
+    Override --> Default --> Selector --> Selected
+```
+
+A backlog task may request a workflow override, but the override is only honored if it exists and is trigger-eligible. This preserves safety: metadata on a backlog item cannot force a manual-only workflow to run unattended.
+
+### Workflow Selection Logic
+
+The selection order is deliberately conservative:
+
+1. Load built-in, catalog/library, and project-authored workflows.
+2. Determine invocation kind from the run origin.
+3. Filter out trigger-ineligible workflows.
+4. Honor a valid override if present.
+5. Prefer the configured project default when eligible.
+6. If exactly one workflow remains, use it without model help.
+7. If several remain, ask the selector to choose the best process fit.
+8. If selector output is invalid or parsing fails, fall back safely rather than inventing a workflow id.
+
+This pattern limits model authority. The model may choose among safe candidates, but it does not get to bypass trigger filtering or runtime binding.
+
+### Binding Declarative Nodes to Runtime Execution
+
+A workflow file describes intent. The runtime must bind that intent to concrete executors.
+
+The binder should:
+
+- classify nodes by type and gate kind,
+- resolve each node to a known executor,
+- expand logical edges into the live execution graph,
+- verify all required review-policy gates have bindings,
+- and fail closed if a required node cannot be executed safely.
+
+Failing closed is a security and correctness property. A workflow that asks for a safety gate but cannot bind one should not silently skip safety. Likewise, a custom node type should not become a no-op merely because the binder does not understand it.
+
+Some workflow shapes, such as fan-out/fan-in style nodes, are design-level extension points: the graph model can express them, and the binder is the place where their executors are resolved. They give the system room to grow more complex execution patterns without changing the surrounding contract.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Workflows/`
+- `docs/workflow-library.md`
+- `docs/workflow-binder.md`
+
+## Run Lifecycle
+
+### What a Run Represents
+
+A run is the durable unit of execution. Conceptually it bundles:
+
+- a project and workspace/worktree,
+- the assigned agent and charter/context,
+- the selected workflow,
+- the run origin,
+- live and durable event streams,
+- and a persisted status.
+
+A run can be started directly by a user, reserved by backlog pickup, created as a coordinator parent, or launched as a coordinator child. All forms should converge on the same lifecycle machinery so status, streaming, review, and recovery behave consistently.
+
+### Parent, Child, and Pickup Runs
+
+Agentweaver uses run origin to preserve intent:
+
+- **Manual runs** are user-started and usually go through the full workflow.
+- **Coordinator parent runs** own the team-level plan, assembly, review, merge, and scribe phases.
+- **Coordinator child runs** execute one subtask and stop at the assemble-ready boundary after agent work and safety review.
+- **Backlog pickup runs** are coordinator runs created by the heartbeat loop for unattended ready tasks.
+
+The key difference is not the storage shape; it is the responsibility boundary. Child runs should not merge independently because they are fragments of the parent outcome. Parent runs should not redo child work because they coordinate, assemble, and gate the whole result.
+
+### State Machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> Pending
-    Pending --> InProgress: launch
-    InProgress --> AwaitingReview: RequestPort review gate
-    AwaitingReview --> Committing: commit request
-    AwaitingReview --> Merging: approve/merge request
-    AwaitingReview --> Declined: decline
-    Committing --> AwaitingReview: restart/non-terminal failure
-    Merging --> AwaitingReview: restart/non-terminal failure
+    Pending --> InProgress: launch or reserved run starts
+    InProgress --> AssembleReady: child run completed its trimmed pipeline
+    InProgress --> AwaitingReview: human review requested
+    AwaitingReview --> InProgress: changes requested / revision loop
+    AwaitingReview --> Committing: commit requested
+    AwaitingReview --> Merging: merge approved
+    AwaitingReview --> Declined: declined
+    Committing --> AwaitingReview: non-terminal commit issue
+    Merging --> AwaitingReview: merge blocked or needs review
     Merging --> Merged: merge completed
-    Merging --> MergeFailed: conflict/terminal merge failure
-    InProgress --> Completed: no changes or completed workflow
-    InProgress --> Failed: workflow/content-safety failure
-    InProgress --> AssembleReady: coordinator child hand-off
+    Merging --> MergeFailed: terminal merge failure
+    InProgress --> Completed: successful terminal without merge
+    InProgress --> Failed: terminal workflow or safety failure
+    AssembleReady --> [*]
+    Completed --> [*]
+    Failed --> [*]
+    Merged --> [*]
+    Declined --> [*]
+    MergeFailed --> [*]
 ```
 
-The persisted statuses are `Pending`, `InProgress`, `Completed`, `Failed`, `AwaitingReview`, `Committing`, `Merging`, `Merged`, `Declined`, `MergeFailed`, and child-only `AssembleReady` (`packages/Agentweaver.Domain/RunStatus.cs:3-33`). The watch loop maps MAF request events into `AwaitingReview` and terminal workflow outputs into persisted terminal states and run events (`apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:126-154`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:252-405`).
+The state machine is designed for externally visible gates. When a human review node is reached, the run becomes `AwaitingReview` and the client can act. When merge is requested, the run becomes `Merging`. These are not merely internal events; they are durable states used by clients, recovery, and monitoring.
+
+### Runtime Sequence
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Orchestrator as RunOrchestrator
-    participant Factory as RunWorkflowFactory
-    participant Exec as AgentTurnExecutor
-    participant Agent as CopilotAIAgent
-    participant Watch as RunWatchLoopService
-    participant SSE as /api/runs/{id}/stream
+    participant Orchestrator
+    participant Factory as Workflow Factory
+    participant Executor as Agent Turn Executor
+    participant Agent as Worker Agent
+    participant Watch as Watch Loop
+    participant Stream as Event Stream / SSE
 
-    Client->>Orchestrator: start run
-    Orchestrator->>Factory: StartAsync(AgentTurnInput)
-    Factory->>Exec: BuildWorkflow()
-    Exec->>Agent: SetupAsync(...)
-    Exec->>Agent: RunTurnAsync(...)
-    Agent-->>SSE: run events via RecordingChannelWriter
-    Exec-->>Factory: AgentTurnOutput(diff/tree/steps)
-    Factory-->>Watch: StreamingRun events
-    Watch-->>SSE: review/merge/terminal events
+    Client->>Orchestrator: start or resume run
+    Orchestrator->>Orchestrator: prepare worktree and run record
+    Orchestrator->>Factory: resolve and bind workflow
+    Factory->>Executor: build executable graph
+    Executor->>Agent: setup and run turn
+    Agent-->>Stream: step and output events
+    Executor-->>Factory: turn output, diff, steps
+    Factory-->>Watch: workflow events
+    Watch->>Orchestrator: persist status transitions
+    Watch-->>Stream: review, merge, terminal events
 ```
 
-Run events have two layers. `RecordingChannelWriter` writes every event to the in-memory `RunStreamEntry` and, when configured, through `IRunEventStream` (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1466-1508`). `IRunEventStream` defines durable append, replay-then-tail subscribe, and completion (`apps/Agentweaver.Api/Infrastructure/IRunEventStream.cs:5-37`); `SqliteRunEventStream` writes to `RunEvents` in `memory.db` before publishing to a bounded live channel (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:12-30`, `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:79-110`). The SSE endpoint replays with `Last-Event-ID` through `SubscribeAsync` when no live entry exists, otherwise tails `RunStreamEntry`, and always ends with the `done` event (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:415-443`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:455-488`; intended contract in `docs/run-event-stream.md:106-128`).
+The watch loop translates live runtime events into persisted run state. This keeps state transitions centralized. The agent produces work; the workflow emits events; the watch loop decides what those events mean for durable status and client-visible stream completion.
 
-## Backlog & Heartbeat Pickup
+### Event Streaming
 
-Backlog tasks flow `Backlog -> Ready -> Claimed`. A task records its title, description, ordering key, accountable `CapturedBy`, `CommittedAt`, `ClaimedAt`, `RunId`, and optional `WorkflowOverrideId` (`packages/Agentweaver.Domain/BacklogTask.cs:3-35`).
+Run events have two purposes:
 
-`IBacklogTaskStore` exposes deterministic top-N Ready reads, workflow override updates while unclaimed, and atomic claim+coordinator-run reservation (`packages/Agentweaver.Domain/IBacklogTaskStore.cs:24-28`, `packages/Agentweaver.Domain/IBacklogTaskStore.cs:66-88`).
+1. **Live feedback** — clients can see what the agent is doing now.
+2. **Recovery and reconnect** — clients can replay what happened if they disconnect or the process restarts.
 
-`CoordinatorHeartbeatService` is one process-wide background service. Each tick scans active projects, skips unavailable workspaces, reads up to `project.MaxReadyPerHeartbeat` Ready tasks, and passes each to `CoordinatorPickupService` (`apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:10-27`, `apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:70-110`). It also runs the coordinator reconciler sweep after pickup (`apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:141-156`).
+The conceptual design is replay-then-tail:
 
-`CoordinatorPickupService` builds an unattended coordinator `Run` with `AgentName = "Coordinator"` and `Origin = BacklogPickup`, prepends `use {workflowOverride}` to the goal when present, atomically claims the task and reserves the run, then starts the reserved coordinator run with unattended confirmation (`apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:45-80`, `apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:94-104`).
+```mermaid
+flowchart LR
+    Runtime[Runtime events]
+    Durable[(Durable event log)]
+    Live[Live bounded channel]
+    Client[SSE client]
+    LastId[Last-Event-ID]
 
-## Review Policies & Gates
+    Runtime --> Durable
+    Runtime --> Live
+    LastId --> Durable
+    Durable --> Client
+    Live --> Client
+```
 
-Review policies are per-project overlays, distinct from workflow definitions. A `ReviewPolicy` is a named ordered list of `ReviewStepKind` values: `Rai`, `Rubberduck`, and `HumanReview` (`apps/Agentweaver.Api/ReviewPolicies/ReviewPolicy.cs:3-48`). The default policy is RAI followed by human review; with the default workflow those gates are absorbed rather than duplicated (`apps/Agentweaver.Api/ReviewPolicies/DefaultReviewPolicyTemplate.cs:15-18`, `apps/Agentweaver.Api/ReviewPolicies/DefaultReviewPolicyTemplate.cs:40-48`).
+A robust rebuild should write events durably before publishing them live. Then a reconnecting client can provide the last seen event id, replay missed events from storage, and continue tailing live updates. The stream should end with an explicit done marker so clients do not infer completion from connection closure alone.
 
-`ReviewPolicyRegistry` loads the built-in default plus project `.agentweaver/review-policies` files, resolves the active project policy by name, and falls back to the safe default when the configured policy is absent (`apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyRegistry.cs:24-39`, `apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyRegistry.cs:64-80`).
+Where this lives:
 
-`ReviewPolicyComposer` injects missing policy gates immediately before the merge node. RAI can pass, revise back to the producer, or fail safety; human review can approve, revise, or decline (`apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyComposer.cs:27-42`, `apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyComposer.cs:51-90`, `apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyComposer.cs:128-156`). Runtime composition verifies every injected kind has a live executor binding (`apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyComposer.cs:192-212`).
+- `apps/Agentweaver.Api/Runs/`
+- `packages/Agentweaver.AgentRuntime/Workflow/`
+- `apps/Agentweaver.Api/Infrastructure/`
+- `docs/run-event-stream.md`
 
-`RunWorkflowFactory` resolves the active review policy, composes it onto the selected workflow, and fails the run submission if composition cannot be made runtime-safe (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1279-1318`; failure handling in `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:384-418`). Human review itself is a MAF `RequestPort`: the watch loop records `review.requested`, updates the run to `AwaitingReview`, and closes the SSE stream at that gate so the client can act (`apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:126-154`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:473-481`).
+## Backlog and Heartbeat Pickup
 
-## Casting
+### Problem It Solves
 
-Casting supplies the roster, agent names, default models, and charters that coordinator decomposition and run execution consume when assigning work to team members. Every confirmed team includes the system agents Scribe, Ralph, Rai, and Coordinator so workflow gates and coordinator responsibilities have identities available (`apps/Agentweaver.Api/Casting/CastingService.cs:904-925`). Full coverage of universes, naming, catalog roles, charters, and squad persistence lives in [team-casting.md](team-casting.md).
+The backlog lets Agentweaver accept work before an agent is actively assigned. The heartbeat loop turns ready backlog items into unattended coordinator runs.
 
-## Blueprints
+This separates **commitment** from **execution**:
 
-Blueprints seed orchestration defaults: roster roles, workflow set/default workflow, active review policy, sandbox profile, and optional bespoke roles (`apps/Agentweaver.Api/Blueprints/BlueprintDtos.cs:14-27`). Applying a blueprint can materialize generated workflow YAML, sync the workflow registry, and persist the workflow/review-policy defaults that the coordinator later selects from (`apps/Agentweaver.Api/Blueprints/BlueprintService.cs:166-173`, `apps/Agentweaver.Api/Blueprints/BlueprintService.cs:216-250`). For the full blueprint/casting relationship, see [team-casting.md](team-casting.md).
+- A task can be captured and ordered in the backlog.
+- Later, when it becomes ready and workspace conditions allow, the system claims it.
+- Claiming creates or reserves exactly one coordinator run.
+- That coordinator run executes the same planning and workflow path as a manually-started coordinator run, but with unattended confirmation rules.
 
-## Extension Points & Gotchas
+### Backlog Task Lifecycle
 
-- **Built-in vs library workflows:** `BuiltInWorkflows` has only `default`; catalog workflows are library workflows loaded by `WorkflowRegistry`, not additional built-ins (`apps/Agentweaver.Api/Workflows/BuiltInWorkflows.cs:11-28`, `docs/workflow-library.md:14-24`).
-- **Triggers are hard filters:** Manual starts cannot select heartbeat/event workflows, and heartbeat pickup cannot select manual-only workflows (`apps/Agentweaver.Api/Workflows/WorkflowTriggerEvaluator.cs:35-47`).
-- **Child runs are trimmed:** Coordinator child runs execute agent + RAI and stop at `AssembleReady`; review/merge/scribe are collective coordinator phases, not per-child phases (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1217-1227`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:325-370`).
-- **DAG isolation is advisory:** `Subtask.IsolationStrategy` documents intent, but child runs share a worktree; conflict serialization relies on declared file tokens and dependency edges (`apps/Agentweaver.Api/Memory/Subtask.cs:14-23`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:224-239`, `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:992-1038`).
-- **Workflow extensions require binder work:** Add node type parsing, classification, executor resolution, and edge expansion. `fan_out`, `fan_in`, `serial`, and `coordinator_composed` are modeled but not wired to runtime executors yet (`apps/Agentweaver.Api/Workflows/NodeExecutorRegistry.cs:68-78`; intended status in `docs/workflow-binder.md:160-173`).
-- **Review policy failures fail early:** Runtime composition and workflow start fail closed rather than letting an unbound policy gate weaken RAI/human review guarantees (`apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyComposer.cs:192-212`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:384-418`).
-- **Registry sync is explicit:** Workflow/review registries cache per project; writing files is not enough unless the service calls `Sync` or the process reloads (`apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:51-70`, `apps/Agentweaver.Api/ReviewPolicies/ReviewPolicyRegistry.cs:45-56`).
-- **SSE has live and durable paths:** Live streams still use `RunStreamEntry`; crash/reconnect replay uses `IRunEventStream` and `RunEvents` (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:415-443`, `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:26-30`).
-- **Comment drift to watch:** Some coordinator comments still describe earlier "decompose + persist only" wave boundaries, while `CoordinatorRunService` and `CoordinatorDispatchService` now perform dispatch/assembly handoff. Prefer the current service flow cited above over those historical wave comments (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:22-42`, `apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:500-535`).
+```mermaid
+stateDiagram-v2
+    [*] --> Backlog
+    Backlog --> Ready: committed / prerequisites satisfied
+    Ready --> Claimed: heartbeat atomically reserves task + run
+    Claimed --> Running: coordinator run starts
+    Running --> Completed: run terminal success
+    Running --> Failed: run terminal failure
+```
+
+The critical operation is the transition from Ready to Claimed. It must be atomic. If two heartbeat ticks or processes see the same ready task, only one should reserve the task and create the coordinator run. Otherwise, the system would execute duplicate plans for the same backlog item.
+
+### Heartbeat Loop
+
+The heartbeat loop is intentionally simple and repeatable:
+
+1. Scan active projects.
+2. Skip projects whose workspace is unavailable.
+3. Read a deterministic top-N set of Ready tasks per project.
+4. For each task, attempt an atomic claim and run reservation.
+5. Start the reserved coordinator run with unattended confirmation.
+6. Run reconciliation to pick up stalled or partially-progressed coordinator work.
+
+```mermaid
+sequenceDiagram
+    participant Heartbeat
+    participant ProjectStore
+    participant Backlog
+    participant Pickup
+    participant Runs
+    participant Reconciler
+
+    Heartbeat->>ProjectStore: list active projects
+    loop each project
+        Heartbeat->>Heartbeat: verify workspace is usable
+        Heartbeat->>Backlog: read ready tasks, deterministic order
+        loop each ready task
+            Heartbeat->>Pickup: attempt pickup
+            Pickup->>Backlog: atomically claim task and reserve run
+            Pickup->>Runs: start coordinator run unattended
+        end
+        Heartbeat->>Reconciler: sweep coordinator progress
+    end
+```
+
+Workflow overrides are allowed at the backlog task level, but they are still filtered by trigger eligibility. The pickup service may prepend or carry override intent into the coordinator goal, but it cannot bypass workflow safety rules.
+
+### Why Heartbeat Instead of Immediate Execution?
+
+A heartbeat loop gives the system backpressure and recovery:
+
+- Projects can limit how many ready tasks are picked up per tick.
+- Workspace availability can be checked before work starts.
+- If the process crashes, unclaimed Ready tasks remain visible for the next tick.
+- Claimed tasks can be reconciled against their reserved runs.
+- The same mechanism can eventually support multiple workers if claim semantics stay atomic.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Coordinator/`
+- `packages/Agentweaver.Domain/`
+
+## Review Policies, Gates, and Merge
+
+### Review Policy as a Safety Overlay
+
+Workflows define the shape of execution. Review policies define which review gates must be present for a project.
+
+This separation is useful because teams often need the same workflow structure with different gate requirements. For example, one project requires only Responsible AI plus human review; another adds a rubberduck review before human approval.
+
+A review policy is an ordered list of review steps. Conceptually common steps are:
+
+- **Responsible AI review** — checks safety and returns pass, revision request, or terminal failure.
+- **Rubberduck review** — an automated sanity or explanation pass.
+- **Human review** — asks a person to approve, request changes, or decline.
+
+The composer injects missing required gates before merge. It should not duplicate gates already present in a workflow, and it should fail if a required gate has no runtime executor.
+
+```mermaid
+flowchart TD
+    Workflow[Selected workflow]
+    Policy[Active review policy]
+    Compose[Compose policy onto workflow]
+    Bound{All required gates bound?}
+    Run[Start run]
+    Fail[Fail submission / fail closed]
+
+    Workflow --> Compose
+    Policy --> Compose
+    Compose --> Bound
+    Bound -- yes --> Run
+    Bound -- no --> Fail
+```
+
+### Human Review as a Pause Point
+
+Human review is not just an event; it is a pause in the workflow. The runtime emits a review request, the watch loop persists the run as awaiting review, and the stream can close cleanly while the system waits for user action.
+
+The user action then chooses a path:
+
+- approve and continue to merge,
+- request changes and loop back to agent work,
+- or decline and terminate.
+
+```mermaid
+sequenceDiagram
+    participant Workflow
+    participant Watch
+    participant Store
+    participant Client
+    participant User
+
+    Workflow->>Watch: human review requested
+    Watch->>Store: set run AwaitingReview
+    Watch-->>Client: emit review.requested and done
+    User->>Client: approve / request changes / decline
+    Client->>Workflow: resume selected edge
+```
+
+This design keeps review durable and externally controllable. A browser tab can close while a run waits for review; the run state still tells the next client exactly what is needed.
+
+### Merge Gate
+
+Merge is a gate because generated work can be correct but not mergeable. The merge step surfaces conflicts, blocked policies, or repository constraints.
+
+A healthy merge gate should distinguish:
+
+- **blocked but recoverable** — return to review or revision with a clear reason,
+- **merged** — terminal success and scribe recording,
+- **terminal merge failure** — cannot proceed without manual intervention.
+
+The parent coordinator run owns merge for coordinated work. Child runs should not merge because they do not know whether sibling subtasks are complete or consistent.
+
+### Scribe
+
+Scribe is the post-outcome memory step. It records what happened, decisions, learnings, or trace information after the run reaches the appropriate terminal path. Conceptually, Scribe turns execution history into reusable project memory.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/ReviewPolicies/`
+- `apps/Agentweaver.Api/Runs/`
+
+## Recovery and Failure Handling
+
+Agentweaver recovery is built from several smaller guarantees rather than one global transaction.
+
+### Idempotent Planning
+
+If a coordinator run already has a WorkPlan, the coordinator should not decompose again. This prevents duplicate children and preserves the original confirmed intent.
+
+### Atomic Pickup
+
+Backlog pickup should claim the task and reserve the run in one atomic operation. If reservation fails, the task should not appear successfully claimed without an executable run.
+
+### Durable Events
+
+Events should be appended durably before live publication. This lets clients reconnect and lets operators inspect what happened after a crash.
+
+### Watch-Loop Status Projection
+
+The runtime graph emits events. The watch loop projects those events into durable statuses. Keeping this projection centralized prevents every executor from inventing its own status semantics.
+
+### Frontier-Based Dispatch
+
+The dispatcher can be rerun safely because it reads persisted subtask states and dependencies. Already-dispatched or completed subtasks are skipped; newly-ready pending subtasks can be launched.
+
+### Review and Merge Re-entry
+
+Review and merge failures often are not terminal. A requested change loops back to agent work. A blocked merge can return to review. Only explicit terminal paths should mark the run failed, declined, merged, or merge-failed.
+
+### Reconciliation
+
+A reconciler should periodically compare plans, subtasks, child runs, and parent status. Its job is to notice mismatches such as:
+
+- a subtask marked running whose child run reached a terminal state,
+- a plan whose all subtasks are assemble-ready but parent assembly has not started,
+- a claimed backlog task whose reserved run was not launched,
+- or a coordinator parent waiting on children that no longer exist.
+
+The reconciler is what turns persisted state into eventual progress after crashes or partial failures.
+
+## Casting and Blueprints Integration
+
+Casting provides the roster: agent names, role charters, default models, and required system agents such as Coordinator, Scribe, Ralph, and Rai. Orchestration consumes this roster when assigning subtasks and binding review responsibilities.
+
+Blueprints provide defaults: initial roster, workflow set, default workflow, review policy, sandbox profile, and optional bespoke roles. Applying a blueprint can materialize workflow definitions and persist defaults that later coordinator runs select from.
+
+The key boundary is that Casting and Blueprints define **who is available** and **what defaults apply**. The orchestration engine decides **what work is needed now** and **how that work moves through gates**.
+
+See [team-casting.md](team-casting.md) for the detailed model.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Casting/`
+- `apps/Agentweaver.Api/Blueprints/`
+
+## Extension Points and Gotchas
+
+- **Do not treat workflow ids as executable code.** A workflow must be parsed, classified, bound to known executors, and validated before it can run.
+- **Trigger filtering is a hard safety boundary.** Overrides and selector output should never make an ineligible workflow eligible.
+- **Child pipelines are intentionally shorter.** Per-child review, merge, and scribe would fragment responsibility. Keep those phases at the parent level for coordinated work.
+- **Advisory isolation is not a lock.** File ownership hints help dispatch and planning, but dependency edges, review, and merge conflict handling still matter.
+- **Review policy composition must fail closed.** Missing safety or human-review bindings should prevent run start rather than silently weaken review guarantees.
+- **Registry sync matters.** If workflow or review-policy files are cached, changing files on disk is not enough unless the registry refreshes or the process reloads.
+- **Live streams and durable streams serve different users.** Live channels make the UI responsive; durable event logs make reconnect and crash recovery possible. Keep both.
+- **Comments can drift from behavior.** Prefer the persisted contracts and current service flow over historical comments when validating orchestration behavior.
+
+## Rebuilding Checklist
+
+If you were rebuilding Agentweaver orchestration from scratch, implement in this order:
+
+1. Durable run records, statuses, and event log.
+2. Workflow definitions with trigger filtering and fail-closed binding.
+3. Agent execution wrapped by a watch loop that projects events into statuses.
+4. Review policies composed onto workflows before merge.
+5. OutcomeSpec confirmation flow.
+6. WorkPlan, subtask, and dependency persistence.
+7. Frontier-based child dispatch and assemble-ready handoff.
+8. Parent assembly, review, merge, and scribe phases.
+9. Backlog Ready-to-Claimed atomic pickup.
+10. Heartbeat scanning and reconciliation.
+11. Casting and Blueprint defaults feeding coordinator selection.
+
+The central design principle is simple: **persist intent, execute only eligible work, make every gate explicit, and recover by replaying durable state rather than reinterpreting the original request.**
