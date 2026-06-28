@@ -51,6 +51,29 @@ public sealed class RunOrchestrator
         Record at most a few high-value items per run. Skip trivia and step-by-step progress.
         """;
 
+    /// <summary>
+    /// Concise "Browser Preview" capability note, appended to worker/child system prompts ONLY when
+    /// Sandbox:Preview:Enabled=true. Tells the agent that running an HTTP server on a port can be
+    /// surfaced to the user as a public HTTPS preview. Wording matches the real contract built on
+    /// feat/sandbox-preview-proxy: Gateway -> per-preview HTTPRoute -> per-run ClusterIP Service
+    /// (port 80 -> the pod's listening port) -> sandbox pod; the URL is an unguessable capability
+    /// host kept alive while viewed (idle ~30 min, hard max ~8 h). Preview start is user-initiated
+    /// from the UI — there is no agent-callable tool to start it — so the agent's job is to run its
+    /// server on a known port and tell the user a preview is available.
+    /// </summary>
+    internal const string BrowserPreviewCapability =
+        """
+        ## Browser Preview
+
+        If you start an HTTP server listening on a TCP port inside this sandbox (a dev server, a
+        static file server, or your app), a live browser preview can be exposed to the user at a
+        public HTTPS URL. To enable it: bind your server to all interfaces (0.0.0.0), not just
+        127.0.0.1, on a port you choose; keep the process running; then tell the user which port it
+        is on and that a preview can be opened. The preview is started by the user from the UI — there
+        is no tool for you to call. The resulting URL is an unguessable capability link kept alive
+        while it is viewed (idle timeout ~30 minutes, hard maximum ~8 hours).
+        """;
+
     public RunOrchestrator(
         IRunStore runStore,
         RunStreamStore streamStore,
@@ -502,7 +525,7 @@ public sealed class RunOrchestrator
                 }
             }
 
-            return (run.Task, AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter, childDecisions)));
+            return (run.Task, AppendCapabilities(AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter, childDecisions))));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)
@@ -545,7 +568,33 @@ public sealed class RunOrchestrator
             }
         }
 
-        return (run.Task, AppendMemoryProtocol(systemPromptContext));
+        return (run.Task, AppendCapabilities(AppendMemoryProtocol(systemPromptContext)));
+    }
+
+    /// <summary>
+    /// Appends the <see cref="BrowserPreviewCapability"/> note to the system prompt when the Gateway
+    /// browser-preview feature is enabled (Sandbox:Preview:Enabled=true). No-op otherwise, so default
+    /// (preview-disabled) runs see an unchanged prompt. MCP awareness is intentionally NOT added here:
+    /// spawned agents run with EnableConfigDiscovery=false and no MCP server in their SessionConfig, so
+    /// the standalone agentweaver MCP server is not reachable by them (the agentweaver loopback tools
+    /// they DO have are already surfaced via the base prompt + Memory Protocol).
+    /// </summary>
+    internal string AppendCapabilities(string systemPromptContext) =>
+        ComposeCapabilities(systemPromptContext, _configuration.GetValue<bool>("Sandbox:Preview:Enabled"));
+
+    /// <summary>
+    /// Pure capability-composition: appends <see cref="BrowserPreviewCapability"/> only when
+    /// <paramref name="previewEnabled"/> is true. Extracted from <see cref="AppendCapabilities"/> so the
+    /// gating is unit-testable without constructing the full orchestrator.
+    /// </summary>
+    internal static string ComposeCapabilities(string? systemPromptContext, bool previewEnabled)
+    {
+        if (!previewEnabled)
+            return systemPromptContext ?? "";
+
+        return string.IsNullOrEmpty(systemPromptContext)
+            ? BrowserPreviewCapability
+            : systemPromptContext + "\n\n---\n\n" + BrowserPreviewCapability;
     }
 
     /// <summary>
