@@ -104,6 +104,14 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
+            # Per-pod identity for ResilientCheckpointStore: when the shared checkpoint store on the
+            # RWX HOME volume is already locked by another replica, the loser falls back to a per-pod
+            # checkpoint sub-dir ({checkpoints}/replicas/{POD_NAME}) so it still boots. The downward
+            # API gives a stable, unique name; HOSTNAME (== pod name) is the fallback if unset.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             # spec-018 P2: HOME on RWX workspace/.home — shared across all replicas + worker.
             # AppPaths.DataDirectory → $HOME/.local/share/agentweaver (token store, checkpoints, worktrees).
             # /workspace is RWX (Azure Files); agentweaver-data RWO PVC is dropped.

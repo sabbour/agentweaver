@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Infrastructure;
 
@@ -57,6 +58,41 @@ public sealed class ResilientCheckpointStoreTests : IDisposable
         }
         // The original (pre-repair) index was preserved as a backup before any rewrite.
         Directory.GetFiles(_dir, "index.jsonl.bak.*").Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public void Create_WhenSharedDirLockedByAnotherProcess_FallsBackToPerPodDir_AndDoesNotThrow()
+    {
+        // Reproduce the live CrashLoop (exit 139): under API replicas:2 on a shared RWX volume the
+        // FileSystemJsonCheckpointStore ctor takes an EXCLUSIVE process lock, so the second pod's
+        // ctor throws "already in use by another process". Create must NOT treat this as corruption
+        // (no quarantine), must NOT throw, and must hand back a usable per-pod store so the API boots.
+        Directory.CreateDirectory(_dir);
+        using var lockHolder = new FileSystemJsonCheckpointStore(new DirectoryInfo(_dir));
+
+        var podName = $"api-pod-{Guid.NewGuid():N}";
+        Environment.SetEnvironmentVariable("POD_NAME", podName);
+        try
+        {
+            object? store = null;
+            var act = () => store = ResilientCheckpointStore.Create(_dir, NullLogger.Instance);
+
+            act.Should().NotThrow();
+            store.Should().NotBeNull();
+
+            // This replica got its own writable per-pod store under the shared volume, keyed by POD_NAME.
+            var perPodDir = Path.Combine(_dir, "replicas", podName);
+            Directory.Exists(perPodDir).Should().BeTrue();
+
+            // The shared index must NOT have been quarantined — lock contention is not corruption.
+            Directory.GetFiles(_dir, "index.jsonl.corrupt.*").Should().BeEmpty();
+
+            (store as IDisposable)?.Dispose();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("POD_NAME", null);
+        }
     }
 
     public void Dispose()
