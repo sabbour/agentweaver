@@ -31,12 +31,32 @@ public interface IRunSubmittingUserResolver
 /// </summary>
 public sealed class RunStoreSubmittingUserResolver : IRunSubmittingUserResolver
 {
+    // Coordinator creates sub-runs by appending these suffixes to the parent run ID. The sub-run IDs
+    // are not stored in the run store; strip the suffix to find the parent run's submitting user.
+    private static readonly string[] _coordinatorSuffixes =
+    [
+        "-coordinator-draft",
+        "-coordinator-decompose",
+        "-coordinator-orchestrate",
+    ];
+
     private readonly IRunStore _runStore;
 
     public RunStoreSubmittingUserResolver(IRunStore runStore) => _runStore = runStore;
 
     public async Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default)
     {
+        // Strip known coordinator sub-run suffixes so callers using sub-run IDs resolve the
+        // parent run's submitting user (and therefore the correct user token).
+        foreach (var suffix in _coordinatorSuffixes)
+        {
+            if (runId.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                runId = runId[..^suffix.Length];
+                break;
+            }
+        }
+
         if (!RunId.TryParse(runId, out var id))
             return null;
 
