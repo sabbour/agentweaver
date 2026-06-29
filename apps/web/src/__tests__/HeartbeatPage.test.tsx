@@ -46,6 +46,7 @@ function sampleData(overrides: Partial<HeartbeatStatusDto> = {}): HeartbeatStatu
         error_count: 0,
         duration_ms: 120,
         error: null,
+        automation_name: 'Coordinator Heartbeat',
       },
       {
         timestamp_utc: new Date(Date.now() - 105000).toISOString(),
@@ -53,6 +54,7 @@ function sampleData(overrides: Partial<HeartbeatStatusDto> = {}): HeartbeatStatu
         error_count: 1,
         duration_ms: 88,
         error: 'boom',
+        automation_name: 'Checkpoint GC',
       },
     ],
     automations: [
@@ -109,9 +111,9 @@ describe('HeartbeatPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Coordinator Heartbeat')).toBeDefined();
+      expect(screen.getAllByText('Coordinator Heartbeat').length).toBeGreaterThan(0);
     });
-    expect(screen.getByText('Checkpoint GC')).toBeDefined();
+    expect(screen.getAllByText('Checkpoint GC').length).toBeGreaterThan(0);
     expect(screen.getByText('Advances active coordinator runs.')).toBeDefined();
   });
 

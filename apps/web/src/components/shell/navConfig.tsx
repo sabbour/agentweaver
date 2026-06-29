@@ -11,6 +11,7 @@ import {
   Brain24Regular,
   Flowchart24Regular,
   Settings24Regular,
+  Server24Regular,
   Stethoscope24Regular,
   Heart24Regular,
 } from '@fluentui/react-icons';
@@ -95,6 +96,7 @@ export const NAV_SECTIONS: NavSectionDef[] = [
     items: [
       { key: 'diagnostics', label: 'Diagnostics', icon: <Stethoscope24Regular />, segment: 'diagnostics' },
       { key: 'heartbeat', label: 'Heartbeat', icon: <Heart24Regular />, segment: 'heartbeat' },
+      { key: 'cluster', label: 'Cluster', icon: <Server24Regular />, segment: 'cluster' },
     ],
   },
 ];

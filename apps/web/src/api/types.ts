@@ -876,6 +876,51 @@ export interface DetailedSystemDiagnosticsDto {
   checks: DetailedDiagnosticsCheckDto[];
 }
 
+// ── Cluster diagnostics (GET /api/diagnostics/cluster) ──────────────────────
+// Built by Tank (spec-018). Not yet live — frontend renders a "Not available"
+// placeholder when the endpoint returns 404.
+
+export interface ClusterComponentHealthDto {
+  component: string;
+  status: 'ok' | 'warning' | 'error' | 'missing' | 'unknown';
+  detail: string;
+}
+
+export interface ClusterAgentPodDto {
+  pod_name: string;
+  run_id: string | null;
+  status: string;
+  started_at: string;
+}
+
+export interface ClusterPendingPodDto {
+  pod_name: string;
+  run_id: string | null;
+  reason: string;
+  retry_count: number;
+  pending_since: string;
+}
+
+export interface ClusterQuotaDto {
+  cpu_used: number;
+  cpu_limit: number;
+  memory_used_gi: number;
+  memory_limit_gi: number;
+}
+
+export interface ClusterDiagnosticsDto {
+  generated_utc: string;
+  warm_pool_ready: number;
+  warm_pool_total: number;
+  active_agent_pods: number;
+  pending_agent_pods: number;
+  claimed_agent_pods: number;
+  component_health: ClusterComponentHealthDto[];
+  active_pods: ClusterAgentPodDto[];
+  pending_pods: ClusterPendingPodDto[];
+  quota?: ClusterQuotaDto | null;
+}
+
 // Global system diagnostics snapshot (FR-016). All fields sourced from live state.
 export interface SystemDiagnosticsDto {
   api_version: string;
@@ -905,6 +950,7 @@ export interface HeartbeatTickDto {
   error_count: number;
   duration_ms: number;
   error: string | null;
+  automation_name: string;
 }
 
 // One real background automation running in the API process (FR-017).

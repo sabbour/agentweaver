@@ -20,6 +20,7 @@ import { WorkflowsPage } from './pages/WorkflowsPage';
 import { SignInPage } from './pages/SignInPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { HeartbeatPage } from './pages/HeartbeatPage';
+import { ClusterPage } from './pages/ClusterPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { FlowPage } from './pages/FlowPage';
 import { OrchestrationsPage } from './pages/OrchestrationsPage';
@@ -51,6 +52,7 @@ function Shell() {
         <Route path="/projects/:projectId/workflows" element={<WorkflowsPage />} />
         <Route path="/projects/:projectId/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/projects/:projectId/heartbeat" element={<HeartbeatPage />} />
+        <Route path="/projects/:projectId/cluster" element={<ClusterPage />} />
         <Route path="/projects/:projectId/runs/:runId/execution/:executionId" element={<WatchPage />} />
         <Route path="/projects/:projectId/runs/:runId/workflow" element={<WorkflowRunPage />} />
         <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunPage />} />

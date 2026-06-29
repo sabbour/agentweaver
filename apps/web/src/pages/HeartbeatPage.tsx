@@ -231,6 +231,7 @@ export function HeartbeatPage() {
               <Table aria-label="Recent heartbeat ticks" size="small">
                 <TableHeader>
                   <TableRow>
+                    <TableHeaderCell>Automation</TableHeaderCell>
                     <TableHeaderCell>When</TableHeaderCell>
                     <TableHeaderCell>Acted</TableHeaderCell>
                     <TableHeaderCell>Errors</TableHeaderCell>
@@ -241,6 +242,7 @@ export function HeartbeatPage() {
                 <TableBody>
                   {data.recent_activity.map((t, i) => (
                     <TableRow key={`${t.timestamp_utc}-${i}`}>
+                      <TableCell>{t.automation_name}</TableCell>
                       <TableCell>{relativeTime(t.timestamp_utc)}</TableCell>
                       <TableCell>{t.acted_count}</TableCell>
                       <TableCell>
