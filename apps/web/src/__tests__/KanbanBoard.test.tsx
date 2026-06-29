@@ -59,14 +59,16 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
     await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
 
     // Columns appear in the fixed product order, not the dynamic API stage order.
+    // Main workflow row: Backlog → Ready → Active → Human Review → Done.
+    // Problems renders in its own section below and appears last in the DOM.
     const columns = screen.getAllByTestId(/^column-/);
     expect(columns.map((c) => c.getAttribute('data-testid'))).toEqual([
       'column-backlog',
       'column-ready',
-      'column-problems',
-      'column-human-review',
       'column-active',
+      'column-human-review',
       'column-done',
+      'column-problems',
     ]);
     expect(screen.queryByTestId('column-coordinator')).toBeNull();
     expect(screen.queryByTestId('column-planned:assembly-custom')).toBeNull();
@@ -125,10 +127,10 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
     expect(screen.getAllByTestId(/^column-/).map((c) => c.getAttribute('data-testid'))).toEqual([
       'column-backlog',
       'column-ready',
-      'column-problems',
-      'column-human-review',
       'column-active',
+      'column-human-review',
       'column-done',
+      'column-problems',
     ]);
   });
 

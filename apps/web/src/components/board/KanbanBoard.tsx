@@ -78,6 +78,29 @@ const useStyles = makeStyles({
     // Zoom origin: anchor to the top-left so zooming out keeps Backlog in place.
     transformOrigin: 'top left',
   },
+  problemsSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  problemsSectionLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    paddingLeft: tokens.spacingHorizontalXS,
+  },
+  problemsColumns: {
+    display: 'flex',
+    flexDirection: 'row',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'flex-start',
+    overflowX: 'auto',
+    paddingBottom: tokens.spacingVerticalXS,
+    scrollbarWidth: 'thin',
+    scrollbarColor: `${tokens.colorNeutralStroke1} transparent`,
+  },
 });
 
 export interface KanbanBoardProps {
@@ -87,9 +110,10 @@ export interface KanbanBoardProps {
 }
 
 // Per-project homepage Kanban board. The board API remains stage-aware, but the UI
-// presents a stable six-bucket view: Backlog, Ready, Problems, Human Review, Active,
-// Done. Drag is constrained to Backlog<->Ready by the column drop handlers and the
-// server (workflow columns never accept a task move).
+// presents a stable six-bucket view: Backlog, Ready, Active, Human Review, Done (main
+// row) + Problems (separate highlighted section below). Drag is constrained to
+// Backlog<->Ready by the column drop handlers and the server (workflow columns never
+// accept a task move).
 export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const styles = useStyles();
   const [includeTerminalHistory, setIncludeTerminalHistory] = useState(false);
@@ -127,6 +151,9 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       accent: columnAccentColor(col.id, col.id === 'backlog' || col.id === 'ready' ? 0 : workflowIndex++),
     }));
   }, [visibleColumns]);
+
+  const mainColumns = useMemo(() => columnsWithAccent.filter(({ col }) => col.id !== 'problems'), [columnsWithAccent]);
+  const problemsEntry = useMemo(() => columnsWithAccent.find(({ col }) => col.id === 'problems'), [columnsWithAccent]);
 
   const handleDropTask = async (taskId: string, sourceColumnId: string, targetColumnId: string, targetIndex: number) => {
     setDraggingTaskId(null);
@@ -253,7 +280,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
           <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
           <div className={styles.columnsViewport} ref={viewportRef}>
             <div className={styles.columns} style={{ zoom }}>
-              {columnsWithAccent.map(({ col: column, accent }) => (
+              {mainColumns.map(({ col: column, accent }) => (
                 <KanbanColumn
                   key={column.id}
                   column={column}
@@ -272,6 +299,29 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
               ))}
             </div>
           </div>
+
+          {problemsEntry && (
+            <div className={styles.problemsSection}>
+              <span className={styles.problemsSectionLabel}>Needs attention</span>
+              <div className={styles.problemsColumns}>
+                <KanbanColumn
+                  key={problemsEntry.col.id}
+                  column={problemsEntry.col}
+                  accentColor={problemsEntry.accent}
+                  projectId={projectId}
+                  onMutated={refetch}
+                  onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>
+                    void handleDropTask(taskId, sourceColumnId, targetColumnId, targetIndex)}
+                  onRejectDrop={handleRejectDrop}
+                  onDragStartTask={(taskId) => setDraggingTaskId(taskId)}
+                  onDragEndTask={() => setDraggingTaskId(null)}
+                  draggingTaskId={draggingTaskId}
+                  includeTerminalHistory={includeTerminalHistory}
+                  onToggleTerminalHistory={() => setIncludeTerminalHistory((v) => !v)}
+                />
+              </div>
+            </div>
+          )}
         </>
       )}
 

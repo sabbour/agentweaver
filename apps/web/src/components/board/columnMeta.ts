@@ -8,10 +8,11 @@ import type { BoardCardDto, BoardColumnDto, RunCardDto } from '../../api/types';
 export const FIXED_BOARD_COLUMNS: ReadonlyArray<Pick<BoardColumnDto, 'id' | 'kind' | 'label'>> = [
   { id: 'backlog', kind: 'intake', label: 'Backlog' },
   { id: 'ready', kind: 'intake', label: 'Ready' },
-  { id: 'problems', kind: 'workflow', label: 'Problems' },
-  { id: 'human-review', kind: 'workflow', label: 'Human Review' },
   { id: 'active', kind: 'workflow', label: 'Active' },
+  { id: 'human-review', kind: 'workflow', label: 'Human Review' },
   { id: 'done', kind: 'workflow', label: 'Done' },
+  // Problems is intentionally last — the board UI renders it in a separate section.
+  { id: 'problems', kind: 'workflow', label: 'Problems' },
 ];
 
 // Resolve a column's left-accent color. `workflowIndex` is the column's 0-based
