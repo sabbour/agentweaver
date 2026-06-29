@@ -4,9 +4,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -51,6 +53,8 @@ public sealed class CoordinatorRunService
     private readonly IRunOptionsStore _runOptions;
     private readonly IBacklogTaskStore _backlogStore;
     private readonly ILogger<CoordinatorRunService> _logger;
+    private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly bool _autoDispatch;
     private readonly CancellationToken _appStopping;
 
@@ -69,7 +73,9 @@ public sealed class CoordinatorRunService
         IBacklogTaskStore backlogStore,
         IHostApplicationLifetime lifetime,
         IConfiguration configuration,
-        ILogger<CoordinatorRunService> logger)
+        ILogger<CoordinatorRunService> logger,
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -84,6 +90,8 @@ public sealed class CoordinatorRunService
         _runOptions = runOptions;
         _backlogStore = backlogStore;
         _logger = logger;
+        _podLifecycle = podLifecycle;
+        _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         // Auto-dispatch is ON in production: confirming a spec launches and tracks child runs.
         // Hermetic web tests (non-git workspaces, signed-out tokens) disable it so the Phase 1
         // confirm/decline lifecycle and the decompose+persist contract stay deterministic; the
@@ -945,7 +953,35 @@ public sealed class CoordinatorRunService
         }
         finally
         {
+            // CRITICAL (orphan cleanup): a failed coordinator run leaves its own AgentHost execution
+            // pod (2 CPU / 4 Gi) running. Release it best-effort so the namespace CPU quota is not
+            // exhausted by accumulating orphaned pods across failed runs.
+            await ReleaseAgentHostPodSafeAsync(runId).ConfigureAwait(false);
             _registry.Abandon(runId);
+        }
+    }
+
+    /// <summary>
+    /// Releases the AgentHost pod for <paramref name="runId"/> when running pod-per-run. Best-effort:
+    /// logs and swallows exceptions so a release failure never disrupts run finalization. No-op when
+    /// not in pod-per-run mode or no lifecycle is wired (in-api / non-Kubernetes).
+    /// </summary>
+    private async Task ReleaseAgentHostPodSafeAsync(string runId)
+    {
+        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(runId).ConfigureAwait(false);
+            _logger.LogInformation(
+                "CoordinatorRunService: AgentHost pod released for failed coordinator run {RunId}", runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "CoordinatorRunService: failed to release AgentHost pod for run {RunId} (best-effort)",
+                runId);
         }
     }
 }

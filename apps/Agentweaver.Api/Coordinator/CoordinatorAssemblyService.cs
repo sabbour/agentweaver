@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
@@ -61,6 +62,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IServiceProvider _serviceProvider;
     private readonly IPodNameRegistry? _podRegistry;
+    private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
@@ -78,7 +81,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IHostApplicationLifetime lifetime,
         ILogger<CoordinatorAssemblyService> logger,
         IConfiguration? configuration = null,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null,
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -88,6 +93,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _scopeFactory = scopeFactory;
         _serviceProvider = serviceProvider;
         _podRegistry = podRegistry;
+        _podLifecycle = podLifecycle;
+        _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
@@ -799,6 +806,35 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (RunId.TryParse(coordinatorRunId, out var id))
             await _runStore.TrySetTerminalStatusAsync(id, status, DateTimeOffset.UtcNow, result, ct)
                 .ConfigureAwait(false);
+
+        // CRITICAL (orphan cleanup): when assembly blocks/fails (e.g. ineligible_subtasks, rai_blocked,
+        // review_timeout) the coordinator run terminates but its AgentHost pod (2 CPU / 4 Gi) would
+        // otherwise keep running and eventually exhaust the namespace CPU quota. Release it best-effort.
+        await ReleaseAgentHostPodSafeAsync(coordinatorRunId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Releases the AgentHost pod for <paramref name="runId"/> when running pod-per-run. Best-effort:
+    /// logs and swallows exceptions so a release failure never disrupts terminalization. No-op when
+    /// not in pod-per-run mode or no lifecycle is wired (in-api / non-Kubernetes).
+    /// </summary>
+    private async Task ReleaseAgentHostPodSafeAsync(string runId, CancellationToken ct)
+    {
+        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "CoordinatorAssemblyService: AgentHost pod released for terminalized coordinator run {RunId}", runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "CoordinatorAssemblyService: failed to release AgentHost pod for run {RunId} (best-effort)",
+                runId);
+        }
     }
 
     private void Emit(string coordinatorRunId, string eventType, object payload) =>

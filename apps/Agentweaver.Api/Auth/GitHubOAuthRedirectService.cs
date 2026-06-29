@@ -29,6 +29,7 @@ public sealed class GitHubOAuthRedirectService
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly AgentHostUserTokenSyncService? _tokenSync;
     private readonly ILogger<GitHubOAuthRedirectService> _logger;
 
     public GitHubOAuthRedirectService(
@@ -36,7 +37,8 @@ public sealed class GitHubOAuthRedirectService
         IGitHubTokenStore tokenStore,
         IHttpClientFactory httpClientFactory,
         IServiceScopeFactory scopeFactory,
-        ILogger<GitHubOAuthRedirectService> logger)
+        ILogger<GitHubOAuthRedirectService> logger,
+        AgentHostUserTokenSyncService? tokenSync = null)
     {
         _baseUrl = configuration["Auth:GitHub:BaseUrl"] ?? "https://github.com";
         _clientId = configuration["Auth:GitHub:ClientId"];
@@ -46,6 +48,7 @@ public sealed class GitHubOAuthRedirectService
         _tokenStore = tokenStore;
         _httpClientFactory = httpClientFactory;
         _scopeFactory = scopeFactory;
+        _tokenSync = tokenSync;
         _logger = logger;
     }
 
@@ -174,7 +177,15 @@ public sealed class GitHubOAuthRedirectService
         // Also store under the user scope so agent-host pods (which read user_<login>.json
         // from the shared RWX filesystem via SharedHomeGitHubTokenStore) can find the token.
         if (!string.IsNullOrWhiteSpace(login) && login != "unknown")
+        {
             await _tokenStore.SetAsync(GitHubTokenScope.ForUser(login), token, ct).ConfigureAwait(false);
+
+            // Option B (CSI): add this user's KV token secret to the agentweaver-user-tokens
+            // SecretProviderClass so the CSI driver begins mounting + rotating it into the shared
+            // K8s Secret. login IS the userId here. Best-effort — never fails sign-in.
+            if (_tokenSync is not null)
+                await _tokenSync.EnsureUserTokenInSpcAsync(login, login, ct).ConfigureAwait(false);
+        }
 
         _logger.LogInformation("GitHub OAuth redirect flow completed for login {Login}", login);
         return (login, body.AccessToken!);

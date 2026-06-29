@@ -315,10 +315,13 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             // Optional: present in-cluster so the resolver can lazily launch the AgentHost
             // pod on first resolve (pod-per-run). Absent => resolver only reads the registry.
             var podLifecycle = sp.GetService<IAgentHostPodLifecycle>();
+            // Optional: lets the resolver record a precise FailureReason (agent_quota_exceeded /
+            // agent_pod_reconciler_error) on the run when a lazy pod launch fails.
+            var runStore = sp.GetService<Agentweaver.Api.Infrastructure.IRunStore>();
             return new KubernetesPodAgentEndpointResolver(
                 k8sClient, podRegistry, ns, sandboxAgentOptions,
                 loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>(),
-                podLifecycle);
+                podLifecycle, runStore);
         }
         catch
         {
@@ -369,6 +372,36 @@ if (SandboxExecutorFactory.IsInCluster)
 // SandboxRuntimeOptions: controls ReleasePodOnSuspend and AgentExecutionMode at runtime.
 // Bound from the same "Sandbox" section; the IsPodPerRun computed prop used by RunWatchLoopService.
 builder.Services.Configure<SandboxRuntimeOptions>(builder.Configuration.GetSection("Sandbox"));
+
+// Option B (CSI): AgentHostUserTokenSyncService patches the agentweaver-user-tokens
+// SecretProviderClass on sign-in so the CSI driver mounts + rotates each user's KV token.
+// Registered only when in-cluster (same gate as the Kubernetes sandbox/pod registrations);
+// outside K8s the GitHubOAuthRedirectService receives null (optional parameter) and no-ops.
+if (SandboxExecutorFactory.IsInCluster)
+{
+    builder.Services.AddSingleton<AgentHostUserTokenSyncService>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILoggerFactory>()
+            .CreateLogger<AgentHostUserTokenSyncService>();
+        var ns = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+
+        // Build an in-cluster client the same way KubernetesSandboxExecutor does. If init fails the
+        // service is constructed with a null client and degrades to logging a warning per sign-in.
+        IKubernetes? k8sClient = null;
+        try
+        {
+            k8sClient = new Kubernetes(KubernetesClientConfiguration.InClusterConfig());
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "AgentHostUserTokenSyncService: in-cluster Kubernetes client init failed; " +
+                "user-token SPC sync will be disabled.");
+        }
+
+        return new AgentHostUserTokenSyncService(k8sClient, logger, ns);
+    });
+}
 
 // Port-forward service (017-preview): manages kubectl port-forward sessions per run.
 builder.Services.AddSingleton<PortForwardService>();

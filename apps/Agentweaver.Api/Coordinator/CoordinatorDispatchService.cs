@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -76,6 +77,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly IRunEventStream? _eventStream;
     private readonly IToolApprovalGate? _approvalGate;
     private readonly IPodNameRegistry? _podRegistry;
+    private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILogger<CoordinatorDispatchService> _logger;
     private readonly CancellationToken _appStopping;
 
@@ -101,7 +104,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IConfiguration? configuration = null,
         IRunEventStream? eventStream = null,
         IToolApprovalGate? approvalGate = null,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null,
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -114,6 +119,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _eventStream = eventStream;
         _approvalGate = approvalGate;
         _podRegistry = podRegistry;
+        _podLifecycle = podLifecycle;
+        _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
 
@@ -594,9 +601,38 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (updated is not null)
             EmitSubtask(context, workPlanId, updated, EventTypes.SubtaskFailed, seq.Next());
 
+        // CRITICAL (orphan cleanup): the stalled child has no live watch loop, so nothing else will
+        // release its AgentHost pod (2 CPU / 4 Gi). Release it here so the namespace CPU quota is not
+        // exhausted by accumulating orphaned pods across failed runs. Best-effort.
+        await ReleaseAgentHostPodSafeAsync(result.ChildRunId, ct).ConfigureAwait(false);
+
         _logger.LogWarning(
             "Coordinator dispatch: stall-failed subtask {SubtaskId} (child {ChildRunId}) during reconciliation for run {RunId}",
             result.SubtaskId, result.ChildRunId, context.CoordinatorRunId);
+    }
+
+    /// <summary>
+    /// Releases the AgentHost pod for <paramref name="runId"/> when running pod-per-run. Best-effort:
+    /// logs and swallows exceptions so a release failure never disrupts dispatch/observe. No-op when
+    /// not in pod-per-run mode or no lifecycle is wired (in-api / non-Kubernetes).
+    /// </summary>
+    private async Task ReleaseAgentHostPodSafeAsync(string runId, CancellationToken ct)
+    {
+        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "CoordinatorDispatchService: AgentHost pod released for orphaned/stalled run {RunId}", runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "CoordinatorDispatchService: failed to release AgentHost pod for run {RunId} (best-effort)",
+                runId);
+        }
     }
 
     // -----------------------------------------------------------------------
