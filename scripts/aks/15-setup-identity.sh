@@ -40,11 +40,15 @@ echo "  Identity object ID:  ${IDENTITY_OBJECT_ID}"
 
 echo ""
 echo "=== Step 2: Create Key Vault ==="
-az keyvault create \
-  --name "${KEYVAULT_NAME}" \
-  --resource-group "${RESOURCE_GROUP}" \
-  --location "${LOCATION}" \
-  --enable-rbac-authorization
+if ! az keyvault show --name "${KEYVAULT_NAME}" --resource-group "${RESOURCE_GROUP}" &>/dev/null; then
+  az keyvault create \
+    --name "${KEYVAULT_NAME}" \
+    --resource-group "${RESOURCE_GROUP}" \
+    --location "${LOCATION}" \
+    --enable-rbac-authorization
+else
+  echo "  [OK] Key Vault '${KEYVAULT_NAME}' already exists."
+fi
 
 KEYVAULT_ID=$(az keyvault show --name "${KEYVAULT_NAME}" --query id -o tsv)
 echo "  Key Vault ID: ${KEYVAULT_ID}"
@@ -91,13 +95,20 @@ echo "  OIDC issuer: ${OIDC_ISSUER}"
 
 echo ""
 echo "=== Step 6: Create federated credential ==="
-az identity federated-credential create \
-  --name agentweaver-api-fedcred \
-  --identity-name agentweaver-api-identity \
-  --resource-group "${RESOURCE_GROUP}" \
-  --issuer "${OIDC_ISSUER}" \
-  --subject "system:serviceaccount:${NAMESPACE}:agentweaver-api" \
-  --audience api://AzureADTokenExchange
+if ! az identity federated-credential show \
+    --name agentweaver-api-fedcred \
+    --identity-name agentweaver-api-identity \
+    --resource-group "${RESOURCE_GROUP}" &>/dev/null; then
+  az identity federated-credential create \
+    --name agentweaver-api-fedcred \
+    --identity-name agentweaver-api-identity \
+    --resource-group "${RESOURCE_GROUP}" \
+    --issuer "${OIDC_ISSUER}" \
+    --subject "system:serviceaccount:${NAMESPACE}:agentweaver-api" \
+    --audience api://AzureADTokenExchange
+else
+  echo "  [OK] Federated credential already exists."
+fi
 
 echo ""
 echo ""
