@@ -33,8 +33,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/00-variables.sh"
 
-SANDBOX_CONTROLLER_VERSION="${SANDBOX_CONTROLLER_VERSION:-v0.4.6}"
-SANDBOX_CONTROLLER_MANIFEST_URL="${SANDBOX_CONTROLLER_MANIFEST_URL:-https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${SANDBOX_CONTROLLER_VERSION}/release.yaml}"
+SANDBOX_CONTROLLER_VERSION="${SANDBOX_CONTROLLER_VERSION:-v0.5.0}"
+SANDBOX_CONTROLLER_MANIFEST_URL="${SANDBOX_CONTROLLER_MANIFEST_URL:-https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${SANDBOX_CONTROLLER_VERSION}/manifest.yaml}"
 
 echo ""
 echo "=== Agentweaver AKS cluster provisioning ==="
