@@ -29,6 +29,7 @@ You need these tools before you start:
 - Node.js 20.19+ (or 22.12+) — required by Vite 8
 - An existing local Git repository that the agent can target
 - A GitHub account with an active GitHub Copilot subscription (the web UI signs you in via OAuth — no static token needed), or a Microsoft Foundry API key if you prefer that model provider.
+- A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback`.
 
 ## 1. Configure the API
 
@@ -38,10 +39,18 @@ The API reads settings from `appsettings.json` plus the environment-specific fil
 $env:ASPNETCORE_ENVIRONMENT = "Local"
 ```
 
-Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your model provider. The minimal config looks like this:
+Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your GitHub OAuth App and model provider:
 
 ```json
 {
+  "Auth": {
+    "GitHub": {
+      "ClientId": "<your-oauth-app-client-id>",
+      "ClientSecret": "<your-oauth-app-client-secret>",
+      "CallbackUrl": "http://localhost:5000/auth/github/callback",
+      "FrontendUrl": "http://localhost:8080"
+    }
+  },
   "Providers": {
     "GitHubCopilot": {
       "Model": "claude-sonnet-4.6"
@@ -50,9 +59,11 @@ Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your model provid
 }
 ```
 
-> **GitHub Copilot token** — you do _not_ need to provide a static API key. When you sign in through the web UI, the server uses your GitHub OAuth token automatically. `GitHubToken` / `ApiKey` in `Providers.GitHubCopilot` is only needed for unattended scenarios (CI, headless servers) where no user has signed in.
+The `ClientId` and `ClientSecret` come from your GitHub OAuth App settings page. `CallbackUrl` must match the **Authorization callback URL** registered in the app exactly.
+
+> **GitHub Copilot token** — you do _not_ need a separate static API key. Once you sign in through the web UI, the server uses your GitHub OAuth token automatically for Copilot model calls. `GitHubToken` in `Providers.GitHubCopilot` is only needed for unattended scenarios (CI, headless servers) where no user signs in.
 >
-> **Microsoft Foundry** — if you prefer Foundry as the model provider, add it instead:
+> **Microsoft Foundry** — if you prefer Foundry as the model provider, add it instead of (or alongside) `GitHubCopilot`:
 > ```json
 > "MicrosoftFoundry": {
 >   "ApiKey": "<foundry-api-key>",
