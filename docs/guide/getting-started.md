@@ -28,7 +28,7 @@ You need these tools before you start:
 - .NET 10 SDK (`global.json` pins `10.0.100`)
 - Node.js 20.19+ (or 22.12+) — required by Vite 8
 - An existing local Git repository that the agent can target
-- A GitHub Copilot or Microsoft Foundry model credential
+- A GitHub account with an active GitHub Copilot subscription (the web UI signs you in via OAuth — no static token needed), or a Microsoft Foundry API key if you prefer that model provider.
 
 ## 1. Configure the API
 
@@ -38,28 +38,28 @@ The API reads settings from `appsettings.json` plus the environment-specific fil
 $env:ASPNETCORE_ENVIRONMENT = "Local"
 ```
 
-Use `apps/Agentweaver.Api/appsettings.Local.json` to define an API key and your model provider settings. Replace the placeholders with your own values.
+Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your model provider. The minimal config looks like this:
 
 ```json
 {
-  "Auth": {
-    "Keys": [
-      { "Token": "dev-local-key", "User": "local-developer" }
-    ]
-  },
   "Providers": {
     "GitHubCopilot": {
-      "ApiKey": "<github-copilot-api-key>",
       "Model": "claude-sonnet-4.6"
-    },
-    "MicrosoftFoundry": {
-      "ApiKey": "<foundry-api-key>",
-      "Endpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
-      "Deployment": "gpt-4.1"
     }
   }
 }
 ```
+
+> **GitHub Copilot token** — you do _not_ need to provide a static API key. When you sign in through the web UI, the server uses your GitHub OAuth token automatically. `GitHubToken` / `ApiKey` in `Providers.GitHubCopilot` is only needed for unattended scenarios (CI, headless servers) where no user has signed in.
+>
+> **Microsoft Foundry** — if you prefer Foundry as the model provider, add it instead:
+> ```json
+> "MicrosoftFoundry": {
+>   "ApiKey": "<foundry-api-key>",
+>   "Endpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
+>   "Deployment": "gpt-4.1"
+> }
+> ```
 
 ## 2. Start the API
 
