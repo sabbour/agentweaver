@@ -380,7 +380,7 @@ public sealed class HeartbeatStatusStoreRingBufferTests
         var store = BuildStore();
         var t = DateTimeOffset.UtcNow;
 
-        store.RecordTickOutcome(t, actedCount: 2, errorCount: 0, durationMs: 5.5, error: null);
+        store.RecordTickOutcome(t, "Coordinator Heartbeat", actedCount: 2, errorCount: 0, durationMs: 5.5, error: null);
 
         store.LastTickUtc.Should().Be(t);
         store.LastError.Should().BeNull();
@@ -393,7 +393,7 @@ public sealed class HeartbeatStatusStoreRingBufferTests
         var base_ = DateTimeOffset.UtcNow;
 
         for (int i = 0; i < 5; i++)
-            store.RecordTickOutcome(base_.AddSeconds(i), i, 0, 1.0, null);
+            store.RecordTickOutcome(base_.AddSeconds(i), "Coordinator Heartbeat", i, 0, 1.0, null);
 
         var activity = store.GetRecentActivity();
         activity.Should().HaveCount(5);
@@ -409,7 +409,7 @@ public sealed class HeartbeatStatusStoreRingBufferTests
         var base_ = DateTimeOffset.UtcNow;
 
         for (int i = 0; i < 55; i++)   // exceeds RingCapacity = 50
-            store.RecordTickOutcome(base_.AddSeconds(i), i, 0, 1.0, null);
+            store.RecordTickOutcome(base_.AddSeconds(i), "Coordinator Heartbeat", i, 0, 1.0, null);
 
         var activity = store.GetRecentActivity();
         activity.Should().HaveCount(50);
@@ -424,7 +424,7 @@ public sealed class HeartbeatStatusStoreRingBufferTests
     public void RecordTickOutcome_WithError_LastErrorUpdated()
     {
         var store = BuildStore();
-        store.RecordTickOutcome(DateTimeOffset.UtcNow, 0, 1, 3.0, "something went wrong");
+        store.RecordTickOutcome(DateTimeOffset.UtcNow, "Coordinator Heartbeat", 0, 1, 3.0, "something went wrong");
 
         store.LastError.Should().Be("something went wrong");
     }
@@ -434,8 +434,8 @@ public sealed class HeartbeatStatusStoreRingBufferTests
     {
         // LastError is sticky — it is not cleared by later error-free ticks.
         var store = BuildStore();
-        store.RecordTickOutcome(DateTimeOffset.UtcNow, 0, 1, 1.0, "initial error");
-        store.RecordTickOutcome(DateTimeOffset.UtcNow.AddSeconds(10), 1, 0, 1.0, null);
+        store.RecordTickOutcome(DateTimeOffset.UtcNow, "Coordinator Heartbeat", 0, 1, 1.0, "initial error");
+        store.RecordTickOutcome(DateTimeOffset.UtcNow.AddSeconds(10), "Coordinator Heartbeat", 1, 0, 1.0, null);
 
         store.LastError.Should().Be("initial error");
     }
@@ -459,12 +459,14 @@ public sealed class HeartbeatStatusStoreRingBufferTests
     public void GetRecentActivity_IsSnapshot_NotLiveReference()
     {
         var store = BuildStore();
-        store.RecordTickOutcome(DateTimeOffset.UtcNow, 1, 0, 1.0, null);
+        store.RecordTickOutcome(DateTimeOffset.UtcNow, "Coordinator Heartbeat", 1, 0, 1.0, null);
         var snapshot = store.GetRecentActivity();
 
         // Add a new record after taking the snapshot.
-        store.RecordTickOutcome(DateTimeOffset.UtcNow.AddSeconds(1), 2, 0, 1.0, null);
+        store.RecordTickOutcome(DateTimeOffset.UtcNow.AddSeconds(1), "Coordinator Heartbeat", 2, 0, 1.0, null);
 
         snapshot.Should().HaveCount(1, "the snapshot must not be mutated by subsequent writes");
     }
 }
+
+
