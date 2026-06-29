@@ -1,7 +1,9 @@
 using System.Text.Json.Serialization;
 using Agentweaver.Api.Backlog;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -18,8 +20,16 @@ public sealed record WorkspaceFileNode(
 
 /// <summary>Request body for <c>POST /api/projects/{id}/backlog/decompose</c>.</summary>
 public sealed record DecomposeRequest(
-    /// <summary>Workspace-relative path of the markdown file to decompose.</summary>
-    [property: JsonPropertyName("file_path")] string FilePath,
+    /// <summary>
+    /// Workspace-relative path of the markdown file to decompose. When <c>null</c>, the endpoint
+    /// uses the confirmed outcome spec for the run identified by <see cref="RunId"/>.
+    /// </summary>
+    [property: JsonPropertyName("file_path")] string? FilePath,
+    /// <summary>
+    /// Coordinator run id whose confirmed outcome spec should be decomposed. Required when
+    /// <see cref="FilePath"/> is <c>null</c>; ignored when <see cref="FilePath"/> is provided.
+    /// </summary>
+    [property: JsonPropertyName("run_id")] string? RunId,
     /// <summary>
     /// When <c>true</c>, creates Backlog tasks for all non-duplicate proposed items.
     /// When <c>false</c>, returns a preview without persisting anything.
@@ -89,6 +99,7 @@ public static class BacklogDecomposeEndpoints
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             BacklogDecomposeService decomposeService,
+            MemoryDbContext db,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(id, out var projectId))
@@ -97,36 +108,58 @@ public static class BacklogDecomposeEndpoints
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
 
-            // Sandbox path validation: must be a valid relative path with no traversal.
-            if (!EndpointHelpers.TryValidateRelativePath(request.FilePath, out var normalizedPath))
-                return Results.BadRequest(new { error = "File path must be within the project workspace." });
-
-            var workspaceRoot = project.WorkingDirectory
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fullPath = Path.GetFullPath(Path.Combine(workspaceRoot, normalizedPath));
-
-            // Containment check: reject any resolved path that escapes the workspace root.
-            var rootWithSep = workspaceRoot + Path.DirectorySeparatorChar;
-            var cmp = OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-
-            if (!fullPath.StartsWith(rootWithSep, cmp) && !fullPath.Equals(workspaceRoot, cmp))
-                return Results.BadRequest(new { error = "File path must be within the project workspace." });
-
-            if (!File.Exists(fullPath))
-                return Results.NotFound(new { error = "File not found in project workspace." });
-
             string fileContent;
-            try
+            string normalizedPath;
+
+            if (request.FilePath is null)
             {
-                fileContent = await File.ReadAllTextAsync(fullPath, ct);
+                // Outcome-spec mode: decompose the confirmed spec for the supplied coordinator run.
+                if (string.IsNullOrWhiteSpace(request.RunId))
+                    return Results.BadRequest(new { error = "run_id is required when file_path is not provided." });
+
+                var spec = await db.OutcomeSpecs
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(s => s.CoordinatorRunId == request.RunId, ct);
+
+                if (spec is null)
+                    return Results.NotFound(new { error = "Outcome spec not found for the specified run." });
+
+                fileContent = BuildOutcomeSpecMarkdown(spec);
+                // Virtual source path used for idempotency — uniquely identifies this spec per run.
+                normalizedPath = $"__outcome-spec__/{request.RunId}";
             }
-            catch (Exception ex)
+            else
             {
-                return Results.Problem(
-                    $"Decomposition failed: could not read file — {ex.Message}",
-                    statusCode: 500);
+                // File mode: validate and read from the project workspace.
+                if (!EndpointHelpers.TryValidateRelativePath(request.FilePath, out normalizedPath))
+                    return Results.BadRequest(new { error = "File path must be within the project workspace." });
+
+                var workspaceRoot = project.WorkingDirectory
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var fullPath = Path.GetFullPath(Path.Combine(workspaceRoot, normalizedPath));
+
+                // Containment check: reject any resolved path that escapes the workspace root.
+                var rootWithSep = workspaceRoot + Path.DirectorySeparatorChar;
+                var cmp = OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+
+                if (!fullPath.StartsWith(rootWithSep, cmp) && !fullPath.Equals(workspaceRoot, cmp))
+                    return Results.BadRequest(new { error = "File path must be within the project workspace." });
+
+                if (!File.Exists(fullPath))
+                    return Results.NotFound(new { error = "File not found in project workspace." });
+
+                try
+                {
+                    fileContent = await File.ReadAllTextAsync(fullPath, ct);
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(
+                        $"Decomposition failed: could not read file — {ex.Message}",
+                        statusCode: 500);
+                }
             }
 
             // Run the decomposition agent turn.
@@ -190,6 +223,33 @@ public static class BacklogDecomposeEndpoints
                 agentResult.WasCapped,
                 agentResult.TotalFound));
         }).WithTags("Backlog");
+    }
+
+    /// <summary>
+    /// Formats an <see cref="OutcomeSpec"/> as a Markdown document suitable for the decomposition
+    /// agent. Mirrors the display format shown in the web client's OutcomeSpecPanel.
+    /// </summary>
+    private static string BuildOutcomeSpecMarkdown(OutcomeSpec spec)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# Goal");
+        sb.AppendLine(spec.Goal);
+        sb.AppendLine();
+        sb.AppendLine("## Desired Outcome");
+        sb.AppendLine(spec.DesiredOutcome);
+        sb.AppendLine();
+        sb.AppendLine("## Scope");
+        sb.AppendLine(spec.Scope);
+        sb.AppendLine();
+        sb.AppendLine("## Assumptions");
+        sb.AppendLine(spec.Assumptions);
+        if (!string.IsNullOrWhiteSpace(spec.ClarifyingQuestions))
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Clarifying Questions");
+            sb.AppendLine(spec.ClarifyingQuestions);
+        }
+        return sb.ToString();
     }
 
     /// <summary>

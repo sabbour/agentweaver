@@ -388,7 +388,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     setDecomposeSuccess(false);
     setDecomposePreviewOpen(true);
     try {
-      const result = await apiClient.decomposeSpec(projectId, null, false);
+      const result = await apiClient.decomposeSpec(projectId, null, false, runId);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
@@ -404,7 +404,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     setDecomposeLoading(true);
     setDecomposeError(null);
     try {
-      const result = await apiClient.decomposeSpec(projectId, null, true);
+      const result = await apiClient.decomposeSpec(projectId, null, true, runId);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
