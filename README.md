@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/public/agentweaver.png" alt="Agentweaver logo" width="128" />
+</p>
+
 # Agentweaver
 
 > ⚠️ **Alpha software.** Agentweaver is under active development. Expect breaking changes, incomplete features, and rough edges. Not intended for production use.
