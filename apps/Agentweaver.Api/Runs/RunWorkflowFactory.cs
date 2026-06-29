@@ -44,6 +44,7 @@ public sealed class RunWorkflowFactory
     private readonly IBacklogTaskStore? _backlogTaskStore;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
+    private readonly ICheckpointStoreFactory _checkpointStoreFactory;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
 
@@ -171,7 +172,7 @@ public sealed class RunWorkflowFactory
         // Production (Postgres) uses a shared, concurrency-safe checkpoint store so both replicas read
         // and write the same checkpoints; local/dev (sqlite) falls back to the per-pod file store.
         // The selector is optional so the convenience ctor / tests still get the file store.
-        var store = (checkpointStoreFactory ?? new FileCheckpointStoreFactory())
+        var store = (_checkpointStoreFactory = checkpointStoreFactory ?? new FileCheckpointStoreFactory())
             .Create("runs", _checkpointDir, _loggerFactory.CreateLogger<RunWorkflowFactory>());
         _checkpointManager = CheckpointManager.CreateJson(store);
     }
@@ -1441,30 +1442,16 @@ public sealed class RunWorkflowFactory
     /// <summary>
     /// Checks if a checkpoint exists for the given runId.
     /// </summary>
-    public bool HasCheckpoint(string runId)
-    {
-        var runCheckpointDir = Path.Combine(_checkpointDir, runId);
-        return Directory.Exists(runCheckpointDir) &&
-               Directory.GetFiles(runCheckpointDir).Length > 0;
-    }
+    public async Task<bool> HasCheckpointAsync(string runId, CancellationToken ct = default)
+        => await GetLatestCheckpointAsync(runId, ct).ConfigureAwait(false) is not null;
 
     /// <summary>
     /// Gets the latest checkpoint info for resumption. Returns null if no checkpoint exists.
+    /// Reads from the active checkpoint store (Postgres or file) so recovery resolves the same store
+    /// that wrote the checkpoint — a file directory scan is wrong when checkpoints live in Postgres.
     /// </summary>
-    public CheckpointInfo? GetLatestCheckpoint(string runId)
-    {
-        if (!HasCheckpoint(runId)) return null;
-        // CheckpointInfo(sessionId, checkpointId). We use the runId as session; the MAF
-        // runtime resolves the actual checkpoint data from the store during resume.
-        // For the latest checkpoint, we scan the directory for the most recent file.
-        var runCheckpointDir = Path.Combine(_checkpointDir, runId);
-        var latestFile = Directory.GetFiles(runCheckpointDir)
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
-        if (latestFile is null) return null;
-        var checkpointId = Path.GetFileNameWithoutExtension(latestFile);
-        return new CheckpointInfo(runId, checkpointId);
-    }
+    public Task<CheckpointInfo?> GetLatestCheckpointAsync(string runId, CancellationToken ct = default)
+        => _checkpointStoreFactory.GetLatestCheckpointAsync("runs", runId, ct);
 }
 
 /// <summary>

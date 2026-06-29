@@ -44,6 +44,7 @@ public sealed class CoordinatorWorkflowFactory
     private readonly ILogger<CoordinatorWorkflowFactory> _logger;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
+    private readonly ICheckpointStoreFactory _checkpointStoreFactory;
     private readonly CoordinatorOrchestratorExecutor _orchestrator;
 
     public CoordinatorWorkflowFactory(
@@ -63,7 +64,8 @@ public sealed class CoordinatorWorkflowFactory
 
         _checkpointDir = configuration["Coordinator:Checkpoints:Path"]
             ?? Path.Combine(AppPaths.DataDirectory, "coordinator-checkpoints");
-        var store = (checkpointStoreFactory ?? new FileCheckpointStoreFactory())
+        _checkpointStoreFactory = checkpointStoreFactory ?? new FileCheckpointStoreFactory();
+        var store = _checkpointStoreFactory
             .Create("coordinator", _checkpointDir, _logger);
         _checkpointManager = CheckpointManager.CreateJson(store);
 
@@ -174,29 +176,17 @@ public sealed class CoordinatorWorkflowFactory
             workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
     }
 
-    /// <summary>True when at least one checkpoint file exists for the given coordinator run.</summary>
-    public bool HasCheckpoint(string runId)
-    {
-        var dir = Path.Combine(_checkpointDir, runId);
-        return Directory.Exists(dir) && Directory.GetFiles(dir).Length > 0;
-    }
+    /// <summary>True when at least one checkpoint exists for the given coordinator run.</summary>
+    public async Task<bool> HasCheckpointAsync(string runId, CancellationToken ct = default)
+        => await GetLatestCheckpointAsync(runId, ct).ConfigureAwait(false) is not null;
 
     /// <summary>
-    /// Gets the latest checkpoint info for resumption, or <c>null</c> if none exists. Mirrors
-    /// <c>RunWorkflowFactory.GetLatestCheckpoint</c>: the run id is the MAF session id and the most
-    /// recently written checkpoint file is the resume point.
+    /// Gets the latest checkpoint info for resumption, or <c>null</c> if none exists. Reads from the
+    /// active checkpoint store (Postgres or file) so recovery resolves the same store that wrote the
+    /// checkpoint — a file directory scan is wrong when checkpoints live in Postgres.
     /// </summary>
-    public CheckpointInfo? GetLatestCheckpoint(string runId)
-    {
-        if (!HasCheckpoint(runId)) return null;
-        var dir = Path.Combine(_checkpointDir, runId);
-        var latestFile = Directory.GetFiles(dir)
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
-        if (latestFile is null) return null;
-        var checkpointId = Path.GetFileNameWithoutExtension(latestFile);
-        return new CheckpointInfo(runId, checkpointId);
-    }
+    public Task<CheckpointInfo?> GetLatestCheckpointAsync(string runId, CancellationToken ct = default)
+        => _checkpointStoreFactory.GetLatestCheckpointAsync("coordinator", runId, ct);
 
     /// <summary>Deletes checkpoint files for a coordinator run (cleanup on terminal state).</summary>
     public void DeleteCheckpoints(string runId)

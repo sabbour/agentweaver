@@ -1,3 +1,4 @@
+using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Extensions.Logging;
 
@@ -22,6 +23,13 @@ public interface ICheckpointStoreFactory
     /// <paramref name="fallbackFileDir"/> is only used by the file backend.
     /// </summary>
     JsonCheckpointStore Create(string storeName, string fallbackFileDir, ILogger logger);
+
+    /// <summary>
+    /// Returns the latest checkpoint for <paramref name="sessionId"/> in the given store, or
+    /// <c>null</c> if none exists. Abstracts over file-based (directory scan) and database-backed
+    /// (DB query) implementations so recovery never needs to know which store is active.
+    /// </summary>
+    Task<CheckpointInfo?> GetLatestCheckpointAsync(string storeName, string sessionId, CancellationToken ct = default);
 
     /// <summary>
     /// Reclaims checkpoints whose session is terminal (DB-backed stores only). The file store returns 0

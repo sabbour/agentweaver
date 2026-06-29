@@ -697,7 +697,7 @@ public sealed class CoordinatorRunService
         var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
         entry.MarkAwaitingReview();
 
-        var checkpointInfo = _factory.GetLatestCheckpoint(runId);
+        var checkpointInfo = await _factory.GetLatestCheckpointAsync(runId, ct).ConfigureAwait(false);
         if (checkpointInfo is null)
         {
             _logger.LogWarning(

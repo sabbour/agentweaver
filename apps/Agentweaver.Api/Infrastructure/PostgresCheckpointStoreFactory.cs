@@ -1,3 +1,4 @@
+using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -25,6 +26,19 @@ public sealed class PostgresCheckpointStoreFactory : ICheckpointStoreFactory
 
     public JsonCheckpointStore Create(string storeName, string fallbackFileDir, ILogger logger)
         => new PostgresJsonCheckpointStore(_factory, storeName, logger);
+
+    public async Task<CheckpointInfo?> GetLatestCheckpointAsync(string storeName, string sessionId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var latest = await db.WorkflowCheckpoints.AsNoTracking()
+            .Where(r => r.StoreName == storeName && r.SessionId == sessionId)
+            .OrderByDescending(r => r.CreatedAt)
+            .Select(r => new { r.CheckpointId })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        return latest is null ? null : new CheckpointInfo(sessionId, latest.CheckpointId);
+    }
 
     public async Task<int> PurgeTerminalAsync(
         string storeName,

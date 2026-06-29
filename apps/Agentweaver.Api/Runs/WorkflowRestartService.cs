@@ -107,7 +107,7 @@ public sealed class WorkflowRestartService
             var entry = _streamStore.Create(runIdStr, run.SubmittingUser);
             entry.MarkAwaitingReview();
 
-            var checkpointInfo = _factory.GetLatestCheckpoint(runIdStr);
+            var checkpointInfo = await _factory.GetLatestCheckpointAsync(runIdStr, ct).ConfigureAwait(false);
             if (checkpointInfo is null)
             {
                 // No checkpoint — cannot resume via MAF. Auto-expire runs older than 24 hours
