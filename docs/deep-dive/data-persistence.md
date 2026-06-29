@@ -488,26 +488,15 @@ Worktree metadata may outlive the physical directory. This can happen if the dat
 
 Where this lives: `apps/Agentweaver.Api/Git`, `apps/Agentweaver.Api/Runs`, `apps/Agentweaver.Api/Infrastructure`.
 
-## Kubernetes Storage and Backups
+## Kubernetes Storage
 
-The production deployment uses two persistent volumes:
+The production deployment uses one persistent volume for filesystem state:
 
-- **`agentweaver-data`**: ReadWriteOnce, mounted at `/data`. It holds `agentweaver.db`, `memory.db`, app home data, and default data-directory artifacts.
-- **`agentweaver-workspace`**: ReadWriteMany, mounted at `/workspace`. It holds project workspaces.
+- **`agentweaver-workspace`**: ReadWriteMany, mounted at `/workspace`. It holds project workspaces, git worktrees, and the shared home directory (`/workspace/.home`).
 
-The API deployment uses one replica and a `Recreate` strategy. That matches the SQLite/RWO model: one writer owns the database volume, and rollout waits for the old pod to release the disk before the new pod attaches it.
+All application state (runs, projects, memory, events, OAuth) lives in **Azure Database for PostgreSQL Flexible Server**, provisioned externally. Use Azure's built-in automated backups and point-in-time restore for data protection.
 
-`Database__Path=/data/agentweaver.db` points the operational store at `/data`. The EF SQLite memory database derives its default path from the same directory, so it resolves to `/data/memory.db`. The run-event stream uses that same `memory.db` location.
-
-### Backup model
-
-The backup CronJob runs SQLite’s `.backup` command for `/data/agentweaver.db` and writes timestamped backups under `/data/backups`, pruning matching `agentweaver-*.db` files older than 14 days.
-
-`memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the backup CronJob. The CronJob backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not separately back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables. Loss of the PVC therefore loses `memory.db` entirely, so treat that database as not separately backed up.
-
-Backups are also written under the same `/data` PVC. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but it offers no protection against loss of the entire PVC: if the volume is destroyed, both the database and its co-located backups go with it. Durable protection requires an external volume snapshot or off-cluster backup policy.
-
-Where this lives: `k8s/api-deployment.yaml`, `k8s/pvc-data.yaml`, `k8s/pvc-workspace.yaml`, `k8s/backup-cronjob.yaml`.
+Where this lives: `k8s/api-deployment.yaml`, `k8s/pvc-workspace.yaml`.
 
 ## Rebuild Checklist and Invariants
 
@@ -516,7 +505,7 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 1. **Separate operational state from memory/orchestration state** unless you deliberately migrate both to one coherent server database.
 2. **Keep run lifecycle transitions explicit and guarded**. Do not let arbitrary writes mutate terminal or merge states.
 3. **Persist worktree path/branch before agent execution** so in-flight work can be recovered.
-4. **Use git for file content and SQLite for metadata**. Do not duplicate large diffs as the only source of truth.
+4. **Use git for file content and the database for metadata**. Do not duplicate large diffs as the only source of truth.
 5. **Make review revisions append-only**.
 6. **Make run events durable before live publication** and replay by sequence.
 7. **Treat decisions as higher priority than all other memory**.

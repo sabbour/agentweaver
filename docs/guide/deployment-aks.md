@@ -347,7 +347,6 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `pvc-data.yaml` | PersistentVolumeClaim | `agentweaver-data` — 10 Gi Azure Disk Premium (RWO), mounted at `/data` |
 | `pvc-workspace.yaml` | PersistentVolumeClaim | `agentweaver-workspace` — 50 Gi Azure Files Premium (RWX), mounted at `/workspace` for agent worktrees |
 
 ### Network policies
@@ -390,12 +389,6 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 | `sandbox-warmpool.yaml` | SandboxWarmPool | Keeps 3 pre-warmed generic sandbox pods ready (`agentweaver-sandbox`) |
 | `sandbox-warmpool-agenthost.yaml` | SandboxWarmPool | `agentweaver-agent-host` pool (`replicas: 0`) — template reference for pod-per-run AgentHost claims (env injection forces a cold start, so no warm spare is kept) |
 | `sandbox-claim-template.yaml` | (template) | Reference v1beta1 SandboxClaim shape — `spec.warmPoolRef.name` + `spec.lifecycle` |
-
-### Maintenance
-
-| File | Kind | Purpose |
-|------|------|---------|
-| `backup-cronjob.yaml` | CronJob | Daily data backup at 03:17 UTC — retains 14 days |
 
 ---
 

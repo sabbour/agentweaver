@@ -218,9 +218,7 @@ Agentweaver separates storage by access pattern.
 
 ### PostgreSQL: primary application state
 
-All application state — runs, projects, backlog tasks, revisions, memory, decisions, OAuth state, and run events — is stored in **Azure Database for PostgreSQL Flexible Server**, provisioned by `scripts/aks/17-provision-postgres.sh`. The connection string is stored in the `agentweaver-postgres` Kubernetes Secret and injected as environment variables at pod startup.
-
-The data PVC previously used for SQLite (`agentweaver-data`) was removed from the API deployment when Postgres became primary. It is retained on the cluster as an emergency rollback path but is not mounted by any running pod.
+All application state — runs, projects, backlog tasks, revisions, memory, decisions, OAuth state, and run events — is stored in **Azure Database for PostgreSQL Flexible Server**, provisioned by `scripts/aks/17-provision-postgres.sh`. The connection string is stored in the `agentweaver-postgres` Kubernetes Secret and injected as environment variables at pod startup. Use Azure's built-in automated backups and point-in-time restore for data protection.
 
 ### Workspace PVC: shared worktrees and sandbox files
 
@@ -232,9 +230,9 @@ StorageClass constraint: mount options are immutable. Do not patch a cluster-man
 
 ### Backups
 
-The `agentweaver-sqlite-backup` CronJob (`k8s/backup-cronjob.yaml`) is a legacy SQLite backup job retained from before the Postgres migration. It mounts the `agentweaver-data` PVC (which is retained but no longer mounted by the API) and backs up `agentweaver.db`. It does not back up Postgres data. For production data protection, configure Azure Database for PostgreSQL's built-in automated backups and point-in-time restore via the Azure portal or `az postgres flexible-server` CLI.
+All production data lives in **Azure Database for PostgreSQL Flexible Server**, which provides automated daily backups and point-in-time restore (PITR). Configure retention and geo-redundancy via the Azure portal or `az postgres flexible-server` CLI. No CronJob is needed.
 
-Where this lives: `k8s/pvc-data.yaml`, `k8s/pvc-workspace.yaml`, `k8s/storageclass-workspace.yaml`, `k8s/backup-cronjob.yaml`, `apps/Agentweaver.Api/Program.cs`.
+Where this lives: `k8s/pvc-workspace.yaml`, `k8s/storageclass-workspace.yaml`, `apps/Agentweaver.Api/Program.cs`.
 
 ## Network policy model
 
