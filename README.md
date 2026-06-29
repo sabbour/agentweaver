@@ -8,7 +8,7 @@
 
 Agentweaver runs an AI agent on a task inside a sandboxed git worktree, streams every step live, and waits for human review before anything merges.
 
-Read the docs: [docs/index.md](docs/index.md)
+📖 **[Read the docs at sabbour.me/agentweaver](https://sabbour.me/agentweaver/)** — or browse the source in [docs/index.md](docs/index.md)
 
 ## Features
 
