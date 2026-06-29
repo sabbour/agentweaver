@@ -190,6 +190,20 @@ public sealed class GitHubTokenAuthMiddleware
             return;
         }
 
+        // Internal service-to-service: agent loopback calls (RunWorkflowFactory, CoordinatorWorkflowFactory,
+        // BacklogDecomposeService) use the shared API key (Auth:ApiKey = mcp-api-key from Key Vault) as a
+        // Bearer token. The raw hex key is not a JWT and is not a GitHub token, so it must be validated
+        // here before the GitHub /user call — which would always return 401 for a non-GitHub credential.
+        // This path is production-safe: the key is a 32-byte random secret injected via CSI/Key Vault,
+        // not a human credential. Callers authenticated this way are attributed as "agentweaver-internal".
+        var internalKey = _configuration["Auth:ApiKey"];
+        if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
+        {
+            context.Items[CallerItemKey] = new CallerContext { User = "agentweaver-internal", GitHubLogin = "agentweaver-internal" };
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var cacheKey = ComputeTokenHash(token);
 
         if (!_cache.TryGetValue(cacheKey, out string? login))
