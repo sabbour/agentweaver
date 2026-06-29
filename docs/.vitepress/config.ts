@@ -3,7 +3,7 @@ import { withMermaid } from 'vitepress-plugin-mermaid'
 export default withMermaid({
   title: 'Agentweaver',
   description: 'Orchestrate AI agent teams that build and ship code — with full observability and human oversight at every step.',
-  base: '/docs/',
+  base: '/agentweaver/',
   ignoreDeadLinks: true,
   markdown: {
     // Endpoint headings end in route params like `{id}`/`{path}`, which
@@ -30,6 +30,9 @@ export default withMermaid({
       { text: 'User Guide', link: '/experience/00-overview' },
       { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
       { text: 'Reference', link: '/reference/api' },
+    ],
+    socialLinks: [
+      { icon: 'github', link: 'https://github.com/sabbour/agentweaver' },
     ],
     sidebar: {
       '/guide/': [
@@ -126,6 +129,7 @@ export default withMermaid({
             { text: 'Orchestration', link: '/deep-dive/orchestration' },
             { text: 'Coordinator internals', link: '/deep-dive/coordinator-internals' },
             { text: 'Workflow engine', link: '/deep-dive/workflow-engine' },
+            { text: 'Workflow selection', link: '/deep-dive/workflow-selection' },
             { text: 'Team & casting', link: '/deep-dive/team-casting' },
             { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
             { text: 'Agent communication', link: '/deep-dive/agent-communication' },
