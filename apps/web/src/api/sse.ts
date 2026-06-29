@@ -133,6 +133,7 @@ export type EventType =
   | 'subtask.rai_flagged'
   | 'subtask.completed'
   | 'subtask.failed'
+  | 'subtask.pending_capacity'
   | 'agent.question_asked'
   | 'agent.question_answered'
   | 'tool.auto_approved'
