@@ -29,6 +29,27 @@ public sealed record SystemDiagnosticsDto
     [JsonPropertyName("generated_utc")]      public required DateTimeOffset                 GeneratedUtc     { get; init; }
     [JsonPropertyName("total_duration_ms")]  public required double                         TotalDurationMs  { get; init; }
     [JsonPropertyName("checks")]             public required IReadOnlyList<DiagnosticsCheckDto> Checks       { get; init; }
+
+    /// <summary>
+    /// Agent-pod CPU quota headroom (spec: 24-core namespace quota, 2 CPU per agent pod). Null when
+    /// the API is not running against a Kubernetes backend.
+    /// </summary>
+    [JsonPropertyName("agent_pod_quota")]    public AgentPodQuotaDiagnosticDto?            AgentPodQuota    { get; init; }
+}
+
+/// <summary>
+/// Agent-pod CPU quota diagnostic (spec-006). Surfaces whether the namespace ResourceQuota still has
+/// room to start another agent pod, so an exhausted quota is visible in Diagnostics instead of
+/// silently failing every new run.
+/// </summary>
+public sealed record AgentPodQuotaDiagnosticDto
+{
+    [JsonPropertyName("name")]   public required string Name   { get; init; }
+    /// <summary><c>"healthy"</c>, <c>"warning"</c>, <c>"critical"</c>, or <c>"unknown"</c>.</summary>
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("used")]   public double?         Used   { get; init; }
+    [JsonPropertyName("limit")]  public double?         Limit  { get; init; }
+    [JsonPropertyName("unit")]   public required string Unit   { get; init; }
 }
 
 /// <summary>

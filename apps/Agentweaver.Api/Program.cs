@@ -369,6 +369,42 @@ if (SandboxExecutorFactory.IsInCluster)
     });
 }
 
+// spec-006: AgentHost orphaned-pod reaper. Each AgentHost pod reserves 2 CPU against the namespace
+// quota (24 CPU); claims left behind by crashed/stalled runs exhaust it and make new runs fail with
+// "exceeded quota". Register a shared in-cluster Kubernetes client + the reaper hosted service when
+// the sandbox provider is Kubernetes (Sandbox:Provider == "kubernetes") or we are running in-cluster.
+{
+    var sandboxProvider = builder.Configuration["Sandbox:Provider"]?.ToLowerInvariant();
+    var useKubernetesSandbox =
+        sandboxProvider == "kubernetes" || SandboxExecutorFactory.IsInCluster;
+
+    if (useKubernetesSandbox)
+    {
+        IKubernetes? sharedK8sClient = null;
+        try
+        {
+            sharedK8sClient = new Kubernetes(KubernetesClientConfiguration.InClusterConfig());
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: without a client the reaper and the diagnostics quota check are skipped,
+            // but the API must still boot (e.g. provider=kubernetes outside a cluster during tooling).
+            Console.Error.WriteLine(
+                $"AgentHostReaper: in-cluster Kubernetes client init failed; reaper + quota diagnostics disabled. {ex.Message}");
+        }
+
+        if (sharedK8sClient is not null)
+        {
+            builder.Services.AddSingleton<IKubernetes>(sharedK8sClient);
+
+            var reaperNamespace = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+            builder.Services.AddSingleton<KubernetesSandboxOptions>(
+                new KubernetesSandboxOptions { Namespace = reaperNamespace });
+            builder.Services.AddHostedService<AgentHostReaperService>();
+        }
+    }
+}
+
 // SandboxRuntimeOptions: controls ReleasePodOnSuspend and AgentExecutionMode at runtime.
 // Bound from the same "Sandbox" section; the IsPodPerRun computed prop used by RunWatchLoopService.
 builder.Services.Configure<SandboxRuntimeOptions>(builder.Configuration.GetSection("Sandbox"));

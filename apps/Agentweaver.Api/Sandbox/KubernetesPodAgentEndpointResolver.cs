@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using k8s;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Sandbox;
 
@@ -34,6 +36,11 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
     // so it lazily launches the AgentHost pod on first resolve for a run when none is
     // registered yet. Null when the lifecycle is unavailable (non-cluster / misconfig).
     private readonly IAgentHostPodLifecycle? _podLifecycle;
+    // Optional run store so a launch that fails for a known, actionable reason (quota exhausted or
+    // a controller reconcile error) can terminalize the run with a precise FailureReason code,
+    // instead of the worker surfacing the generic "run interrupted" message. Best-effort: a null
+    // store (or a missing run row) degrades to the generic failure path unchanged.
+    private readonly IRunStore? _runStore;
     // Dedupes concurrent launches for the same run (e.g. parallel sub-agent turns) and
     // caches the in-flight/launched task so a run is launched at most once.
     private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _launches = new(StringComparer.Ordinal);
@@ -44,7 +51,8 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         string @namespace,
         SandboxAgentOptions options,
         ILogger<KubernetesPodAgentEndpointResolver> logger,
-        IAgentHostPodLifecycle? podLifecycle = null)
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IRunStore? runStore = null)
     {
         _k8sClient = k8sClient ?? throw new ArgumentNullException(nameof(k8sClient));
         _podRegistry = podRegistry ?? throw new ArgumentNullException(nameof(podRegistry));
@@ -52,6 +60,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _podLifecycle = podLifecycle;
+        _runStore = runStore;
     }
 
     /// <inheritdoc />
@@ -150,10 +159,46 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         {
             // Drop the cached failed launch so a subsequent turn can retry.
             _launches.TryRemove(runId, out _);
+
+            // Map the known, actionable launch failures to a precise FailureReason so the run row
+            // (and the run_not_active API response) can explain *why* the run stopped.
+            var reason = ex switch
+            {
+                AgentHostQuotaExceededException => "agent_quota_exceeded",
+                AgentHostPodReconcilerErrorException => "agent_pod_reconciler_error",
+                _ => null,
+            };
+            if (reason is not null)
+                await TryRecordFailureReasonAsync(runId, reason).ConfigureAwait(false);
+
             _logger.LogError(ex,
-                "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}",
-                runId);
+                "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}{Reason}",
+                runId, reason is null ? string.Empty : $" ({reason})");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: terminalizes <paramref name="runId"/> as Failed with <paramref name="reason"/>
+    /// as its FailureReason. Never throws — a missing store, missing run row, or a losing CAS
+    /// (the run was already terminalized elsewhere) all degrade silently to the generic path.
+    /// </summary>
+    private async Task TryRecordFailureReasonAsync(string runId, string reason)
+    {
+        if (_runStore is null || !RunId.TryParse(runId, out var parsed))
+            return;
+
+        try
+        {
+            await _runStore.TrySetTerminalStatusAsync(
+                parsed, RunStatus.Failed, DateTimeOffset.UtcNow, reason, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesPodAgentEndpointResolver: failed to record FailureReason '{Reason}' for run {RunId}",
+                reason, runId);
         }
     }
 }

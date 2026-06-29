@@ -138,6 +138,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private const string ClaimPlural = SandboxClaimConventions.ClaimPlural;
     private const string ContainerName = "agentweaver-sandbox";
 
+    /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
+    private const string ResourceQuotaName = "agentweaver-quota";
+
+    /// <summary>CPU cores reserved by a single AgentHost pod (its <c>limits.cpu</c>).</summary>
+    private const double AgentPodCpuLimit = 2.0;
+
     private readonly IKubernetes _client;
     private readonly KubernetesSandboxOptions _options;
     private readonly ILogger<KubernetesSandboxExecutor> _logger;
@@ -273,6 +279,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     public async Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        // Fail fast before creating the claim if the namespace quota cannot admit another agent pod
+        // (2 CPU). Without this the claim is accepted but the controller's pod reconcile is rejected
+        // with "exceeded quota", which surfaces as a generic mid-turn failure. Throws
+        // AgentHostQuotaExceededException so the launch path can record reason "agent_quota_exceeded".
+        await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
@@ -438,6 +450,94 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
+    /// Pre-launch guard: throws <see cref="AgentHostQuotaExceededException"/> when the namespace
+    /// ResourceQuota has less than one agent pod's worth of CPU headroom
+    /// (<see cref="AgentPodCpuLimit"/>). The quota check itself is best-effort: if the quota does
+    /// not exist or the read fails, it logs a warning and returns so a transient API/quota issue
+    /// never blocks a launch that the controller would otherwise admit.
+    /// </summary>
+    private async Task CheckQuotaHeadroomAsync(CancellationToken ct)
+    {
+        double used;
+        double hard;
+        try
+        {
+            var quota = await _client.CoreV1.ReadNamespacedResourceQuotaAsync(
+                ResourceQuotaName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
+
+            var usedStr = TryGetQuotaValue(quota?.Status?.Used, "limits.cpu");
+            var hardStr = TryGetQuotaValue(quota?.Status?.Hard, "limits.cpu");
+
+            if (usedStr is null || hardStr is null ||
+                !TryParseCpu(usedStr, out used) || !TryParseCpu(hardStr, out hard))
+            {
+                _logger.LogWarning(
+                    "KubernetesSandboxExecutor: agent pod quota '{Quota}' missing or unparseable " +
+                    "limits.cpu (used={Used}, hard={Hard}); skipping pre-launch quota check",
+                    ResourceQuotaName, usedStr ?? "(none)", hardStr ?? "(none)");
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: could not read ResourceQuota '{Quota}' in namespace " +
+                "{Namespace}; skipping pre-launch quota check (best-effort)",
+                ResourceQuotaName, _options.Namespace);
+            return;
+        }
+
+        if (hard - used < AgentPodCpuLimit)
+        {
+            _logger.LogWarning(
+                "KubernetesSandboxExecutor: agent pod quota exhausted ({Used}/{Hard} CPU used); " +
+                "need {Limit} CPU headroom to launch a new agent pod",
+                used, hard, AgentPodCpuLimit);
+            throw new AgentHostQuotaExceededException(used, hard);
+        }
+    }
+
+    private static string? TryGetQuotaValue(
+        IDictionary<string, k8s.Models.ResourceQuantity>? map, string key)
+    {
+        if (map is not null && map.TryGetValue(key, out var quantity) && quantity is not null)
+            return quantity.ToString();
+        return null;
+    }
+
+    /// <summary>
+    /// Parses a Kubernetes CPU quantity into whole cores. Handles plain cores (<c>"24"</c>,
+    /// <c>"1.5"</c>) and the millicore suffix (<c>"500m"</c> = 0.5 cores). Returns
+    /// <see langword="false"/> for an unrecognized format.
+    /// </summary>
+    internal static bool TryParseCpu(string? value, out double cores)
+    {
+        cores = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        value = value.Trim();
+        if (value.EndsWith("m", StringComparison.Ordinal))
+        {
+            var millis = value[..^1];
+            if (double.TryParse(millis, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var m))
+            {
+                cores = m / 1000.0;
+                return true;
+            }
+            return false;
+        }
+
+        return double.TryParse(value, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out cores);
+    }
+
+    /// <summary>
     /// Reads the pod IP from the Kubernetes API after the claim is Bound.
     /// Polls every 2 s until <c>status.podIP</c> is non-empty (pod has been scheduled
     /// and assigned a network address).
@@ -502,6 +602,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
             var json = JsonSerializer.Serialize(raw);
             using var doc = JsonDocument.Parse(json);
+
+            // Surface a controller reconcile failure (e.g. "exceeded quota") as a deterministic
+            // launch failure with a precise reason instead of polling until the caller times out.
+            var reconcilerError = SandboxClaimConventions.TryGetReconcilerError(doc.RootElement);
+            if (reconcilerError is not null)
+            {
+                _logger.LogWarning(
+                    "KubernetesSandboxExecutor: claim {Claim} reconcile failed: {Error}",
+                    claimName, reconcilerError);
+                throw new AgentHostPodReconcilerErrorException(
+                    $"SandboxClaim '{claimName}' could not be provisioned: {reconcilerError}");
+            }
 
             var podName = SandboxClaimConventions.TryGetBoundPodName(doc.RootElement);
             if (!string.IsNullOrEmpty(podName))

@@ -85,7 +85,7 @@ app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
     return outcome switch
     {
         CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
-        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", message = "The coordinator run is not active and cannot be confirmed." }),
+        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
         CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
         _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
     };
@@ -125,7 +125,7 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
     return outcome switch
     {
         CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
-        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", message = "The coordinator run is not active and cannot be revised." }),
+        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be revised." }),
         CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
         _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
     };
@@ -564,6 +564,23 @@ static async Task<OutcomeSpecResponse?> ReadOutcomeSpecAsync(
 {
     var spec = await coordinator.GetOutcomeSpecAsync(runId, ct);
     return spec is null ? null : MapOutcomeSpec(spec);
+}
+
+// Reads the run's persisted FailureReason (the terminal Result code, e.g. "agent_quota_exceeded")
+// so a run_not_active conflict can tell the caller *why* the run is no longer active. Best-effort:
+// returns null when the run is gone or the lookup fails, so the response degrades to error-only.
+static async Task<string?> ReadFailureReasonAsync(
+    Agentweaver.Api.Infrastructure.IRunStore runStore, RunId runId, CancellationToken ct)
+{
+    try
+    {
+        var run = await runStore.GetAsync(runId, ct);
+        return run?.Result;
+    }
+    catch
+    {
+        return null;
+    }
 }
 
 // Maps a coordinator work-plan view to its camelCase response (Feature 008 Phase 2).

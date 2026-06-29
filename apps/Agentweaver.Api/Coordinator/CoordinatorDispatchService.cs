@@ -606,6 +606,25 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // exhausted by accumulating orphaned pods across failed runs. Best-effort.
         await ReleaseAgentHostPodSafeAsync(result.ChildRunId, ct).ConfigureAwait(false);
 
+        // Record a precise FailureReason on the stalled child run so the run row (and any
+        // run_not_active response) explains the stall instead of the generic message. Best-effort +
+        // CAS-guarded: a missing row or an already-terminal run is a silent no-op.
+        if (RunId.TryParse(result.ChildRunId, out var stalledRunId))
+        {
+            try
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    stalledRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "agent_stall_timeout", ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Coordinator dispatch: failed to record agent_stall_timeout for child run {ChildRunId}",
+                    result.ChildRunId);
+            }
+        }
+
         _logger.LogWarning(
             "Coordinator dispatch: stall-failed subtask {SubtaskId} (child {ChildRunId}) during reconciliation for run {RunId}",
             result.SubtaskId, result.ChildRunId, context.CoordinatorRunId);

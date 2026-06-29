@@ -84,4 +84,61 @@ public sealed class SandboxClaimConventionsTests
     {
         SandboxClaimConventions.DeriveAgentHostClaimName(runId).Should().Be(expected);
     }
+
+    private static string? Reconciler(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return SandboxClaimConventions.TryGetReconcilerError(doc.RootElement);
+    }
+
+    [Fact]
+    public void TryGetReconcilerError_detects_exceeded_quota_message()
+    {
+        const string json = """
+        {"status":{"conditions":[{"type":"Ready","status":"False","message":"pods \"x\" is forbidden: exceeded quota"}]}}
+        """;
+
+        Reconciler(json).Should().Contain("exceeded quota");
+    }
+
+    [Fact]
+    public void TryGetReconcilerError_detects_ReconcilerError_type()
+    {
+        const string json = """
+        {"status":{"conditions":[{"type":"ReconcilerError","status":"True","reason":"FailedCreate","message":"boom"}]}}
+        """;
+
+        Reconciler(json).Should().Be("boom");
+    }
+
+    [Fact]
+    public void TryGetReconcilerError_returns_null_for_healthy_claim()
+    {
+        const string json = """
+        {"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}
+        """;
+
+        Reconciler(json).Should().BeNull();
+    }
+
+    [Fact]
+    public void TryGetReconcilerError_returns_null_when_status_absent()
+    {
+        Reconciler("""{"metadata":{"name":"c"}}""").Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("24", true, 24.0)]
+    [InlineData("1.5", true, 1.5)]
+    [InlineData("500m", true, 0.5)]
+    [InlineData("2000m", true, 2.0)]
+    [InlineData("", false, 0.0)]
+    [InlineData("abc", false, 0.0)]
+    public void TryParseCpu_handles_cores_and_millicores(string value, bool expectedOk, double expectedCores)
+    {
+        var ok = KubernetesSandboxExecutor.TryParseCpu(value, out var cores);
+        ok.Should().Be(expectedOk);
+        if (expectedOk)
+            cores.Should().BeApproximately(expectedCores, 1e-9);
+    }
 }

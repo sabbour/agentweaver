@@ -74,6 +74,41 @@ public static class SandboxClaimConventions
     }
 
     /// <summary>
+    /// Returns a reconciler-error message when the claim's <c>status</c> carries a condition that
+    /// signals the controller failed to provision the pod — either a condition whose
+    /// <c>type</c>/<c>reason</c> contains <c>ReconcilerError</c>, or any condition whose message
+    /// mentions <c>exceeded quota</c>. Returns <see langword="null"/> when no such failure is
+    /// present. Pure — safe to unit test without a cluster.
+    /// </summary>
+    public static string? TryGetReconcilerError(JsonElement root)
+    {
+        if (!root.TryGetProperty("status", out var status) ||
+            !status.TryGetProperty("conditions", out var conditions) ||
+            conditions.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var cond in conditions.EnumerateArray())
+        {
+            var type = cond.TryGetProperty("type", out var t) ? t.GetString() : null;
+            var reason = cond.TryGetProperty("reason", out var r) ? r.GetString() : null;
+            var message = cond.TryGetProperty("message", out var m) ? m.GetString() : null;
+
+            var isReconcilerError =
+                Contains(type, "ReconcilerError") ||
+                Contains(reason, "ReconcilerError") ||
+                Contains(message, "exceeded quota");
+
+            if (isReconcilerError)
+                return message ?? reason ?? type ?? "reconciler error";
+        }
+
+        return null;
+    }
+
+    private static bool Contains(string? haystack, string needle) =>
+        haystack is not null && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Returns <see langword="true"/> when the claim's <c>status</c> carries a <c>Ready</c>
     /// condition with <c>status == "True"</c>. This is the authoritative readiness signal for the
     /// agent-sandbox CRD (there is no <c>status.phase</c>).
