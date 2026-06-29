@@ -8,6 +8,17 @@ COPY ["apps/Agentweaver.Api.Migrations.Postgres/Agentweaver.Api.Migrations.Postg
 COPY ["packages/", "packages/"]
 COPY Directory.Build.props .
 
+# Pre-download the Copilot CLI binary once. Directory.Build.props sets CopilotSkipCliDownload=true
+# for all projects under /src/, preventing per-project downloads and the resulting NETSDK1152
+# duplicate-file error. We manually place the binary in the publish output after dotnet publish.
+# The EF bundle temp project at /tmp/ does NOT inherit /src/Directory.Build.props, so it downloads
+# exactly one copy on its own — no duplicates from /src/ projects to collide with.
+ARG COPILOT_CLI_VERSION=1.0.57
+RUN mkdir -p /copilot-bin && \
+    curl -fsSL "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" | \
+    tar -xz --strip-components=1 -C /copilot-bin && \
+    chmod +x /copilot-bin/copilot
+
 COPY apps/Agentweaver.Api/ apps/Agentweaver.Api/
 COPY apps/Agentweaver.Api.Data/ apps/Agentweaver.Api.Data/
 COPY apps/Agentweaver.Api.Migrations.Postgres/ apps/Agentweaver.Api.Migrations.Postgres/
@@ -19,11 +30,14 @@ RUN dotnet publish "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --no-restore \
     --output /app/publish
 
+# Place the Copilot CLI binary that CopilotSkipCliDownload=true suppressed from the SDK targets.
+RUN mkdir -p /app/publish/runtimes/linux-x64/native && \
+    cp /copilot-bin/copilot /app/publish/runtimes/linux-x64/native/copilot
+
 RUN dotnet tool install --global dotnet-ef --version 9.0.7
 ENV PATH="${PATH}:/root/.dotnet/tools"
-# Pass ErrorOnDuplicatePublishOutputFiles=false directly to EF bundle's internal dotnet publish.
-# The temp efbundle.csproj lives at /tmp/xyz/ and can't inherit /src/Directory.Build.props;
-# --msbuild-arg puts the property on the dotnet publish command line for that project.
+# EF bundle temp project at /tmp/ downloads its own single copy (no /src/ duplicates to
+# conflict with), so no extra flags needed.
 RUN dotnet ef migrations bundle \
     --project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --startup-project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
@@ -31,7 +45,6 @@ RUN dotnet ef migrations bundle \
     --configuration Release \
     --runtime linux-x64 \
     --self-contained \
-    --msbuild-arg /p:ErrorOnDuplicatePublishOutputFiles=false \
     --output /app/publish/efbundle
 
 # Runtime stage

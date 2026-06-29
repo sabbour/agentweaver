@@ -4,11 +4,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
-    <!-- GitHub.Copilot.SDK 1.0.0 downloads a native Copilot CLI binary via MSBuild targets.
-         Multiple projects in the dependency graph each trigger the download, causing NETSDK1152
-         (duplicate publish output files) for dotnet publish and dotnet ef migrations bundle.
-         The binaries are byte-identical; suppress the error globally including for EF bundle's
-         generated temp project (which inherits this file). -->
+    <!-- GitHub.Copilot.SDK 1.0.0 downloads a native Copilot CLI binary via MSBuild targets and
+         registers it as a ContentWithTargetPath item. Every project in the dependency graph that
+         imports the SDK targets (AgentRuntime, API) registers its own copy, causing NETSDK1152
+         (duplicate publish output files) when dotnet publish collects them all.
+
+         Fix: skip the per-project download AND registration for all projects under /src/ (i.e.,
+         everything that inherits this file). We pre-download the binary once in the Dockerfile and
+         manually place it in the publish output. The EF bundle's temp project lives at /tmp/ and
+         therefore does NOT inherit this file, so it downloads exactly one copy on its own, which is
+         fine (no duplicates from /src/ projects to collide with). -->
+    <CopilotSkipCliDownload>true</CopilotSkipCliDownload>
+    <!-- Belt-and-suspenders: if any project somehow still ends up with duplicates, suppress the error
+         rather than failing the build. -->
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
 </Project>
