@@ -196,10 +196,19 @@ public sealed class GitHubTokenAuthMiddleware
         // here before the GitHub /user call — which would always return 401 for a non-GitHub credential.
         // This path is production-safe: the key is a 32-byte random secret injected via CSI/Key Vault,
         // not a human credential. Callers authenticated this way are attributed as "agentweaver-internal".
+        // IsOAuthJwt=true + Org=allowedOrg lets GitHubOrgAuthorizationMiddleware skip the GitHub org
+        // membership call (which would always fail for a non-GitHub credential).
         var internalKey = _configuration["Auth:ApiKey"];
         if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
         {
-            context.Items[CallerItemKey] = new CallerContext { User = "agentweaver-internal", GitHubLogin = "agentweaver-internal" };
+            var allowedOrg = _configuration["Auth:GitHub:AllowedOrg"]?.Trim();
+            context.Items[CallerItemKey] = new CallerContext
+            {
+                User = "agentweaver-internal",
+                GitHubLogin = "agentweaver-internal",
+                IsOAuthJwt = true,
+                Org = allowedOrg,
+            };
             await _next(context).ConfigureAwait(false);
             return;
         }
