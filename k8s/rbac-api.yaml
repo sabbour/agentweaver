@@ -12,6 +12,7 @@ rules:
       - sandboxclaims
     verbs:
       - get
+      - list
       - create
       - delete
   - apiGroups:
