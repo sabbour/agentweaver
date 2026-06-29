@@ -13,6 +13,9 @@ COPY apps/Agentweaver.Api.Data/ apps/Agentweaver.Api.Data/
 COPY apps/Agentweaver.Api.Migrations.Postgres/ apps/Agentweaver.Api.Migrations.Postgres/
 COPY packages/ packages/
 
+# Apply to all MSBuild invocations including EF bundle's /tmp temp project
+ENV MSBUILDADDITIONALCOMMANDLINEARGS=/p:ErrorOnDuplicatePublishOutputFiles=false
+
 RUN dotnet restore "apps/Agentweaver.Api/Agentweaver.Api.csproj"
 RUN dotnet publish "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --configuration Release \
