@@ -32,6 +32,7 @@ import {
   DismissCircleRegular,
   EditRegular,
   FlowRegular,
+  HourglassRegular,
   OpenRegular,
   SendRegular,
   StopRegular,
@@ -121,6 +122,7 @@ const useStyles = makeStyles({
   badgeRunning: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1 },
   badgeAssemble: { backgroundColor: tokens.colorPaletteLavenderBackground2, color: tokens.colorPaletteLavenderForeground2 },
   badgeFlagged: { backgroundColor: tokens.colorPaletteMarigoldBorderActive, color: tokens.colorNeutralForegroundInverted },
+  badgePendingCapacity: { backgroundColor: tokens.colorPaletteMarigoldBackground2, color: tokens.colorPaletteMarigoldForeground2 },
   badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2, color: tokens.colorPaletteGreenForeground1 },
   badgeFailed: { backgroundColor: tokens.colorPaletteRedBackground2, color: tokens.colorPaletteRedForeground1 },
   cardMain: {
@@ -225,6 +227,7 @@ function statusMeta(status: string, styles: ReturnType<typeof useStyles>): { lab
     running: { label: 'Running', badgeClass: 'badgeRunning', Icon: ArrowSyncRegular },
     assemble_ready: { label: 'Awaiting assembly', badgeClass: 'badgeAssemble', Icon: ClockRegular },
     rai_flagged: { label: 'RAI flagged', badgeClass: 'badgeFlagged', Icon: AlertRegular },
+    pending_capacity: { label: 'Waiting for capacity', badgeClass: 'badgePendingCapacity', Icon: HourglassRegular },
     completed: { label: 'Completed', badgeClass: 'badgeCompleted', Icon: CheckmarkCircleRegular },
     failed: { label: 'Failed', badgeClass: 'badgeFailed', Icon: DismissCircleRegular },
   };
@@ -232,7 +235,7 @@ function statusMeta(status: string, styles: ReturnType<typeof useStyles>): { lab
   return { label: meta.label, className: styles[meta.badgeClass] as string, Icon: meta.Icon };
 }
 
-const ACTIVE_STATUSES = new Set(['dispatched', 'running', 'assemble_ready', 'rai_flagged']);
+const ACTIVE_STATUSES = new Set(['dispatched', 'running', 'assemble_ready', 'rai_flagged', 'pending_capacity']);
 
 // ---------------------------------------------------------------------------
 // Node data passed into the React Flow custom node
@@ -275,10 +278,24 @@ function TopologyNodeCard({ data }: NodeProps) {
         <Handle type="source" position={Position.Right} style={handleStyle} />
 
       <div className={styles.cardHeader}>
-        <span className={`${styles.statusBadge} ${sm.className}`}>
-          <sm.Icon fontSize={10} aria-hidden="true" />
-          {sm.label}
-        </span>
+        {node.status === 'pending_capacity' ? (
+          <Tooltip
+            content="The agent pod could not start — the cluster is at capacity. The system will retry automatically."
+            relationship="description"
+            positioning="above"
+            withArrow
+          >
+            <span className={`${styles.statusBadge} ${sm.className}`}>
+              <sm.Icon fontSize={10} aria-hidden="true" />
+              {sm.label}
+            </span>
+          </Tooltip>
+        ) : (
+          <span className={`${styles.statusBadge} ${sm.className}`}>
+            <sm.Icon fontSize={10} aria-hidden="true" />
+            {sm.label}
+          </span>
+        )}
       </div>
 
       <div className={styles.cardMain}>

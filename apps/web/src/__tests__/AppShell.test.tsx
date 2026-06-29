@@ -9,6 +9,8 @@ vi.mock('../api/apiClient', () => ({
     listProjects: vi.fn(),
     checkHealth: vi.fn(),
     getGitHubAuthStatus: vi.fn(),
+    getDetailedDiagnostics: vi.fn(),
+    getDiagnostics: vi.fn(),
   },
 }));
 
@@ -65,6 +67,19 @@ beforeEach(() => {
   vi.mocked(apiClient.listProjects).mockResolvedValue([]);
   vi.mocked(apiClient.checkHealth).mockResolvedValue(true);
   vi.mocked(apiClient.getGitHubAuthStatus).mockResolvedValue({ status: 'signed_in' } as never);
+  // StatusDot now uses diagnostics instead of checkHealth; return healthy state.
+  vi.mocked(apiClient.getDetailedDiagnostics).mockResolvedValue(null);
+  vi.mocked(apiClient.getDiagnostics).mockResolvedValue({
+    api_version: '1.0',
+    process_started_utc: '',
+    uptime_seconds: 0,
+    total_projects: 0,
+    total_runs: 0,
+    active_runs: 0,
+    generated_utc: new Date().toISOString(),
+    total_duration_ms: 0,
+    checks: [{ name: 'test', status: 'pass', detail: '', duration_ms: 0 }],
+  });
 });
 
 afterEach(() => {
@@ -98,7 +113,7 @@ describe('AppShell navigation', () => {
 
     // The top bar exposes the project switcher and an API status indicator.
     expect(screen.getByLabelText('Project switcher')).toBeDefined();
-    await waitFor(() => expect(screen.getByLabelText('API reachable')).toBeDefined());
+    await waitFor(() => expect(screen.getByLabelText('All checks healthy')).toBeDefined());
   });
 
   it('hides project-scoped groups at the app root (no project selected)', () => {

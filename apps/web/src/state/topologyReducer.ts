@@ -55,6 +55,7 @@ const SUBTASK_STATUS_FROM_TYPE: Record<string, string> = {
   'subtask.rai_flagged': 'rai_flagged',
   'subtask.completed': 'completed',
   'subtask.failed': 'failed',
+  'subtask.pending_capacity': 'pending_capacity',
 };
 
 function str(value: unknown): string | undefined {
@@ -198,7 +199,8 @@ export function topologyReducer(
     case 'subtask.assemble_ready':
     case 'subtask.rai_flagged':
     case 'subtask.completed':
-    case 'subtask.failed': {
+    case 'subtask.failed':
+    case 'subtask.pending_capacity': {
       const subtaskId = str(p['subtaskId']);
       if (!subtaskId) return state;
       const status = str(p['status']) ?? SUBTASK_STATUS_FROM_TYPE[evt.type];

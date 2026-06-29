@@ -561,7 +561,8 @@ export type SubtaskStatus =
   | 'assemble_ready'
   | 'rai_flagged'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'pending_capacity';
 
 // coordinator.work_plan event payload.
 export interface WorkPlanSubtask {
@@ -853,6 +854,26 @@ export interface DiagnosticsCheckDto {
   status: string; // "pass" | "warn" | "fail"
   detail: string;
   duration_ms: number;
+}
+
+// Detailed diagnostic check from GET /api/diagnostics/detailed (spec-018 capacity visibility).
+// Optional fields are populated only when relevant (e.g. quota checks emit used/limit/unit).
+export interface DetailedDiagnosticsCheckDto {
+  name: string;
+  status: 'healthy' | 'warning' | 'critical' | 'unknown';
+  message?: string;
+  latencyMs?: number;
+  used?: number;
+  limit?: number;
+  unit?: string;
+  pendingCount?: number;
+}
+
+// Detailed system diagnostics snapshot from GET /api/diagnostics/detailed.
+export interface DetailedSystemDiagnosticsDto {
+  generated_utc: string;
+  total_duration_ms: number;
+  checks: DetailedDiagnosticsCheckDto[];
 }
 
 // Global system diagnostics snapshot (FR-016). All fields sourced from live state.

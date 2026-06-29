@@ -10,6 +10,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getDiagnostics: vi.fn(),
     getProjectDiagnostics: vi.fn(),
+    getDetailedDiagnostics: vi.fn(),
   },
 }));
 
@@ -33,9 +34,12 @@ function renderPage(projectId = 'proj-001') {
 
 const getDiagnosticsMock = () => vi.mocked(apiClient.getDiagnostics);
 const getProjectDiagnosticsMock = () => vi.mocked(apiClient.getProjectDiagnostics);
+const getDetailedDiagnosticsMock = () => vi.mocked(apiClient.getDetailedDiagnostics);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: detailed endpoint not available (404-style null return) → falls back to basic.
+  getDetailedDiagnosticsMock().mockResolvedValue(null);
 });
 
 afterEach(() => {

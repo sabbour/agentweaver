@@ -157,6 +157,14 @@ function SpecSection({ label, value }: { label: string; value?: string | string[
   );
 }
 
+const RUN_NOT_ACTIVE_MESSAGES: Record<string, string> = {
+  agent_quota_exceeded: 'The cluster ran out of capacity to start your agent. The system is retrying — please wait a moment before trying again.',
+  agent_stall_timeout: 'The agent pod took too long to respond. This may be a transient issue — please start a new task.',
+  agent_pod_reconciler_error: 'The agent pod failed to start due to a configuration error. Please contact support if this persists.',
+  capacity_unavailable: 'No agent capacity is available after multiple retries. Please try again later.',
+};
+const DEFAULT_INTERRUPTED_MESSAGE = 'This run was interrupted (server restart or timeout) and can no longer be confirmed. Please start a new task.';
+
 const STATUS_META: Record<OutcomeSpecStatus, { label: string; color: 'informative' | 'warning' | 'success' | 'danger' }> = {
   drafting: { label: 'Drafting', color: 'informative' },
   awaiting_confirmation: { label: 'Awaiting confirmation', color: 'warning' },
@@ -311,6 +319,20 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   const statusMeta = STATUS_META[status] ?? STATUS_META.drafting;
   const awaiting = status === 'awaiting_confirmation';
   const runInterrupted = actionError?.includes('run_not_active') ?? false;
+
+  // Map run_not_active detail codes to human-readable messages.
+  const runInterruptedMessage = useMemo(() => {
+    if (!runInterrupted || !actionError) return DEFAULT_INTERRUPTED_MESSAGE;
+    try {
+      const jsonStart = actionError.indexOf('{');
+      if (jsonStart >= 0) {
+        const body = JSON.parse(actionError.slice(jsonStart)) as Record<string, unknown>;
+        const detail = typeof body.detail === 'string' ? body.detail : '';
+        return RUN_NOT_ACTIVE_MESSAGES[detail] ?? DEFAULT_INTERRUPTED_MESSAGE;
+      }
+    } catch { /* body is not JSON */ }
+    return DEFAULT_INTERRUPTED_MESSAGE;
+  }, [runInterrupted, actionError]);
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
   const clarifying = useMemo(() => splitQuestions(toLines(spec?.clarifyingQuestions)), [spec?.clarifyingQuestions]);
 
@@ -468,7 +490,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
         <MessageBar intent="error">
           <MessageBarBody>
             {runInterrupted
-              ? 'This run was interrupted (server restart or timeout) and can no longer be confirmed. Please start a new task.'
+              ? runInterruptedMessage
               : actionError}
           </MessageBarBody>
         </MessageBar>
