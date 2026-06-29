@@ -29,7 +29,7 @@ flowchart TB
         feSvc(["frontend Service :80"])
         fe(["frontend Deploy ×2<br/>:8080"])
         apiSvc(["api Service :8080"])
-        api(["api Deploy ×1<br/>.NET 10 · Recreate"])
+        api(["api Deploy ×2<br/>.NET 10 · RollingUpdate"])
         mcpSvc(["mcp Service :8080"])
         mcp(["mcp Deploy ×1<br/>:8080"])
 
@@ -39,7 +39,6 @@ flowchart TB
             sb(["Sandbox pods<br/>Kata VM · non-root"])
         end
 
-        appdb[("agentweaver-data<br/>Azure Disk RWO · /data<br/>SQLite")]
         ws[("agentweaver-workspace<br/>Azure Files RWX · /workspace")]
 
         subgraph netpol["NetworkPolicies"]
@@ -52,6 +51,7 @@ flowchart TB
     kv(["Azure Key Vault<br/>CSI + Workload Identity"])
     gh(["GitHub<br/>OAuth · api.github.com"])
     ai(["Azure AI Foundry<br/>npmjs · Copilot"])
+    pg(["Azure Database<br/>for PostgreSQL<br/>Flexible Server"])
 
     client -->|"HTTPS :443"| gw
     gw --> rApi --> apiSvc --> api
@@ -61,12 +61,12 @@ flowchart TB
     api -->|"SandboxClaim"| claim
     warm --> claim --> sb
     api -->|"pods/exec"| sb
-    api --- appdb
     api --- ws
     sb --- ws
     api -->|"CSI"| kv
     mcp -->|"CSI"| kv
     api -->|"OAuth · REST"| gh
+    api -->|"TLS :5432"| pg
     sb -->|"egress allowlist"| gh
     sb -->|"egress allowlist"| ai
 
@@ -86,9 +86,9 @@ flowchart TB
     class gw,rApi,rMcp,rFe,feSvc,fe,mcpSvc,mcp,apiSvc svc;
     class api core;
     class warm,claim,sb runtime;
-    class appdb,ws data;
+    class ws data;
     class pDeny,pMcp,pSb evt;
-    class kv,gh,ai ext;
+    class kv,gh,ai,pg ext;
 ```
 
 ---
@@ -269,7 +269,7 @@ flowchart LR
 
     SPC["SecretProviderClass<br/>agentweaver-secrets"]
 
-    API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-api-key"]
+    API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-api-key<br/>mcp-oauth-signing-key"]
     MCP["MCP Pod<br/>(no mounted secrets)"]
 
     SA -->|"federated credential"| OIDC --> MI
@@ -298,6 +298,7 @@ The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed ident
 | `github-client-id` | `github-client-id` | GitHub OAuth App client ID → `GitHub__ClientId` env var |
 | `github-client-secret` | `github-client-secret` | GitHub OAuth App client secret → `GitHub__ClientSecret` env var |
 | `mcp-api-key` | `mcp-api-key` | Internal API loopback key for Scribe/coordinator self-calls → `Auth__ApiKey` |
+| `mcp-oauth-signing-key` | `mcp-oauth-signing-key` | ECDSA P-256 key for signing Agentweaver OAuth tokens → `Auth__OAuth__SigningKey` |
 
 The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough).
 
@@ -340,62 +341,49 @@ The MCP server (`agentweaver-mcp`) accepts inbound connections with a Bearer tok
 
 ## Storage model
 
-### SQLite on Azure Disk RWO
+### PostgreSQL (primary data store)
 
-The API uses two PersistentVolumeClaims:
-- `agentweaver-data` — Azure Disk (`managed-csi-premium`, RWO), mounted at `/data`, for the SQLite databases.
-- `agentweaver-workspace` — Azure Files (`azurefile-csi-premium`, RWX), mounted at `/workspace`, for agent workspaces and per-run git worktrees.
+The API uses **Azure Database for PostgreSQL Flexible Server** for all application state. The connection string is provisioned by `scripts/aks/17-provision-postgres.sh`, stored in the `agentweaver-postgres` Kubernetes Secret, and injected as environment variables at pod startup.
 
-The two SQLite databases on the data PVC are:
-- `agentweaver.db` — main application data (runs, projects, tasks, blueprints)
-- `memory.db` — EF Core managed memory/decisions store
+Both the `SqliteDb` (projects, runs, backlog, revisions) and the `MemoryDbContext` (decisions, agent memory, OAuth state, checkpoints) are wired to the same Postgres instance in production via `Database__Provider=Postgres`:
 
-Both are stored under the `Database:Path` configuration key (set to `/data/agentweaver.db`). The `MemoryDbContext` derives its path from the same directory, so both databases land on the same PVC.
+| Connection string key | Used by | Contents |
+|-----------------------|---------|----------|
+| `ConnectionStrings__Postgres` | `SqliteDb` (Dapper) | Projects, runs, backlog tasks, revisions, run events |
+| `ConnectionStrings__MemoryDb` | `MemoryDbContext` (EF Core) | Decisions, agent memory, steering, OAuth state, checkpoints |
+
+With Postgres as the data store, the API can run two replicas with `RollingUpdate` — no single-writer constraint.
+
+### Workspace volume
+
+One PersistentVolumeClaim handles all filesystem-backed state:
+
+- `agentweaver-workspace` — Azure Files (`azurefile-csi-premium`, RWX), mounted at `/workspace`. Shared across all replicas and the worker pod.
 
 ```
-PVC: agentweaver-data (Azure Disk, RWO)
-  storageClass: managed-csi-premium
-  mountPath: /data
-  │
-  ├── agentweaver.db      (main SQLite DB, SqliteDb)
-  └── memory.db           (EF Core memory DB, MemoryDbContext)
-
 PVC: agentweaver-workspace (Azure Files, RWX)
   storageClass: azurefile-csi-premium
   mountPath: /workspace
   │
-  ├── worktrees/          (git worktrees per run)
-  └── <project workspaces> (project working directories)
+  ├── .home/                   (shared HOME dir — token store, Copilot CLI session)
+  ├── worktrees/               (git worktrees per run)
+  └── <project workspaces>     (project working directories)
 ```
-
-### Single-writer guarantee
-
-SQLite does not support concurrent writes from multiple processes. The API Deployment enforces:
-
-- `replicas: 1` — only one pod runs at a time
-- `strategy: Recreate` — the old pod is fully terminated and releases the RWO disk before the new pod starts
-
-This prevents the `RWO` disk from being multi-attached (which Azure Disk does not support) and prevents SQLite write corruption.
 
 ### EF Core migrations
 
-On startup, the API runs database migrations via an **init container** (`migrate-memory-db`) that executes the EF bundle (`/app/efbundle`). This runs before the main API container starts, ensuring migrations are always applied before the application accepts traffic.
+On startup, the API runs schema migrations via an **init container** (`migrate-memory-db`) that executes the EF bundle (`/app/efbundle`) against the Postgres connection string. This runs before the main API container starts, ensuring the schema is always current before the application accepts traffic.
 
-The init container uses the same image as the API (`agentweaver-api:${IMAGE_TAG}`) and runs against the same data PVC.
+The init container uses the same image as the API (`agentweaver-api:${IMAGE_TAG}`) and reads `ConnectionStrings__MemoryDb` + `ConnectionStrings__Postgres` from the `agentweaver-postgres` Secret.
 
 ### Ephemeral storage for testing
 
-Both PVCs (`agentweaver-data` and `agentweaver-workspace`) are applied by
-`scripts/aks/30-deploy.sh` before the deployments roll out. For throwaway testing
-without persistent volumes, replace the `persistentVolumeClaim` volumes in
-`api-deployment.yaml` with `emptyDir`:
+For throwaway testing without Postgres, set `Database__Provider=Sqlite` in the API environment and replace the workspace `persistentVolumeClaim` volume with `emptyDir`:
 
 ```yaml
 volumes:
-  - name: data
-    emptyDir: {}
   - name: workspace
     emptyDir: {}
 ```
 
-Data will be lost on pod restart, but the stack is fully functional for validation.
+Data will be lost on pod restart, but the stack is fully functional for validation. SQLite mode enforces `replicas: 1` + `strategy: Recreate` to prevent write contention.
