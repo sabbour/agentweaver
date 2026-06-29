@@ -67,7 +67,7 @@ SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 AKS_VNET_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${AKS_MC_RG}/providers/Microsoft.Network/virtualNetworks/${AKS_VNET_NAME}"
 # Full resource ID required when DNS zone is in a different RG from the server (cross-RG safe).
 PG_DNS_ZONE_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Network/privateDnsZones/${PG_DNS_ZONE}"
-PG_FQDN="${PG_SERVER_NAME}.private.postgres.database.azure.com"
+PG_FQDN="${PG_SERVER_NAME}.postgres.database.azure.com"
 
 echo ""
 echo "=== Agentweaver PostgreSQL Flexible Server provisioning ==="

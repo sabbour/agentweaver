@@ -122,6 +122,7 @@ kubectl wait \
 apply_rendered secret-provider-class.yaml
 apply_rendered rbac-api.yaml
 apply_rendered quota.yaml
+apply_rendered storageclass-workspace.yaml
 apply_rendered pvc-data.yaml
 apply_rendered pvc-workspace.yaml
 
