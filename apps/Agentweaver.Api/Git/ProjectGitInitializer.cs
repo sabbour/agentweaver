@@ -55,7 +55,51 @@ public class ProjectGitInitializer
     }
 
     /// <summary>
-    /// Clones <paramref name="sourceRepository"/> (e.g. "owner/repo" resolved to
+    /// Stages all untracked and modified files in <paramref name="workingDirectory"/> and creates
+    /// a commit with <paramref name="message"/>. No-ops when there is nothing to commit (e.g. all
+    /// scaffold writes failed). Called after scaffold materialization so the initial git tree
+    /// reflects the project's starting state rather than the empty-commit baseline.
+    /// </summary>
+    public virtual void CommitAllUntracked(string workingDirectory, string message)
+    {
+        if (!Directory.Exists(workingDirectory)) return;
+
+        try
+        {
+            using var repo = new Repository(workingDirectory);
+
+            var status = repo.RetrieveStatus(new StatusOptions
+            {
+                IncludeUntracked = true,
+                IncludeIgnored = false,
+                RecurseUntrackedDirs = true,
+                RecurseIgnoredDirs = false,
+            });
+
+            var toStage = status
+                .Where(e => e.State != FileStatus.Ignored && e.State != 0)
+                .Select(e => e.FilePath)
+                .ToList();
+
+            if (toStage.Count == 0) return;
+
+            Commands.Stage(repo, toStage);
+
+            var sig = new Signature("Agentweaver", "agentweaver@localhost", DateTimeOffset.UtcNow);
+            repo.Commit(message, sig, sig);
+
+            _logger.LogInformation(
+                "Committed {Count} scaffold file(s) at {Path} ({Message})",
+                toStage.Count, workingDirectory, message);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort — never fail project creation if the commit fails.
+            _logger.LogWarning(ex, "Failed to commit scaffold files at {Path}", workingDirectory);
+        }
+    }
+
+
     /// https://github.com/owner/repo) into <paramref name="workingDirectory"/> using
     /// the provided <paramref name="accessToken"/> as an ephemeral credential.
     /// The token is NEVER logged or stored. Returns the default branch name.

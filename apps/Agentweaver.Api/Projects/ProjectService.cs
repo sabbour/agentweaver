@@ -89,6 +89,10 @@ public sealed class ProjectService
         // and non-clobbering: the embedded template is a generated copy of .github/agents/agentweaver.agent.md.
         TryMaterializeAgentDefinition(workingDir);
 
+        // Commit any scaffold files written above so the base-branch git tree reflects the starting
+        // state. Best-effort: a failure here is logged but never fails project creation.
+        _gitInit.CommitAllUntracked(workingDir, "Add scaffold files");
+
         var project = new Project
         {
             Id = id,
@@ -181,6 +185,10 @@ public sealed class ProjectService
         // and non-clobbering: a repo that already ships its own .github/agents/agentweaver.agent.md is never
         // overwritten. Never fails creation.
         TryMaterializeAgentDefinition(workingDir);
+
+        // Commit any scaffold files written above so the base-branch git tree reflects the starting
+        // state. Best-effort: a failure here is logged but never fails project creation.
+        _gitInit.CommitAllUntracked(workingDir, "Add scaffold files");
 
         var project = new Project
         {
