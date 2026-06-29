@@ -171,6 +171,11 @@ public sealed class GitHubOAuthRedirectService
 
         await _tokenStore.SetAsync(GitHubTokenScope.Installation, token, ct).ConfigureAwait(false);
 
+        // Also store under the user scope so agent-host pods (which read user_<login>.json
+        // from the shared RWX filesystem via SharedHomeGitHubTokenStore) can find the token.
+        if (!string.IsNullOrWhiteSpace(login) && login != "unknown")
+            await _tokenStore.SetAsync(GitHubTokenScope.ForUser(login), token, ct).ConfigureAwait(false);
+
         _logger.LogInformation("GitHub OAuth redirect flow completed for login {Login}", login);
         return (login, body.AccessToken!);
     }
