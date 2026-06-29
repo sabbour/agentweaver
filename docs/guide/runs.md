@@ -181,3 +181,8 @@ flowchart LR
     D -->|you approve| E[Merge to branch]
     D -->|you decline| F[Worktrees discarded]
 ```
+
+## See also
+
+- [Workflow selection — Deep Dive](/deep-dive/workflow-selection) — full algorithm, override hierarchy, and trigger filtering
+- [Coordinator reference — Workflow selection](/reference/coordinator#workflow-selection-how-the-coordinator-picks-the-process-to-run) — precedence table and API details

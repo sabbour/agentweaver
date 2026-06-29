@@ -236,6 +236,7 @@ The recreated run emits [`coordinator.recovered`](./events.md#coordinatorrecover
 
 ## Related references
 
+- [Workflow selection — Deep Dive](/deep-dive/workflow-selection) — concept, end-to-end algorithm, and mermaid flow for the full selection + override hierarchy
 - [API reference — Coordinator endpoints](./api.md#coordinator-endpoints)
 - [API reference — The orchestration lifecycle](./api.md#the-orchestration-lifecycle)
 - [Events reference — `coordinator.*` and `subtask.*` events](./events.md)
