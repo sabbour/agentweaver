@@ -435,33 +435,37 @@ and the git remote(s) the run legitimately needs. Everything else — especially
 services and the database — is denied. Sandbox pods talk to the worker tier, never directly to the
 database.
 
-## Reaching into the pod: preview port-forward
+## Reaching into the pod: browser preview
 
-Default-deny egress governs traffic *out* of the pod. A separate, deliberate path lets an operator reach
-*into* a run's sandbox pod: a **preview port-forward**. When an agent starts a server inside its sandbox
-(a dev server, a built app, a debug endpoint), the run's pod can expose that port back through the API on
-demand, so a human can open a live preview scoped to exactly that run's pod.
+Default-deny egress governs traffic *out* of the pod. A separate, deliberate path lets an operator (or a
+running agent) reach *into* a run's sandbox pod: the **sandbox browser preview**. When an agent starts a
+server inside its sandbox (a dev server, a built app, a debug endpoint), the run's pod can expose that port
+back through the API on demand, so a human can open a live preview scoped to exactly that run's pod.
 
-This is **Kubernetes-only** — it tunnels through the agent-sandbox controller's pod, located by run id via
-the same `PodNameRegistry` the pod pill uses. The implementation (`PortForwardService`) shells out to
-`kubectl port-forward --address 127.0.0.1 pod/{podName} :{targetPort} -n {namespace}` (not the Kubernetes
-API), parses the chosen loopback port from kubectl's `Forwarding from 127.0.0.1:<port> ->` line, and
-probes TCP until ready. It returns a **`local_port` on the API host — not a public URL**; the web client's
-optional `preview_url`/`previewUrl` fields are not populated by the backend, and the UI says so honestly
-when no proxied URL is returned.
+In **AKS deployments** (where `Sandbox:Preview:Enabled=true`) this is a **Gateway-direct reverse proxy**: the
+API creates a per-preview `ClusterIP Service` + `HTTPRoute` that attaches to the shared
+`agentweaver-preview-gateway` and routes `{token}-preview.{ZoneSuffix}` directly to the sandbox pod. The
+response includes a public `preview_url`; no loopback port or `kubectl` process is involved. The agent or the
+operator UI can also initiate this via the `start_preview` MCP tool, which first routes through a
+human-in-the-loop approval gate.
 
-The path is initiated explicitly per port, lists and stops cleanly, and never widens the pod's own egress
-allowlist; it is an inbound tunnel the operator opens, not a capability the sandboxed agent can grant
-itself. Sessions are tracked **in memory with no TTL** — capped at a default 3 per run and 20 globally —
-and are cleaned up explicitly (operator `DELETE`, run end via `RunWatchLoopService`, the kubectl process
-exiting, or shutdown). The endpoints, the `PortForwardSessionDto` shape, and the K8s-only behavior are in
-[Sandbox pods reference › preview port-forward](../reference/sandbox-pods.md#sandbox-preview-port-forward-feature-017);
-the user-facing flow is in
-[the experience doc](../experience/sandbox-pod-execution.md#sandbox-preview-reaching-a-server-inside-the-pod).
+In **local dev** (where `Sandbox:Preview:Enabled=false`) the fallback path still exists: the
+implementation (`PortForwardService`) shells out to
+`kubectl port-forward --address 127.0.0.1 pod/{podName} :{targetPort} -n {namespace}`, parses the chosen
+loopback port from kubectl's `Forwarding from 127.0.0.1:<port> ->` line, and probes TCP until ready. It
+returns a **`local_port` on the API host — not a public URL**; the `preview_url`/`previewUrl` fields are not
+populated and the UI says so honestly when no proxied URL is returned. Sessions are tracked in memory, capped
+at 3 per run and 20 globally, and cleaned up explicitly.
 
-> **Dedicated pages:** the browser preview now has its own first-class docs —
+Neither path widens the pod's own egress allowlist; both are inbound tunnels the operator/agent opens, not
+capabilities the sandboxed code can grant itself. The AKS NetworkPolicy
+`sandbox-allow-preview-ingress` (`k8s/networkpolicy-sandbox.yaml`) admits TCP 3000–9000 exclusively from
+`agentweaver-preview-gateway` pods — no other source can reach those ports.
+
+> **Dedicated pages:** the browser preview has its own first-class docs —
 > [Deep Dive](./sandbox-browser-preview.md), [Reference](../reference/sandbox-browser-preview.md), and
 > [User Guide](../experience/sandbox-browser-preview.md).
+> For the AKS-specific setup see [Sandbox browser preview — Deploy to AKS](../guide/deployment-aks.md#sandbox-browser-preview).
 
 ## The execution-mode flag and rollback
 
