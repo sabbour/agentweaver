@@ -41,11 +41,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- GitHub.Copilot.SDK 1.0.0 downloads a native Copilot CLI binary via MSBuild targets.
-         Both Agentweaver.AgentRuntime (direct ref) and this project (transitive via
-         Microsoft.Agents.AI.Workflows) cause the same binary to appear twice in publish output.
-         The two copies are byte-identical; suppress the duplicate-file error. -->
-    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
 
   <ItemGroup>

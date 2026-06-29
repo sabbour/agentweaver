@@ -4,5 +4,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
+    <!-- GitHub.Copilot.SDK 1.0.0 downloads a native Copilot CLI binary via MSBuild targets.
+         Multiple projects in the dependency graph each trigger the download, causing NETSDK1152
+         (duplicate publish output files) for dotnet publish and dotnet ef migrations bundle.
+         The binaries are byte-identical; suppress the error globally including for EF bundle's
+         generated temp project (which inherits this file). -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
 </Project>

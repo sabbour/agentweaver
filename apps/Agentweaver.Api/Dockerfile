@@ -27,9 +27,7 @@ RUN dotnet ef migrations bundle \
     --configuration Release \
     --runtime linux-x64 \
     --self-contained \
-    --verbose \
-    --output /app/publish/efbundle \
-    -- /p:ErrorOnDuplicatePublishOutputFiles=false
+    --output /app/publish/efbundle
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
