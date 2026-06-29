@@ -6,6 +6,7 @@ COPY ["apps/Agentweaver.Api/Agentweaver.Api.csproj", "apps/Agentweaver.Api/"]
 COPY ["apps/Agentweaver.Api.Data/Agentweaver.Api.Data.csproj", "apps/Agentweaver.Api.Data/"]
 COPY ["apps/Agentweaver.Api.Migrations.Postgres/Agentweaver.Api.Migrations.Postgres.csproj", "apps/Agentweaver.Api.Migrations.Postgres/"]
 COPY ["packages/", "packages/"]
+COPY Directory.Build.props .
 
 COPY apps/Agentweaver.Api/ apps/Agentweaver.Api/
 COPY apps/Agentweaver.Api.Data/ apps/Agentweaver.Api.Data/
