@@ -549,6 +549,9 @@ public sealed class TrackingPodLifecycle : IAgentHostPodLifecycle
     public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
         => Task.FromResult($"https://fake-pod:8088/a2a/agent");
 
+    public Task CheckAgentHostCapacityAsync(CancellationToken ct = default)
+        => Task.CompletedTask;
+
     public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
         _released.Add(runId);

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.ReviewPolicies;
@@ -43,8 +44,22 @@ public sealed class DiagnosticsService
     // (local dev / CI), in which case the quota diagnostic reports status "unknown".
     private readonly IKubernetes? _k8s;
 
+    // Optional dependencies for the detailed multi-dependency health suite (Change to Task 3c).
+    // Null in minimal/test hosts — the corresponding check then reports "unknown".
+    private readonly IGitHubTokenStore? _gitHubTokenStore;
+    private readonly ISecretStore? _secretStore;
+
     /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
     private const string ResourceQuotaName = "agentweaver-quota";
+
+    /// <summary>Key Vault secret probed by the detailed Key Vault health check.</summary>
+    private const string McpApiKeySecretName = "mcp-api-key";
+
+    /// <summary>Name prefix of warm-pool sandbox pods (<c>agentweaver-sandbox-*</c>).</summary>
+    private const string WarmPoolPodPrefix = "agentweaver-sandbox-";
+
+    /// <summary>Per-check timeout for the detailed diagnostics suite.</summary>
+    private static readonly TimeSpan DetailedCheckTimeout = TimeSpan.FromSeconds(5);
 
     public DiagnosticsService(
         SqliteDb db,
@@ -55,7 +70,9 @@ public sealed class DiagnosticsService
         ReviewPolicyRegistry reviewPolicyRegistry,
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
-        IKubernetes? k8s = null)
+        IKubernetes? k8s = null,
+        IGitHubTokenStore? gitHubTokenStore = null,
+        ISecretStore? secretStore = null)
     {
         _db = db;
         _projectStore = projectStore;
@@ -66,6 +83,8 @@ public sealed class DiagnosticsService
         _configuration = configuration;
         _scopeFactory = scopeFactory;
         _k8s = k8s;
+        _gitHubTokenStore = gitHubTokenStore;
+        _secretStore = secretStore;
     }
 
     // -------------------------------------------------------------------------
@@ -180,6 +199,331 @@ public sealed class DiagnosticsService
         if (map is not null && map.TryGetValue("limits.cpu", out var quantity) && quantity is not null)
             return quantity.ToString();
         return null;
+    }
+
+    // -------------------------------------------------------------------------
+    // Detailed multi-dependency health suite (spec-006, Change to Task 3c)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Runs every critical-dependency health check concurrently, each bounded by
+    /// <see cref="DetailedCheckTimeout"/>. A check that exceeds its timeout reports status
+    /// <c>"unknown"</c> ("check timed out") and never blocks the overall response. Designed so a
+    /// genuinely broken dependency (DB down, expired GitHub token, exhausted quota, empty warm pool)
+    /// surfaces in the Diagnostics panel instead of being masked by a green overall status.
+    /// </summary>
+    public async Task<DetailedDiagnosticsDto> GetDetailedDiagnosticsAsync(CancellationToken ct = default)
+    {
+        var overallSw = Stopwatch.StartNew();
+        var generatedUtc = DateTimeOffset.UtcNow;
+
+        var checks = await Task.WhenAll(
+            RunGuardedAsync("postgresql", CheckPostgresAsync, ct),
+            RunGuardedAsync("github_installation_token", CheckGitHubInstallationTokenAsync, ct),
+            RunGuardedAsync("key_vault", CheckKeyVaultAsync, ct),
+            RunGuardedAsync("agent_pod_quota", CheckAgentPodQuotaDetailedAsync, ct),
+            RunGuardedAsync("warm_pool", CheckWarmPoolAsync, ct),
+            RunGuardedAsync("k8s_api", CheckK8sApiAsync, ct)).ConfigureAwait(false);
+
+        overallSw.Stop();
+
+        return new DetailedDiagnosticsDto
+        {
+            GeneratedUtc    = generatedUtc,
+            TotalDurationMs = overallSw.Elapsed.TotalMilliseconds,
+            Checks          = checks,
+        };
+    }
+
+    /// <summary>
+    /// Wraps a single check with a per-check timeout and a catch-all. On timeout the check reports
+    /// <c>"unknown"</c> / "check timed out"; on an unexpected throw it reports <c>"critical"</c> with
+    /// the error message. Never propagates — one failing check cannot break the suite.
+    /// </summary>
+    private static async Task<DetailedHealthCheckDto> RunGuardedAsync(
+        string name, Func<CancellationToken, Task<DetailedHealthCheckDto>> check, CancellationToken outerCt)
+    {
+        var sw = Stopwatch.StartNew();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(outerCt);
+        cts.CancelAfter(DetailedCheckTimeout);
+        try
+        {
+            return await check(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested && !outerCt.IsCancellationRequested)
+        {
+            sw.Stop();
+            return Detailed(name, "unknown", "check timed out", sw.Elapsed.TotalMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Detailed(name, "critical", ex.Message, sw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    private static DetailedHealthCheckDto Detailed(
+        string name, string status, string message, double latencyMs) => new()
+    {
+        Name      = name,
+        Status    = status,
+        Message   = message,
+        LatencyMs = latencyMs,
+    };
+
+    /// <summary>PostgreSQL/primary DB connectivity: <c>SELECT 1</c> via the EF <c>MemoryDbContext</c>.
+    /// healthy &lt; 500 ms, degraded &gt; 500 ms, critical on connection refused / timeout.</summary>
+    private async Task<DetailedHealthCheckDto> CheckPostgresAsync(CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.Database.ExecuteSqlRawAsync("SELECT 1", ct).ConfigureAwait(false);
+            sw.Stop();
+            var ms = sw.Elapsed.TotalMilliseconds;
+            var status = ms < 500 ? "healthy" : "degraded";
+            return Detailed("postgresql", status, $"SELECT 1 returned in {ms:F0}ms", ms);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Detailed("postgresql", "critical", $"database unreachable: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    /// <summary>GitHub Installation token: inspects the STORED token's presence and expiry only (no
+    /// live GitHub call). healthy when present and unexpired; critical when missing or expired
+    /// (agents cannot run).</summary>
+    private async Task<DetailedHealthCheckDto> CheckGitHubInstallationTokenAsync(CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        if (_gitHubTokenStore is null)
+        {
+            sw.Stop();
+            return Detailed("github_installation_token", "unknown",
+                "no token store configured", sw.Elapsed.TotalMilliseconds);
+        }
+
+        try
+        {
+            var token = await _gitHubTokenStore.GetTokenAsync(GitHubTokenScope.Installation, ct).ConfigureAwait(false);
+            sw.Stop();
+            var ms = sw.Elapsed.TotalMilliseconds;
+
+            if (token is null || string.IsNullOrEmpty(token.AccessToken))
+                return Detailed("github_installation_token", "critical",
+                    "no installation token stored — agents cannot run", ms);
+
+            if (token.ExpiresAt is { } exp && exp <= DateTimeOffset.UtcNow)
+                return Detailed("github_installation_token", "critical",
+                    $"installation token expired at {exp:O} — agents cannot run", ms);
+
+            var detail = token.ExpiresAt is { } e
+                ? $"installation token valid (expires {e:O})"
+                : "installation token present (no expiry)";
+            return Detailed("github_installation_token", "healthy", detail, ms);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Detailed("github_installation_token", "critical",
+                $"token read failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    /// <summary>Key Vault: resolves the mounted <c>mcp-api-key</c> secret via
+    /// <see cref="ISecretStore"/>. healthy when it resolves; critical on any failure.</summary>
+    private async Task<DetailedHealthCheckDto> CheckKeyVaultAsync(CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        if (_secretStore is null)
+        {
+            sw.Stop();
+            return Detailed("key_vault", "unknown", "no secret store configured", sw.Elapsed.TotalMilliseconds);
+        }
+
+        try
+        {
+            var result = await _secretStore.GetSecretAsync(McpApiKeySecretName, ct).ConfigureAwait(false);
+            sw.Stop();
+            var ms = sw.Elapsed.TotalMilliseconds;
+            return result.Found
+                ? Detailed("key_vault", "healthy", $"secret '{McpApiKeySecretName}' resolved", ms)
+                : Detailed("key_vault", "critical", $"secret '{McpApiKeySecretName}' not found", ms);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Detailed("key_vault", "critical",
+                $"secret read failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    /// <summary>Agent-pod CPU quota with subtask PendingCapacity backlog. headroom &gt;= 4 → healthy,
+    /// 2–4 → warning (one pod can still start), &lt; 2 → critical (no new agent pod can start).</summary>
+    private async Task<DetailedHealthCheckDto> CheckAgentPodQuotaDetailedAsync(CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        var pendingCount = await CountPendingCapacitySubtasksAsync(ct).ConfigureAwait(false);
+
+        if (_k8s is null)
+        {
+            sw.Stop();
+            return Detailed("agent_pod_quota", "unknown", "not running on Kubernetes", sw.Elapsed.TotalMilliseconds)
+                with { Unit = "CPU cores", PendingCount = pendingCount };
+        }
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        try
+        {
+            var quota = await _k8s.CoreV1.ReadNamespacedResourceQuotaAsync(
+                ResourceQuotaName, ns, cancellationToken: ct).ConfigureAwait(false);
+
+            var usedStr = TryGetQuotaCpu(quota?.Status?.Used);
+            var hardStr = TryGetQuotaCpu(quota?.Status?.Hard);
+            sw.Stop();
+            var ms = sw.Elapsed.TotalMilliseconds;
+
+            if (usedStr is null || hardStr is null ||
+                !KubernetesSandboxExecutor.TryParseCpu(usedStr, out var used) ||
+                !KubernetesSandboxExecutor.TryParseCpu(hardStr, out var hard))
+            {
+                return Detailed("agent_pod_quota", "unknown", "quota missing or unparseable", ms)
+                    with { Unit = "CPU cores", PendingCount = pendingCount };
+            }
+
+            var headroom = hard - used;
+            var status = headroom >= 4.0 ? "healthy" : headroom >= 2.0 ? "warning" : "critical";
+            var msg = status == "critical"
+                ? $"no headroom for a new agent pod ({used}/{hard} CPU used)"
+                : $"{headroom} CPU headroom ({used}/{hard} CPU used)";
+            return Detailed("agent_pod_quota", status, msg, ms)
+                with { Used = used, Limit = hard, Unit = "CPU cores", PendingCount = pendingCount };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Detailed("agent_pod_quota", "unknown", $"quota read failed: {ex.Message}", sw.Elapsed.TotalMilliseconds)
+                with { Unit = "CPU cores", PendingCount = pendingCount };
+        }
+    }
+
+    private async Task<int> CountPendingCapacitySubtasksAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            return await db.Subtasks
+                .CountAsync(s => s.Status == "pending_capacity", ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>Warm-pool readiness: counts ready <c>agentweaver-sandbox-*</c> pods.
+    /// healthy &gt;= 2 ready, warning == 1, critical == 0.</summary>
+    private async Task<DetailedHealthCheckDto> CheckWarmPoolAsync(CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        if (_k8s is null)
+        {
+            sw.Stop();
+            return Detailed("warm_pool", "unknown", "not running on Kubernetes", sw.Elapsed.TotalMilliseconds);
+        }
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        try
+        {
+            var pods = await _k8s.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct).ConfigureAwait(false);
+            var ready = pods.Items.Count(p =>
+                (p.Metadata?.Name?.StartsWith(WarmPoolPodPrefix, StringComparison.Ordinal) ?? false)
+                && IsPodReady(p));
+            sw.Stop();
+            var ms = sw.Elapsed.TotalMilliseconds;
+            var status = ready >= 2 ? "healthy" : ready == 1 ? "warning" : "critical";
+            return Detailed("warm_pool", status, $"{ready} warm-pool pod(s) ready", ms)
+                with { Used = ready, Unit = "ready pods" };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Detailed("warm_pool", "unknown", $"pod list failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    private static bool IsPodReady(k8s.Models.V1Pod pod)
+    {
+        var conditions = pod.Status?.Conditions;
+        if (conditions is null) return false;
+        foreach (var c in conditions)
+        {
+            if (string.Equals(c.Type, "Ready", StringComparison.Ordinal))
+                return string.Equals(c.Status, "True", StringComparison.Ordinal);
+        }
+        return false;
+    }
+
+    /// <summary>Kubernetes API reachability: lists pods (capped) with the per-check timeout.
+    /// healthy when the API responds; critical when unreachable.</summary>
+    private async Task<DetailedHealthCheckDto> CheckK8sApiAsync(CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        if (_k8s is null)
+        {
+            sw.Stop();
+            return Detailed("k8s_api", "unknown", "not running on Kubernetes", sw.Elapsed.TotalMilliseconds);
+        }
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        try
+        {
+            await _k8s.CoreV1.ListNamespacedPodAsync(ns, limit: 1, cancellationToken: ct).ConfigureAwait(false);
+            sw.Stop();
+            return Detailed("k8s_api", "healthy", "Kubernetes API reachable", sw.Elapsed.TotalMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return Detailed("k8s_api", "critical", $"Kubernetes API unreachable: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -63,3 +63,47 @@ public sealed record ProjectDiagnosticsDto
     [JsonPropertyName("total_duration_ms")] public required double                         TotalDurationMs { get; init; }
     [JsonPropertyName("checks")]            public required IReadOnlyList<DiagnosticsCheckDto> Checks      { get; init; }
 }
+
+/// <summary>
+/// A single detailed dependency health check (spec-006, Change to Task 3c). Uniform shape across
+/// every critical dependency so the Diagnostics panel can surface a broken dependency instead of
+/// reporting "everything fine". <see cref="Status"/> is one of <c>"healthy"</c>, <c>"degraded"</c>,
+/// <c>"warning"</c>, <c>"critical"</c>, or <c>"unknown"</c>.
+/// </summary>
+public sealed record DetailedHealthCheckDto
+{
+    [JsonPropertyName("name")]      public required string Name      { get; init; }
+    [JsonPropertyName("status")]    public required string Status    { get; init; }
+    [JsonPropertyName("message")]   public required string Message   { get; init; }
+    [JsonPropertyName("latencyMs")] public required double LatencyMs { get; init; }
+
+    // ── Optional, check-specific detail (omitted from JSON when null). ──────────────
+
+    /// <summary>Agent-pod quota: CPU cores currently used against the namespace quota.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("used")] public double? Used { get; init; }
+
+    /// <summary>Agent-pod quota: hard CPU-core limit configured on the namespace quota.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("limit")] public double? Limit { get; init; }
+
+    /// <summary>Agent-pod quota / warm pool: unit of <see cref="Used"/>/<see cref="Limit"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("unit")] public string? Unit { get; init; }
+
+    /// <summary>Agent-pod quota: number of subtasks currently parked in PendingCapacity.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("pendingCount")] public int? PendingCount { get; init; }
+}
+
+/// <summary>
+/// Detailed multi-dependency diagnostics response (spec-006, Change to Task 3c). Each check runs
+/// concurrently with an individual timeout; a timed-out check reports status <c>"unknown"</c>
+/// rather than blocking the overall response.
+/// </summary>
+public sealed record DetailedDiagnosticsDto
+{
+    [JsonPropertyName("generated_utc")]     public required DateTimeOffset                     GeneratedUtc    { get; init; }
+    [JsonPropertyName("total_duration_ms")] public required double                             TotalDurationMs { get; init; }
+    [JsonPropertyName("checks")]            public required IReadOnlyList<DetailedHealthCheckDto> Checks        { get; init; }
+}

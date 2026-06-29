@@ -185,6 +185,13 @@ public static class EventTypes
     /// <summary>Emitted when a subtask's child run has been launched (Subtask.Status -> dispatched).</summary>
     public const string SubtaskDispatched = "subtask.dispatched";
 
+    /// <summary>
+    /// Emitted when a subtask could not be dispatched because the namespace had no CPU headroom for
+    /// another AgentHost pod (Subtask.Status -> pending_capacity). Carries the retry attempt and the
+    /// capacity reason; the subtask is parked and retried with back-off until capacity frees up.
+    /// </summary>
+    public const string SubtaskPendingCapacity = "subtask.pending_capacity";
+
     /// <summary>Emitted once the dispatched child run is executing (Subtask.Status -> running).</summary>
     public const string SubtaskRunning = "subtask.running";
 

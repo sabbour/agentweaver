@@ -283,7 +283,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // Fail fast before creating the claim if the namespace quota cannot admit another agent pod
         // (2 CPU). Without this the claim is accepted but the controller's pod reconcile is rejected
         // with "exceeded quota", which surfaces as a generic mid-turn failure. Throws
-        // AgentHostQuotaExceededException so the launch path can record reason "agent_quota_exceeded".
+        // AgentHostCapacityPendingException so the launch path can park-and-retry instead of failing.
         await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
 
         _logger.LogInformation(
@@ -449,12 +449,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             cancellationToken: ct);
     }
 
+    /// <inheritdoc/>
+    public Task CheckAgentHostCapacityAsync(CancellationToken ct = default) =>
+        CheckQuotaHeadroomAsync(ct);
+
     /// <summary>
-    /// Pre-launch guard: throws <see cref="AgentHostQuotaExceededException"/> when the namespace
+    /// Pre-launch guard: throws <see cref="AgentHostCapacityPendingException"/> when the namespace
     /// ResourceQuota has less than one agent pod's worth of CPU headroom
-    /// (<see cref="AgentPodCpuLimit"/>). The quota check itself is best-effort: if the quota does
-    /// not exist or the read fails, it logs a warning and returns so a transient API/quota issue
-    /// never blocks a launch that the controller would otherwise admit.
+    /// (<see cref="AgentPodCpuLimit"/>). Capacity-pending is a <i>retry signal</i>, not a hard
+    /// failure: the reaper frees orphaned pods and the node pool can scale out, so the caller queues
+    /// and retries. The quota check itself is best-effort: if the quota does not exist or the read
+    /// fails, it logs a warning and returns so a transient API/quota issue never blocks a launch that
+    /// the controller would otherwise admit.
     /// </summary>
     private async Task CheckQuotaHeadroomAsync(CancellationToken ct)
     {
@@ -495,9 +501,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             _logger.LogWarning(
                 "KubernetesSandboxExecutor: agent pod quota exhausted ({Used}/{Hard} CPU used); " +
-                "need {Limit} CPU headroom to launch a new agent pod",
+                "need {Limit} CPU headroom to launch a new agent pod — signalling capacity-pending retry",
                 used, hard, AgentPodCpuLimit);
-            throw new AgentHostQuotaExceededException(used, hard);
+            throw new AgentHostCapacityPendingException(used, hard, "quota_exceeded");
         }
     }
 

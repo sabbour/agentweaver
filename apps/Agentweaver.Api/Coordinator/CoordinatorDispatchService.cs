@@ -88,6 +88,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// </summary>
     private readonly TimeSpan _stallTimeout;
 
+    /// <summary>
+    /// Maximum number of times a subtask parked in <see cref="SubtaskStatus.PendingCapacity"/> is
+    /// retried before it is failed with reason <c>capacity_unavailable</c>. With
+    /// <see cref="CapacityRetryDelay"/> this caps capacity-waiting at ~10 minutes.
+    /// </summary>
+    private const int MaxCapacityRetries = 10;
+
+    /// <summary>Back-off between agent-pod capacity retries for a parked subtask.</summary>
+    private static readonly TimeSpan CapacityRetryDelay = TimeSpan.FromSeconds(60);
+
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
     public CoordinatorDispatchService(
@@ -201,6 +211,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var inFlight = new Dictionary<int, Task<ChildResult>>();
 
+        // Tracks subtasks parked in PendingCapacity (no agent-pod CPU headroom) and when each is next
+        // eligible to retry. Bounded by MaxCapacityRetries so a persistently saturated cluster fails
+        // the subtask with capacity_unavailable instead of retrying forever.
+        var capacityRetry = new Dictionary<int, CapacityRetryState>();
+
         // Build a per-id lookup so DoSubtasksConflict can inspect Scope without a DB round-trip.
         var subtasksById = subtasks.ToDictionary(s => s.Id);
 
@@ -218,6 +233,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         foreach (var s in reArmed)
             inFlight[s.Id] = ObserveChildAsync(context.CoordinatorRunId, s.Id, s.ChildRunId!, ct);
 
+        // Recovery: a prior process may have parked subtasks in PendingCapacity. Treat them as
+        // pending in this fresh loop so the frontier re-attempts them (the retry budget restarts
+        // with the new process) rather than stranding them as a non-terminal, non-frontier status.
+        foreach (var s in subtasks.Where(s => s.Status == SubtaskStatus.PendingCapacity))
+            statusById[s.Id] = SubtaskStatus.Pending;
+
         if (reArmed.Count > 0)
         {
             _logger.LogInformation(
@@ -232,6 +253,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         while (!ct.IsCancellationRequested)
         {
+            // Thaw capacity-parked subtasks whose back-off window elapsed: flip them back to pending
+            // (in-memory) so the frontier re-dispatches them — capacity may have freed up via the
+            // reaper or a node scale-out. The retry count is preserved in capacityRetry.
+            ThawDueCapacityRetries(capacityRetry, statusById);
+
             // Dispatch the current frontier. Subtasks with non-overlapping file scopes run in
             // parallel; subtasks whose scopes conflict with any in-flight subtask run serially
             // (deferred until the conflicting in-flight task completes).
@@ -246,15 +272,41 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (inFlight.Count > 0 && ConflictsWithAnyInFlight(subtaskId, inFlight.Keys, subtasksById))
                     continue;
 
+                // Pre-flight capacity gate (pod-per-run only). If the namespace can't admit another
+                // agent pod, the subtask is parked in PendingCapacity and retried with back-off
+                // instead of launching a pod the controller would reject with "exceeded quota".
+                if (!await TryPassCapacityGateAsync(
+                        context, workPlanId.Value, subtaskId, capacityRetry, statusById, edges, seq, ct)
+                        .ConfigureAwait(false))
+                    continue;
+
                 var dispatched = await DispatchOneAsync(
                     context, workPlanId.Value, subtaskId, statusById, seq, ct).ConfigureAwait(false);
 
                 if (dispatched is { } childRunId)
+                {
+                    capacityRetry.Remove(subtaskId);
                     inFlight[subtaskId] = ObserveChildAsync(context.CoordinatorRunId, subtaskId, childRunId, ct);
+                }
             }
 
             if (inFlight.Count == 0)
+            {
+                // If subtasks are parked awaiting capacity, don't go quiescent — wait for the soonest
+                // retry window (bounded) and loop so they are re-attempted once the reaper frees quota.
+                var nextRetry = capacityRetry.Count == 0
+                    ? (DateTimeOffset?)null
+                    : capacityRetry.Values.Min(r => r.NextRetryAt);
+                if (nextRetry is { } due)
+                {
+                    var wait = due - DateTimeOffset.UtcNow;
+                    if (wait > CapacityRetryDelay) wait = CapacityRetryDelay;
+                    if (wait > TimeSpan.Zero)
+                        await Task.Delay(wait, ct).ConfigureAwait(false);
+                    continue;
+                }
                 break; // quiescent: nothing running and no ready frontier (all terminal or blocked)
+            }
 
             var finished = await Task.WhenAny(inFlight.Values).ConfigureAwait(false);
             var result = await finished.ConfigureAwait(false);
@@ -655,7 +707,166 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     }
 
     // -----------------------------------------------------------------------
-    // Steering — apply a queued redirect/amend at the child's next turn boundary (Phase 2).
+    // Agent-pod capacity gate — park-and-retry when the namespace quota is exhausted (Change to
+    // Task 2). When pod-per-run cannot admit another agent pod, the subtask is queued in
+    // PendingCapacity and retried with back-off rather than failing the run hard. The reaper frees
+    // orphaned-pod quota periodically, so parked subtasks eventually succeed (virtuous cycle).
+    // -----------------------------------------------------------------------
+
+    /// <summary>Per-subtask agent-pod capacity retry bookkeeping (in-loop, not persisted).</summary>
+    private readonly record struct CapacityRetryState(int Attempts, DateTimeOffset NextRetryAt);
+
+    /// <summary>
+    /// Flips capacity-parked subtasks whose back-off elapsed back to <see cref="SubtaskStatus.Pending"/>
+    /// in <paramref name="statusById"/> so the dispatch frontier re-attempts them. Purely in-memory:
+    /// the persisted row stays PendingCapacity until the subtask is actually dispatched (or fails),
+    /// avoiding churn for a subtask that is about to be re-parked.
+    /// </summary>
+    private static void ThawDueCapacityRetries(
+        Dictionary<int, CapacityRetryState> capacityRetry, Dictionary<int, string> statusById)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var (subtaskId, state) in capacityRetry)
+        {
+            if (state.NextRetryAt <= now
+                && statusById.TryGetValue(subtaskId, out var s)
+                && s == SubtaskStatus.PendingCapacity)
+                statusById[subtaskId] = SubtaskStatus.Pending;
+        }
+    }
+
+    /// <summary>
+    /// Pre-flight agent-pod capacity gate. Returns <see langword="true"/> when the subtask may be
+    /// dispatched (capacity available, or not pod-per-run so the gate is a no-op). Returns
+    /// <see langword="false"/> when there is no agent-pod headroom: the subtask is parked in
+    /// PendingCapacity for retry, or — once the retry budget is exhausted — failed with reason
+    /// <c>capacity_unavailable</c> and its dependents propagated.
+    /// </summary>
+    private async Task<bool> TryPassCapacityGateAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        Dictionary<int, CapacityRetryState> capacityRetry,
+        Dictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        // No capacity gating outside pod-per-run (in-api / non-Kubernetes) — always pass.
+        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun)
+            return true;
+
+        try
+        {
+            await _podLifecycle.CheckAgentHostCapacityAsync(ct).ConfigureAwait(false);
+            return true; // capacity available
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (AgentHostCapacityPendingException cap)
+        {
+            await ParkOrFailForCapacityAsync(
+                context, workPlanId, subtaskId, cap, capacityRetry, statusById, edges, seq, ct)
+                .ConfigureAwait(false);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Parks a subtask in <see cref="SubtaskStatus.PendingCapacity"/> with a back-off, or — when the
+    /// retry budget (<see cref="MaxCapacityRetries"/>) is exhausted — fails it with reason
+    /// <c>capacity_unavailable</c> and propagates the failure to its blocked dependents.
+    /// </summary>
+    private async Task ParkOrFailForCapacityAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        AgentHostCapacityPendingException cap,
+        Dictionary<int, CapacityRetryState> capacityRetry,
+        Dictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        var attempts = (capacityRetry.TryGetValue(subtaskId, out var existing) ? existing.Attempts : 0) + 1;
+
+        if (attempts > MaxCapacityRetries)
+        {
+            capacityRetry.Remove(subtaskId);
+            await FailSubtaskCapacityUnavailableAsync(
+                context, workPlanId, subtaskId, statusById, seq, ct).ConfigureAwait(false);
+            await PropagateBlockedDependentsAsync(
+                context, workPlanId, subtaskId, "dependency_failed", statusById, edges, seq, ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        capacityRetry[subtaskId] = new CapacityRetryState(attempts, DateTimeOffset.UtcNow.Add(CapacityRetryDelay));
+
+        var parked = await SetSubtaskCapacityPendingAsync(subtaskId, cap.Reason, ct).ConfigureAwait(false);
+        statusById[subtaskId] = SubtaskStatus.PendingCapacity;
+        if (parked is not null)
+            EmitSubtask(context, workPlanId, parked, EventTypes.SubtaskPendingCapacity, seq.Next());
+
+        _logger.LogWarning(
+            "Subtask {SubtaskId}: agent pod capacity unavailable, retry {Attempt}/{Max} in {Delay}s",
+            subtaskId, attempts, MaxCapacityRetries, (int)CapacityRetryDelay.TotalSeconds);
+    }
+
+    private async Task<Subtask?> SetSubtaskCapacityPendingAsync(int subtaskId, string reason, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false);
+        if (row is null) return null;
+
+        row.Status = SubtaskStatus.PendingCapacity;
+        row.RecoveryGuidance =
+            $"Agent pod capacity pending ({reason}); subtask queued for retry until namespace CPU frees up.";
+        row.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        db.Entry(row).State = EntityState.Detached;
+        return row;
+    }
+
+    private async Task FailSubtaskCapacityUnavailableAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        Dictionary<int, string> statusById,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        Subtask? updated;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false);
+            if (row is not null)
+            {
+                row.Status = SubtaskStatus.Failed;
+                row.RecoveryGuidance =
+                    "Agent pod capacity remained unavailable after the retry budget was exhausted " +
+                    "(capacity_unavailable).";
+                row.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                db.Entry(row).State = EntityState.Detached;
+            }
+            updated = row;
+        }
+
+        statusById[subtaskId] = SubtaskStatus.Failed;
+        if (updated is not null)
+            EmitSubtask(context, workPlanId, updated, EventTypes.SubtaskFailed, seq.Next());
+
+        _logger.LogError(
+            "Subtask {SubtaskId}: agent pod capacity unavailable after {Max} retries — failing with capacity_unavailable",
+            subtaskId, MaxCapacityRetries);
+    }
+
+
     // Reuses the revision-injection mechanism identified in the steering spike: the child resumes
     // its session and worktree with the steered instruction as a fresh trimmed-pipeline turn. There
     // is NO mid-turn interrupt — this only runs once the child's prior turn has fully completed.

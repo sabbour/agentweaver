@@ -15,6 +15,14 @@ public static class SubtaskStatus
     public const string Failed = "failed";
 
     /// <summary>
+    /// A subtask whose AgentHost pod could not be admitted because the namespace had no CPU
+    /// headroom. NOT terminal and does NOT satisfy dependents: the dispatch loop parks it here and
+    /// retries (back-off, capped) once the reaper frees quota or the node pool scales out. After the
+    /// retry cap is hit it transitions to <see cref="Failed"/> with reason <c>capacity_unavailable</c>.
+    /// </summary>
+    public const string PendingCapacity = "pending_capacity";
+
+    /// <summary>
     /// A subtask is <em>satisfied</em> for the purpose of unblocking its dependents only when it
     /// reached <see cref="AssembleReady"/> or <see cref="Completed"/>. A <see cref="RaiFlagged"/>
     /// or <see cref="Failed"/> predecessor does NOT satisfy a dependency — its dependents stay
