@@ -145,7 +145,7 @@ spec:
             - name: Sandbox__AgentHost__RequireMtls
               value: "false"
             - name: Auth__User
-              value: agentweaver-mcp
+              value: sabbour
             - name: Auth__GitHub__AllowedOrg
               value: microsoft
             - name: Auth__GitHub__CallbackUrl
