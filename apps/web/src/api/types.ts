@@ -393,6 +393,7 @@ export interface GitHubAuthStatusResponse {
 
 export interface GitHubRepo {
   fullName: string | null;
+  htmlUrl?: string | null;
   description?: string | null;
   private: boolean;
   defaultBranch: string;

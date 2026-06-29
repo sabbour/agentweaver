@@ -32,6 +32,14 @@ import { PageHeader } from '../components/PageHeader';
 import { BlueprintPicker, applyBlueprintToRequest, NO_BLUEPRINT, type BlueprintSelection } from '../components/BlueprintPicker';
 import { useProjectList } from '../hooks/useProjectList';
 
+/** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
+function toGitHubUrl(val: string): string {
+  const v = val.trim();
+  if (v.startsWith('https://')) return v;
+  if (/^[\w.-]+\/[\w.-]/.test(v)) return `https://github.com/${v}`;
+  return v;
+}
+
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -150,7 +158,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
         origin,
         working_directory: workingDirectory.trim(),
       };
-      if (origin === 'github') req.source_repository = sourceRepository.trim();
+      if (origin === 'github') req.source_repository = toGitHubUrl(sourceRepository.trim());
       applyBlueprintToRequest(req, blueprint);
       const project = await apiClient.createProject(req);
       onCreated(project);
@@ -390,9 +398,13 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
     d.setWorkingDirectory(dataDir ? `${dataDir}/${value}` : value);
   };
 
-  const filteredRepos = repos.filter(r =>
-    r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false
-  );
+  const filteredRepos = repos
+    .filter(r => r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false)
+    .sort((a, b) => {
+      const nameA = (a.fullName?.split('/').pop() ?? '').toLowerCase();
+      const nameB = (b.fullName?.split('/').pop() ?? '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
 
   return (
     <Dialog open={d.open} onOpenChange={(_, s) => {
@@ -499,10 +511,14 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
                       d.setSourceRepository(val);
                     }}
                     onOptionSelect={(_, data) => {
-                      const fullName = data.optionValue ?? '';
-                      d.setSourceRepository(fullName);
-                      setRepoFilter(fullName);
-                      const slug = fullName.split('/')[1] ?? fullName;
+                      const repoUrl = data.optionValue ?? '';
+                      // optionValue is an https URL — extract owner/repo for display and filtering
+                      const ownerRepo = repoUrl.startsWith('https://github.com/')
+                        ? repoUrl.slice('https://github.com/'.length)
+                        : repoUrl;
+                      d.setSourceRepository(ownerRepo);
+                      setRepoFilter(ownerRepo);
+                      const slug = ownerRepo.split('/')[1] ?? ownerRepo;
                       if (workspaceAutoAssigned) {
                         if (slug) d.setWorkingDirectory(slugify(slug));
                       } else if (slug && !folderEdited) {
@@ -514,18 +530,15 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
                     }}
                     disabled={accountsLoading}
                   >
-                    {filteredRepos.map((repo) => (
-                      <Option key={repo.fullName ?? ''} value={repo.fullName ?? ''} text={repo.fullName ?? ''}>
-                        <div>
-                          <Text weight="semibold">{repo.fullName ?? '(unnamed)'}</Text>
-                          {repo.description && (
-                            <Text size={200} style={{ display: 'block', color: 'inherit', opacity: 0.7 }}>
-                              {repo.description}
-                            </Text>
-                          )}
-                        </div>
-                      </Option>
-                    ))}
+                    {filteredRepos.map((repo) => {
+                      const repoName = repo.fullName?.split('/').pop() ?? repo.fullName ?? '(unnamed)';
+                      const repoUrl = repo.htmlUrl ?? `https://github.com/${repo.fullName ?? ''}`;
+                      return (
+                        <Option key={repo.fullName ?? ''} value={repoUrl} text={repo.fullName ?? ''}>
+                          <Text weight="semibold">{repoName}</Text>
+                        </Option>
+                      );
+                    })}
                   </Combobox>
                 </Field>
 

@@ -42,7 +42,9 @@ function makeProject(id: string, name: string): Project {
 }
 
 const USER_ACCOUNT: GitHubAccount = { login: 'octocat', name: 'Octocat', avatar_url: 'https://example.com/avatar.png', type: 'user' };
-const REPO: GitHubRepo = { fullName: 'octocat/hello-world', defaultBranch: 'main', private: false, description: 'A sample repo' };
+const REPO: GitHubRepo = { fullName: 'octocat/hello-world', defaultBranch: 'main', private: false, description: 'A sample repo', htmlUrl: 'https://github.com/octocat/hello-world' };
+const REPO_B: GitHubRepo = { fullName: 'octocat/aardvark', defaultBranch: 'main', private: false, description: null, htmlUrl: 'https://github.com/octocat/aardvark' };
+const REPO_C: GitHubRepo = { fullName: 'octocat/zebra', defaultBranch: 'main', private: false, description: 'Last alphabetically', htmlUrl: 'https://github.com/octocat/zebra' };
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -96,9 +98,37 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
     expect(screen.queryByText(/Connect your GitHub account/)).toBeNull();
 
-    // Opening the repo combobox surfaces the fetched repo.
+    // Opening the repo combobox surfaces the fetched repo — shows name only (no owner prefix).
     fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
-    await waitFor(() => expect(screen.getByText('octocat/hello-world')).toBeDefined());
+    await waitFor(() => expect(screen.getByText('hello-world')).toBeDefined());
+    // Owner prefix must NOT appear as a standalone label.
+    expect(screen.queryByText('octocat/hello-world')).toBeNull();
+  });
+
+  it('does not render the repo description in the dropdown', async () => {
+    vi.mocked(apiClient.listGitHubRepos).mockResolvedValue([REPO]);
+
+    await openGitHubDialog();
+
+    await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
+    await waitFor(() => expect(screen.getByText('hello-world')).toBeDefined());
+    expect(screen.queryByText('A sample repo')).toBeNull();
+  });
+
+  it('sorts repos alphabetically by name (case-insensitive)', async () => {
+    vi.mocked(apiClient.listGitHubRepos).mockResolvedValue([REPO_C, REPO, REPO_B]);
+
+    await openGitHubDialog();
+
+    await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
+
+    await waitFor(() => expect(screen.getByText('aardvark')).toBeDefined());
+
+    const options = screen.getAllByRole('option');
+    const labels = options.map(o => o.textContent);
+    expect(labels).toEqual(['aardvark', 'hello-world', 'zebra']);
   });
 
   it('still submits a manually typed owner/repo even when repos failed to load', async () => {
@@ -120,7 +150,28 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
     expect(req.origin).toBe('github');
-    expect(req.source_repository).toBe('me/manual-repo');
+    expect(req.source_repository).toBe('https://github.com/me/manual-repo');
+  });
+
+  it('normalizes a manually typed owner/repo to an HTTPS URL on submit', async () => {
+    vi.mocked(apiClient.listGitHubAccounts).mockRejectedValue(new ApiError(401, 'unauthorized'));
+
+    await openGitHubDialog();
+    await waitFor(() =>
+      expect(screen.getByText(/Connect your GitHub account to list repositories/)).toBeDefined(),
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'My Repo' } });
+    const repoCombobox = screen.getByRole('combobox', { name: 'Repository' });
+    // Already-full URL must pass through unchanged
+    fireEvent.input(repoCombobox, { target: { value: 'https://github.com/me/my-repo' } });
+    fireEvent.change(screen.getByPlaceholderText('my-repo'), { target: { value: 'my-repo' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
+    const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
+    expect(req.source_repository).toBe('https://github.com/me/my-repo');
   });
 });
 
@@ -195,6 +246,6 @@ describe('ProjectGalleryPage — GitHub dialog, workspace_auto_assigned', () => 
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
     expect(req.working_directory).toBe('hello-world');
-    expect(req.source_repository).toBe('octocat/hello-world');
+    expect(req.source_repository).toBe('https://github.com/octocat/hello-world');
   });
 });
