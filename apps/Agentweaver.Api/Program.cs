@@ -627,9 +627,30 @@ if (args.Contains("--migrate-data"))
     Environment.Exit(0);
     return;
 }
-await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
+// Startup recovery — run on exactly one replica via a Postgres advisory lock so concurrent pod
+// restarts do not race on orphaned-run recovery and trigger Postgres 40001 serialization failures.
+// On SQLite (dev) the lock is always granted and the startup path is unchanged.
+await using var recoveryLeader = await StartupRecoveryLeader.AcquireAsync(
+    app.Configuration, app.Logger, CancellationToken.None);
 
-// Startup mount-health warning: log early if the persistent-volume root is missing or read-only.
+if (recoveryLeader.IsLeader)
+{
+    await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
+    // Coordinator (parent) runs are recovered AFTER the generic sweep (which has already failed any
+    // stranded child runs) so a re-dispatched subtask always launches a fresh child. This re-arms the
+    // dispatch / collective-assembly engine from the persisted work plan, or resumes the spec-phase MAF
+    // workflow from checkpoint, instead of failing interrupted orchestrations.
+    await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorRunService>()
+        .RecoverInterruptedRunsAsync(CancellationToken.None);
+    // Immediate watchdog sweep at startup: re-arm any coordinator whose work plan is still dispatching
+    // but has no active loop (orphaned after a crash/restart that the run-status recovery above did not
+    // re-arm), so a restart recovers stuck dispatch fast instead of waiting for the first heartbeat tick.
+    await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorReconciler>()
+        .SweepAsync(CancellationToken.None);
+}
+// recoveryLeader disposed here → Postgres advisory lock released so future restarts can acquire it.
+
+// Startup mount-health warning: runs on ALL replicas so every pod logs its own volume state.
 // The app continues — the /healthz/workspace readiness probe will keep unmounted pods out of the
 // Service until the volume attaches, so traffic is not served. This log aids incident diagnosis.
 {
@@ -642,17 +663,6 @@ await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(Can
             "Pod will be excluded from the Service until /healthz/workspace returns 200.");
     }
 }
-// Coordinator (parent) runs are recovered AFTER the generic sweep (which has already failed any
-// stranded child runs) so a re-dispatched subtask always launches a fresh child. This re-arms the
-// dispatch / collective-assembly engine from the persisted work plan, or resumes the spec-phase MAF
-// workflow from checkpoint, instead of failing interrupted orchestrations.
-await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorRunService>()
-    .RecoverInterruptedRunsAsync(CancellationToken.None);
-// Immediate watchdog sweep at startup: re-arm any coordinator whose work plan is still dispatching
-// but has no active loop (orphaned after a crash/restart that the run-status recovery above did not
-// re-arm), so a restart recovers stuck dispatch fast instead of waiting for the first heartbeat tick.
-await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorReconciler>()
-    .SweepAsync(CancellationToken.None);
 
 if (isWorker)
 {

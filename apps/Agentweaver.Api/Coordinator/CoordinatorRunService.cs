@@ -919,9 +919,20 @@ public sealed class CoordinatorRunService
     {
         try
         {
-            await _runStore.TrySetTerminalStatusAsync(
+            var changed = await _runStore.TrySetTerminalStatusAsync(
                 RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "watch_loop_error", CancellationToken.None)
                 .ConfigureAwait(false);
+            if (!changed)
+            {
+                // Another replica already transitioned this run to a terminal status (concurrent
+                // startup recovery race). The losing pod must not write RunEvents — doing so causes
+                // Postgres 40001 serialization failures. Mirror WorkflowRestartService.FailRecoveredRunAsync.
+                _logger.LogWarning(
+                    "Recovery failure transition skipped for coordinator run {RunId}; " +
+                    "status already terminal or changed concurrently — not writing RunEvents",
+                    runId);
+                return;
+            }
             entry.RecordNext(EventTypes.RunFailed, new { reason = "watch_loop_error" });
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
