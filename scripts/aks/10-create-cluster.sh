@@ -143,7 +143,9 @@ az aks nodepool add \
 
 echo ""
 echo "Installing agent-sandbox CRDs/controller (${SANDBOX_CONTROLLER_VERSION})..."
+SANDBOX_EXTENSIONS_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${SANDBOX_CONTROLLER_VERSION}/extensions.yaml"
 kubectl apply -f "${SANDBOX_CONTROLLER_MANIFEST_URL}"
+kubectl apply -f "${SANDBOX_EXTENSIONS_URL}"
 kubectl wait --for=condition=Established crd/sandboxclaims.extensions.agents.x-k8s.io --timeout=180s
 kubectl wait --for=condition=Established crd/sandboxtemplates.extensions.agents.x-k8s.io --timeout=180s
 kubectl wait --for=condition=Established crd/sandboxwarmpools.extensions.agents.x-k8s.io --timeout=180s
