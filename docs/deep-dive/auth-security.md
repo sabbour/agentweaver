@@ -602,6 +602,70 @@ Where this lives:
 - `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
 - `apps/Agentweaver.Mcp/Program.cs`
 
+## Agent-host token delivery (Option B)
+
+Agent-host pods need a valid GitHub token for the signed-in user so they can call GitHub APIs, clone repositories, and act on behalf of that user. Agentweaver supports two delivery modes:
+
+- **Option A — shared RWX filesystem (`UseSharedTokenStore=true`).** The token is written to a PVC-backed volume mounted by both the API pod and the agent-host pod. This is the legacy path and still supported when `AgentHostOptions.KvTokenMountPath` is not configured.
+- **Option B — CSI secrets-store from Azure Key Vault.** The token is stored in Key Vault and projected into the agent-host pod's filesystem by the CSI secrets-store driver. This is the preferred path for AKS deployments.
+
+### Option B end-to-end flow
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+sequenceDiagram
+    participant User as User (browser)
+    participant API as Agentweaver API
+    participant KV as Azure Key Vault
+    participant SPC as SecretProviderClass<br/>(agentweaver-user-tokens)
+    participant CSI as CSI driver
+    participant Pod as AgentHost pod
+
+    User->>API: sign in (GitHub OAuth)
+    API->>KV: store token as secret<br/>user_{userId}
+    API->>SPC: patch: add secretObject reference<br/>(EnsureUserTokenInSpcAsync)
+    loop every 2 minutes
+        CSI->>KV: rotate K8s Secret from KV
+    end
+    Pod->>Pod: read /mnt/user-tokens/user_{userId}.json<br/>(CsiMountedGitHubTokenStore)
+```
+
+On user sign-in, `AgentHostUserTokenSyncService.EnsureUserTokenInSpcAsync` patches the `agentweaver-user-tokens` `SecretProviderClass` to add a reference to the user's Key Vault secret (`user_{userId}`). The CSI driver syncs the updated manifest and rotates the resulting Kubernetes Secret from Key Vault every **2 minutes**. The agent-host pod mounts the CSI volume at `/mnt/user-tokens/`, so each user's token is visible at `/mnt/user-tokens/user_{userId}.json`.
+
+The in-pod `CsiMountedGitHubTokenStore` reads from that path. Because the file may not be present immediately on pod cold-start (the CSI volume needs a moment to project the first sync), the store performs a **cold-start retry** of up to 6 attempts with 5-second intervals before failing.
+
+The agent-host pod uses the dedicated workload-identity service account `agentweaver-agent-host` (defined in `k8s/serviceaccount-agenthost.yaml`), which is federated with the managed identity that has `get`/`list` access to the Key Vault secrets.
+
+### Configuration
+
+`AgentHostOptions.KvTokenMountPath` controls which delivery mode is active:
+
+| `KvTokenMountPath` | `UseSharedTokenStore` | Active mode |
+|---|---|---|
+| set (e.g. `/mnt/user-tokens`) | *(any)* | **Option B — CSI** |
+| unset | `true` | Option A — shared RWX filesystem |
+| unset | `false` | no GitHub token delivery |
+
+When `KvTokenMountPath` is set it takes precedence over `UseSharedTokenStore`.
+
+### Security properties
+
+- No GitHub token ever transits over the network between API and agent-host pod — it is delivered via Kubernetes Secret projection from Key Vault.
+- The CSI-mounted secret is read-only from the pod's perspective.
+- The 2-minute rotation window limits the exposure window if a pod is compromised.
+- The workload-identity SA is scoped to Key Vault get/list only — no write access to KV.
+
+> **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) explains both delivery modes, the cold-start retry, the workload-identity SA, and when to use each approach.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Auth/AgentHostUserTokenSyncService.cs`
+- `apps/Agentweaver.AgentHost/CsiMountedGitHubTokenStore.cs`
+- `apps/Agentweaver.AgentHost/AgentHostOptions.cs`
+- `k8s/serviceaccount-agenthost.yaml`
+- `k8s/secret-provider-class.yaml`
+- `k8s/sandbox-template-agenthost.yaml`
+
 ## Rebuild checklist
 
 If rebuilding Agentweaver auth from scratch, implement the system in this order:

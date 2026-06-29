@@ -517,6 +517,64 @@ To rebuild pod-per-run from these ideas:
   brokered checkpoint, so killing a pod loses no run.
 - The whole capability is **reversible by a single flag** (`Sandbox:AgentExecutionMode=in-api`).
 
+## Orphaned-pod reaper and quota lifecycle
+
+### Why orphaned pods happen
+
+Pod-per-run expects every run lifecycle path (normal completion, stall-fail, cancellation) to call `ReleaseAgentHostPodAsync` before exiting. Any path that fails to do so leaves a pod running without an active run — an **orphaned pod** that consumes cluster CPU quota but does no work. Over time these accumulate and exhaust the `katapool` capacity.
+
+### The reaper
+
+`AgentHostReaperService` (`IAgentHostReaper`, singleton) sweeps all agent-host pods in the namespace and identifies pods that have no matching active run record. It is driven by the coordinator heartbeat's 3rd tick phase on a tunable cadence:
+
+```
+Coordinator:ReaperIntervalTicks   (default 12)
+```
+
+With the default heartbeat interval the reaper fires roughly **every 2 minutes** (12 ticks × ~10 s). It terminates orphaned pods and emits a telemetry event for each one reaped.
+
+All stall-fail and cancellation paths in `CoordinatorDispatchService` call `ReleaseAgentHostPodAsync` explicitly to minimize the reaper's workload. The reaper is the belt to that suspender.
+
+### Pre-dispatch quota check
+
+Before dispatching a new subtask, `KubernetesSandboxExecutor.CheckAgentHostCapacityAsync` checks the namespace's current CPU quota headroom. If the headroom is less than **2 CPU**, the executor throws `AgentHostCapacityPendingException` rather than trying to schedule a pod that would be unschedulable.
+
+### PendingCapacity subtask flow
+
+`CoordinatorDispatchService` catches `AgentHostCapacityPendingException` and transitions the subtask to the `PendingCapacity` status. The UI emits a `subtask.pending_capacity` SSE event and the frontend renders the subtask node with an amber **⏳ Waiting for capacity** badge. The dispatcher retries the dispatch on a **60-second interval** for up to **10 attempts**. If capacity is still unavailable after 10 retries, the subtask fails with the detail code `capacity_unavailable`.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TD
+    Dispatch["CoordinatorDispatchService<br/>dispatch subtask"] --> Check{"CheckAgentHostCapacityAsync<br/>headroom ≥ 2 CPU?"}
+    Check -- yes --> Launch["launch pod / claim"]
+    Check -- "no → AgentHostCapacityPendingException" --> Pending["SubtaskStatus.PendingCapacity<br/>emit subtask.pending_capacity SSE"]
+    Pending --> Retry{"retry ≤ 10 × 60s?"}
+    Retry -- yes --> Check
+    Retry -- "no → capacity_unavailable" --> Failed["subtask failed<br/>detail: capacity_unavailable"]
+
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
+    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
+
+    class Dispatch core;
+    class Check,Retry svc;
+    class Pending evt;
+    class Failed runtime;
+    class Launch data;
+```
+
+The `OutcomeSpecPanel.tsx` sidebar surfaces human-readable messages for all detail codes that reach terminal runs: `agent_stall_timeout`, `agent_quota_exceeded`, `agent_pod_reconciler_error`, and `capacity_unavailable`.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs`
+- `apps/Agentweaver.Api/Sandbox/AgentHostCapacityPendingException.cs`
+- `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs`
+- `apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs`
+
 ## Related reading
 
 - [Sandbox](./sandbox.md) — the underlying isolation model, claim lifecycle, and hardening.

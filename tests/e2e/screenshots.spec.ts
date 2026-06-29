@@ -427,3 +427,45 @@ test.describe('User Guide · Scaling operations', () => {
     await page.screenshot({ path: shot('diagnostics-global-health'), fullPage: true });
   });
 });
+
+// ============================================================================
+// cluster-page.md
+// ============================================================================
+test.describe('User Guide · Cluster page', () => {
+  test('cluster-page.png', async ({ page }) => {
+    test.skip(!PROJECT_ID, 'Set PROJECT_ID to capture project-scoped screenshots.');
+    await captureAt(page, projectRoute('/cluster'), async () => {
+      await page.getByText('Active pods').first().waitFor().catch(() => undefined);
+    }, 'cluster-page');
+  });
+
+  test('cluster-page-quota-warning.png', async ({ page }) => {
+    test.skip(!PROJECT_ID, 'Set PROJECT_ID to capture project-scoped screenshots.');
+    // Navigate to the cluster page; capture whenever the CPU bar is present.
+    await page.goto(`${BASE_URL}${projectRoute('/cluster')}`, { waitUntil: 'domcontentloaded' });
+    await page.getByText('CPU').first().waitFor().catch(() => undefined);
+    await page.screenshot({ path: shot('cluster-page-quota-warning'), fullPage: true });
+  });
+});
+
+// ============================================================================
+// operations.md — heartbeat + topology screenshots (spec-006 additions)
+// ============================================================================
+test.describe('User Guide · Operations (spec-006)', () => {
+  test('heartbeat-automation-column.png', async ({ page }) => {
+    test.skip(!PROJECT_ID, 'Set PROJECT_ID to capture project-scoped screenshots.');
+    await captureAt(page, projectRoute('/heartbeat'), async () => {
+      await page.getByText('Background automation status').first().waitFor().catch(() => undefined);
+      // Wait for the Recent Activity table with the Automation column.
+      await page.getByText('Automation').first().waitFor().catch(() => undefined);
+    }, 'heartbeat-automation-column');
+  });
+
+  test('run-pending-capacity.png', async ({ page }) => {
+    test.skip(!PROJECT_ID || !RUN_ID, 'Set PROJECT_ID and RUN_ID to capture this screenshot.');
+    await captureAt(page, projectRoute(`/runs/${RUN_ID}/workflow`), async () => {
+      // Wait for the topology graph to render and the pending-capacity badge to appear.
+      await page.getByText('Waiting for capacity').first().waitFor().catch(() => undefined);
+    }, 'run-pending-capacity');
+  });
+});

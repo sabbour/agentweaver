@@ -65,6 +65,10 @@ rg "📸 \*\*Screenshot" docs/experience
 | 32 | `sandbox-policy.png` | `operations.md` | `/projects/:projectId/settings` (Sandbox policy) | **Settings** → **Sandbox policy** | **Sandbox policy** with **Shell execution** / **Sandbox enabled** / **Outbound network** switches and read-only **Allowed repository roots** / **Blocked command patterns** lists. |
 | 33 | `overview-active-projects.png` | `scaling-operations.md` | `/overview` | **Overview** in left rail | Overview with **Active workflow runs** and **Active projects** populated — identical view whether served by one combined pod or a web/worker fleet. |
 | 34 | `diagnostics-global-health.png` | `scaling-operations.md` | `/projects/:projectId/diagnostics` (Global tab) | **Diagnostics** → **Global** tab | Global diagnostics with **API version**, **Uptime**, **Total projects**, **Total runs**, **Active runs** and `pass`/`warn`/`fail` check cards — confirms a scaled deployment is healthy. |
+| 35 | `cluster-page.png` | `cluster-page.md` | `/projects/:projectId/cluster` | **Cluster** in SYSTEM left rail | Cluster page with KPI cards (Active pods, Orphaned pods, CPU used/total, Pending runs), quota bars (CPU, memory), component health table (6 checks), and Active / Orphaned / Pending pods tables. |
+| 36 | `cluster-page-quota-warning.png` | `cluster-page.md` | `/projects/:projectId/cluster` | **Cluster** → observe a red CPU bar | Cluster page with the CPU quota bar in red near-limit state and at least one entry in the Pending-capacity runs table. |
+| 37 | `heartbeat-automation-column.png` | `operations.md` | `/projects/:projectId/heartbeat` | **Heartbeat** in left rail | Heartbeat page **Recent Activity** table showing the **Automation** column as the first column, with values such as `Coordinator Heartbeat` and `Checkpoint GC` alongside When, Acted, Errors, Duration. |
+| 38 | `run-pending-capacity.png` | `operations.md` | `/projects/:projectId/runs/:runId/workflow` | Open an active coordinator run with at least one subtask in `PendingCapacity` | Coordinator topology graph with one or more subtask nodes showing the amber **⏳ Waiting for capacity** badge. |
 
 ## Count per page
 
@@ -77,6 +81,7 @@ rg "📸 \*\*Screenshot" docs/experience
 | `review-workspace-merge.md` | 3 |
 | `team-casting-memory.md` | 6 |
 | `workflows-backlog.md` | 4 |
-| `operations.md` | 4 |
+| `operations.md` | 6 |
 | `scaling-operations.md` | 2 |
-| **Total** | **34** |
+| `cluster-page.md` | 2 |
+| **Total** | **38** |

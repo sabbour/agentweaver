@@ -59,8 +59,9 @@ The important operating rule is: Agentweaver shows real state. Diagnostics can w
 | **Diagnostics** | Project **Diagnostics** page | Is the system or project healthy enough to operate? | `diagnostics_get` for global diagnostics |
 | **Heartbeat** | Project **Heartbeat** page | Is background automation enabled, ticking, and acting? | `heartbeat_status` |
 | **Flow** | Project **Flow** page | What is each agent working on right now? | Indirect through board/run/coordinator tools |
+| **Cluster** | Project **Cluster** page (SYSTEM section) | Are pods healthy, is quota available, are any pods orphaned? | `GET /api/diagnostics/cluster` |
 
-Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready work is not being claimed. Use **Flow** during active multi-agent work. Use **Settings** before changing command execution posture.
+Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready work is not being claimed. Use **Flow** during active multi-agent work. Use **Settings** before changing command execution posture. Use **Cluster** when capacity warnings appear or pods are accumulating.
 
 ## Settings experience
 
@@ -205,6 +206,7 @@ The **Automations** section shows the real automation catalog, including Coordin
 
 The **Recent activity** table shows completed ticks:
 
+- **Automation** (first column) — which background automation produced the tick record (e.g. **Coordinator Heartbeat** or **Checkpoint GC**)
 - **When**
 - **Acted**
 - **Errors**
@@ -397,4 +399,28 @@ A good MCP sequence is:
 ## Limits and source of truth
 
 Operations pages are snapshots and projections over backend state. They do not replace deployment configuration, cluster telemetry, source-control review, or lower-level sandbox enforcement. The backend API remains authoritative; the web UI renders it, and MCP tools forward structured operations to it.
+
+## Cluster page experience
+
+The **Cluster** page is the SYSTEM-section operations view for Kubernetes cluster health. It is available under the **Cluster** nav item (Server24Regular icon) at `/projects/:projectId/cluster`.
+
+![Cluster page with KPI cards and pod tables](/screenshots/cluster-page.png)
+
+> 📸 **Screenshot — `cluster-page.png`**
+> *Shows:* the **Cluster** page with KPI cards (Active pods, Orphaned pods, CPU used/total, Pending runs), quota bars (CPU, memory), the component health table, and the Active / Orphaned / Pending pods tables.
+> *Path:* open a project → click **Cluster** in the SYSTEM left rail section → `/projects/:projectId/cluster`.
+
+The page provides:
+
+- **KPI cards** — Active pods, Orphaned pods, CPU used/total, Pending-capacity runs
+- **Quota bars** — CPU (used vs. limit) and memory (used vs. limit), color-coded green/amber/red by saturation
+- **Component health table** — 6 checks: Postgres, GitHub installation token, Azure Key Vault, namespace quota, warm-pool, Kubernetes API server
+- **Active agent pods table** — pods currently serving a live run
+- **Orphaned agent pods table** — pods with no matching active run (will be reaped on the next sweep)
+- **Pending-capacity runs table** — subtasks waiting for CPU headroom
+
+When the API is not deployed on AKS (or the cluster diagnostics endpoint returns `404`), the page falls back gracefully and shows a message indicating cluster diagnostics are unavailable.
+
+> **Full user guide:** see [Cluster page guide](./cluster-page.md) for a walkthrough of each KPI and how to interpret quota warnings.
+> **API reference:** see [Cluster diagnostics reference](../reference/cluster-diagnostics.md) for the full response schema.
 

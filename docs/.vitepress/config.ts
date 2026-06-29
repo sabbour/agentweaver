@@ -81,6 +81,7 @@ export default withMermaid({
             { text: 'Sandbox browser preview', link: '/reference/sandbox-browser-preview' },
             { text: 'Sandbox setup', link: '/reference/sandbox-setup' },
             { text: 'A2A transport', link: '/reference/a2a' },
+            { text: 'Cluster diagnostics', link: '/reference/cluster-diagnostics' },
             { text: 'Scaling & data layer', link: '/reference/scaling-data-layer' },
           ],
         },
@@ -99,6 +100,7 @@ export default withMermaid({
             { text: 'Team casting & memory', link: '/experience/team-casting-memory' },
             { text: 'Workflows & backlog', link: '/experience/workflows-backlog' },
             { text: 'Operations', link: '/experience/operations' },
+            { text: 'Cluster', link: '/experience/cluster-page' },
             { text: 'Sandbox pod execution', link: '/experience/sandbox-pod-execution' },
             { text: 'Sandbox browser preview', link: '/experience/sandbox-browser-preview' },
             { text: 'Distributed agents (A2A)', link: '/experience/a2a-distributed-agents' },
@@ -141,6 +143,7 @@ export default withMermaid({
           items: [
             { text: 'Sandbox', link: '/deep-dive/sandbox' },
             { text: 'Sandbox pod execution', link: '/deep-dive/sandbox-pod-execution' },
+            { text: 'Agent-host token delivery', link: '/deep-dive/agent-token-delivery' },
             { text: 'Sandbox browser preview', link: '/deep-dive/sandbox-browser-preview' },
             { text: 'Sandboxed execution', link: '/deep-dive/sandboxed-execution' },
             { text: 'A2A bridge', link: '/deep-dive/a2a-bridge' },

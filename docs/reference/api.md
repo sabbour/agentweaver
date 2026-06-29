@@ -212,7 +212,8 @@ Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case
 | --- | --- | --- |
 | `GET` | `/health` | Public liveness probe |
 | `GET` | `/api/health` | API liveness probe |
-| `GET` | `/api/diagnostics` | Get API diagnostics |
+| `GET` | `/api/diagnostics` | Get API diagnostics (SQLite/disk/workflow/heartbeat) |
+| `GET` | `/api/diagnostics/cluster` | Get cluster diagnostics (pods, quota, component health, pending runs) |
 | `GET` | `/api/diagnostics/heartbeat` | Get diagnostics heartbeat |
 | `GET` | `/api/projects/{id}/diagnostics` | Get project diagnostics |
 | `GET` | `/api/projects/{id}/workspace/refs` | List workspace refs |
@@ -220,6 +221,75 @@ Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case
 | `GET` | `/api/projects/{id}/workspace/files/{**path}` | Read a project workspace file |
 | `GET` | `/api/projects/{id}/dashboard` | Get project dashboard metrics |
 | `GET` | `/api/overview` | Get global overview metrics |
+
+### GET /api/diagnostics/cluster
+
+Returns a `ClusterDiagnosticsDto` with the current state of the Kubernetes cluster as seen by the Agentweaver API. Requires authentication. Returns `404 Not Found` when cluster diagnostics are not available (e.g. non-AKS deployment).
+
+Six component health checks run **concurrently** with a 5-second individual timeout each:
+
+| Check name | What it tests |
+| --- | --- |
+| `postgres` | Postgres connectivity |
+| `github_installation_token` | GitHub installation token validity |
+| `azure_key_vault` | Azure Key Vault reachability |
+| `namespace_quota` | CPU headroom ≥ 2 CPU in the sandbox namespace |
+| `warm_pool` | Warm-pool agent-sandbox availability |
+| `kubernetes_api` | Kubernetes API server reachability |
+
+Response `200 OK` — a `ClusterDiagnosticsDto`:
+
+```json
+{
+  "component_health": [
+    { "name": "postgres", "status": "pass", "detail": null, "duration_ms": 12 },
+    { "name": "namespace_quota", "status": "warn", "detail": "CPU headroom: 1.2 cores", "duration_ms": 45 }
+  ],
+  "namespace_quota": {
+    "cpu_used": 3.8,
+    "cpu_total": 5.0,
+    "memory_used_gi": 6.4,
+    "memory_total_gi": 10.0
+  },
+  "active_agent_pods": [
+    { "pod_name": "agent-host-abc123", "run_id": "f36800fd-...", "node": "katapool-vm-1", "started_at": "2026-06-27T17:55:00Z" }
+  ],
+  "orphaned_agent_pods": [],
+  "pending_capacity_runs": [
+    { "coordinator_run_id": "coord-...", "subtask_id": 7, "pending_since": "2026-06-27T17:58:30Z", "retry_count": 3 }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `component_health` | `ComponentHealthDto[]` | One entry per check; `status` is `pass`, `warn`, or `fail`. |
+| `namespace_quota` | object | Current CPU and memory usage vs. namespace limits. |
+| `active_agent_pods` | `AgentPodInfoDto[]` | Pods currently running with a matching active run. |
+| `orphaned_agent_pods` | `AgentPodInfoDto[]` | Pods running with no matching active run (candidates for next reaper sweep). |
+| `pending_capacity_runs` | `PendingCapacityRunDto[]` | Subtasks waiting for CPU capacity to become available. |
+
+See [Cluster diagnostics reference](./cluster-diagnostics.md) for the full DTO schema and field descriptions.
+
+### GET /api/diagnostics/heartbeat — automation_name
+
+The heartbeat tick records returned by `GET /api/diagnostics/heartbeat` include an `automation_name` field on each `TickRecordDto`:
+
+```json
+{
+  "tick_records": [
+    {
+      "automation_name": "Coordinator Heartbeat",
+      "acted_count": 2,
+      "error_count": 0,
+      "duration_ms": 340,
+      "recorded_at": "2026-06-27T18:00:00Z"
+    }
+  ]
+}
+```
+
+The Heartbeat page **Recent Activity** table shows this as the first column (**Automation**). Possible values are `"Coordinator Heartbeat"` and `"Checkpoint GC"`.
 
 ### GET /
 

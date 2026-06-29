@@ -482,6 +482,45 @@ The coordinator assumes in-memory drivers can disappear. Recovery routes by dura
 
 The heartbeat also runs a reconciler. It scans for orphaned dispatching, awaiting-assembly, and assembling plans whose in-memory loop is gone, recreates the coordinator stream if needed, and re-arms the correct service. Each candidate is isolated by try/catch so one corrupt plan does not stop the sweep.
 
+### Reaper as the 3rd heartbeat phase
+
+`CoordinatorHeartbeatService` drives three phases per tick:
+
+1. **Backlog pickup** — claim Ready tasks and start coordinator runs.
+2. **Work-plan reconciliation** — re-arm orphaned dispatching/assembly plans.
+3. **Agent-host pod reaper** — invoke `AgentHostReaperService` to sweep and terminate orphaned agent-host pods.
+
+The reaper phase runs every `Coordinator:ReaperIntervalTicks` ticks (default **12**, i.e. roughly every 2 minutes at the default interval). This is intentionally coarser than the heartbeat cadence; the reaper lists all pods in the namespace each sweep, so running it on every tick would be excessive.
+
+The reaper is the last line of defense against quota leakage. The normal dispatch paths call `ReleaseAgentHostPodAsync` on all stall-fail and cancellation paths first; the reaper terminates any pod that slips through.
+
+### Automation name in tick records
+
+Each heartbeat tick carries an **automation name** string that identifies which background automation produced the record. `HeartbeatStatusStore.TickRecord` and `RecordTickOutcome` include an `AutomationName` property (e.g. `"Coordinator Heartbeat"`, `"Checkpoint GC"`). The `HeartbeatStatusDto.TickRecordDto` exposes this as the `automation_name` field in the API response.
+
+The frontend **Heartbeat** page shows **Automation** as the first column in the **Recent Activity** table, so operators can distinguish which automation ran on each tick at a glance.
+
+```json
+{
+  "tick_records": [
+    {
+      "automation_name": "Coordinator Heartbeat",
+      "acted_count": 2,
+      "error_count": 0,
+      "duration_ms": 340,
+      "recorded_at": "2026-06-27T18:00:00Z"
+    },
+    {
+      "automation_name": "Checkpoint GC",
+      "acted_count": 0,
+      "error_count": 0,
+      "duration_ms": 12,
+      "recorded_at": "2026-06-27T17:59:50Z"
+    }
+  ]
+}
+```
+
 ### Failure containment
 
 Several paths intentionally convert ambiguous failure into durable, inspectable state:
