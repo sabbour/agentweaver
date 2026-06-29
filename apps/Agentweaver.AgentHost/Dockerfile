@@ -12,6 +12,7 @@ WORKDIR /src
 
 COPY ["apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj", "apps/Agentweaver.AgentHost/"]
 COPY ["packages/", "packages/"]
+COPY Directory.Build.props .
 
 COPY apps/Agentweaver.AgentHost/ apps/Agentweaver.AgentHost/
 COPY packages/ packages/
