@@ -264,15 +264,18 @@ Secrets are delivered from **Azure Key Vault** via the **Secrets Store CSI drive
 flowchart LR
     MI["Managed Identity<br/>agentweaver-api-identity<br/>Key Vault Secrets User"]
     SA["ServiceAccount<br/>agentweaver-api<br/>azure.workload.identity/client-id"]
-    OIDC["AKS OIDC Issuer<br/>Federated Credential"]
+    SA2["ServiceAccount<br/>agentweaver-agent-host<br/>azure.workload.identity/client-id"]
+    OIDC["AKS OIDC Issuer<br/>agentweaver-api-fedcred"]
+    OIDC2["AKS OIDC Issuer<br/>agentweaver-agenthost-fedcred"]
     KV["Azure Key Vault<br/>agentweaver-kv"]
 
     SPC["SecretProviderClass<br/>agentweaver-secrets"]
 
-    API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-api-key<br/>mcp-oauth-signing-key"]
+    API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-oauth-signing-key"]
     MCP["MCP Pod<br/>(no mounted secrets)"]
 
     SA -->|"federated credential"| OIDC --> MI
+    SA2 -->|"federated credential"| OIDC2 --> MI
     MI -->|"Key Vault Secrets User"| KV
     KV --> SPC -->|"CSI volume mount"| API
 
@@ -284,12 +287,12 @@ flowchart LR
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class SA,SPC,MCP svc;
+    class SA,SA2,SPC,MCP svc;
     class API core;
     class MI,OIDC,KV ext;
 ```
 
-The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. One `SecretProviderClass` object syncs secrets from Key Vault into the API pod volume:
+The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing agent-host pods to mount Key Vault secrets via CSI. One `SecretProviderClass` object syncs secrets from Key Vault into the API pod volume:
 
 **`agentweaver-secrets`** (used by API pod, `k8s/secret-provider-class.yaml`):
 
@@ -297,7 +300,6 @@ The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed ident
 |-----------------|------------------------------|----------|
 | `github-client-id` | `github-client-id` | GitHub OAuth App client ID → `GitHub__ClientId` env var |
 | `github-client-secret` | `github-client-secret` | GitHub OAuth App client secret → `GitHub__ClientSecret` env var |
-| `mcp-api-key` | `mcp-api-key` | Internal API loopback key for Scribe/coordinator self-calls → `Auth__ApiKey` |
 | `mcp-oauth-signing-key` | `mcp-oauth-signing-key` | ECDSA P-256 key for signing Agentweaver OAuth tokens → `Auth__OAuth__SigningKey` |
 
 The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough).

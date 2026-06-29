@@ -204,7 +204,7 @@ flowchart LR
 
 The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
-The API reads the internal loopback key (`mcp-api-key`), GitHub OAuth client settings, and OAuth signing key. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). Both use the same workload identity service account; the single `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
+The API reads GitHub OAuth client settings and the OAuth signing key. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). Both the `agentweaver-api` and `agentweaver-agent-host` service accounts use the same managed identity (`agentweaver-api-identity`), each with its own federated credential (`agentweaver-api-fedcred` and `agentweaver-agenthost-fedcred` respectively). The single `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
 
 Rotation constraint: the CSI driver can refresh mounted files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 

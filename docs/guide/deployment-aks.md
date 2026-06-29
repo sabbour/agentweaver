@@ -199,7 +199,6 @@ This provides the `SandboxClaim`, `SandboxTemplate`, and `SandboxWarmPool` CRDs 
 
 ```bash
 export TENANT_ID=$(az account show --query tenantId -o tsv)
-export MCP_API_KEY=<generated-key>
 export GITHUB_CLIENT_ID=<from-github-oauth-app>
 export GITHUB_CLIENT_SECRET=<from-github-oauth-app>
 
@@ -210,13 +209,15 @@ The script:
 
 1. Creates a **user-assigned managed identity** (`agentweaver-api-identity`)
 2. Creates an **Azure Key Vault** (`$KEYVAULT_NAME`) with RBAC authorization enabled
-3. Stores three secrets in Key Vault:
-   - `mcp-api-key` — internal API loopback key for Scribe/coordinator self-calls
+3. Stores two secrets in Key Vault:
    - `github-client-id` — GitHub OAuth App client ID
    - `github-client-secret` — GitHub OAuth App client secret
 4. Grants the managed identity **Key Vault Secrets User** on the vault
 5. Enables OIDC issuer + workload identity on the cluster (if not already enabled)
-6. Creates a **federated credential** linking `serviceaccount/agentweaver-api` in namespace `agentweaver` to the managed identity
+6. Creates a **federated credential** (`agentweaver-api-fedcred`) linking `serviceaccount/agentweaver-api` in namespace `agentweaver` to the managed identity
+7. Creates a second **federated credential** (`agentweaver-agenthost-fedcred`) linking `serviceaccount/agentweaver-agent-host` to the same managed identity — required for agent-host pods to mount Key Vault secrets via CSI
+
+> **Before first deploy:** run `bash scripts/aks/16-provision-oauth-signing-key.sh` to provision the `mcp-oauth-signing-key` secret in Key Vault.
 
 At completion, export the identity client ID for use in Step 5:
 
@@ -233,21 +234,21 @@ export IDENTITY_CLIENT_ID=$(az identity show \
 Azure Key Vault
   └── github-client-id        ─┐
   └── github-client-secret     ├─ SecretProviderClass: agentweaver-secrets
-  └── mcp-api-key             ─┘   (k8s/secret-provider-class.yaml)
+  └── mcp-oauth-signing-key   ─┘   (k8s/secret-provider-class.yaml)
                                        │
                                        │  CSI driver fetches via pod workload identity
                                        ▼
                                Pod volume: /mnt/secrets-store/
                                  github-client-id       (file)
                                  github-client-secret   (file)
-                                 mcp-api-key            (file)
+                                 mcp-oauth-signing-key  (file)
                                        │
                                        │  API startup script reads files:
                                        ▼
                                env vars injected at runtime (not in YAML):
                                  GitHub__ClientId
                                  GitHub__ClientSecret
-                                 Auth__ApiKey
+                                 Auth__OAuth__SigningKey
 
 The MCP pod mounts no secrets; its auth relies only on the OAuth paths.
 ```
@@ -341,7 +342,7 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `secret-provider-class.yaml` | SecretProviderClass | Fetches `mcp-api-key`, `github-client-id`, `github-client-secret` from Key Vault into the API pod volume |
+| `secret-provider-class.yaml` | SecretProviderClass | Fetches `github-client-id`, `github-client-secret`, `mcp-oauth-signing-key` from Key Vault into the API pod volume |
 
 ### Storage
 

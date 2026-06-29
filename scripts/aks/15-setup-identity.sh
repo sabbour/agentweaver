@@ -7,7 +7,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/00-variables.sh"
 
 missing=()
-[[ -z "${MCP_API_KEY:-}" ]] && missing+=("MCP_API_KEY")
 [[ -z "${GITHUB_CLIENT_ID:-}" ]] && missing+=("GITHUB_CLIENT_ID")
 [[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && missing+=("GITHUB_CLIENT_SECRET")
 if [[ ${#missing[@]} -gt 0 ]]; then
@@ -53,7 +52,6 @@ echo "  Key Vault ID: ${KEYVAULT_ID}"
 
 echo ""
 echo "=== Step 3: Store required secrets in Key Vault ==="
-az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name mcp-api-key --value "${MCP_API_KEY}" --output none
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-id --value "${GITHUB_CLIENT_ID}" --output none
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-secret --value "${GITHUB_CLIENT_SECRET}" --output none
 
@@ -107,11 +105,35 @@ else
 fi
 
 echo ""
+echo "=== Step 7: Create federated credential for agent-host ==="
+if ! az identity federated-credential show \
+    --name agentweaver-agenthost-fedcred \
+    --identity-name agentweaver-api-identity \
+    --resource-group "${RESOURCE_GROUP}" &>/dev/null; then
+  az identity federated-credential create \
+    --name agentweaver-agenthost-fedcred \
+    --identity-name agentweaver-api-identity \
+    --resource-group "${RESOURCE_GROUP}" \
+    --issuer "${OIDC_ISSUER}" \
+    --subject "system:serviceaccount:${NAMESPACE}:agentweaver-agent-host" \
+    --audience api://AzureADTokenExchange
+else
+  echo "  [OK] Agent-host federated credential already exists."
+fi
+
+echo ""
 echo ""
 echo "=== Summary ==="
 echo "  IDENTITY_CLIENT_ID=${IDENTITY_CLIENT_ID}"
 echo "  KEYVAULT_NAME=${KEYVAULT_NAME}"
 echo "  TENANT_ID=${TENANT_ID}"
+echo ""
+echo "Two federated credentials are now configured on agentweaver-api-identity:"
+echo "  agentweaver-api-fedcred      → system:serviceaccount:${NAMESPACE}:agentweaver-api"
+echo "  agentweaver-agenthost-fedcred → system:serviceaccount:${NAMESPACE}:agentweaver-agent-host"
+echo ""
+echo "NOTE: Run scripts/aks/16-provision-oauth-signing-key.sh before the first deploy"
+echo "      to provision the mcp-oauth-signing-key secret in Key Vault."
 echo ""
 echo "Apply k8s manifests with these values substituted:"
 echo "  IDENTITY_CLIENT_ID=${IDENTITY_CLIENT_ID} KEYVAULT_NAME=${KEYVAULT_NAME} TENANT_ID=${TENANT_ID} bash scripts/aks/30-deploy.sh"
