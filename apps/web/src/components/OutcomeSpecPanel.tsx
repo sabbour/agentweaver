@@ -310,6 +310,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   const status = spec?.status ?? 'drafting';
   const statusMeta = STATUS_META[status] ?? STATUS_META.drafting;
   const awaiting = status === 'awaiting_confirmation';
+  const runInterrupted = actionError?.includes('run_not_active') ?? false;
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
   const clarifying = useMemo(() => splitQuestions(toLines(spec?.clarifyingQuestions)), [spec?.clarifyingQuestions]);
 
@@ -465,7 +466,11 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
 
       {actionError && (
         <MessageBar intent="error">
-          <MessageBarBody>{actionError}</MessageBarBody>
+          <MessageBarBody>
+            {runInterrupted
+              ? 'This run was interrupted (server restart or timeout) and can no longer be confirmed. Please start a new task.'
+              : actionError}
+          </MessageBarBody>
         </MessageBar>
       )}
 
@@ -480,7 +485,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
           <Button
             appearance="primary"
             icon={<CheckmarkCircleRegular />}
-            disabled={acting}
+            disabled={acting || runInterrupted}
             onClick={() => void handleConfirm()}
           >
             {acting ? 'Confirming' : 'Confirm'}
@@ -488,7 +493,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
           <Button
             appearance="secondary"
             icon={<EditRegular />}
-            disabled={acting}
+            disabled={acting || runInterrupted}
             onClick={openRevise}
           >
             Clarify and request changes
