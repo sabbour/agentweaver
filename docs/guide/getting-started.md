@@ -28,7 +28,7 @@ You need these tools before you start:
 - .NET 10 SDK (`global.json` pins `10.0.100`)
 - Node.js 20.19+ (or 22.12+) — required by Vite 8
 - An existing local Git repository that the agent can target
-- A GitHub account with an active GitHub Copilot subscription (the web UI signs you in via OAuth — no static token needed), or a Microsoft Foundry API key if you prefer that model provider.
+- A GitHub account with an active GitHub Copilot subscription — the web UI signs you in via OAuth.
 - A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback`.
 
 ## 1. Configure the API
@@ -61,17 +61,6 @@ Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your GitHub OAuth
 
 The `ClientId` and `ClientSecret` come from your GitHub OAuth App settings page. `CallbackUrl` must match the **Authorization callback URL** registered in the app exactly.
 
-> **GitHub Copilot token** — you do _not_ need a separate static API key. Once you sign in through the web UI, the server uses your GitHub OAuth token automatically for Copilot model calls. `GitHubToken` in `Providers.GitHubCopilot` is only needed for unattended scenarios (CI, headless servers) where no user signs in.
->
-> **Microsoft Foundry** — if you prefer Foundry as the model provider, add it instead of (or alongside) `GitHubCopilot`:
-> ```json
-> "MicrosoftFoundry": {
->   "ApiKey": "<foundry-api-key>",
->   "Endpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
->   "Deployment": "gpt-4.1"
-> }
-> ```
-
 ## 2. Start the API
 
 From the repository root, start the backend:
@@ -92,7 +81,7 @@ npm install
 npm run dev
 ```
 
-Set `VITE_API_URL` in `apps/web/.env` so the browser client points at your API (default `http://localhost:5000`), then open the local URL that Vite prints in the console. The web UI signs you in through GitHub — you do not need to configure a static API key for the browser.
+Set `VITE_API_URL` in `apps/web/.env` so the browser client points at your API (default `http://localhost:5000`), then open the local URL that Vite prints in the console.
 
 ```dotenv
 VITE_API_URL=http://localhost:5000
