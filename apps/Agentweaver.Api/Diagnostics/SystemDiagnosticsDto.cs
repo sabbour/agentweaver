@@ -97,13 +97,49 @@ public sealed record DetailedHealthCheckDto
 }
 
 /// <summary>
-/// Detailed multi-dependency diagnostics response (spec-006, Change to Task 3c). Each check runs
-/// concurrently with an individual timeout; a timed-out check reports status <c>"unknown"</c>
-/// rather than blocking the overall response.
+/// Detailed cluster diagnostics response (spec-006). The critical-dependency checks plus a live
+/// inventory of agent-host pods (active vs orphaned) and subtasks waiting on capacity. Powers the
+/// dedicated frontend "Cluster" page (<c>GET /api/diagnostics/cluster</c>).
 /// </summary>
-public sealed record DetailedDiagnosticsDto
+public sealed record ClusterDiagnosticsDto
 {
-    [JsonPropertyName("generated_utc")]     public required DateTimeOffset                     GeneratedUtc    { get; init; }
-    [JsonPropertyName("total_duration_ms")] public required double                             TotalDurationMs { get; init; }
-    [JsonPropertyName("checks")]            public required IReadOnlyList<DetailedHealthCheckDto> Checks        { get; init; }
+    [JsonPropertyName("generated_utc")]     public required DateTimeOffset                        GeneratedUtc        { get; init; }
+    [JsonPropertyName("total_duration_ms")] public required double                                TotalDurationMs     { get; init; }
+    [JsonPropertyName("checks")]            public required IReadOnlyList<DetailedHealthCheckDto>  Checks              { get; init; }
+
+    /// <summary>Running <c>agent-*</c> pods that belong to a currently active run.</summary>
+    [JsonPropertyName("active_agent_pods")]    public required IReadOnlyList<AgentPodInfoDto>      ActiveAgentPods    { get; init; }
+
+    /// <summary>Running <c>agent-*</c> pods whose run is finished/failed/gone — the reaper's targets.</summary>
+    [JsonPropertyName("orphaned_agent_pods")]  public required IReadOnlyList<AgentPodInfoDto>      OrphanedAgentPods  { get; init; }
+
+    /// <summary>Subtasks parked in PendingCapacity waiting for an agent pod slot to free up.</summary>
+    [JsonPropertyName("pending_capacity_runs")] public required IReadOnlyList<PendingCapacityRunDto> PendingCapacityRuns { get; init; }
+}
+
+/// <summary>A single agent-host pod / SandboxClaim in the cluster inventory.</summary>
+public sealed record AgentPodInfoDto
+{
+    [JsonPropertyName("claim_name")] public required string  ClaimName  { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_id")]     public string?          RunId      { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("pod_name")]   public string?          PodName    { get; init; }
+    /// <summary><c>"ready"</c> or <c>"pending"</c>.</summary>
+    [JsonPropertyName("status")]     public required string  Status     { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("age_seconds")] public double?         AgeSeconds { get; init; }
+}
+
+/// <summary>A subtask parked in PendingCapacity awaiting an agent-host pod slot.</summary>
+public sealed record PendingCapacityRunDto
+{
+    [JsonPropertyName("subtask_id")]   public required int    SubtaskId   { get; init; }
+    [JsonPropertyName("work_plan_id")] public required int    WorkPlanId  { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("child_run_id")] public string?         ChildRunId  { get; init; }
+    [JsonPropertyName("status")]       public required string Status      { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("reason")]       public string?         Reason      { get; init; }
+    [JsonPropertyName("age_seconds")]  public required double AgeSeconds  { get; init; }
 }

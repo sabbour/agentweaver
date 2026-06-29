@@ -33,6 +33,15 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
     private readonly TimeSpan _interval;
     private readonly HeartbeatStatusStore _statusStore;
 
+    /// <summary>
+    /// Run the orphaned agent-host pod reaper every Nth tick. The heartbeat ticks every ~10s which
+    /// is too frequent for K8s API calls, so the reaper sweep (which lists + deletes SandboxClaims)
+    /// is throttled to roughly every 2 minutes by default. Configurable via
+    /// <c>Coordinator:ReaperIntervalTicks</c>.
+    /// </summary>
+    private readonly int _reaperIntervalTicks;
+    private int _tickCount;
+
     public CoordinatorHeartbeatService(
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
@@ -50,6 +59,9 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
         // Interval read once at construction; floor of 1 second.
         var seconds = configuration.GetValue("Coordinator:HeartbeatIntervalSeconds", 10);
         _interval = TimeSpan.FromSeconds(Math.Max(1, seconds));
+
+        // Reaper cadence in heartbeat ticks (floor of 1). 12 ticks * 10s ≈ 2 minutes.
+        _reaperIntervalTicks = Math.Max(1, configuration.GetValue("Coordinator:ReaperIntervalTicks", 12));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -153,6 +165,28 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
         catch (Exception exSweep)
         {
             _logger.LogError(exSweep, "Heartbeat: coordinator reconciler sweep failed");
+        }
+
+        // spec-006 (3rd phase): orphaned agent-host pod cleanup. Throttled to every Nth tick because
+        // the heartbeat ticks far more often than the reaper needs to run. The reaper is only
+        // registered when the Kubernetes sandbox is active, so resolve it null-safely. Isolated so a
+        // sweep failure never affects the pickup tick outcome above.
+        if (++_tickCount % _reaperIntervalTicks == 0)
+        {
+            try
+            {
+                var reaper = sp.GetService<Agentweaver.Api.Sandbox.IAgentHostReaper>();
+                if (reaper is not null)
+                    await reaper.SweepOrphanedPodsAsync(stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;   // shutdown — stop the service cleanly
+            }
+            catch (Exception exReap)
+            {
+                _logger.LogError(exReap, "Heartbeat: agent-host pod reaper sweep failed");
+            }
         }
     }
 }

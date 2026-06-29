@@ -53,12 +53,12 @@ public static class DiagnosticsEndpoints
         app.MapGet("/api/diagnostics/heartbeat", async (DiagnosticsService service, CancellationToken ct) =>
             Results.Ok(await service.GetHeartbeatStatusAsync(ct)));
 
-        // spec-006 (Change to Task 3c): detailed multi-dependency health suite. Each critical
-        // dependency (Postgres, GitHub installation token, Key Vault, agent-pod quota, warm pool,
-        // K8s API) is probed concurrently with a per-check timeout so a broken dependency surfaces
-        // here instead of the panel reporting "everything fine".
-        app.MapGet("/api/diagnostics/detailed", async (DiagnosticsService service, CancellationToken ct) =>
-            Results.Ok(await service.GetDetailedDiagnosticsAsync(ct)));
+        // spec-006: detailed cluster diagnostics. Probes every critical dependency (Postgres, GitHub
+        // installation token, Key Vault, agent-pod quota, warm pool, K8s API) concurrently with a
+        // per-check timeout, and returns a live agent-pod inventory (active / orphaned) plus subtasks
+        // parked in PendingCapacity. Powers the dedicated frontend "Cluster" page.
+        app.MapGet("/api/diagnostics/cluster", async (DiagnosticsService service, CancellationToken ct) =>
+            Results.Ok(await service.GetClusterDiagnosticsAsync(ct)));
 
         // FR-016 (project scope): workspace, scaffold directories, and active workflow/policy checks
         // for a single project. Owner-authorized (same pattern as other project endpoints).

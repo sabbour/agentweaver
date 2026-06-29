@@ -49,6 +49,10 @@ public sealed class DiagnosticsService
     private readonly IGitHubTokenStore? _gitHubTokenStore;
     private readonly ISecretStore? _secretStore;
 
+    // Optional agent-host reaper (spec-006): used to enumerate active/orphaned agent pods for the
+    // cluster diagnostics view. Null outside Kubernetes — the inventory then comes back empty.
+    private readonly IAgentHostReaper? _reaper;
+
     /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
     private const string ResourceQuotaName = "agentweaver-quota";
 
@@ -72,7 +76,8 @@ public sealed class DiagnosticsService
         IServiceScopeFactory scopeFactory,
         IKubernetes? k8s = null,
         IGitHubTokenStore? gitHubTokenStore = null,
-        ISecretStore? secretStore = null)
+        ISecretStore? secretStore = null,
+        IAgentHostReaper? reaper = null)
     {
         _db = db;
         _projectStore = projectStore;
@@ -85,6 +90,7 @@ public sealed class DiagnosticsService
         _k8s = k8s;
         _gitHubTokenStore = gitHubTokenStore;
         _secretStore = secretStore;
+        _reaper = reaper;
     }
 
     // -------------------------------------------------------------------------
@@ -202,37 +208,130 @@ public sealed class DiagnosticsService
     }
 
     // -------------------------------------------------------------------------
-    // Detailed multi-dependency health suite (spec-006, Change to Task 3c)
+    // Detailed cluster diagnostics suite (spec-006)
     // -------------------------------------------------------------------------
 
     /// <summary>
     /// Runs every critical-dependency health check concurrently, each bounded by
-    /// <see cref="DetailedCheckTimeout"/>. A check that exceeds its timeout reports status
-    /// <c>"unknown"</c> ("check timed out") and never blocks the overall response. Designed so a
-    /// genuinely broken dependency (DB down, expired GitHub token, exhausted quota, empty warm pool)
-    /// surfaces in the Diagnostics panel instead of being masked by a green overall status.
+    /// <see cref="DetailedCheckTimeout"/>, and returns the live agent-pod inventory (active /
+    /// orphaned) plus subtasks parked in PendingCapacity. A check that exceeds its timeout reports
+    /// status <c>"unknown"</c> ("check timed out") and never blocks the overall response. Designed so
+    /// a genuinely broken dependency (DB down, expired GitHub token, exhausted quota, empty warm
+    /// pool) surfaces in the Cluster diagnostics page instead of being masked by a green status.
     /// </summary>
-    public async Task<DetailedDiagnosticsDto> GetDetailedDiagnosticsAsync(CancellationToken ct = default)
+    public async Task<ClusterDiagnosticsDto> GetClusterDiagnosticsAsync(CancellationToken ct = default)
     {
         var overallSw = Stopwatch.StartNew();
         var generatedUtc = DateTimeOffset.UtcNow;
 
-        var checks = await Task.WhenAll(
+        // Checks + inventory run concurrently; the inventory tasks are best-effort (never throw).
+        var checksTask = Task.WhenAll(
             RunGuardedAsync("postgresql", CheckPostgresAsync, ct),
             RunGuardedAsync("github_installation_token", CheckGitHubInstallationTokenAsync, ct),
             RunGuardedAsync("key_vault", CheckKeyVaultAsync, ct),
             RunGuardedAsync("agent_pod_quota", CheckAgentPodQuotaDetailedAsync, ct),
             RunGuardedAsync("warm_pool", CheckWarmPoolAsync, ct),
-            RunGuardedAsync("k8s_api", CheckK8sApiAsync, ct)).ConfigureAwait(false);
+            RunGuardedAsync("k8s_api", CheckK8sApiAsync, ct));
+
+        var podsTask = GetAgentPodInventoryAsync(ct);
+        var pendingTask = GetPendingCapacityRunsAsync(ct);
+
+        await Task.WhenAll(checksTask, podsTask, pendingTask).ConfigureAwait(false);
+
+        var checks = await checksTask.ConfigureAwait(false);
+        var (active, orphaned) = await podsTask.ConfigureAwait(false);
+        var pending = await pendingTask.ConfigureAwait(false);
 
         overallSw.Stop();
 
-        return new DetailedDiagnosticsDto
+        return new ClusterDiagnosticsDto
         {
-            GeneratedUtc    = generatedUtc,
-            TotalDurationMs = overallSw.Elapsed.TotalMilliseconds,
-            Checks          = checks,
+            GeneratedUtc        = generatedUtc,
+            TotalDurationMs     = overallSw.Elapsed.TotalMilliseconds,
+            Checks              = checks,
+            ActiveAgentPods     = active,
+            OrphanedAgentPods   = orphaned,
+            PendingCapacityRuns = pending,
         };
+    }
+
+    /// <summary>
+    /// Splits the reaper's agent-host claim inventory into active vs orphaned pods. Best-effort:
+    /// returns empty lists outside Kubernetes or on any failure (diagnostics must never throw).
+    /// </summary>
+    private async Task<(IReadOnlyList<AgentPodInfoDto> Active, IReadOnlyList<AgentPodInfoDto> Orphaned)>
+        GetAgentPodInventoryAsync(CancellationToken ct)
+    {
+        if (_reaper is null)
+            return (Array.Empty<AgentPodInfoDto>(), Array.Empty<AgentPodInfoDto>());
+
+        try
+        {
+            var inventory = await _reaper.GetClaimInventoryAsync(ct).ConfigureAwait(false);
+            var now = DateTimeOffset.UtcNow;
+
+            var active = new List<AgentPodInfoDto>();
+            var orphaned = new List<AgentPodInfoDto>();
+            foreach (var c in inventory)
+            {
+                var dto = new AgentPodInfoDto
+                {
+                    ClaimName  = c.ClaimName,
+                    RunId      = c.RunId,
+                    PodName    = c.PodName,
+                    Status     = c.Ready ? "ready" : "pending",
+                    AgeSeconds = c.CreatedAt is { } created ? (now - created).TotalSeconds : null,
+                };
+                (c.Orphaned ? orphaned : active).Add(dto);
+            }
+            return (active, orphaned);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return (Array.Empty<AgentPodInfoDto>(), Array.Empty<AgentPodInfoDto>());
+        }
+    }
+
+    /// <summary>
+    /// Lists subtasks parked in <c>pending_capacity</c> (waiting for an agent-host pod slot).
+    /// Best-effort: returns an empty list on any failure.
+    /// </summary>
+    private async Task<IReadOnlyList<PendingCapacityRunDto>> GetPendingCapacityRunsAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+
+            var rows = await db.Subtasks
+                .AsNoTracking()
+                .Where(s => s.Status == "pending_capacity")
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+
+            return rows.Select(s => new PendingCapacityRunDto
+            {
+                SubtaskId  = s.Id,
+                WorkPlanId = s.WorkPlanId,
+                ChildRunId = s.ChildRunId,
+                Status     = s.Status,
+                Reason     = s.RecoveryGuidance,
+                AgeSeconds = (now - s.UpdatedAt).TotalSeconds,
+            }).ToList();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return Array.Empty<PendingCapacityRunDto>();
+        }
     }
 
     /// <summary>

@@ -371,8 +371,9 @@ if (SandboxExecutorFactory.IsInCluster)
 
 // spec-006: AgentHost orphaned-pod reaper. Each AgentHost pod reserves 2 CPU against the namespace
 // quota (24 CPU); claims left behind by crashed/stalled runs exhaust it and make new runs fail with
-// "exceeded quota". Register a shared in-cluster Kubernetes client + the reaper hosted service when
-// the sandbox provider is Kubernetes (Sandbox:Provider == "kubernetes") or we are running in-cluster.
+// "exceeded quota". Register a shared in-cluster Kubernetes client + the reaper as a regular
+// singleton (its cadence is driven by the coordinator heartbeat, NOT a standalone BackgroundService)
+// when the sandbox provider is Kubernetes (Sandbox:Provider == "kubernetes") or we are in-cluster.
 {
     var sandboxProvider = builder.Configuration["Sandbox:Provider"]?.ToLowerInvariant();
     var useKubernetesSandbox =
@@ -400,7 +401,7 @@ if (SandboxExecutorFactory.IsInCluster)
             var reaperNamespace = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
             builder.Services.AddSingleton<KubernetesSandboxOptions>(
                 new KubernetesSandboxOptions { Namespace = reaperNamespace });
-            builder.Services.AddHostedService<AgentHostReaperService>();
+            builder.Services.AddSingleton<IAgentHostReaper, AgentHostReaperService>();
         }
     }
 }
