@@ -155,7 +155,6 @@ apply_rendered gateway-preview.yaml
 apply_rendered httproute-api.yaml
 apply_rendered httproute-frontend.yaml
 apply_rendered mcp-httproute.yaml
-apply_rendered backup-cronjob.yaml
 
 echo ""
 echo "Applying sandbox template and warm pool (if CRD is available)..."
