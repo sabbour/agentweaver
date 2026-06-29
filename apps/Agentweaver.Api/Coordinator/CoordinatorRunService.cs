@@ -108,6 +108,7 @@ public sealed class CoordinatorRunService
         bool autoApproveTools,
         bool autopilot,
         CancellationToken ct,
+        string? workflowOverrideId = null,
         string? retriedFrom = null)
     {
         var runId = RunId.New();
@@ -136,7 +137,7 @@ public sealed class CoordinatorRunService
         // Interactive runs share the same activation body as unattended backlog-pickup runs, but they
         // do NOT schedule the unattended confirm: a human confirms/revises the spec via the HTTP
         // endpoints.
-        await ActivateAsync(run, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
+        await ActivateAsync(run, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot), workflowOverrideId)
             .ConfigureAwait(false);
 
         return runId;
@@ -218,7 +219,7 @@ public sealed class CoordinatorRunService
     /// per-run CTS (registered so Abandon -> Cts.Cancel() tears the run down, mirroring
     /// RunOrchestrator), and starts the supervised watch loop.
     /// </summary>
-    private async Task ActivateAsync(Run run, RunOptions options)
+    private async Task ActivateAsync(Run run, RunOptions options, string? workflowOverrideId = null)
     {
         var runId = run.Id.ToString();
         _runOptions.Set(runId, options);
@@ -232,7 +233,8 @@ public sealed class CoordinatorRunService
             run.Task,
             run.SubmittingUser,
             run.RepositoryPath,
-            run.ModelId);
+            run.ModelId,
+            WorkflowOverrideId: workflowOverrideId);
 
         var runCts = new CancellationTokenSource();
         var ctsRegistered = false;

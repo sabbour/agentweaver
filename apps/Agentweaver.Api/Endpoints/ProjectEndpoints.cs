@@ -673,7 +673,8 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
         modelId,
         request.AutoApproveTools,
         request.Autopilot,
-        ct);
+        ct,
+        workflowOverrideId: request.WorkflowOverrideId);
 
     return Results.Created(
         $"/api/runs/{runId}",

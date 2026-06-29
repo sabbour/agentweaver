@@ -841,6 +841,10 @@ public sealed record StartOrchestrationRequest
     /// child questions) using the coordinator model. Permissions are NOT auto-granted. Cascades to
     /// children. Defaults to false. (Feature 008)</summary>
     [JsonPropertyName("autopilot")] public bool Autopilot { get; init; }
+
+    /// <summary>Optional workflow id override. When set, the coordinator uses this workflow instead of auto-selecting.
+    /// Must be a manual-trigger-eligible workflow id. Null means auto-select (default).</summary>
+    [JsonPropertyName("workflow_override_id")] public string? WorkflowOverrideId { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{id}/auto-approve and POST /api/runs/{id}/autopilot.</summary>

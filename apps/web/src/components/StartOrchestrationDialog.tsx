@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Button,
   Dialog,
@@ -11,6 +11,7 @@ import {
   Field,
   MessageBar,
   MessageBarBody,
+  Select,
   Spinner,
   Text,
   Textarea,
@@ -20,6 +21,7 @@ import {
 import { FlowRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import type { WorkflowSummaryDto } from '../api/types';
 
 const useStyles = makeStyles({
   fields: {
@@ -40,11 +42,25 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const [goal, setGoal] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
+  const [manualWorkflows, setManualWorkflows] = useState<WorkflowSummaryDto[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    apiClient.listWorkflows(projectId)
+      .then(res => {
+        const manual = res.workflows.filter(w => w.trigger?.type === 'manual' && w.id && w.valid);
+        setManualWorkflows(manual);
+      })
+      .catch(() => setManualWorkflows([]));
+  }, [open, projectId]);
 
   const reset = () => {
     setGoal('');
     setError(null);
     setSaving(false);
+    setWorkflowOverride(null);
+    setManualWorkflows([]);
   };
 
   const handleSubmit = async () => {
@@ -52,7 +68,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
     setSaving(true);
     setError(null);
     try {
-      const result = await apiClient.startOrchestration(projectId, goal.trim());
+      const result = await apiClient.startOrchestration(projectId, goal.trim(), workflowOverride || null);
       setOpen(false);
       reset();
       onStarted(result.runId);
@@ -91,6 +107,19 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
                   rows={4}
                 />
               </Field>
+              {manualWorkflows.length > 1 && (
+                <Field label="Workflow">
+                  <Select
+                    value={workflowOverride ?? ''}
+                    onChange={(_, d) => setWorkflowOverride(d.value || null)}
+                  >
+                    <option value="">Auto (coordinator picks)</option>
+                    {manualWorkflows.map(w => (
+                      <option key={w.id} value={w.id!}>{w.name ?? w.id}</option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
               {error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{error}</MessageBarBody>

@@ -12,6 +12,7 @@ public sealed record CoordinatorDraftInput(
     string SubmittingUser,
     string RepositoryPath,
     string? ModelId,
+    string? WorkflowOverrideId = null,
     string? ReviseFeedback = null);
 
 /// <summary>

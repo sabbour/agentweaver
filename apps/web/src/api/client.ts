@@ -376,8 +376,10 @@ export class AgentweaverApiClient {
   }
 
   // Orchestration (Feature 008 — Squad Coordinator Agent)
-  startOrchestration(projectId: string, goal: string): Promise<StartOrchestrationResponse> {
-    return this.request<StartOrchestrationResponse>('POST', `/projects/${encodeURIComponent(projectId)}/orchestrations`, { goal });
+  startOrchestration(projectId: string, goal: string, workflowOverrideId?: string | null): Promise<StartOrchestrationResponse> {
+    const body: Record<string, unknown> = { goal };
+    if (workflowOverrideId) body.workflow_override_id = workflowOverrideId;
+    return this.request<StartOrchestrationResponse>('POST', `/projects/${encodeURIComponent(projectId)}/orchestrations`, body);
   }
 
   // Project Workspace browsing (read-only). The backend exposes the project repo

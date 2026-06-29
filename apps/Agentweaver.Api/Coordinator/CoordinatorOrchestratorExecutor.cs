@@ -195,7 +195,8 @@ public sealed class CoordinatorOrchestratorExecutor
             // heartbeat pickup never selects a manual-only workflow. When NO workflow's trigger
             // matches, fall back to the project default rather than picking a mismatched workflow.
             var invocationKind = await ResolveInvocationKindAsync(scope, input.RunId, ct).ConfigureAwait(false);
-            var overrideId = await ResolveWorkflowOverrideIdAsync(backlogStore, input.RunId, ct).ConfigureAwait(false);
+            var overrideId = input.WorkflowOverrideId
+                ?? await ResolveWorkflowOverrideIdAsync(backlogStore, input.RunId, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(overrideId))
             {
                 var overrideResult = availableResults.FirstOrDefault(r =>
