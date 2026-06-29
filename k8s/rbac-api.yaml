@@ -64,6 +64,14 @@ rules:
       - get
       - patch
       - update
+  # ResourceQuota — read by DiagnosticsService.CheckAgentPodQuotaDetailedAsync for the
+  # Cluster health page (agent_pod_quota check).
+  - apiGroups:
+      - ""
+    resources:
+      - resourcequotas
+    verbs:
+      - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

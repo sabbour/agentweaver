@@ -57,7 +57,7 @@ public sealed class DiagnosticsService
     private const string ResourceQuotaName = "agentweaver-quota";
 
     /// <summary>Key Vault secret probed by the detailed Key Vault health check.</summary>
-    private const string McpApiKeySecretName = "mcp-api-key";
+    private const string KeyVaultProbeSecretName = "mcp-oauth-signing-key";
 
     /// <summary>Name prefix of warm-pool sandbox pods (<c>agentweaver-sandbox-*</c>).</summary>
     private const string WarmPoolPodPrefix = "agentweaver-sandbox-";
@@ -444,7 +444,7 @@ public sealed class DiagnosticsService
         }
     }
 
-    /// <summary>Key Vault: resolves the mounted <c>mcp-api-key</c> secret via
+    /// <summary>Key Vault: resolves the mounted <c>mcp-oauth-signing-key</c> secret via
     /// <see cref="ISecretStore"/>. healthy when it resolves; critical on any failure.</summary>
     private async Task<DetailedHealthCheckDto> CheckKeyVaultAsync(CancellationToken ct)
     {
@@ -457,12 +457,12 @@ public sealed class DiagnosticsService
 
         try
         {
-            var result = await _secretStore.GetSecretAsync(McpApiKeySecretName, ct).ConfigureAwait(false);
+            var result = await _secretStore.GetSecretAsync(KeyVaultProbeSecretName, ct).ConfigureAwait(false);
             sw.Stop();
             var ms = sw.Elapsed.TotalMilliseconds;
             return result.Found
-                ? Detailed("key_vault", "healthy", $"secret '{McpApiKeySecretName}' resolved", ms)
-                : Detailed("key_vault", "critical", $"secret '{McpApiKeySecretName}' not found", ms);
+                ? Detailed("key_vault", "healthy", $"secret '{KeyVaultProbeSecretName}' resolved", ms)
+                : Detailed("key_vault", "critical", $"secret '{KeyVaultProbeSecretName}' not found", ms);
         }
         catch (OperationCanceledException)
         {
