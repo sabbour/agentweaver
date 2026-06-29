@@ -1,5 +1,6 @@
 using FluentAssertions;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime;
@@ -152,7 +153,7 @@ public sealed class CopilotReportIntentTests : IDisposable
         var result = await handler(request, new PermissionInvocation());
 
         // Assert
-        result.Kind.Should().Be(PermissionRequestResultKind.Approved,
+        result.Should().BeOfType<PermissionDecisionApproveOnce>(
             "report_intent must always be auto-approved without governance consultation");
 
         emittedEvents.Should().ContainSingle(e => e.Type == EventTypes.AgentIntent,
@@ -213,8 +214,7 @@ public sealed class CopilotReportIntentTests : IDisposable
 
         // The result is Approved or Rejected depending on the governance policy.
         // What matters is the handler reached governance instead of short-circuiting.
-        result.Kind.Should().BeOneOf(
-            PermissionRequestResultKind.Approved, PermissionRequestResultKind.Rejected,
+        result.Should().BeAssignableTo<PermissionDecision>(
             "governance must produce a definitive allow/deny decision for non-report_intent tools");
     }
 

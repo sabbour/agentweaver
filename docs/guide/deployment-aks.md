@@ -365,6 +365,7 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 | File | Kind | Purpose |
 |------|------|---------|
 | `gateway.yaml` | Gateway | `agentweaver-gateway` — HTTPS listener on port 443, TLS terminate with managed cert, `gatewayClassName: approuting-istio` |
+| `gateway-preview.yaml` | Gateway | `agentweaver-preview-gateway` — dedicated HTTPS gateway for sandbox browser preview; shares the managed `*.aksapp.io` wildcard cert. Applied by `30-deploy.sh`. |
 | `httproute-api.yaml` | HTTPRoute | Routes `PathPrefix: /api` and `/auth` → `agentweaver-api:8080` |
 | `httproute-frontend.yaml` | HTTPRoute | Routes `PathPrefix: /` (catch-all) → `agentweaver-frontend:80` |
 | `mcp-httproute.yaml` | HTTPRoute | Routes `PathPrefix: /mcp` → `agentweaver-mcp:8080`; rewrites `/mcp/health` → `/healthz` |
@@ -463,7 +464,7 @@ The `agentweaver` namespace enforces **default-deny** with explicit allow rules.
 | `allow-gateway-to-api` (unnamed in YAML) | `app: agentweaver-api` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
 | `allow-gateway-to-frontend` | `app: agentweaver-frontend` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
 | `allow-gateway-to-mcp` | `app: agentweaver-mcp` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
-| `sandbox-deny-ingress` | `app: agentweaver-sandbox` | Denies all ingress (API accesses sandboxes via `pods/exec`, not network) |
+| `sandbox-deny-ingress` | `app: agentweaver-sandbox` | Denies all ingress by default; preview ingress on TCP 3000–9000 from the preview gateway is explicitly allowed by `sandbox-allow-preview-ingress` (see [Sandbox browser preview](#sandbox-browser-preview)) |
 
 Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentweaver-gateway`, which the `approuting-istio` controller sets automatically.
 
@@ -538,7 +539,84 @@ kubectl get sandboxwarmpool agentweaver-sandbox -n agentweaver \
 
 ---
 
-## Step 6 — Verify
+## Sandbox browser preview
+
+The **sandbox browser preview** lets an agent (or an operator) expose a server running inside its sandbox pod
+at a public HTTPS URL, scoped to that one run. It is **enabled by default** in the AKS deployment.
+
+### How it works
+
+When an agent calls the `start_preview` MCP tool (or an operator clicks **Preview** in the UI), the API:
+
+1. Resolves the run's bound sandbox pod from the `SandboxClaim` status (replica-safe — no in-process registry).
+2. Mints an unguessable 128-bit capability token and derives the host `{token}-preview.{ZoneSuffix}`.
+3. Creates a **ClusterIP Service** (`preview-{token}`) whose selector targets that specific run's pod at the requested port.
+4. Creates an **HTTPRoute** (`preview-{token}`) that attaches to `agentweaver-preview-gateway`, matches the
+   `{token}-preview.{ZoneSuffix}` hostname, and backends the Service.
+5. Returns the public `preview_url` (e.g. `https://{token}-preview.6a41f26c75d5cf00019ef7d7.westus2.staging.aksapp.io`).
+
+The request is routed through a **human-in-the-loop approval gate** (`AgentPreviewGate`) before any
+provisioning happens. By default (`SANDBOX_PREVIEW_AUTO_APPROVE=false`) an operator must grant the request
+via `POST /api/runs/{runId}/tool-approvals`; the agent call suspends until approved or the 5-minute window
+times out.
+
+### Prerequisites
+
+Two resources must be in place before the first preview can be served:
+
+| Requirement | Detail |
+|---|---|
+| `Sandbox__Preview__Enabled=true` | Set in the API pod's environment (injected by `30-deploy.sh`). Activates the Gateway-direct path and the reaper service. |
+| `k8s/gateway-preview.yaml` applied | Creates the `agentweaver-preview-gateway` Gateway; applied by `30-deploy.sh`. |
+
+The deploy script sets the three required env vars automatically from the cluster's managed domain:
+
+| Env var | ASP.NET config key | Production value |
+|---|---|---|
+| `Sandbox__Preview__Enabled` | `Sandbox:Preview:Enabled` | `true` |
+| `Sandbox__Preview__ZoneSuffix` | `Sandbox:Preview:ZoneSuffix` | `6a41f26c75d5cf00019ef7d7.westus2.staging.aksapp.io` |
+| `Sandbox__Preview__GatewayName` | `Sandbox:Preview:GatewayName` | `agentweaver-preview-gateway` |
+
+### Approval gate
+
+The `start_preview` tool routes through `AgentPreviewGate` before provisioning:
+
+- **Default (human-gated):** `SANDBOX_PREVIEW_AUTO_APPROVE=false` — the run timeline receives a
+  `tool.approval_required` event and the agent waits up to 5 minutes for an operator to call
+  `POST /api/runs/{runId}/tool-approvals`.
+- **Auto-approve:** Set `SANDBOX_PREVIEW_AUTO_APPROVE=true` on the API pod to skip the gate (useful for
+  automated demos). **Do not enable in production without understanding the security implications.**
+
+### Preview lifecycle
+
+| Mechanism | Default | Behaviour |
+|---|---|---|
+| Sliding idle TTL | 30 min | `SandboxPreviewReaperService` sweeps every ~60 s; the frontend pings `keepalive` every 60 s to extend the window. Stop pinging and the preview lapses within the idle window. |
+| Hard cap | 8 h | A preview is always reaped after this, regardless of keepalive. |
+| Pod gone | — | If the backing sandbox pod no longer exists, the reaper removes the preview as an orphan. |
+| Explicit stop | — | `DELETE /api/runs/{runId}/sandbox/port-forward/{token}` immediately removes the HTTPRoute and Service. |
+
+The reaper reads all decision inputs from cluster state (HTTPRoute annotations + pod existence), so both API
+replicas reconcile identically — no leader election, no in-memory timers.
+
+### Verify preview gateway
+
+```bash
+# Gateway should be Programmed=True with an assigned address
+kubectl get gateway agentweaver-preview-gateway -n agentweaver
+
+# NetworkPolicy admitting preview gateway → sandbox ports 3000-9000
+kubectl get networkpolicy sandbox-allow-preview-ingress -n agentweaver
+
+# List active preview HTTPRoutes (empty when no previews are running)
+kubectl get httproute -n agentweaver -l agentweaver.dev/preview=true
+```
+
+> See the [Sandbox browser preview deep dive](../deep-dive/sandbox-browser-preview.md) for the full wiring
+> and security model, and the [reference](../reference/sandbox-browser-preview.md) for all configuration
+> knobs.
+
+
 
 ```bash
 bash scripts/aks/40-verify.sh

@@ -8,14 +8,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.0-beta.2" />
+    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.0" />
     <PackageReference Include="Microsoft.AgentGovernance" Version="[4.0.0,5.0.0)" />
     <PackageReference Include="Microsoft.Agents.AI.A2A" Version="1.9.0-preview.260603.1" />
-    <PackageReference Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.9.0-preview.260603.1" />
-    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.9.0" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.1" />
+    <PackageReference Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.11.1-rc1" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.11.1" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
     <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.5.1" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
@@ -26,6 +26,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- SDK PermissionDecision Rpc types are marked [Experimental("GHCP001")]; suppress since we intentionally use them for OnPermissionRequest handlers. -->
+    <NoWarn>$(NoWarn);GHCP001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

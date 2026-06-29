@@ -1,7 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -279,7 +280,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             // and routes it through OnPermissionRequest. The full SandboxToolRegistry
             // is NOT registered wholesale — that would conflict with native tools and
             // bypass governance for sandbox operations.
-            Tools = BuildSessionConfigTools(toolContext),
+            Tools = BuildSessionConfigTools(toolContext).Cast<AIFunctionDeclaration>().ToList(),
             // Append workflow instructions as a system message so the model receives them
             // before any user turn. SystemMessageMode.Append preserves Copilot's built-in
             // guardrails and tool-use guidance while layering our scaffold instructions on top.
@@ -292,6 +293,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = modelId,
+            // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
+            // cross-session retrieval and the shared SQLite store causes "database is locked" under
+            // concurrent load with multiple replicas.
+            EnableSessionStore = false,
+            InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
         };
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
@@ -393,7 +399,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// the streaming loop (call + real result); the handler only co-emits its tool.call when it
     /// holds the SDK's real ToolCallId, so the two sources dedup instead of diverging.
     /// </summary>
-    internal PermissionRequestHandler BuildPermissionHandler(
+    internal Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>> BuildPermissionHandler(
         SandboxGovernance governance,
         string runId,
         string workingDirectory,
@@ -427,7 +433,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     _logger.LogInformation(
                         "Tool HITL auto-approved (policy) — url={Url} runId={RunId}",
                         rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
-                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                 }
 
                 // Auto-approve-tools run option: grant the allow-with-approval request without an
@@ -440,7 +446,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     emit(EventTypes.ToolAutoApproved, new { requestId, toolName = "web_fetch", url = SanitizeUrl(rawUrl) });
                     _logger.LogInformation(
                         "Tool HITL auto-approved (run option) — requestId={RequestId} runId={RunId}", displayId, runId);
-                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                 }
 
                 // Atomically register context and gate in one call so GrantAsync can record
@@ -467,11 +473,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 {
                     emitToolErrorOnce(urlCallId, "URL fetch was denied by the operator.");
                     _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
-                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Rejected });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedInteractivelyByUser());
                 }
 
                 _logger.LogInformation("Tool HITL approved — requestId={RequestId} runId={RunId}", displayId, runId);
-                return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
             }
 
             // Custom external tools registered in SessionConfig.Tools fire OnPermissionRequest
@@ -498,10 +504,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
                         emit(EventTypes.AgentIntent, new { intent = SanitizeIntent(intentRaw) });
 
-                        return Task.FromResult(new PermissionRequestResult
-                        {
-                            Kind = PermissionRequestResultKind.Approved,
-                        });
+                        return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                     }
 
                     // report_outcome is a side-effect-free self-assessment call: approve without
@@ -523,10 +526,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
                         emit(EventTypes.RunOutcome, new { achieved, reason = SanitizeIntent(reasonRaw) });
 
-                        return Task.FromResult(new PermissionRequestResult
-                        {
-                            Kind = PermissionRequestResultKind.Approved,
-                        });
+                        return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                     }
 
                     // Deserialize the JSON args blob. Stamp tool_name first so it cannot be
@@ -565,12 +565,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                         emit(EventTypes.RunDegraded, new { toolName, reason = denyReason });
                     }
 
-                    return Task.FromResult(new PermissionRequestResult
-                    {
-                        Kind = allowed
-                            ? PermissionRequestResultKind.Approved
-                            : PermissionRequestResultKind.Rejected,
-                    });
+                    return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
                 }
                 catch (Exception ex)
                 {
@@ -581,10 +576,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
                     emit(EventTypes.RunDegraded, new { toolName, reason = failReason });
-                    return Task.FromResult(new PermissionRequestResult
-                    {
-                        Kind = PermissionRequestResultKind.Rejected,
-                    });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
                 }
             }
 
@@ -630,12 +622,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     emit(EventTypes.RunDegraded, new { toolName, reason = denyReason2 });
                 }
 
-                return Task.FromResult(new PermissionRequestResult
-                {
-                    Kind = allowed
-                        ? PermissionRequestResultKind.Approved
-                        : PermissionRequestResultKind.Rejected,
-                });
+                return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
             }
             catch (Exception ex)
             {
@@ -645,10 +632,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
                 emit(EventTypes.RunDegraded, new { toolName = request.Kind ?? "unknown", reason = failReason2 });
-                return Task.FromResult(new PermissionRequestResult
-                {
-                    Kind = PermissionRequestResultKind.Rejected,
-                });
+                return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
             }
         };
     }

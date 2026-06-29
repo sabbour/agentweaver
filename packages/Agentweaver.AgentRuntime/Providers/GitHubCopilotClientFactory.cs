@@ -1,4 +1,4 @@
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Domain;

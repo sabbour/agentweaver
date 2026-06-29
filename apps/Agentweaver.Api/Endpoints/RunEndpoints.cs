@@ -656,13 +656,13 @@ app.MapGet("/api/runs/{id}/history", async (
     await using var client = copilotClientFactory.CreateClient();
     await client.StartAsync(ct);
 
-    GitHub.Copilot.SDK.CopilotSession? session = null;
+    GitHub.Copilot.CopilotSession? session = null;
     try
     {
-        var resumeConfig = new GitHub.Copilot.SDK.ResumeSessionConfig
+        var resumeConfig = new GitHub.Copilot.ResumeSessionConfig
         {
             EnableConfigDiscovery = false,
-            DisableResume = true,
+            SuppressResumeEvent = true,
         };
         session = await client.ResumeSessionAsync(sessionId, resumeConfig, ct);
     }
@@ -674,7 +674,7 @@ app.MapGet("/api/runs/{id}/history", async (
 
     try
     {
-        var events = await session.GetMessagesAsync(ct);
+        var events = await session.GetEventsAsync(ct);
         var result = events.Select(e => new
         {
             id        = e.Id,

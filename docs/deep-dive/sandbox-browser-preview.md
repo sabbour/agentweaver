@@ -10,8 +10,10 @@ This page explains how the proxy is wired and torn down. For the API surface see
 [reference](../reference/sandbox-browser-preview.md); for the user flow see the
 [user guide](../experience/sandbox-browser-preview.md).
 
-The whole feature ships **dark**: it is a no-op unless `Sandbox:Preview:Enabled=true`
-([`SandboxPreviewOptions.cs:21`](#source)).
+The feature is **enabled by default** in AKS deployments (`Sandbox__Preview__Enabled=true`, gateway
+`agentweaver-preview-gateway`, zone `6a41f26c75d5cf00019ef7d7.westus2.staging.aksapp.io`). In local-dev
+environments where `Sandbox:Preview:Enabled` is `false`, the Gateway path is a no-op and the legacy
+`kubectl port-forward` fallback is used instead ([`SandboxPreviewOptions.cs:21`](#source)).
 
 ## End-to-end flow
 
