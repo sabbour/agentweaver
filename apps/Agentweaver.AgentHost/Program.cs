@@ -42,20 +42,37 @@ if (!requireMtls && !kestrelEndpointsConfigured)
 }
 
 // ── GitHub credential chain ────────────────────────────────────────────────────
-// Two paths, selected by AgentHost:UseSharedTokenStore:
+// Three paths, selected in priority order:
 //
-//  (a) Shared file store (spec-018 P1.5 live PoC): the cluster mounts the agentweaver-workspace
+//  (A) CSI-mounted Key Vault token files (Option B, KvTokenMountPath set):
+//      The SPC agentweaver-user-tokens mounts per-user token files from Key Vault at
+//      /mnt/user-tokens/user_{userId}.json — same StoredCredential JSON as the shared store.
+//      CsiMountedGitHubTokenStore adds cold-start retry (6×5s) in case the CSI driver hasn't
+//      written the file yet at pod startup. Takes precedence over UseSharedTokenStore.
+//
+//  (B) Shared file store (spec-018 P1.5 live PoC): the cluster mounts the agentweaver-workspace
 //      RWX volume at /workspace with HOME=/workspace/.home, and the API persists the user's GitHub
 //      token to {HOME}/.local/share/agentweaver/auth/user_<id>.json. When UseSharedTokenStore=true
 //      the pod READS that same shared store directly — the token never moves, no secret is created.
 //      Pairs with a per-user scope provider so the correct user_<id>.json is read.
 //
-//  (b) Default: PodGitHubTokenStore (NeverSignedIn) + installation scope. The factory then falls
+//  (C) Default: PodGitHubTokenStore (NeverSignedIn) + installation scope. The factory then falls
 //      back to Providers:GitHubCopilot:GitHubToken from config (e.g. an injected env/secret).
 //
 // No IGitHubAccessTokenProvider is wired (token is static at pod lifetime; the shared store already
 // holds a freshly-issued user token).
-if (builder.Configuration.GetValue("AgentHost:UseSharedTokenStore", false))
+var kvMountPath = builder.Configuration["AgentHost:KvTokenMountPath"];
+if (!string.IsNullOrWhiteSpace(kvMountPath))
+{
+    // Option A: CSI-mounted Key Vault token files.
+    // File per user: {kvMountPath}/user_{sanitizedUserId}.json — same StoredCredential JSON.
+    var configuredUserId = builder.Configuration["AgentHost:UserId"];
+    builder.Services.AddSingleton<IGitHubTokenStore>(
+        new CsiMountedGitHubTokenStore(kvMountPath));
+    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(
+        new SharedUserScopeProvider(kvMountPath, configuredUserId));
+}
+else if (builder.Configuration.GetValue("AgentHost:UseSharedTokenStore", false))
 {
     var authDir = SharedTokenStorePaths.ResolveAuthDir(
         builder.Configuration["AgentHost:SharedTokenStorePath"]);
