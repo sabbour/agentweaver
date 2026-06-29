@@ -507,7 +507,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
           <Button
             appearance="primary"
             icon={<CheckmarkCircleRegular />}
-            disabled={acting || runInterrupted}
+            disabled={acting || revising || runInterrupted}
             onClick={() => void handleConfirm()}
           >
             {acting ? 'Confirming' : 'Confirm'}
@@ -515,7 +515,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
           <Button
             appearance="secondary"
             icon={<EditRegular />}
-            disabled={acting || runInterrupted}
+            disabled={acting || revising || runInterrupted}
             onClick={openRevise}
           >
             Clarify and request changes

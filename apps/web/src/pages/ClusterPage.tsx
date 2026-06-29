@@ -21,10 +21,10 @@ import { ArrowClockwiseRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type {
-  ClusterAgentPodDto,
-  ClusterComponentHealthDto,
+  AgentPodInfoDto,
   ClusterDiagnosticsDto,
-  ClusterPendingPodDto,
+  DetailedHealthCheckDto,
+  PendingCapacityRunDto,
 } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
@@ -75,44 +75,6 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
-  quotaRow: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-  },
-  quotaBar: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-  },
-  quotaBarLabel: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
-  },
-  quotaBarTrack: {
-    height: '8px',
-    backgroundColor: tokens.colorNeutralBackground4,
-    borderRadius: '4px',
-    overflow: 'hidden',
-  },
-  quotaBarFill: {
-    height: '100%',
-    borderRadius: '4px',
-    backgroundColor: tokens.colorBrandForeground1,
-    transition: 'width 0.3s ease',
-  },
-  quotaBarFillWarn: {
-    backgroundColor: tokens.colorPaletteYellowForeground1,
-  },
-  quotaBarFillCrit: {
-    backgroundColor: tokens.colorPaletteRedForeground1,
-  },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   emptyState: {
     fontSize: tokens.fontSizeBase300,
@@ -122,32 +84,25 @@ const useStyles = makeStyles({
   },
 });
 
-function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const seconds = Math.floor(diffMs / 1000);
-  if (Number.isNaN(seconds)) return iso;
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+function formatAge(ageSeconds: number | null | undefined): string {
+  if (ageSeconds == null) return '—';
+  if (ageSeconds < 60) return `${Math.floor(ageSeconds)}s`;
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
+  return `${Math.floor(ageSeconds / 3600)}h`;
 }
 
-function componentBadgeColor(
-  status: ClusterComponentHealthDto['status'],
+function healthBadgeColor(
+  status: string,
 ): 'success' | 'warning' | 'danger' | 'subtle' {
-  if (status === 'ok') return 'success';
+  if (status === 'healthy') return 'success';
   if (status === 'warning') return 'warning';
-  if (status === 'error') return 'danger';
-  if (status === 'missing') return 'subtle';
+  if (status === 'degraded' || status === 'critical') return 'danger';
   return 'subtle';
 }
 
-function podBadgeColor(status: string): 'success' | 'warning' | 'danger' | 'informative' {
-  if (status === 'Running') return 'success';
-  if (status === 'Pending' || status === 'ContainerCreating') return 'warning';
-  if (status === 'Failed' || status === 'CrashLoopBackOff') return 'danger';
+function podBadgeColor(status: string): 'success' | 'warning' | 'informative' {
+  if (status === 'ready') return 'success';
+  if (status === 'pending') return 'warning';
   return 'informative';
 }
 
@@ -162,42 +117,28 @@ function KpiCard({ label, value, sub }: { label: string; value: number | string;
   );
 }
 
-function QuotaBar({ label, used, limit, unit }: { label: string; used: number; limit: number; unit: string }) {
+function HealthChecksTable({ rows }: { rows: DetailedHealthCheckDto[] }) {
   const styles = useStyles();
-  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
-  const fillClass = pct >= 90 ? styles.quotaBarFillCrit : pct >= 75 ? styles.quotaBarFillWarn : styles.quotaBarFill;
+  if (rows.length === 0) return <Text className={styles.emptyState}>No health checks.</Text>;
   return (
-    <div className={styles.quotaBar}>
-      <div className={styles.quotaBarLabel}>
-        <Text>{label}</Text>
-        <Text>{used} / {limit} {unit}</Text>
-      </div>
-      <div className={styles.quotaBarTrack}>
-        <div className={fillClass} style={{ width: `${pct}%` }} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${label}: ${used} of ${limit} ${unit}`} />
-      </div>
-    </div>
-  );
-}
-
-function ComponentHealthTable({ rows }: { rows: ClusterComponentHealthDto[] }) {
-  if (rows.length === 0) return null;
-  return (
-    <Table aria-label="Component health" size="small">
+    <Table aria-label="Health checks" size="small">
       <TableHeader>
         <TableRow>
-          <TableHeaderCell>Component</TableHeaderCell>
+          <TableHeaderCell>Name</TableHeaderCell>
           <TableHeaderCell>Status</TableHeaderCell>
-          <TableHeaderCell>Detail</TableHeaderCell>
+          <TableHeaderCell>Message</TableHeaderCell>
+          <TableHeaderCell>Latency (ms)</TableHeaderCell>
         </TableRow>
       </TableHeader>
       <TableBody>
         {rows.map((r) => (
-          <TableRow key={r.component}>
-            <TableCell>{r.component}</TableCell>
+          <TableRow key={r.name}>
+            <TableCell>{r.name}</TableCell>
             <TableCell>
-              <Badge appearance="tint" color={componentBadgeColor(r.status)}>{r.status}</Badge>
+              <Badge appearance="tint" color={healthBadgeColor(r.status)}>{r.status}</Badge>
             </TableCell>
-            <TableCell>{r.detail}</TableCell>
+            <TableCell>{r.message}</TableCell>
+            <TableCell>{r.latencyMs}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -205,30 +146,28 @@ function ComponentHealthTable({ rows }: { rows: ClusterComponentHealthDto[] }) {
   );
 }
 
-function ActivePodsTable({ pods }: { pods: ClusterAgentPodDto[] }) {
+function AgentPodsTable({ pods, label }: { pods: AgentPodInfoDto[]; label: string }) {
   const styles = useStyles();
-  if (pods.length === 0) {
-    return <Text className={styles.emptyState}>No active agent pods.</Text>;
-  }
+  if (pods.length === 0) return <Text className={styles.emptyState}>No {label.toLowerCase()}.</Text>;
   return (
-    <Table aria-label="Active agent pods" size="small">
+    <Table aria-label={label} size="small">
       <TableHeader>
         <TableRow>
-          <TableHeaderCell>Pod</TableHeaderCell>
-          <TableHeaderCell>Run ID</TableHeaderCell>
-          <TableHeaderCell>Age</TableHeaderCell>
+          <TableHeaderCell>Claim</TableHeaderCell>
+          <TableHeaderCell>Pod name</TableHeaderCell>
           <TableHeaderCell>Status</TableHeaderCell>
+          <TableHeaderCell>Age</TableHeaderCell>
         </TableRow>
       </TableHeader>
       <TableBody>
         {pods.map((p) => (
-          <TableRow key={p.pod_name}>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.pod_name}</TableCell>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.run_id ?? '—'}</TableCell>
-            <TableCell>{relativeTime(p.started_at)}</TableCell>
+          <TableRow key={p.claim_name}>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.claim_name}</TableCell>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.pod_name ?? '—'}</TableCell>
             <TableCell>
               <Badge appearance="tint" color={podBadgeColor(p.status)}>{p.status}</Badge>
             </TableCell>
+            <TableCell>{formatAge(p.age_seconds)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -236,30 +175,30 @@ function ActivePodsTable({ pods }: { pods: ClusterAgentPodDto[] }) {
   );
 }
 
-function PendingPodsTable({ pods }: { pods: ClusterPendingPodDto[] }) {
+function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
   const styles = useStyles();
-  if (pods.length === 0) {
-    return <Text className={styles.emptyState}>No pending agent pods.</Text>;
-  }
+  if (rows.length === 0) return <Text className={styles.emptyState}>No pending capacity runs.</Text>;
   return (
-    <Table aria-label="Pending agent pods" size="small">
+    <Table aria-label="Pending capacity runs" size="small">
       <TableHeader>
         <TableRow>
-          <TableHeaderCell>Pod</TableHeaderCell>
-          <TableHeaderCell>Run ID</TableHeaderCell>
+          <TableHeaderCell>Subtask ID</TableHeaderCell>
+          <TableHeaderCell>Work plan</TableHeaderCell>
+          <TableHeaderCell>Child run</TableHeaderCell>
+          <TableHeaderCell>Status</TableHeaderCell>
           <TableHeaderCell>Reason</TableHeaderCell>
-          <TableHeaderCell>Retries</TableHeaderCell>
-          <TableHeaderCell>Pending since</TableHeaderCell>
+          <TableHeaderCell>Age</TableHeaderCell>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {pods.map((p) => (
-          <TableRow key={p.pod_name}>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.pod_name}</TableCell>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.run_id ?? '—'}</TableCell>
-            <TableCell>{p.reason}</TableCell>
-            <TableCell>{p.retry_count}</TableCell>
-            <TableCell>{relativeTime(p.pending_since)}</TableCell>
+        {rows.map((r) => (
+          <TableRow key={r.subtask_id}>
+            <TableCell>{r.subtask_id}</TableCell>
+            <TableCell>{r.work_plan_id}</TableCell>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{r.child_run_id ?? '—'}</TableCell>
+            <TableCell>{r.status}</TableCell>
+            <TableCell>{r.reason ?? '—'}</TableCell>
+            <TableCell>{formatAge(r.age_seconds)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -361,42 +300,42 @@ export function ClusterPage() {
         <>
           {/* KPI row */}
           <div className={styles.kpiRow}>
-            <KpiCard label="Warm" value={data.warm_pool_ready} sub={`/ ${data.warm_pool_total} total`} />
-            <KpiCard label="Active" value={data.active_agent_pods} />
-            <KpiCard label="Pending" value={data.pending_agent_pods} />
-            <KpiCard label="Claimed" value={data.claimed_agent_pods} />
+            <KpiCard label="Active" value={data.active_agent_pods.length} />
+            <KpiCard label="Orphaned" value={data.orphaned_agent_pods.length} />
+            <KpiCard label="Pending capacity" value={data.pending_capacity_runs.length} />
+            <KpiCard
+              label="Checks OK"
+              value={`${data.checks.filter(c => c.status === 'healthy').length} / ${data.checks.length}`}
+            />
           </div>
 
-          {/* Quota */}
-          {data.quota && (
-            <div className={styles.section}>
-              <Title3>Quota</Title3>
-              <div className={styles.quotaRow}>
-                <QuotaBar label="CPU" used={data.quota.cpu_used} limit={data.quota.cpu_limit} unit="cores" />
-                <QuotaBar label="Memory" used={data.quota.memory_used_gi} limit={data.quota.memory_limit_gi} unit="Gi" />
-              </div>
-            </div>
-          )}
-
-          {/* Component health */}
+          {/* Health checks */}
           <div className={styles.section}>
-            <Title3>Component health</Title3>
-            <ComponentHealthTable rows={data.component_health} />
+            <Title3>Health checks</Title3>
+            <HealthChecksTable rows={data.checks} />
           </div>
 
           {/* Active agent pods */}
           <div className={styles.section}>
-            <Title3>Active agent pods ({data.active_pods.length})</Title3>
-            <ActivePodsTable pods={data.active_pods} />
+            <Title3>Active agent pods ({data.active_agent_pods.length})</Title3>
+            <AgentPodsTable pods={data.active_agent_pods} label="Active agent pods" />
           </div>
 
-          {/* Pending agent pods */}
-          {(data.pending_pods.length > 0 || data.pending_agent_pods > 0) && (
+          {/* Orphaned agent pods */}
+          {data.orphaned_agent_pods.length > 0 && (
             <div className={styles.section}>
-              <Title3>Pending agent pods ({data.pending_pods.length})</Title3>
-              <PendingPodsTable pods={data.pending_pods} />
+              <Title3>Orphaned agent pods ({data.orphaned_agent_pods.length})</Title3>
+              <AgentPodsTable pods={data.orphaned_agent_pods} label="Orphaned agent pods" />
             </div>
           )}
+
+          {/* Pending capacity runs */}
+          <div className={styles.section}>
+            <Title3>Pending capacity ({data.pending_capacity_runs.length})</Title3>
+            <PendingCapacityTable rows={data.pending_capacity_runs} />
+          </div>
+
+          <Text className={styles.generated}>Generated {data.generated_utc} · {data.total_duration_ms.toFixed(0)} ms</Text>
         </>
       )}
     </div>

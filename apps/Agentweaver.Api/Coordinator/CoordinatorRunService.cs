@@ -357,7 +357,14 @@ public sealed class CoordinatorRunService
     {
         var streamingRun = _registry.Get(runId);
         if (streamingRun is null)
-            return CoordinatorGateOutcome.RunNotActive;
+        {
+            // Not in local registry — coordinator may be on another replica.
+            // Checkpoints are on the shared RWX PVC; resume here so any replica
+            // can handle confirm/revise without sticky routing.
+            streamingRun = await TryResumeOnDemandAsync(runId, ct).ConfigureAwait(false);
+            if (streamingRun is null)
+                return CoordinatorGateOutcome.RunNotActive;
+        }
 
         // Atomic consume for replay/double-POST protection (mirrors the review endpoint).
         var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
@@ -691,6 +698,39 @@ public sealed class CoordinatorRunService
                 _factory.DeleteCheckpoints(runId);
                 break;
         }
+    }
+
+    /// <summary>
+    /// On-demand checkpoint resume for multi-replica scenarios. The coordinator MAF workflow
+    /// is in-memory on whichever replica started it, but coordinator checkpoints are on the
+    /// shared RWX PVC so any replica can resume and process the request.
+    ///
+    /// The original replica's suspended streaming run becomes an inert zombie — permanently
+    /// parked at the gate with no sender, cleaned up on pod restart. It cannot cause
+    /// double-dispatch because it never receives a response.
+    /// </summary>
+    private async Task<StreamingRun?> TryResumeOnDemandAsync(string runId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(runId, out var id)) return null;
+
+        var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
+        if (run is null || run.Status != RunStatus.InProgress) return null;
+        if (run.ParentRunId is not null ||
+            !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+            return null;
+
+        var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
+        if (spec?.Status != "awaiting_confirmation") return null;
+
+        var checkpointInfo = await _factory.GetLatestCheckpointAsync(runId, ct).ConfigureAwait(false);
+        if (checkpointInfo is null) return null;
+
+        _logger.LogInformation(
+            "Multi-replica on-demand resume: coordinator run {RunId} not in local registry; " +
+            "resuming from shared checkpoint", runId);
+
+        await RecoverSpecPhaseAsync(run, ct).ConfigureAwait(false);
+        return _registry.Get(runId);
     }
 
     /// <summary>

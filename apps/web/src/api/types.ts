@@ -877,48 +877,42 @@ export interface DetailedSystemDiagnosticsDto {
 }
 
 // ── Cluster diagnostics (GET /api/diagnostics/cluster) ──────────────────────
-// Built by Tank (spec-018). Not yet live — frontend renders a "Not available"
-// placeholder when the endpoint returns 404.
-
-export interface ClusterComponentHealthDto {
-  component: string;
-  status: 'ok' | 'warning' | 'error' | 'missing' | 'unknown';
-  detail: string;
+// ── Cluster diagnostics (GET /api/diagnostics/cluster) ─────────────────────
+export interface DetailedHealthCheckDto {
+  name: string;
+  status: string; // 'healthy' | 'degraded' | 'warning' | 'critical' | 'unknown'
+  message: string;
+  latencyMs: number;
+  used?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+  pendingCount?: number | null;
 }
 
-export interface ClusterAgentPodDto {
-  pod_name: string;
-  run_id: string | null;
+export interface AgentPodInfoDto {
+  claim_name: string;
+  run_id?: string | null;
+  pod_name?: string | null;
+  status: string; // 'ready' | 'pending'
+  age_seconds?: number | null;
+}
+
+export interface PendingCapacityRunDto {
+  subtask_id: number;
+  work_plan_id: number;
+  child_run_id?: string | null;
   status: string;
-  started_at: string;
-}
-
-export interface ClusterPendingPodDto {
-  pod_name: string;
-  run_id: string | null;
-  reason: string;
-  retry_count: number;
-  pending_since: string;
-}
-
-export interface ClusterQuotaDto {
-  cpu_used: number;
-  cpu_limit: number;
-  memory_used_gi: number;
-  memory_limit_gi: number;
+  reason?: string | null;
+  age_seconds: number;
 }
 
 export interface ClusterDiagnosticsDto {
   generated_utc: string;
-  warm_pool_ready: number;
-  warm_pool_total: number;
-  active_agent_pods: number;
-  pending_agent_pods: number;
-  claimed_agent_pods: number;
-  component_health: ClusterComponentHealthDto[];
-  active_pods: ClusterAgentPodDto[];
-  pending_pods: ClusterPendingPodDto[];
-  quota?: ClusterQuotaDto | null;
+  total_duration_ms: number;
+  checks: DetailedHealthCheckDto[];
+  active_agent_pods: AgentPodInfoDto[];
+  orphaned_agent_pods: AgentPodInfoDto[];
+  pending_capacity_runs: PendingCapacityRunDto[];
 }
 
 // Global system diagnostics snapshot (FR-016). All fields sourced from live state.
