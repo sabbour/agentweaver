@@ -3,8 +3,10 @@ using System.Reflection;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.ReviewPolicies;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using k8s;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,6 +39,12 @@ public sealed class DiagnosticsService
     private readonly ReviewPolicyRegistry _reviewPolicyRegistry;
     private readonly IConfiguration _configuration;
     private readonly IServiceScopeFactory _scopeFactory;
+    // Optional in-cluster Kubernetes client for the agent-pod quota check. Null outside Kubernetes
+    // (local dev / CI), in which case the quota diagnostic reports status "unknown".
+    private readonly IKubernetes? _k8s;
+
+    /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
+    private const string ResourceQuotaName = "agentweaver-quota";
 
     public DiagnosticsService(
         SqliteDb db,
@@ -46,7 +54,8 @@ public sealed class DiagnosticsService
         WorkflowRegistry workflowRegistry,
         ReviewPolicyRegistry reviewPolicyRegistry,
         IConfiguration configuration,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        IKubernetes? k8s = null)
     {
         _db = db;
         _projectStore = projectStore;
@@ -56,6 +65,7 @@ public sealed class DiagnosticsService
         _reviewPolicyRegistry = reviewPolicyRegistry;
         _configuration = configuration;
         _scopeFactory = scopeFactory;
+        _k8s = k8s;
     }
 
     // -------------------------------------------------------------------------
@@ -86,6 +96,8 @@ public sealed class DiagnosticsService
 
         var (totalRuns, activeRuns) = await CountRunsAsync(ct).ConfigureAwait(false);
 
+        var agentPodQuota = await CheckAgentPodQuotaAsync(ct).ConfigureAwait(false);
+
         overallSw.Stop();
 
         return new SystemDiagnosticsDto
@@ -99,7 +111,75 @@ public sealed class DiagnosticsService
             GeneratedUtc      = generatedUtc,
             TotalDurationMs   = overallSw.Elapsed.TotalMilliseconds,
             Checks            = checks,
+            AgentPodQuota     = agentPodQuota,
         };
+    }
+
+    /// <summary>
+    /// Reports agent-pod CPU quota headroom from the namespace ResourceQuota
+    /// (<see cref="ResourceQuotaName"/>). Status thresholds (each agent pod needs 2 CPU):
+    /// headroom &gt;= 4 → healthy, 2–4 → warning, &lt; 2 → critical (cannot start a new agent pod).
+    /// Returns <c>null</c> outside Kubernetes and status <c>"unknown"</c> when the quota is missing
+    /// or the read fails — diagnostics must never throw.
+    /// </summary>
+    private async Task<AgentPodQuotaDiagnosticDto?> CheckAgentPodQuotaAsync(CancellationToken ct)
+    {
+        if (_k8s is null)
+            return null;
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+
+        try
+        {
+            var quota = await _k8s.CoreV1.ReadNamespacedResourceQuotaAsync(
+                ResourceQuotaName, ns, cancellationToken: ct).ConfigureAwait(false);
+
+            var usedStr = TryGetQuotaCpu(quota?.Status?.Used);
+            var hardStr = TryGetQuotaCpu(quota?.Status?.Hard);
+
+            if (usedStr is null || hardStr is null ||
+                !KubernetesSandboxExecutor.TryParseCpu(usedStr, out var used) ||
+                !KubernetesSandboxExecutor.TryParseCpu(hardStr, out var hard))
+            {
+                return UnknownQuota();
+            }
+
+            var headroom = hard - used;
+            var status = headroom >= 4.0 ? "healthy" : headroom >= 2.0 ? "warning" : "critical";
+
+            return new AgentPodQuotaDiagnosticDto
+            {
+                Name   = "agent_pod_quota",
+                Status = status,
+                Used   = used,
+                Limit  = hard,
+                Unit   = "CPU cores",
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return UnknownQuota();
+        }
+    }
+
+    private static AgentPodQuotaDiagnosticDto UnknownQuota() => new()
+    {
+        Name   = "agent_pod_quota",
+        Status = "unknown",
+        Used   = null,
+        Limit  = null,
+        Unit   = "CPU cores",
+    };
+
+    private static string? TryGetQuotaCpu(IDictionary<string, k8s.Models.ResourceQuantity>? map)
+    {
+        if (map is not null && map.TryGetValue("limits.cpu", out var quantity) && quantity is not null)
+            return quantity.ToString();
+        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -229,11 +309,12 @@ public sealed class DiagnosticsService
             LastError      = lastError,
             RecentActivity = recentActivity.Select(r => new TickRecordDto
             {
-                TimestampUtc = r.TimestampUtc,
-                ActedCount   = r.ActedCount,
-                ErrorCount   = r.ErrorCount,
-                DurationMs   = r.DurationMs,
-                Error        = r.Error,
+                TimestampUtc   = r.TimestampUtc,
+                AutomationName = r.AutomationName,
+                ActedCount     = r.ActedCount,
+                ErrorCount     = r.ErrorCount,
+                DurationMs     = r.DurationMs,
+                Error          = r.Error,
             }).ToList(),
             Automations = automations,
             Pods        = pods,

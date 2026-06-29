@@ -136,7 +136,7 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
         }
 
         sw.Stop();
-        _statusStore.RecordTickOutcome(tickStart, actedCount, errorCount, sw.Elapsed.TotalMilliseconds, lastError);
+        _statusStore.RecordTickOutcome(tickStart, "Coordinator Heartbeat", actedCount, errorCount, sw.Elapsed.TotalMilliseconds, lastError);
 
         // Watchdog: recover any orphaned coordinator dispatch (a work plan still dispatching whose
         // in-memory loop died / never re-armed after a restart). Isolated so a sweep failure never

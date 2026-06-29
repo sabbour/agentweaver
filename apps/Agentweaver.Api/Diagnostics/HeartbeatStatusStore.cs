@@ -14,6 +14,9 @@ public readonly struct TickRecord
 {
     public DateTimeOffset TimestampUtc { get; init; }
 
+    /// <summary>Human-readable name of the automation that fired this tick (e.g. "Coordinator Heartbeat").</summary>
+    public string AutomationName { get; init; }
+
     /// <summary>Number of backlog tasks submitted to pickup this tick (across all eligible projects).</summary>
     public int ActedCount { get; init; }
 
@@ -121,6 +124,7 @@ public sealed class HeartbeatStatusStore
     /// </summary>
     public void RecordTickOutcome(
         DateTimeOffset tickUtc,
+        string automationName,
         int actedCount,
         int errorCount,
         double durationMs,
@@ -130,11 +134,12 @@ public sealed class HeartbeatStatusStore
         {
             _ring[_ringHead] = new TickRecord
             {
-                TimestampUtc = tickUtc,
-                ActedCount   = actedCount,
-                ErrorCount   = errorCount,
-                DurationMs   = durationMs,
-                Error        = error,
+                TimestampUtc   = tickUtc,
+                AutomationName = automationName,
+                ActedCount     = actedCount,
+                ErrorCount     = errorCount,
+                DurationMs     = durationMs,
+                Error          = error,
             };
             _ringHead = (_ringHead + 1) % RingCapacity;
             if (_ringCount < RingCapacity) _ringCount++;

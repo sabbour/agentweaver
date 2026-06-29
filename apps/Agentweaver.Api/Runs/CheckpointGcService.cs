@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Agentweaver.Api.Diagnostics;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 
@@ -17,17 +18,20 @@ public sealed class CheckpointGcService : BackgroundService
     private readonly IRunStore _runStore;
     private readonly RunWorkflowFactory _factory;
     private readonly ICheckpointStoreFactory _checkpointStoreFactory;
+    private readonly HeartbeatStatusStore _statusStore;
     private readonly ILogger<CheckpointGcService> _logger;
 
     public CheckpointGcService(
         IRunStore runStore,
         RunWorkflowFactory factory,
         ICheckpointStoreFactory checkpointStoreFactory,
+        HeartbeatStatusStore statusStore,
         ILogger<CheckpointGcService> logger)
     {
         _runStore = runStore;
         _factory = factory;
         _checkpointStoreFactory = checkpointStoreFactory;
+        _statusStore = statusStore;
         _logger = logger;
     }
 
@@ -38,7 +42,24 @@ public sealed class CheckpointGcService : BackgroundService
             try
             {
                 await Task.Delay(SweepInterval, stoppingToken).ConfigureAwait(false);
-                await SweepAsync(stoppingToken).ConfigureAwait(false);
+                var tickStart = DateTimeOffset.UtcNow;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                int purged = 0;
+                string? error = null;
+                try
+                {
+                    purged = await SweepAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    error = ex.Message;
+                    throw;
+                }
+                finally
+                {
+                    sw.Stop();
+                    _statusStore.RecordTickOutcome(tickStart, "Checkpoint GC", purged, error is null ? 0 : 1, sw.Elapsed.TotalMilliseconds, error);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -51,7 +72,7 @@ public sealed class CheckpointGcService : BackgroundService
         }
     }
 
-    private async Task SweepAsync(CancellationToken ct)
+    private async Task<int> SweepAsync(CancellationToken ct)
     {
         // Postgres: checkpoints live in the shared workflow_checkpoints table — purge rows for terminal
         // runs (the "runs" store). The coordinator store is not GC'd today (matches the file behaviour).
@@ -62,12 +83,13 @@ public sealed class CheckpointGcService : BackgroundService
                 .ConfigureAwait(false);
             if (purged > 0)
                 _logger.LogInformation("GC: deleted {Count} checkpoint rows for terminal runs", purged);
-            return;
+            return purged;
         }
 
         var checkpointDir = _factory.CheckpointDirectory;
-        if (!Directory.Exists(checkpointDir)) return;
+        if (!Directory.Exists(checkpointDir)) return 0;
 
+        int deletedCount = 0;
         foreach (var dir in Directory.GetDirectories(checkpointDir))
         {
             var runId = Path.GetFileName(dir);
@@ -82,6 +104,7 @@ public sealed class CheckpointGcService : BackgroundService
                 {
                     Directory.Delete(dir, recursive: true);
                     _logger.LogInformation("GC: deleted orphaned checkpoint directory for run {RunId}", runId);
+                    deletedCount++;
                 }
             }
             catch (Exception ex)
@@ -89,6 +112,7 @@ public sealed class CheckpointGcService : BackgroundService
                 _logger.LogWarning(ex, "GC: failed to check/delete checkpoint for run {RunId}", runId);
             }
         }
+        return deletedCount;
     }
 
     private async ValueTask<bool> IsTerminalSessionAsync(string sessionId, CancellationToken ct)

@@ -7,11 +7,12 @@ namespace Agentweaver.Api.Diagnostics;
 /// </summary>
 public sealed record TickRecordDto
 {
-    [JsonPropertyName("timestamp_utc")] public required DateTimeOffset TimestampUtc { get; init; }
-    [JsonPropertyName("acted_count")]   public required int            ActedCount   { get; init; }
-    [JsonPropertyName("error_count")]   public required int            ErrorCount   { get; init; }
-    [JsonPropertyName("duration_ms")]   public required double         DurationMs   { get; init; }
-    [JsonPropertyName("error")]         public required string?        Error        { get; init; }
+    [JsonPropertyName("timestamp_utc")]   public required DateTimeOffset TimestampUtc   { get; init; }
+    [JsonPropertyName("automation_name")] public required string         AutomationName { get; init; }
+    [JsonPropertyName("acted_count")]     public required int            ActedCount     { get; init; }
+    [JsonPropertyName("error_count")]     public required int            ErrorCount     { get; init; }
+    [JsonPropertyName("duration_ms")]     public required double         DurationMs     { get; init; }
+    [JsonPropertyName("error")]           public required string?        Error          { get; init; }
 }
 
 /// <summary>
