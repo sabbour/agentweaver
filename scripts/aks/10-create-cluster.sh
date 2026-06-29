@@ -4,7 +4,7 @@
 # Creates: resource group, ACR, AKS cluster with three node pools:
 #
 #   nodepool1 (System, AzureLinux, autoscaler 1–3)
-#     Taint: CriticalAddonsOnly=true:NoSchedule
+#     Taint: CriticalAddonsOnly=true:NoSchedule  (set via --nodepool-taints on az aks create)
 #     Only kube-system / critical-addon pods schedule here. App workloads
 #     are excluded and land on apppool (no taint).
 #
@@ -84,7 +84,7 @@ az aks create \
   --enable-cluster-autoscaler \
   --min-count 1 \
   --max-count 3 \
-  --node-taints CriticalAddonsOnly=true:NoSchedule \
+  --nodepool-taints CriticalAddonsOnly=true:NoSchedule \
   --enable-app-routing-istio \
   --enable-gateway-api \
   --enable-default-domain \
