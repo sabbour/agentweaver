@@ -29,10 +29,11 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Auth:Keys` | none | Array of `{ Token, User }` entries for multi-user API access |
-| `Auth:ApiKey` | none | Single-key shortcut when you only need one bearer token |
-| `Auth:User` | none | User name paired with `Auth:ApiKey` |
-| `Auth:GitHub:AllowedOrg` | none | When set, GitHub-authenticated callers must belong to this org (enforced by `GitHubOrgAuthorizationService`); when unset, org authorization is treated as not configured |
+| `Auth:GitHub:ClientId` | none | GitHub OAuth App client ID — required for sign-in |
+| `Auth:GitHub:ClientSecret` | none | GitHub OAuth App client secret — required for sign-in |
+| `Auth:GitHub:CallbackUrl` | none | OAuth callback URL registered in the GitHub App (must match exactly) |
+| `Auth:GitHub:FrontendUrl` | none | URL the API redirects to after a successful sign-in |
+| `Auth:GitHub:AllowedOrg` | none | When set, users must belong to this GitHub org to access the API |
 
 ### CORS settings
 
@@ -44,13 +45,7 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Providers:GitHubCopilot:ApiKey` | none | API key/token for the GitHub Copilot-compatible endpoint. `Providers:GitHubCopilot:GitHubToken` is also accepted and takes precedence — this is the key the AKS deployment populates from Key Vault. |
-| `Providers:GitHubCopilot:Model` | `gpt-4o` | Model name used for GitHub Copilot runs |
-| `Providers:MicrosoftFoundry:ApiKey` | none | API key for Microsoft Foundry (required at runtime) |
-| `Providers:MicrosoftFoundry:Endpoint` | none | Microsoft Foundry endpoint URL (required at runtime) |
-| `Providers:MicrosoftFoundry:Deployment` | none | Deployment name used for Microsoft Foundry runs (required at runtime) |
-
-Some local samples still show `Providers:Foundry` with `DeploymentName`. The current runtime reads `Providers:MicrosoftFoundry:Endpoint`, `Providers:MicrosoftFoundry:ApiKey`, and `Providers:MicrosoftFoundry:Deployment`.
+| `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | Model name used for GitHub Copilot runs. The token comes from the signed-in user's OAuth session — no API key is needed. |
 
 ### Logging verbosity
 
@@ -73,7 +68,6 @@ The web UI authenticates users through GitHub OAuth and sends the resulting sess
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `VITE_API_URL` | No | `http://localhost:5000` | API base URL for the browser client. In container deployments this is injected at runtime as `/api` via `window.__AGENTWEAVER_CONFIG__`. |
-| `VITE_API_KEY` | No | empty | Optional bearer key for non-interactive/local use. Not needed when signing in through the web UI; the Docker build deliberately unsets it. |
 
 ## Example local setup
 

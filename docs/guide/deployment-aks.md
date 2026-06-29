@@ -347,7 +347,7 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `pvc-data.yaml` | PersistentVolumeClaim | `agentweaver-data` — 10 Gi Azure Disk Premium (RWO), mounted at `/data` for SQLite databases |
+| `pvc-data.yaml` | PersistentVolumeClaim | `agentweaver-data` — 10 Gi Azure Disk Premium (RWO), mounted at `/data` |
 | `pvc-workspace.yaml` | PersistentVolumeClaim | `agentweaver-workspace` — 50 Gi Azure Files Premium (RWX), mounted at `/workspace` for agent worktrees |
 
 ### Network policies
@@ -374,7 +374,7 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `api-deployment.yaml` | Deployment | API pod — 1 replica, `Recreate` strategy (SQLite single-writer), init container runs EF migrations |
+| `api-deployment.yaml` | Deployment | API pod — 2 replicas, PostgreSQL-backed, init container runs EF migrations |
 | `api-service.yaml` | Service | `agentweaver-api` ClusterIP :8080 |
 | `frontend-deployment.yaml` | Deployment | Frontend pods — 2 replicas, serves React SPA |
 | `frontend-service.yaml` | Service | `agentweaver-frontend` ClusterIP :80 → :8080 |
@@ -395,7 +395,7 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `backup-cronjob.yaml` | CronJob | Daily SQLite backup at 03:17 UTC — runs `sqlite3 .backup`, retains 14 days |
+| `backup-cronjob.yaml` | CronJob | Daily data backup at 03:17 UTC — retains 14 days |
 
 ---
 
