@@ -65,6 +65,8 @@ AKS_MC_RG="${AKS_MC_RG:-MC_agentweaver-rg_agentweaver-aks-2_westus2}"
 
 SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 AKS_VNET_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${AKS_MC_RG}/providers/Microsoft.Network/virtualNetworks/${AKS_VNET_NAME}"
+# Full resource ID required when DNS zone is in a different RG from the server (cross-RG safe).
+PG_DNS_ZONE_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Network/privateDnsZones/${PG_DNS_ZONE}"
 PG_FQDN="${PG_SERVER_NAME}.private.postgres.database.azure.com"
 
 echo ""
@@ -182,6 +184,11 @@ else
   PG_ADMIN_PASSWORD="$(openssl rand -base64 48 | tr -d '+=/' | head -c 48)"
 
   echo "  Creating Flexible Server '${PG_SERVER_NAME}' — this takes ~5 minutes..."
+  # --zonal-resiliency requires AZ capacity; skip when HA is Disabled (staging).
+  ZONAL_FLAGS=()
+  if [[ "${PG_HA_MODE}" != "Disabled" ]]; then
+    ZONAL_FLAGS+=(--zonal-resiliency Enabled)
+  fi
   az postgres flexible-server create \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${PG_SERVER_NAME}" \
@@ -192,17 +199,12 @@ else
     --sku-name "${PG_SKU}" \
     --tier "GeneralPurpose" \
     --storage-size "${PG_STORAGE_GB}" \
-    --zonal-resiliency "Enabled" \
+    "${ZONAL_FLAGS[@]}" \
     --backup-retention "${PG_BACKUP_DAYS}" \
     --subnet "${PG_SUBNET_ID}" \
-    --private-dns-zone "${PG_DNS_ZONE}" \
+    --private-dns-zone "${PG_DNS_ZONE_ID}" \
     --yes \
-    --output none 2>&1 | grep -v "password" || true
-  # NOTE: 'az postgres flexible-server create' always echoes credentials in the JSON output
-  # and WARNING messages regardless of --output none. Run with --output none to suppress the
-  # JSON but WARNING lines may still appear. The password is immediately stored in K8s secret
-  # and rotated — the echoed value should be treated as compromised and rotated.
-
+    --output none 2>&1 | grep -v -i "password" 
   echo "  [OK] Server created."
 
   # Store admin password directly into K8s secret — never written to disk or stdout
