@@ -14,7 +14,7 @@ namespace Agentweaver.Tests.OAuth;
 ///
 /// Validates that the static Agentweaver API-key path continues to work after the OAuth
 /// changes land, so CI and automation are unbroken:
-///   • The existing static API key in <c>McpApiKeyRegistry</c> still authenticates /mcp.
+///   • The existing static API key (test bypass map) still authenticates /api/*.
 ///   • The existing API Bearer key path still authenticates /api/* endpoints.
 ///   • All existing MCP tool calls succeed with the static API key.
 ///

@@ -159,9 +159,10 @@ used in any shared or hosted deployment.
 
 ## Backward compatibility
 
-The static Agentweaver API-key path (`McpApiKeyRegistry` / `Auth:Keys`) used by CI is unchanged. The
-new `/oauth/*` and `/.well-known/*` routes are additive and are exempt from the GitHub token and
-org-authorization middleware so the flow that obtains a token is itself reachable without a token.
+There is no static Agentweaver API-key path for MCP — auth relies solely on Agentweaver-minted JWTs
+(via DCR) and the transitional raw-GitHub passthrough. The `/oauth/*` and `/.well-known/*` routes are
+exempt from the GitHub token and org-authorization middleware so the flow that obtains a token is
+itself reachable without a token.
 
 ## Out of scope (post-checkpoint)
 

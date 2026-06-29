@@ -120,7 +120,6 @@ kubectl wait \
   --namespace "${NAMESPACE}" \
   --timeout=60s
 apply_rendered secret-provider-class.yaml
-apply_rendered secretprovider-mcp.yaml
 apply_rendered rbac-api.yaml
 apply_rendered quota.yaml
 apply_rendered pvc-data.yaml

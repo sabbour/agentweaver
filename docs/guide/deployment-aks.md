@@ -109,9 +109,7 @@ Gather these before running `scripts/aks/15-setup-identity.sh`:
 
 | Variable | Description |
 |----------|-------------|
-| `MCP_API_KEY` | Internal API key the MCP server uses to call the Agentweaver API |
-| `MCP_AUTH_API_KEY` | Inbound bearer key accepted from external MCP callers |
-| `MCP_AUTH_USER` | Username paired with the inbound bearer key |
+| `MCP_API_KEY` | Internal API loopback key for the API's Scribe/coordinator self-calls (`Auth__ApiKey`) |
 | `GITHUB_CLIENT_ID` | GitHub OAuth App client ID |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret |
 
@@ -202,8 +200,6 @@ This provides the `SandboxClaim`, `SandboxTemplate`, and `SandboxWarmPool` CRDs 
 ```bash
 export TENANT_ID=$(az account show --query tenantId -o tsv)
 export MCP_API_KEY=<generated-key>
-export MCP_AUTH_API_KEY=<generated-key>
-export MCP_AUTH_USER=agentweaver-mcp
 export GITHUB_CLIENT_ID=<from-github-oauth-app>
 export GITHUB_CLIENT_SECRET=<from-github-oauth-app>
 
@@ -214,10 +210,8 @@ The script:
 
 1. Creates a **user-assigned managed identity** (`agentweaver-api-identity`)
 2. Creates an **Azure Key Vault** (`$KEYVAULT_NAME`) with RBAC authorization enabled
-3. Stores five secrets in Key Vault:
-   - `mcp-api-key` — internal key for MCP → API calls
-   - `mcp-auth-api-key` — inbound bearer key for external MCP callers
-   - `mcp-auth-user` — username paired with `mcp-auth-api-key`
+3. Stores three secrets in Key Vault:
+   - `mcp-api-key` — internal API loopback key for Scribe/coordinator self-calls
    - `github-client-id` — GitHub OAuth App client ID
    - `github-client-secret` — GitHub OAuth App client secret
 4. Grants the managed identity **Key Vault Secrets User** on the vault
@@ -240,30 +234,22 @@ Azure Key Vault
   └── github-client-id        ─┐
   └── github-client-secret     ├─ SecretProviderClass: agentweaver-secrets
   └── mcp-api-key             ─┘   (k8s/secret-provider-class.yaml)
-                                        │
-                                        │  CSI driver fetches via pod workload identity
-                                        ▼
+                                       │
+                                       │  CSI driver fetches via pod workload identity
+                                       ▼
                                Pod volume: /mnt/secrets-store/
-                                  github-client-id       (file)
-                                  github-client-secret   (file)
-                                  mcp-api-key            (file)
-                                        │
-                                        │  API startup script reads files:
-                                        ▼
+                                 github-client-id       (file)
+                                 github-client-secret   (file)
+                                 mcp-api-key            (file)
+                                       │
+                                       │  API startup script reads files:
+                                       ▼
                                env vars injected at runtime (not in YAML):
-                                  GitHub__ClientId
-                                  GitHub__ClientSecret
-                                  Auth__ApiKey / Mcp__ApiKey
+                                 GitHub__ClientId
+                                 GitHub__ClientSecret
+                                 Auth__ApiKey
 
-Azure Key Vault
-  └── mcp-auth-user           ─┐
-  └── mcp-auth-api-key         ├─ SecretProviderClass: agentweaver-mcp-secrets
-  └── mcp-api-key             ─┘   (k8s/secretprovider-mcp.yaml)
-                                        │
-                                        ▼
-                               Pod volume: /mnt/secrets-store/
-                                  mcp-auth-user          (file)
-                               env var: Auth__User
+The MCP pod mounts no secrets; its auth relies only on the OAuth paths.
 ```
 
 The CSI volume mount is what triggers `SecretProviderClass` synchronization — without the volume attached, secrets are never fetched.
@@ -321,7 +307,7 @@ The script aborts if `IDENTITY_CLIENT_ID`, `KEYVAULT_NAME`, or `TENANT_ID` are u
    - `${KEYVAULT_NAME}` — Key Vault name
    - `${TENANT_ID}` — Azure tenant ID
 5. Applies resources in this order:
-   - `serviceaccount-api.yaml` → `secret-provider-class.yaml` → `secretprovider-mcp.yaml` → `rbac-api.yaml` → `quota.yaml` → `pvc-data.yaml` → `pvc-workspace.yaml`
+   - `serviceaccount-api.yaml` → `secret-provider-class.yaml` → `rbac-api.yaml` → `quota.yaml` → `pvc-data.yaml` → `pvc-workspace.yaml`
    - Network policies and Cilium egress policies
    - Services, Gateway, HTTPRoutes, backup CronJob
    - Sandbox template and warm pool (skipped if CRDs not installed)
@@ -355,8 +341,7 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `secret-provider-class.yaml` | SecretProviderClass | Fetches `mcp-api-key`, `github-client-id`, `github-client-secret` from Key Vault into pod volume |
-| `secretprovider-mcp.yaml` | SecretProviderClass | Fetches `mcp-api-key`, `mcp-auth-api-key`, `mcp-auth-user` for the MCP pod |
+| `secret-provider-class.yaml` | SecretProviderClass | Fetches `mcp-api-key`, `github-client-id`, `github-client-secret` from Key Vault into the API pod volume |
 
 ### Storage
 

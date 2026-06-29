@@ -90,7 +90,6 @@ spec:
             - |
               set -eu
               export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
-              export Mcp__ApiKey="${Auth__ApiKey}"
               export GitHub__ClientId="$(cat /mnt/secrets-store/github-client-id)"
               export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
               export Auth__GitHub__ClientId="${GitHub__ClientId}"

@@ -53,7 +53,6 @@ internal sealed class McpProgram
         builder.Services.AddMemoryCache();
         builder.Services.AddHttpClient();
         builder.Services.AddHttpContextAccessor();
-        builder.Services.AddSingleton<McpApiKeyRegistry>();
         builder.Services.AddSingleton<McpAccessTokenValidator>();
 
         var mcpBuilder = builder.Services.AddMcpServer().WithToolsFromAssembly();

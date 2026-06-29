@@ -77,7 +77,7 @@ fi
 
 echo ""
 echo "--- SecretProviderClass sync ---"
-for spc in agentweaver-secrets agentweaver-mcp-secrets; do
+for spc in agentweaver-secrets; do
   if kubectl get secretproviderclass "${spc}" -n "${NAMESPACE}" >/dev/null 2>&1; then
     ok "SecretProviderClass ${spc} exists"
   else

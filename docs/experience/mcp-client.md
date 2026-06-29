@@ -37,11 +37,10 @@ For the complete interactive setup flow, see [Onboarding & auth](./onboarding-au
 
 ### Authentication experience
 
-The user sees a normal bearer-token experience, with three accepted token paths:
+The user sees a normal bearer-token experience, with two accepted token paths:
 
-1. **Automation keys.** CI, local scripts, and controlled automation can use an Agentweaver API key. The MCP server checks it through the API-key registry first because it is the fastest path and does not require external validation.
-2. **Agentweaver JWTs.** Interactive clients can discover the OAuth resource metadata, run the OAuth authorization-code flow with PKCE through Agentweaver, and receive a short-lived Agentweaver access token. The MCP server validates this JWT offline against the authorization server JWKS, requiring the expected issuer, audience (`<issuer>/mcp` unless configured otherwise), expiry, and RS256 signature.
-3. **Transitional raw GitHub tokens.** When enabled, the MCP server can validate a raw GitHub bearer token by calling GitHub's user API and caching the result briefly. This keeps older client setups working while interactive clients move to Agentweaver-minted tokens.
+1. **Agentweaver JWTs.** Interactive clients can discover the OAuth resource metadata, run the OAuth authorization-code flow with PKCE through Agentweaver, and receive a short-lived Agentweaver access token. The MCP server validates this JWT offline against the authorization server JWKS, requiring the expected issuer, audience (`<issuer>/mcp` unless configured otherwise), expiry, and RS256 signature.
+2. **Transitional raw GitHub tokens.** When enabled, the MCP server can validate a raw GitHub bearer token by calling GitHub's user API and caching the result briefly. This keeps older client setups working while interactive clients move to Agentweaver-minted tokens.
 
 If a hosted MCP request has no bearer token, the server returns `401` with a `WWW-Authenticate` challenge that advertises the OAuth protected-resource metadata URL. If a token is present but invalid, the challenge includes `invalid_token`. Health and OAuth metadata discovery stay reachable without a bearer token.
 

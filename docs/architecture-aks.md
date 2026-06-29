@@ -268,15 +268,13 @@ flowchart LR
     KV["Azure Key Vault<br/>agentweaver-kv"]
 
     SPC["SecretProviderClass<br/>agentweaver-secrets"]
-    SPCM["SecretProviderClass<br/>agentweaver-mcp-secrets"]
 
     API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-api-key"]
-    MCP["MCP Pod<br/>/mnt/secrets-store/<br/>mcp-auth-user<br/>mcp-auth-api-key<br/>mcp-api-key"]
+    MCP["MCP Pod<br/>(no mounted secrets)"]
 
     SA -->|"federated credential"| OIDC --> MI
     MI -->|"Key Vault Secrets User"| KV
     KV --> SPC -->|"CSI volume mount"| API
-    KV --> SPCM -->|"CSI volume mount"| MCP
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -286,12 +284,12 @@ flowchart LR
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class SA,SPC,SPCM,MCP svc;
+    class SA,SPC,MCP svc;
     class API core;
     class MI,OIDC,KV ext;
 ```
 
-The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. Two `SecretProviderClass` objects sync secrets from Key Vault into pod volumes:
+The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. One `SecretProviderClass` object syncs secrets from Key Vault into the API pod volume:
 
 **`agentweaver-secrets`** (used by API pod, `k8s/secret-provider-class.yaml`):
 
@@ -299,15 +297,9 @@ The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed ident
 |-----------------|------------------------------|----------|
 | `github-client-id` | `github-client-id` | GitHub OAuth App client ID → `GitHub__ClientId` env var |
 | `github-client-secret` | `github-client-secret` | GitHub OAuth App client secret → `GitHub__ClientSecret` env var |
-| `mcp-api-key` | `mcp-api-key` | Internal key used by MCP server to call the API → `Auth__ApiKey` / `Mcp__ApiKey` |
+| `mcp-api-key` | `mcp-api-key` | Internal API loopback key for Scribe/coordinator self-calls → `Auth__ApiKey` |
 
-**`agentweaver-mcp-secrets`** (used by MCP pod, `k8s/secretprovider-mcp.yaml`):
-
-| Key Vault secret | File in `/mnt/secrets-store/` | Used for |
-|-----------------|------------------------------|----------|
-| `mcp-auth-user` | `mcp-auth-user` | Username for inbound MCP authentication → `Auth__User` env var |
-| `mcp-auth-api-key` | `mcp-auth-api-key` | Inbound bearer key accepted from MCP callers |
-| `mcp-api-key` | `mcp-api-key` | Key used to authenticate MCP server calls to the API |
+The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough).
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 
@@ -332,9 +324,7 @@ Agentweaver uses **GitHub OAuth** for user authentication. There are no API keys
 
 ### MCP authentication
 
-The MCP server (`agentweaver-mcp`) accepts inbound connections with a Bearer token. It forwards the caller's Bearer token as-is to the API (`AGENTWEAVER_API_URL: http://agentweaver-api:8080`). The API validates the token as a GitHub OAuth token via the same `GET /user` + org membership flow.
-
-For internal tooling or automated callers, an alternative `mcp-auth-api-key` / `mcp-auth-user` pair is also accepted (stored in Key Vault, mounted in the MCP pod).
+The MCP server (`agentweaver-mcp`) accepts inbound connections with a Bearer token. It forwards the caller's Bearer token as-is to the API (`AGENTWEAVER_API_URL: http://agentweaver-api:8080`). The API validates the token as an Agentweaver-minted JWT or a GitHub OAuth token via the `GET /user` + org membership flow. There is no static MCP bearer key — auth relies only on the OAuth paths.
 
 ### External dependencies
 

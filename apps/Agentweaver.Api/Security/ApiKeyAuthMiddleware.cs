@@ -52,7 +52,7 @@ public sealed class CallerContext
 ///
 /// Setting <c>Testing:BypassGitHubTokenAuth=true</c> in configuration skips the GitHub call and
 /// maps the bearer token directly to a caller using the <c>Auth:ApiKey/User</c> + <c>Auth:Keys</c>
-/// config (same shape as McpApiKeyRegistry). For test harnesses only.
+/// config (same shape as the API's Auth:Keys registry). For test harnesses only.
 ///
 /// SECURITY (F1): the bypass is honored ONLY when <see cref="IHostEnvironment.IsDevelopment"/> is
 /// true, so a stray <c>Testing__BypassGitHubTokenAuth=true</c> env var cannot disable GitHub token

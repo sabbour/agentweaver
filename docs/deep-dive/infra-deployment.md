@@ -95,7 +95,7 @@ The sandbox controller adds higher-level objects such as sandbox templates and w
 
 The trade-off is platform maturity and availability: the deploy script only applies sandbox resources when the CRDs are installed. A rebuild can run the core web/API/MCP stack without the sandbox CRDs, but agent execution that depends on Kubernetes sandboxes will not behave the same.
 
-Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/secretprovider-mcp.yaml`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`.
+Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`.
 
 ## Workloads and their responsibilities
 
@@ -206,13 +206,13 @@ flowchart LR
 
 The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
-The API reads the MCP API key, GitHub OAuth client settings, and OAuth signing key. The MCP server reads its auth user and MCP-related keys. Both use the same workload identity service account, but separate SecretProviderClasses define which Key Vault objects are mounted for each workload.
+The API reads the internal loopback key (`mcp-api-key`), GitHub OAuth client settings, and OAuth signing key. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). Both use the same workload identity service account; the single `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
 
 Rotation constraint: the CSI driver can refresh mounted files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
 OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens.
 
-Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-oauth-signing-key.sh`, `k8s/serviceaccount-api.yaml`, `k8s/secret-provider-class.yaml`, `k8s/secretprovider-mcp.yaml`.
+Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-oauth-signing-key.sh`, `k8s/serviceaccount-api.yaml`, `k8s/secret-provider-class.yaml`.
 
 ## Storage and persistence
 

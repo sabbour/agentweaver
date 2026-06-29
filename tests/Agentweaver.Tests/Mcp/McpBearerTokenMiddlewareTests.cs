@@ -16,7 +16,7 @@ namespace Agentweaver.Tests.Mcp;
 /// Coverage map:
 ///   S1 (partial) — Verifies the current 401 shape; after T6 new assertions check
 ///                  WWW-Authenticate header with resource_metadata.
-///   S4            — Static Agentweaver API-key path still authenticates; CI flow unbroken.
+///   S4            — Static API key path removed; only OAuth JWT + GitHub passthrough remain.
 ///
 /// Tests labelled [Skip] need Tank's T6 (MCP RS changes) before they can be enabled.
 ///
@@ -24,49 +24,8 @@ namespace Agentweaver.Tests.Mcp;
 /// </summary>
 public sealed class McpBearerTokenMiddlewareTests
 {
-    private const string TestApiKey  = "mcp-test-api-key-smith";
-    private const string TestUser    = "smith-test-user";
     private const string HealthPath  = "/healthz";
     private const string McpPath     = "/mcp";
-
-    // =========================================================================
-    // S4-01 — Valid static API key is accepted and passes request to next handler
-    // =========================================================================
-    [Fact]
-    public async Task ValidApiKey_PassesThrough_WithResolvedUser()
-    {
-        var middleware = BuildMiddleware(out var capturedUser, nextStatusCode: 200);
-        var context = MakeContext(McpPath, bearerToken: TestApiKey);
-
-        await middleware.InvokeAsync(context);
-
-        context.Response.StatusCode.Should().Be(200,
-            "a valid static API key must reach the next handler");
-        capturedUser.Value.Should().Be(TestUser,
-            "mcp.user item must contain the configured user for the API key");
-    }
-
-    // =========================================================================
-    // S4-02 — The bearer token is also stored as mcp.bearer_token so
-    //         AgentweaverApiClient can propagate it downstream.
-    // =========================================================================
-    [Fact]
-    public async Task ValidApiKey_StoresBearerTokenInItems()
-    {
-        string? storedToken = null;
-        RequestDelegate next = ctx =>
-        {
-            storedToken = ctx.Items["mcp.bearer_token"] as string;
-            ctx.Response.StatusCode = 200;
-            return Task.CompletedTask;
-        };
-        var middleware = BuildMiddleware(next);
-        var context = MakeContext(McpPath, bearerToken: TestApiKey);
-
-        await middleware.InvokeAsync(context);
-
-        storedToken.Should().Be(TestApiKey, "the raw bearer token must be forwarded to the API client");
-    }
 
     // =========================================================================
     // S4-03 / S1-01 — Missing Authorization header → 401
@@ -120,19 +79,20 @@ public sealed class McpBearerTokenMiddlewareTests
     }
 
     // =========================================================================
-    // S4-05 — Bearer prefix is case-insensitive ("bearer" in lower case)
+    // S4-05 — An unknown bearer token (GitHub validation fails) → 401
     // =========================================================================
     [Fact]
-    public async Task ApiKey_WithLowercaseBearerScheme_PassesThrough()
+    public async Task UnknownBearer_WithLowercaseScheme_Rejected()
     {
-        var middleware = BuildMiddleware(nextStatusCode: 200);
+        var githubHandler = new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized);
+        var middleware = BuildMiddleware(nextStatusCode: 200, githubHandler: githubHandler);
         var context = MakeContext(McpPath);
-        context.Request.Headers.Authorization = $"bearer {TestApiKey}";
+        context.Request.Headers.Authorization = "bearer some-unknown-token";
 
         await middleware.InvokeAsync(context);
 
-        context.Response.StatusCode.Should().Be(200,
-            "bearer scheme matching must be case-insensitive");
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized,
+            "no static key path remains; an unknown token must fail GitHub validation");
     }
 
     // =========================================================================
@@ -210,22 +170,6 @@ public sealed class McpBearerTokenMiddlewareTests
     // =========================================================================
 
     private McpBearerTokenMiddleware BuildMiddleware(
-        out Box<string?> captureUser,
-        int nextStatusCode = 200,
-        HttpMessageHandler? githubHandler = null)
-    {
-        captureUser = new Box<string?>();
-        var captured = captureUser;
-        RequestDelegate next = ctx =>
-        {
-            captured.Value = ctx.Items["mcp.user"] as string;
-            ctx.Response.StatusCode = nextStatusCode;
-            return Task.CompletedTask;
-        };
-        return BuildMiddleware(next, githubHandler);
-    }
-
-    private McpBearerTokenMiddleware BuildMiddleware(
         int nextStatusCode = 200,
         HttpMessageHandler? githubHandler = null)
     {
@@ -242,14 +186,9 @@ public sealed class McpBearerTokenMiddlewareTests
         HttpMessageHandler? githubHandler = null)
     {
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Auth:ApiKey"] = TestApiKey,
-                ["Auth:User"]   = TestUser,
-            })
+            .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
 
-        var registry = new McpApiKeyRegistry(config);
         var cache    = new MemoryCache(new MemoryCacheOptions());
         var handler  = githubHandler ?? new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized);
         var factory  = new SingleClientHttpClientFactory(handler);
@@ -261,7 +200,6 @@ public sealed class McpBearerTokenMiddlewareTests
 
         return new McpBearerTokenMiddleware(
             next,
-            registry,
             validator,
             config,
             cache,
@@ -288,9 +226,6 @@ public sealed class McpBearerTokenMiddlewareTests
     // -------------------------------------------------------------------------
     // Test infrastructure helpers
     // -------------------------------------------------------------------------
-
-    /// <summary>Box so we can capture a value out of a lambda for later assertion.</summary>
-    private sealed class Box<T> { public T? Value { get; set; } }
 
     /// <summary>Always returns the same status code for any request.</summary>
     private sealed class FixedStatusHttpMessageHandler : HttpMessageHandler

@@ -229,7 +229,6 @@ The fix is to pin issuer and audience to public values in Production on both ser
 
 - `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
 - `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs`
-- `apps/Agentweaver.Mcp/McpApiKeyRegistry.cs`
 - `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
 - `apps/Agentweaver.Api/Auth/OAuth`
 - `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
@@ -311,7 +310,7 @@ This distinction is crucial: issuer and audience describe token identity and mus
 - `k8s/mcp-service.yaml`
 - `k8s/mcp-httproute.yaml`
 - `k8s/mcp-deployment.yaml`
-- `k8s/secretprovider-mcp.yaml`
+- `k8s/secret-provider-class.yaml`
 
 ## 7. Rebuild checklist
 

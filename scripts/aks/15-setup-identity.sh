@@ -8,8 +8,6 @@ source "${SCRIPT_DIR}/00-variables.sh"
 
 missing=()
 [[ -z "${MCP_API_KEY:-}" ]] && missing+=("MCP_API_KEY")
-[[ -z "${MCP_AUTH_API_KEY:-}" ]] && missing+=("MCP_AUTH_API_KEY")
-[[ -z "${MCP_AUTH_USER:-}" ]] && missing+=("MCP_AUTH_USER")
 [[ -z "${GITHUB_CLIENT_ID:-}" ]] && missing+=("GITHUB_CLIENT_ID")
 [[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && missing+=("GITHUB_CLIENT_SECRET")
 if [[ ${#missing[@]} -gt 0 ]]; then
@@ -56,8 +54,6 @@ echo "  Key Vault ID: ${KEYVAULT_ID}"
 echo ""
 echo "=== Step 3: Store required secrets in Key Vault ==="
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name mcp-api-key --value "${MCP_API_KEY}" --output none
-az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name mcp-auth-api-key --value "${MCP_AUTH_API_KEY}" --output none
-az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name mcp-auth-user --value "${MCP_AUTH_USER}" --output none
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-id --value "${GITHUB_CLIENT_ID}" --output none
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-secret --value "${GITHUB_CLIENT_SECRET}" --output none
 
