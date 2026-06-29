@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
 # 10-create-cluster.sh -- Provision ACR + AKS cluster for Agentweaver.
 #
-# Creates: resource group, ACR, AKS cluster with:
-#   - Kata VM isolation (pod sandboxing) + AzureLinux
-#   - App Routing with Istio + Gateway API + managed default domain
-#   - Azure CNI Overlay + Cilium dataplane
-#   - Node Auto Provisioning
-#   - Key Vault CSI driver (azure-keyvault-secrets-provider addon)
-#   - OIDC issuer + Workload Identity (for Key Vault access)
+# Creates: resource group, ACR, AKS cluster with three node pools:
+#
+#   nodepool1 (System, AzureLinux, autoscaler 1–3)
+#     Taint: CriticalAddonsOnly=true:NoSchedule
+#     Only kube-system / critical-addon pods schedule here. App workloads
+#     are excluded and land on apppool (no taint).
+#
+#   apppool (User, AzureLinux, autoscaler 1–5, no taint)
+#     Receives all application workloads: api, worker, mcp, frontend, jobs.
+#     No tolerations needed in app deployment YAMLs.
+#
+#   katapool (User, AzureLinux, KataVmIsolation, autoscaler 1–5)
+#     Taint: sandbox=kata:NoSchedule
+#     Label: agentweaver.io/kata=true
+#     Dedicated to sandbox/AgentHost pods via SandboxTemplate tolerations.
+#
+# NOTE: NAP (--node-provisioning-mode Auto) is intentionally NOT used.
+#   NAP and cluster-autoscaler are mutually exclusive; Kata VM isolation
+#   (katapool) requires cluster-autoscaler on a fixed user pool.
 #
 # NOTE: If az aks create fails with "feature not registered", register first:
 #   az feature register --namespace Microsoft.ContainerService --name AKSAppRoutingGatewayAPI
@@ -56,19 +68,23 @@ echo "  ACR resource ID: ${ACR_ID}"
 
 echo ""
 echo "Creating AKS cluster '${CLUSTER_NAME}' (~10-15 minutes)..."
+# System pool: CriticalAddonsOnly taint keeps app workloads off nodepool1.
+# App workloads (api, worker, mcp, frontend) land on apppool (added below, no taint).
 az aks create \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CLUSTER_NAME}" \
   --location "${LOCATION}" \
-  --node-provisioning-mode Auto \
   --network-plugin azure \
   --network-plugin-mode overlay \
   --network-dataplane cilium \
   --enable-acns \
   --os-sku AzureLinux \
-  --workload-runtime KataVmIsolation \
   --node-vm-size Standard_D4s_v3 \
   --node-count 2 \
+  --enable-cluster-autoscaler \
+  --min-count 1 \
+  --max-count 3 \
+  --node-taints CriticalAddonsOnly=true:NoSchedule \
   --enable-app-routing-istio \
   --enable-gateway-api \
   --enable-default-domain \
@@ -85,6 +101,45 @@ az aks get-credentials \
   --resource-group "${RESOURCE_GROUP}" \
   --name "${CLUSTER_NAME}" \
   --overwrite-existing
+
+echo ""
+echo "Adding app user pool '${APP_POOL_NAME}' (cluster-autoscaler 1–5 nodes)..."
+# Receives all app workloads (api, worker, mcp, frontend, jobs).
+# No taint: pods schedule here without needing any toleration.
+az aks nodepool add \
+  --resource-group "${RESOURCE_GROUP}" \
+  --cluster-name "${CLUSTER_NAME}" \
+  --name "${APP_POOL_NAME}" \
+  --mode User \
+  --os-sku AzureLinux \
+  --node-vm-size Standard_D4s_v3 \
+  --enable-cluster-autoscaler \
+  --min-count 1 \
+  --max-count 5 \
+  --ssh-access disabled \
+  --output table
+
+echo ""
+echo "Adding dedicated Kata user pool '${KATA_POOL_NAME}' (cluster-autoscaler 1–5 nodes)..."
+# NAP and cluster-autoscaler are mutually exclusive; this cluster uses cluster-autoscaler.
+# katapool is the sole Kata-capable pool; sandbox/AgentHost SandboxTemplate pod specs
+# target it via toleration (sandbox=kata:NoSchedule) + preferred nodeAffinity
+# (agentweaver.io/kata=true). The system pool (nodepool1) is a standard pool.
+az aks nodepool add \
+  --resource-group "${RESOURCE_GROUP}" \
+  --cluster-name "${CLUSTER_NAME}" \
+  --name "${KATA_POOL_NAME}" \
+  --mode User \
+  --os-sku AzureLinux \
+  --workload-runtime KataVmIsolation \
+  --node-vm-size Standard_D4s_v3 \
+  --enable-cluster-autoscaler \
+  --min-count 1 \
+  --max-count 5 \
+  --node-taints sandbox=kata:NoSchedule \
+  --labels agentweaver.io/kata=true \
+  --ssh-access disabled \
+  --output table
 
 echo ""
 echo "Installing agent-sandbox CRDs/controller (${SANDBOX_CONTROLLER_VERSION})..."

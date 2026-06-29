@@ -158,12 +158,24 @@ This script provisions:
 | Azure CNI Overlay | `--network-plugin azure --network-plugin-mode overlay` | Pod networking |
 | Cilium dataplane | `--network-dataplane cilium` | `NetworkPolicy` enforcement |
 | ACNS | `--enable-acns` | `CiliumNetworkPolicy` FQDN-based egress + network observability |
-| Kata VM isolation | `--workload-runtime KataVmIsolation` | `kata-vm-isolation` RuntimeClass for sandbox pods |
-| AzureLinux nodes | `--os-sku AzureLinux` | Hardened node OS |
-| Node Auto Provisioning | `--node-provisioning-mode Auto` | Scales node pools automatically |
+| AzureLinux nodes | `--os-sku AzureLinux` | Hardened node OS (all pools) |
+| System pool taint | `--node-taints CriticalAddonsOnly=true:NoSchedule` | Restricts nodepool1 to critical-addon pods; app workloads use `apppool` |
+| Cluster Autoscaler (system pool) | `--enable-cluster-autoscaler --min-count 1 --max-count 3` | Scales system node pool automatically (1–3 nodes) |
 | Key Vault CSI driver | `--enable-addons azure-keyvault-secrets-provider` | Mounts Key Vault secrets as volumes |
 | Workload Identity | `--enable-oidc-issuer --enable-workload-identity` | Federated credentials for pods |
 | ACR pull-through | `--attach-acr $ACR_ID` | No `imagePullSecret` required |
+
+After cluster creation the script adds two **user node pools** via `az aks nodepool add`:
+
+| Pool | Mode | workloadRuntime | Autoscaler | Taint | Label | Receives |
+|------|------|-----------------|------------|-------|-------|---------|
+| `nodepool1` | System | *(standard)* | 1–3 nodes | `CriticalAddonsOnly=true:NoSchedule` | — | kube-system / critical addons only |
+| `apppool` | User | *(standard)* | 1–5 nodes | *(none)* | — | api, worker, mcp, frontend, jobs |
+| `katapool` | User | `KataVmIsolation` | 1–5 nodes | `sandbox=kata:NoSchedule` | `agentweaver.io/kata=true` | Sandbox / AgentHost pods |
+
+> **Why a dedicated app pool?** `CriticalAddonsOnly=true:NoSchedule` on the system pool is the AKS-recommended way to reserve it for cluster-critical components. No tolerations are needed in any application deployment YAML — app workloads schedule onto `apppool` by default, which has no taint. Sandbox and AgentHost pods land on `katapool` via their existing `SandboxTemplate` toleration (`sandbox=kata:NoSchedule`) and preferred `nodeAffinity` (`agentweaver.io/kata=true`).
+
+> **NAP vs cluster-autoscaler**: `--node-provisioning-mode Auto` (Node Auto Provisioning) is **not** used because NAP and cluster-autoscaler are mutually exclusive. Kata VM isolation requires `--workload-runtime KataVmIsolation` on a fixed user pool with `--enable-cluster-autoscaler`.
 
 After cluster creation the script installs the **agent-sandbox** CRD controller:
 

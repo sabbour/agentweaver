@@ -14,6 +14,8 @@ IDENTITY_CLIENT_ID="${IDENTITY_CLIENT_ID:-}"
 
 # -- Kubernetes parameters ----------------------------------------------------
 NAMESPACE="${NAMESPACE:-agentweaver}"
+KATA_POOL_NAME="${KATA_POOL_NAME:-katapool}"
+APP_POOL_NAME="${APP_POOL_NAME:-apppool}"
 
 # -- Image parameters ---------------------------------------------------------
 if [[ -z "${IMAGE_TAG:-}" ]]; then
@@ -40,6 +42,8 @@ export CLUSTER_NAME
 export ACR_NAME
 export LOCATION
 export NAMESPACE
+export KATA_POOL_NAME
+export APP_POOL_NAME
 export IMAGE_TAG
 export AGENTHOST_IMAGE_TAG
 export ACR_LOGIN_SERVER
@@ -54,6 +58,8 @@ echo "  Cluster:         ${CLUSTER_NAME}"
 echo "  ACR:             ${ACR_LOGIN_SERVER}"
 echo "  Location:        ${LOCATION}"
 echo "  Namespace:       ${NAMESPACE}"
+echo "  Kata pool:       ${KATA_POOL_NAME}"
+echo "  App pool:        ${APP_POOL_NAME}"
 echo "  Image tag:       ${IMAGE_TAG}"
 echo "  Key Vault:       ${KEYVAULT_NAME}"
 echo "  Tenant ID:       ${TENANT_ID:-<not set>}"
