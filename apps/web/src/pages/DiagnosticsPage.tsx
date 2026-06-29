@@ -11,7 +11,6 @@ import {
   TabList,
   Text,
   Title3,
-  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -19,7 +18,6 @@ import {
   ArrowClockwiseRegular,
   CheckmarkCircleRegular,
   DismissCircleRegular,
-  HelpCircleRegular,
   WarningRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
@@ -27,7 +25,6 @@ import { ApiError } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import type {
-  DetailedDiagnosticsCheckDto,
   DiagnosticsCheckDto,
   ProjectDiagnosticsDto,
   SystemDiagnosticsDto,
@@ -36,64 +33,8 @@ import type {
 // Diagnostics (Spec 011, FR-016) — renders the backend's real executed checks as
 // pass/warn/fail cards with per-check duration. A Global vs This-project tab
 // switches between GET /api/diagnostics and GET /api/projects/{id}/diagnostics.
-// When GET /api/diagnostics/detailed is available it is preferred: it provides
-// healthy/warning/critical/unknown status plus latency, quota (used/limit/unit),
-// and pending-count fields for richer display.
 
-const REFRESH_MS = 30_000;
-
-// ---------------------------------------------------------------------------
-// Unified internal check shape — normalises both the legacy DiagnosticsCheckDto
-// (pass/warn/fail) and the new DetailedDiagnosticsCheckDto (healthy/warning/critical).
-// ---------------------------------------------------------------------------
-
-interface NormalisedCheck {
-  name: string;
-  /** Canonical status used for icons / colours. */
-  status: 'healthy' | 'warning' | 'critical' | 'unknown';
-  message?: string;
-  latencyMs?: number;
-  used?: number;
-  limit?: number;
-  unit?: string;
-  pendingCount?: number;
-}
-
-function fromLegacy(c: DiagnosticsCheckDto): NormalisedCheck {
-  const statusMap: Record<string, NormalisedCheck['status']> = {
-    pass: 'healthy',
-    warn: 'warning',
-    fail: 'critical',
-  };
-  return {
-    name: c.name,
-    status: statusMap[c.status] ?? 'unknown',
-    message: c.detail || undefined,
-    latencyMs: c.duration_ms,
-  };
-}
-
-function fromDetailed(c: DetailedDiagnosticsCheckDto): NormalisedCheck {
-  return {
-    name: c.name,
-    status: c.status,
-    message: c.message,
-    latencyMs: c.latencyMs,
-    used: c.used,
-    limit: c.limit,
-    unit: c.unit,
-    pendingCount: c.pendingCount,
-  };
-}
-
-// Aggregate status across all checks for the summary dot / header badge.
-export function aggregateStatus(checks: NormalisedCheck[]): 'healthy' | 'warning' | 'critical' | 'unknown' {
-  if (checks.length === 0) return 'unknown';
-  if (checks.some((c) => c.status === 'critical')) return 'critical';
-  if (checks.some((c) => c.status === 'warning')) return 'warning';
-  if (checks.every((c) => c.status === 'healthy')) return 'healthy';
-  return 'unknown';
-}
+const REFRESH_MS = 15000;
 
 const useStyles = makeStyles({
   root: {
@@ -140,10 +81,9 @@ const useStyles = makeStyles({
     borderLeftWidth: '3px',
     borderRadius: tokens.borderRadiusMedium,
   },
-  checkHealthy: { borderLeftColor: tokens.colorPaletteGreenBorderActive },
-  checkWarning: { borderLeftColor: tokens.colorPaletteYellowBorderActive },
-  checkCritical: { borderLeftColor: tokens.colorPaletteRedBorderActive },
-  checkUnknown: { borderLeftColor: tokens.colorNeutralStroke2 },
+  checkPass: { borderLeftColor: tokens.colorPaletteGreenBorderActive },
+  checkWarn: { borderLeftColor: tokens.colorPaletteYellowBorderActive },
+  checkFail: { borderLeftColor: tokens.colorPaletteRedBorderActive },
   checkBody: {
     display: 'flex',
     flexDirection: 'column',
@@ -159,20 +99,11 @@ const useStyles = makeStyles({
   },
   checkName: { fontWeight: tokens.fontWeightSemibold },
   checkDetail: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200 },
-  checkMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-  },
   duration: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
-  iconHealthy: { color: tokens.colorPaletteGreenForeground1, fontSize: '20px' },
-  iconWarning: { color: tokens.colorPaletteYellowForeground1, fontSize: '20px' },
-  iconCritical: { color: tokens.colorPaletteRedForeground1, fontSize: '20px' },
-  iconUnknown: { color: tokens.colorNeutralForeground4, fontSize: '20px' },
+  iconPass: { color: tokens.colorPaletteGreenForeground1, fontSize: '20px' },
+  iconWarn: { color: tokens.colorPaletteYellowForeground1, fontSize: '20px' },
+  iconFail: { color: tokens.colorPaletteRedForeground1, fontSize: '20px' },
 });
 
 type Scope = 'global' | 'project';
@@ -190,71 +121,36 @@ function humanizeUptime(seconds: number): string {
   return parts.join(' ');
 }
 
-function badgeColor(status: NormalisedCheck['status']): 'success' | 'warning' | 'danger' | 'subtle' {
-  if (status === 'healthy') return 'success';
-  if (status === 'warning') return 'warning';
-  if (status === 'critical') return 'danger';
+function badgeColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
+  if (status === 'pass') return 'success';
+  if (status === 'warn') return 'warning';
+  if (status === 'fail') return 'danger';
   return 'subtle';
 }
 
-function CheckCard({ check }: { check: NormalisedCheck }) {
-  const styles = useStyles();
-
-  const accentClass =
-    check.status === 'healthy' ? styles.checkHealthy
-    : check.status === 'warning' ? styles.checkWarning
-    : check.status === 'critical' ? styles.checkCritical
-    : styles.checkUnknown;
-
-  const iconClass =
-    check.status === 'healthy' ? styles.iconHealthy
-    : check.status === 'warning' ? styles.iconWarning
-    : check.status === 'critical' ? styles.iconCritical
-    : styles.iconUnknown;
-
+function CheckCard({ check, styles }: { check: DiagnosticsCheckDto; styles: ReturnType<typeof useStyles> }) {
+  const accent =
+    check.status === 'pass' ? styles.checkPass : check.status === 'warn' ? styles.checkWarn : styles.checkFail;
   const icon =
-    check.status === 'healthy' ? <CheckmarkCircleRegular className={iconClass} aria-hidden="true" />
-    : check.status === 'warning' ? <WarningRegular className={iconClass} aria-hidden="true" />
-    : check.status === 'critical' ? <DismissCircleRegular className={iconClass} aria-hidden="true" />
-    : <HelpCircleRegular className={iconClass} aria-hidden="true" />;
-
-  // Quota detail: "used / limit unit  (N pending)"
-  const quotaText =
-    check.used != null && check.limit != null
-      ? `${check.used} / ${check.limit}${check.unit ? ` ${check.unit}` : ''}`
-      : undefined;
-
-  const pendingText =
-    check.pendingCount != null && check.pendingCount > 0
-      ? `${check.pendingCount} pending`
-      : undefined;
-
+    check.status === 'pass' ? (
+      <CheckmarkCircleRegular className={styles.iconPass} aria-hidden="true" />
+    ) : check.status === 'warn' ? (
+      <WarningRegular className={styles.iconWarn} aria-hidden="true" />
+    ) : (
+      <DismissCircleRegular className={styles.iconFail} aria-hidden="true" />
+    );
   return (
-    <div className={`${styles.checkCard} ${accentClass}`} role="listitem">
+    <div className={`${styles.checkCard} ${accent}`} role="listitem">
       {icon}
       <div className={styles.checkBody}>
         <div className={styles.checkHeader}>
           <Text className={styles.checkName}>{check.name}</Text>
           <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
             <Badge appearance="tint" color={badgeColor(check.status)}>{check.status}</Badge>
-            {check.latencyMs != null && (
-              <Text className={styles.duration}>{Math.round(check.latencyMs)} ms</Text>
-            )}
+            <Text className={styles.duration}>{Math.round(check.duration_ms)} ms</Text>
           </div>
         </div>
-        {(check.message || quotaText || pendingText) && (
-          <div className={styles.checkMeta}>
-            {check.message && <Text className={styles.checkDetail}>{check.message}</Text>}
-            {quotaText && <Text className={styles.checkDetail}>{quotaText}</Text>}
-            {pendingText && (
-              <Tooltip content="Number of agent pods waiting for capacity" relationship="description" withArrow>
-                <Text className={styles.checkDetail} style={{ color: tokens.colorPaletteYellowForeground1 }}>
-                  ⏳ {pendingText}
-                </Text>
-              </Tooltip>
-            )}
-          </div>
-        )}
+        <Text className={styles.checkDetail}>{check.detail}</Text>
       </div>
     </div>
   );
@@ -267,11 +163,9 @@ export function DiagnosticsPage() {
   const [scope, setScope] = useState<Scope>('global');
   const [global, setGlobal] = useState<SystemDiagnosticsDto | null>(null);
   const [project, setProject] = useState<ProjectDiagnosticsDto | null>(null);
-  const [detailedChecks, setDetailedChecks] = useState<NormalisedCheck[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -284,29 +178,10 @@ export function DiagnosticsPage() {
     try {
       if (scope === 'project' && projectId) {
         const dto = await apiClient.getProjectDiagnostics(projectId);
-        if (!signal.cancelled) {
-          setProject(dto);
-          setDetailedChecks(null);
-          setError(null);
-          setLastRefreshed(new Date());
-        }
+        if (!signal.cancelled) { setProject(dto); setError(null); }
       } else {
-        // Try the detailed endpoint first; fall back to the basic snapshot.
-        const detailed = await apiClient.getDetailedDiagnostics();
-        if (!signal.cancelled) {
-          if (detailed) {
-            setDetailedChecks(detailed.checks.map(fromDetailed));
-            setGlobal((prev) => prev ?? null);
-          } else {
-            const dto = await apiClient.getDiagnostics();
-            if (!signal.cancelled) {
-              setGlobal(dto);
-              setDetailedChecks(dto.checks.map(fromLegacy));
-            }
-          }
-          setError(null);
-          setLastRefreshed(new Date());
-        }
+        const dto = await apiClient.getDiagnostics();
+        if (!signal.cancelled) { setGlobal(dto); setError(null); }
       }
     } catch (err) {
       if (!signal.cancelled) setError(formatError(err));
@@ -326,14 +201,8 @@ export function DiagnosticsPage() {
     };
   }, [load, autoRefresh]);
 
-  // Derive displayed checks: prefer detailed (normalised) for the global scope;
-  // for project scope fall back to legacy mapping.
-  const displayChecks: NormalisedCheck[] =
-    detailedChecks ?? (project?.checks.map(fromLegacy) ?? []);
-
   const active = scope === 'project' ? project : global;
-  const generatedUtc = lastRefreshed?.toISOString() ?? active?.generated_utc;
-  const totalDurationMs = active?.total_duration_ms ?? 0;
+  const checks = active?.checks ?? [];
 
   return (
     <div className={styles.root}>
@@ -342,16 +211,16 @@ export function DiagnosticsPage() {
         subtitle="System and project health checks."
         actions={
           <>
-            {generatedUtc && (
+            {active && (
               <Text className={styles.generated}>
-                Updated {new Date(generatedUtc).toLocaleTimeString()}
+                Updated {new Date(active.generated_utc).toLocaleTimeString()}
               </Text>
             )}
-            {generatedUtc && autoRefresh && (
+            {active && autoRefresh && (
               <RefreshCountdown
                 className={styles.generated}
                 intervalMs={REFRESH_MS}
-                lastRefreshedAt={new Date(generatedUtc)}
+                lastRefreshedAt={new Date(active.generated_utc)}
               />
             )}
             <Switch
@@ -386,7 +255,7 @@ export function DiagnosticsPage() {
         </MessageBar>
       )}
 
-      {loading && displayChecks.length === 0 && <Spinner label="Loading diagnostics" />}
+      {loading && !active && <Spinner label="Loading diagnostics" />}
 
       {scope === 'global' && global && (
         <div className={styles.summaryCards}>
@@ -426,16 +295,20 @@ export function DiagnosticsPage() {
         </div>
       )}
 
-      {displayChecks.length > 0 && (
+      {active && (
         <div>
-          <Title3>Checks ({displayChecks.length}) · {Math.round(totalDurationMs)} ms</Title3>
+          <Title3>Checks ({checks.length}) · {Math.round(active.total_duration_ms)} ms</Title3>
           <div
             className={styles.checks}
             role="list"
             aria-label="Diagnostics checks"
             style={{ marginTop: tokens.spacingVerticalM }}
           >
-            {displayChecks.map((c) => <CheckCard key={c.name} check={c} />)}
+            {checks.length === 0 ? (
+              <Text>No checks reported.</Text>
+            ) : (
+              checks.map((c) => <CheckCard key={c.name} check={c} styles={styles} />)
+            )}
           </div>
         </div>
       )}
