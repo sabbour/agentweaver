@@ -2,7 +2,8 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.GitHub.Copilot;
 using Microsoft.Extensions.AI;
@@ -261,7 +262,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // Deterministic session ID enables history replay via ResumeSessionAsync.
             // Format: "agentweaver-run-{runId}" — unique per run, stable across restarts.
             SessionId = $"agentweaver-run-{runId}",
-            Tools = sessionTools,
+            Tools = sessionTools.Cast<AIFunctionDeclaration>().ToList(),
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
@@ -270,6 +271,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     : AgentBasePrompt.Base + "\n\n" + systemPromptContext,
             },
             Model = modelId,
+            // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
+            // cross-session retrieval and the shared SQLite store causes "database is locked" under
+            // concurrent load with multiple replicas.
+            EnableSessionStore = false,
+            InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
         };
         _sessionConfig = sessionConfig;
 
@@ -360,7 +366,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             _client ??= await _factory.CreateClientAsync(scope, _modelId, cancellationToken).ConfigureAwait(false);
             await _client.StartAsync(cancellationToken).ConfigureAwait(false);
             _inner = _client.AsAIAgent(
-                new SessionConfig { SessionId = $"agentweaver-run-{_runId}" },
+                new SessionConfig
+                {
+                    SessionId = $"agentweaver-run-{_runId}",
+                    // Disable persistent session store (copilot-sdk#1814).
+                    EnableSessionStore = false,
+                    InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
+                },
                 ownsClient: false, id: null, name: null, description: null);
         }
         return await _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
@@ -686,11 +698,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     _suppressedCallIds.Add(callId);
                     try
                     {
-                        var argsStr = start.Data.Arguments is string argStr
-                            ? argStr
-                            : JsonSerializer.Serialize(start.Data.Arguments);
-                        using var doc = JsonDocument.Parse(argsStr);
-                        if (doc.RootElement.TryGetProperty("intent", out var intentEl))
+                        if (start.Data.Arguments is { } argsEl &&
+                            argsEl.TryGetProperty("intent", out var intentEl))
                         {
                             var intentText = intentEl.GetString();
                             if (!string.IsNullOrWhiteSpace(intentText))
@@ -733,7 +742,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// the streaming loop (call + real result); the handler only co-emits its tool.call when it
     /// holds the SDK's real ToolCallId, so the two sources dedup instead of diverging.
     /// </summary>
-    internal PermissionRequestHandler BuildPermissionHandler(
+    internal Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>> BuildPermissionHandler(
         SandboxGovernance governance,
         string runId,
         string workingDirectory,
@@ -764,7 +773,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     _logger.LogInformation(
                         "Tool HITL auto-approved (policy) — url={Url} runId={RunId}",
                         rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
-                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                 }
 
                 // Auto-approve-tools run option: grant the allow-with-approval request without an
@@ -777,7 +786,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     emit(EventTypes.ToolAutoApproved, new { requestId, toolName = "web_fetch", url = SanitizeUrl(rawUrl) });
                     _logger.LogInformation(
                         "Tool HITL auto-approved (run option) — requestId={RequestId} runId={RunId}", displayId, runId);
-                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                 }
 
                 // Atomically register context and gate in one call so GrantAsync can record
@@ -804,11 +813,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 {
                     emitToolErrorOnce(urlCallId, "URL fetch was denied by the operator.");
                     _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
-                    return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Rejected });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedInteractivelyByUser());
                 }
 
                 _logger.LogInformation("Tool HITL approved — requestId={RequestId} runId={RunId}", displayId, runId);
-                return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
+                return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
             }
 
             // Custom external tools registered in SessionConfig.Tools fire OnPermissionRequest
@@ -833,10 +842,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
                         emit(EventTypes.AgentIntent, new { intent = SanitizeIntent(intentRaw) });
 
-                        return Task.FromResult(new PermissionRequestResult
-                        {
-                            Kind = PermissionRequestResultKind.Approved,
-                        });
+                        return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                     }
 
                     // report_outcome is a side-effect-free self-assessment call: approve without
@@ -858,10 +864,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
                         emit(EventTypes.RunOutcome, new { achieved, reason = SanitizeIntent(reasonRaw) });
 
-                        return Task.FromResult(new PermissionRequestResult
-                        {
-                            Kind = PermissionRequestResultKind.Approved,
-                        });
+                        return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                     }
 
                     // Agentweaver API tools: auto-approve without sandbox governance.
@@ -878,10 +881,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         }
                         if (realCustomCallId is not null)
                             emitToolCallOnce(customCallId, toolName, apiArgs);
-                        return Task.FromResult(new PermissionRequestResult
-                        {
-                            Kind = PermissionRequestResultKind.Approved,
-                        });
+                        return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                     }
 
                     // Deserialize the JSON args blob. Stamp tool_name first so it cannot be
@@ -920,12 +920,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         EmitRunDegradedOnce(toolName, denyReason);
                     }
 
-                    return Task.FromResult(new PermissionRequestResult
-                    {
-                        Kind = allowed
-                            ? PermissionRequestResultKind.Approved
-                            : PermissionRequestResultKind.Rejected,
-                    });
+                    return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
                 }
                 catch (Exception ex)
                 {
@@ -936,10 +931,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
                     EmitRunDegradedOnce(toolName, failReason);
-                    return Task.FromResult(new PermissionRequestResult
-                    {
-                        Kind = PermissionRequestResultKind.Rejected,
-                    });
+                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
                 }
             }
 
@@ -979,12 +971,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     EmitRunDegradedOnce(toolName, denyReason2);
                 }
 
-                return Task.FromResult(new PermissionRequestResult
-                {
-                    Kind = allowed
-                        ? PermissionRequestResultKind.Approved
-                        : PermissionRequestResultKind.Rejected,
-                });
+                return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
             }
             catch (Exception ex)
             {
@@ -994,10 +981,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
                 EmitRunDegradedOnce(request.Kind ?? "unknown", failReason2);
-                return Task.FromResult(new PermissionRequestResult
-                {
-                    Kind = PermissionRequestResultKind.Rejected,
-                });
+                return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
             }
         };
     }

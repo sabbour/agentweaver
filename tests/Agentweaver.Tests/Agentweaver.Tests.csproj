@@ -7,6 +7,8 @@
     <IsPackable>false</IsPackable>
     <!-- Allow the test project to reference ASP.NET Core types without the Web SDK -->
     <PreserveCompilationContext>true</PreserveCompilationContext>
+    <!-- SDK PermissionDecision Rpc types are marked [Experimental("GHCP001")]; suppress in tests. -->
+    <NoWarn>$(NoWarn);GHCP001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

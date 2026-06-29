@@ -1,5 +1,6 @@
 using FluentAssertions;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime;
@@ -66,7 +67,7 @@ public sealed class CopilotAutoApproveTests : IDisposable
         var result = await handler(request, new PermissionInvocation())
             .WaitAsync(TimeSpan.FromSeconds(5));
 
-        result.Kind.Should().Be(PermissionRequestResultKind.Approved,
+        result.Should().BeOfType<PermissionDecisionApproveOnce>(
             "auto-approve-tools must grant the allow-with-approval web_fetch request without an operator");
         emitted.Should().ContainSingle(e => e.Type == EventTypes.ToolAutoApproved,
             "every auto-grant must be logged as a tool.auto_approved audit event");
@@ -105,7 +106,7 @@ public sealed class CopilotAutoApproveTests : IDisposable
 
         var result = await handler(request, new PermissionInvocation());
 
-        result.Kind.Should().Be(PermissionRequestResultKind.Rejected,
+        result.Should().NotBeOfType<PermissionDecisionApproveOnce>(
             "a policy-denied tool stays denied even when auto-approve-tools is ON");
     }
 
@@ -138,7 +139,7 @@ public sealed class CopilotAutoApproveTests : IDisposable
 
         var result = await handler(request, new PermissionInvocation());
 
-        result.Kind.Should().Be(PermissionRequestResultKind.Rejected);
+        result.Should().NotBeOfType<PermissionDecisionApproveOnce>();
     }
 
     private GitHubCopilotAgentRunner BuildRunner(IRunOptionsStore options)
