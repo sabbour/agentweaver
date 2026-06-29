@@ -31,6 +31,7 @@ RUN dotnet ef migrations bundle \
     --configuration Release \
     --runtime linux-x64 \
     --self-contained \
+    --verbose \
     --output /app/publish/efbundle
 
 # Runtime stage
