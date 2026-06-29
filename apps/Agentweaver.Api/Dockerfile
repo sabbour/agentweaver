@@ -25,8 +25,8 @@ RUN dotnet publish "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
 RUN dotnet tool install --global dotnet-ef --version 9.0.7
 ENV PATH="${PATH}:/root/.dotnet/tools"
 # EF bundle creates a temp project under /tmp which doesn't inherit /src/Directory.Build.props.
-# Place one at /tmp so MSBuild finds it when walking up from /tmp/xyz/efbundle.csproj.
-RUN printf '<Project><PropertyGroup><ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles></PropertyGroup></Project>' > /tmp/Directory.Build.props
+# Place one at / (filesystem root) so MSBuild finds it when walking up from /tmp/xyz/efbundle.csproj.
+RUN printf '<Project><PropertyGroup><ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles></PropertyGroup></Project>' > /Directory.Build.props
 RUN dotnet ef migrations bundle \
     --project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --startup-project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
