@@ -53,6 +53,16 @@ rules:
       - delete
       - patch
       - update
+  # SecretProviderClass CRDs — the API patches agentweaver-user-tokens on user sign-in
+  # to add/remove per-user GitHub token objects mounted into agent-host pods via CSI.
+  - apiGroups:
+      - secrets-store.csi.x-k8s.io
+    resources:
+      - secretproviderclasses
+    verbs:
+      - get
+      - patch
+      - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

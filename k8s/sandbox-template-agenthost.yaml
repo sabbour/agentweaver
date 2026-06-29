@@ -12,10 +12,12 @@
 #   - PoC: RequireMtls=false comes from the mounted configmap-agenthost (plain http :8088).
 #   - PoC: readOnlyRootFilesystem relaxed to false (CopilotClient / git write to $HOME).
 #     PRODUCTION must restore readOnlyRootFilesystem: true + a writable $HOME emptyDir.
-#   - GitHub token: the pod mounts the SHARED agentweaver-workspace RWX volume at /workspace with
-#     HOME=/workspace/.home and AgentHost__UseSharedTokenStore=true, so it READS the same
-#     {HOME}/.local/share/agentweaver/auth/user_<id>.json the API persisted. No secret is created
-#     and the token never leaves the shared store. (PRODUCTION: workload identity, §3.3.)
+#   - GitHub token (Option B / workload identity): the pod runs as the dedicated
+#     agentweaver-agent-host ServiceAccount (workload identity) and the CSI secrets-store
+#     driver mounts user GitHub tokens from Key Vault (SecretProviderClass
+#     agentweaver-user-tokens) read-only at /mnt/user-tokens. AgentHost reads
+#     /mnt/user-tokens/user_<id>.json (AgentHost__KvTokenMountPath) — NO shared RWX token
+#     store. HOME points at a writable emptyDir (/home/appuser) for CopilotClient/git.
 #
 # Pod label `app: agentweaver-sandbox` is intentional: it makes ALL existing sandbox
 # NetworkPolicies apply unchanged (ingress 8088 from worker+api, DNS egress, Cilium FQDN
@@ -46,6 +48,9 @@ spec:
         app: agentweaver-sandbox
         app.kubernetes.io/part-of: agentweaver
         app.kubernetes.io/component: agent-host
+        # Workload identity webhook mutates the pod (projected SA token + AZURE_* env)
+        # so the CSI secrets-store driver can authenticate to Key Vault.
+        azure.workload.identity/use: "true"
     spec:
       runtimeClassName: kata-vm-isolation
       # Dedicated kata scheduling (fix/kata-userpool): prefer the fixed kata USER pool
@@ -70,7 +75,8 @@ spec:
                     values:
                       - "true"
       restartPolicy: Never
-      automountServiceAccountToken: false
+      serviceAccountName: agentweaver-agent-host
+      automountServiceAccountToken: true  # needed for CSI workload identity
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -104,17 +110,13 @@ spec:
             # per-run by the executor; the rest come from the configmap.
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
-            # spec-018 P1.5 — shared RWX token store. HOME points at the agentweaver-workspace
-            # volume so the pod's {HOME}/.local/share/agentweaver/auth/user_<id>.json is the SAME
-            # file the API/worker wrote (the cluster runs api+worker with HOME=/workspace/.home).
-            # The token is read in-place; no secret is created or injected.
+            # Writable HOME on an emptyDir so CopilotClient/git can write (no shared RWX store).
             - name: HOME
-              value: "/workspace/.home"
-            # Selects SharedHomeGitHubTokenStore + SharedUserScopeProvider in AgentHost/Program.cs
-            # so CopilotAIAgent.SetupAsync authenticates from that shared store. The scope provider
-            # discovers the signed-in user_<id>.json automatically (no UserId injection required).
-            - name: AgentHost__UseSharedTokenStore
-              value: "true"
+              value: "/home/appuser"
+            # Option B (workload identity): the CSI driver mounts user GitHub tokens from Key Vault
+            # read-only here. AgentHost reads /mnt/user-tokens/user_<id>.json with retry.
+            - name: AgentHost__KvTokenMountPath
+              value: "/mnt/user-tokens"
           resources:
             requests:
               memory: "1Gi"
@@ -127,6 +129,13 @@ spec:
               mountPath: /workspace
             - name: tmp
               mountPath: /tmp
+            # Writable HOME (CopilotClient / git config + caches).
+            - name: home
+              mountPath: /home/appuser
+            # User GitHub tokens from Key Vault via CSI secrets-store (read-only).
+            - name: csi-user-tokens
+              mountPath: /mnt/user-tokens
+              readOnly: true
             # Optional in PoC (RequireMtls=false): server TLS cert. Required in production.
             - name: a2a-tls
               mountPath: /mnt/a2a-tls
@@ -141,6 +150,14 @@ spec:
             claimName: agentweaver-workspace
         - name: tmp
           emptyDir: {}
+        - name: home
+          emptyDir: {}
+        - name: csi-user-tokens
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentweaver-user-tokens
         - name: a2a-tls
           secret:
             secretName: agentweaver-a2a-server-tls
