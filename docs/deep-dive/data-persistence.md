@@ -9,13 +9,13 @@ Think of the data layer as four cooperating persistence systems:
 1. **Operational control plane** — the authoritative record of projects, runs, workflow envelopes, backlog tasks, review revisions, cast proposals, and merge state.
 2. **Memory and orchestration plane** — decisions, draft decisions, agent memories, sessions, run-event history, coordinator plans, steering directives, and MCP OAuth state.
 3. **Git state** — branches and worktrees that hold the actual file changes produced by agent runs.
-4. **Kubernetes storage lifecycle** — persistent volumes, SQLite files, migration startup, and backups.
+4. **Kubernetes storage lifecycle** — persistent volumes, PostgreSQL Flexible Server, migration startup, and backups.
 
 A rebuild should preserve the same separation of concerns: databases answer “what is the system state?”, git answers “what file state did this run produce?”, and exported `.squad` / `.agentweaver` files make selected memory visible to humans and agents.
 
 ## Architecture at a glance
 
-A single API instance is the only writer. The operational control plane lives in the hand-written `SqliteDb` (projects, runs, backlog tasks, revisions). The memory and orchestration plane lives in EF Core (`MemoryDbContext`), whose provider is selectable — Postgres for hosted deployments, SQLite by default — and is evolved with EF Core migrations. Run worktrees live on the workspace volume. MAF JSON checkpoints are stored in the database on Postgres (the shared `workflow_checkpoints` table, replica-safe), and only fall back to JSON files on the workspace volume for the SQLite/dev file store.
+The operational control plane lives in `SqliteDb` (projects, runs, backlog tasks, revisions); the memory and orchestration plane lives in EF Core (`MemoryDbContext`). Both stores are provider-aware: `Database:Provider=Postgres` routes everything through PostgreSQL Flexible Server (the AKS production deployment), while `sqlite` (the default for local dev) uses separate SQLite files. EF Core migrations manage the schema. Run worktrees live on the workspace volume. MAF JSON checkpoints are stored in the shared `workflow_checkpoints` table (Postgres) and fall back to JSON files on the workspace volume in SQLite/dev mode.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -80,11 +80,11 @@ The persistence design optimizes for a single Agentweaver API instance coordinat
 - **Recoverable runs**: after a process restart, Agentweaver should know which runs exist, where their worktrees are, what status they were in, and what events already happened.
 - **Auditable decisions**: durable team decisions and rejected/merged inbox items should explain the current operating rules.
 - **Safe isolation**: unapproved agent changes should live outside the main branch until review and merge.
-- **Low operational burden**: SQLite avoids running an external database for the default deployment.
-- **Clear write ownership**: the Kubernetes deployment uses one API replica and a ReadWriteOnce data volume, matching SQLite’s single-writer model.
+- **Low operational burden for local dev**: the SQLite provider avoids a database dependency when running locally.
+- **Replica-safe writes in production**: the AKS deployment uses PostgreSQL Flexible Server with two API replicas. CAS-style `UPDATE ... WHERE` guards status transitions; run-level leasing prevents double-dispatch across replicas.
 - **Evolvable memory schema**: the memory/orchestration model changes faster than the control-plane schema, so it uses EF Core migrations rather than hand-written SQL everywhere.
 
-The main trade-off is deliberate: simple local durability and easy deployment are favored over horizontal write scaling. If Agentweaver needed active-active API replicas, the SQLite/RWO assumptions would need to be revisited.
+Local dev uses SQLite for simplicity. The AKS deployment uses PostgreSQL Flexible Server — this lifts the single-writer constraint and allows two replicas with a RollingUpdate strategy.
 
 ## Conceptual Domain Model
 
@@ -236,24 +236,29 @@ erDiagram
     }
 ```
 
-## Why Two SQLite Databases?
+## Database architecture
 
-Agentweaver uses two SQLite-backed stores by default:
+### Production (PostgreSQL Flexible Server)
 
-1. **`agentweaver.db`** for stable operational state.
+The AKS deployment uses **Azure Database for PostgreSQL Flexible Server** (`Database:Provider=Postgres`). Both stores — the operational control plane and the memory/orchestration plane — are unified behind a single EF Core `MemoryDbContext` and a single database. There is one connection string, one migration mechanism, and no local disk dependency for application state.
+
+This removes the single-writer constraint. The deployment runs two API replicas; Postgres handles concurrent writes safely because every status transition uses a CAS-style `UPDATE ... WHERE status = expected` and run-level leasing ensures exactly one worker executes a given run at a time.
+
+### Local development (SQLite)
+
+In local/dev mode (`Database:Provider=Sqlite`, the default), Agentweaver uses two SQLite files:
+
+1. **`agentweaver.db`** for stable operational state (projects, runs, backlog tasks, revisions).
 2. **`memory.db`** for memory, orchestration, run events, and OAuth state.
 
-This split is intentional. The control-plane store is hand-written SQL and conservative: it owns the core lifecycle facts that must be updated predictably during run orchestration. The memory/orchestration plane evolves more quickly and benefits from EF Core’s model relationships and migrations. Keeping it in a separate file avoids coupling EF migrations to the ADO.NET store.
+This split is intentional. The control-plane store is hand-written SQL and conservative; the memory/orchestration plane evolves more quickly and benefits from EF Core's model relationships and migrations. Keeping it in a separate file avoids coupling EF migrations to the ADO.NET store. A single local writer means SQLite's simple transaction model is sufficient — no distributed coordination is needed.
 
-SQLite is a good fit for the current deployment because:
+SQLite is a good fit for local development because:
 
-- Agentweaver runs as a **single API writer**.
-- Kubernetes mounts the data volume as **ReadWriteOnce**.
-- WAL mode allows readers and one writer to coexist better than rollback journal mode.
-- Busy timeouts make short write contention less fragile.
-- The database files are easy to mount, inspect, and back up.
-
-The cost is that SQLite is not a distributed coordination system. Cross-pod writes, multi-replica API deployments, and high write concurrency would require a server database or a different locking model.
+- One writer at a time; no concurrency configuration needed.
+- WAL mode allows readers and one writer to coexist.
+- Database files are easy to inspect and reset between tests.
+- No external dependency to install or configure.
 
 ## Operational Store: `agentweaver.db`
 
@@ -314,7 +319,7 @@ The memory schema is relational and evolves frequently. EF Core gives this side 
 - a path to SQL Server or PostgreSQL for this database when deployment needs outgrow SQLite;
 - simpler transactional code for inbox promotion and planning updates.
 
-SQLite remains the default provider. SQL Server and PostgreSQL support are configuration options for the EF-backed store, but the production Kubernetes deployment still uses SQLite.
+PostgreSQL is the production provider. SQLite remains the default for local development. SQL Server is also a supported EF provider for the memory store.
 
 ### Core invariants
 
@@ -339,12 +344,12 @@ Where this lives: `apps/Agentweaver.Api/Memory`, `apps/Agentweaver.Api/Migration
 
 ## Durable Run Event Streams
 
-Run events are persisted in `memory.db`, not just kept in memory. The design is a two-layer stream:
+Run events are persisted in the database, not just kept in memory. The design is a two-layer stream:
 
-1. **Durable write-through**: append the event row to SQLite and assign/record its run-local sequence number.
+1. **Durable write-through**: append the event row to the database (Postgres in production, SQLite in dev) and assign/record its run-local sequence number.
 2. **Live fan-out**: publish the same event to an in-process channel for active subscribers.
 
-The ordering matters: an event is written to SQLite before subscribers can observe it. That means a client may miss a live channel message, but it should not miss the event permanently.
+The ordering matters: an event is written to the database before subscribers can observe it. That means a client may miss a live channel message, but it should not miss the event permanently.
 
 Subscribers use a **replay-then-tail** pattern:
 
@@ -354,11 +359,11 @@ Subscribers use a **replay-then-tail** pattern:
 4. Skip any channel event already delivered during replay.
 5. Stop cleanly after terminal event types.
 
-The live channel is bounded. If a subscriber is slow or absent, live copies can be dropped; durability is still preserved by SQLite. This is the key design trade-off: the channel optimizes latency, while the database guarantees recovery.
+The live channel is bounded. If a subscriber is slow or absent, live copies can be dropped; durability is still preserved by the database. This is the key design trade-off: the channel optimizes latency, while the database guarantees recovery.
 
 The essential invariant is **unique `(run_id, sequence)`**. It makes replay deterministic and lets clients resume from “last event I saw.”
 
-Where this lives: `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs`, `apps/Agentweaver.Api/Memory`.
+Where this lives: `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs` (SQLite/dev), `apps/Agentweaver.Api/Memory/EfRunEventStream.cs` (Postgres/production).
 
 ## Decisions, Memory, and Context Assembly
 
@@ -424,7 +429,7 @@ A session is the durable “what are we doing right now?” record for a project
 
 ### Export/import mirror
 
-SQLite is authoritative for API reads, but selected memory is mirrored to files so humans and agents can inspect it in the workspace:
+The database (Postgres in production, SQLite in dev) is authoritative for API reads, but selected memory is mirrored to files so humans and agents can inspect it in the workspace:
 
 - `.squad/decisions.md` for accepted decisions;
 - `.squad/decisions/inbox/{slug}.md` for pending inbox entries;
@@ -439,7 +444,7 @@ Where this lives: `apps/Agentweaver.Api/Memory`, `apps/Agentweaver.Api/Endpoints
 
 ## Git as Persistent Run State
 
-Agentweaver does not store file changes in SQLite. It stores metadata in SQLite and lets git store the actual content graph.
+Agentweaver does not store file changes in the database. It stores metadata in the database and lets git store the actual content graph.
 
 For a normal run:
 

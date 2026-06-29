@@ -8,7 +8,7 @@ The deployment is built around five ideas:
 
 1. **One public HTTPS entry point** routes browser, API, OAuth, and MCP traffic by path.
 2. **Three long-running application workloads** run separately: API, frontend/static host, and MCP server.
-3. **State is explicit and mounted**: SQLite data lives on a single-writer disk; shared workspaces live on a multi-writer file share.
+3. **State is explicit**: PostgreSQL Flexible Server holds all application state; the workspace volume is a shared multi-writer file share for worktrees and sandbox files.
 4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets through the CSI driver.
 5. **Networking starts closed**: default deny policies are opened only for the paths each component actually needs.
 
@@ -34,8 +34,8 @@ flowchart TD
   McpSvc --> McpPod["MCP pod<br/>resource server"]
   FrontendSvc --> WebPods["Frontend pods<br/>SPA + docs static host"]
 
-  ApiPod --> DataPVC["RWO data PVC<br/>agentweaver.db + memory.db"]
   ApiPod --> WorkspacePVC["RWX workspace PVC<br/>worktrees + sandbox workspace"]
+  ApiPod --> Postgres["Azure Database<br/>for PostgreSQL<br/>Flexible Server"]
   SandboxPool["Warm sandbox pool<br/>Kata-isolated pods"] --> WorkspacePVC
 
   KeyVault["Azure Key Vault"] --> CSI["Secrets Store CSI"]
@@ -103,9 +103,7 @@ Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-iden
 
 The API is the authoritative backend. It handles orchestration, project/workspace operations, authentication/OAuth authorization-server endpoints, memory/decision data, sandbox lifecycle calls, and durable run state.
 
-It runs as **one replica** with a **Recreate** deployment strategy because the deployment uses SQLite on a ReadWriteOnce disk. The core problem is multi-attach and single-writer safety: two API pods writing the same SQLite files on an RWO volume would be unsafe and often impossible to mount. Recreate forces the old pod to release the disk before a new pod attaches it.
-
-Before the API starts, an init container runs the EF migration bundle for the memory database. This keeps schema migration close to deployment and ensures the database is upgraded before the application accepts traffic. The API container itself uses a read-only root filesystem, drops Linux capabilities, and mounts writable locations explicitly for data, workspace, logs, and scratch space.
+It runs as **two replicas** with a **RollingUpdate** strategy. Application state lives in **Azure Database for PostgreSQL Flexible Server** — multiple pods can write concurrently because status transitions use CAS-style `UPDATE ... WHERE` guards and run-level leasing prevents double-dispatch. The init container runs the EF migration bundle before the API container starts, ensuring the schema is current before serving traffic.
 
 ### Frontend workload
 
@@ -218,11 +216,11 @@ Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-
 
 Agentweaver separates storage by access pattern.
 
-### Data PVC: single-writer SQLite state
+### PostgreSQL: primary application state
 
-The data PVC is a premium managed disk mounted by the API. It holds the operational SQLite database and, by default, the EF-backed `memory.db` in the same `/data` directory.
+All application state — runs, projects, backlog tasks, revisions, memory, decisions, OAuth state, and run events — is stored in **Azure Database for PostgreSQL Flexible Server**, provisioned by `scripts/aks/17-provision-postgres.sh`. The connection string is stored in the `agentweaver-postgres` Kubernetes Secret and injected as environment variables at pod startup.
 
-The design optimizes for simplicity and local transactional behavior: SQLite is easy to operate, fast for a single backend, and avoids a managed database dependency. The trade-off is horizontal scaling. Because this is a single-writer storage model, the API is one replica and deployment uses Recreate. If you rebuild this for high availability, the equivalent design change is not “add more API replicas”; it is “move authoritative state to a multi-writer database such as SQL Server/PostgreSQL and revisit migrations, locks, and failure modes”.
+The data PVC previously used for SQLite (`agentweaver-data`) was removed from the API deployment when Postgres became primary. It is retained on the cluster as an emergency rollback path but is not mounted by any running pod.
 
 ### Workspace PVC: shared worktrees and sandbox files
 
@@ -234,11 +232,7 @@ StorageClass constraint: mount options are immutable. Do not patch a cluster-man
 
 ### Backups
 
-The backup job runs a SQLite online backup for `agentweaver.db`, writes timestamped files under the same data PVC, and prunes old matching backups.
-
-`memory.db` is co-located on the `agentweaver-data` PVC but is not captured by the CronJob. The job backs up `/data/agentweaver.db` specifically and prunes only `agentweaver-*.db`; it does not back up `/data/memory.db`, which contains decisions, agent memory, sessions, run events, work plans, steering directives, and MCP OAuth/client registration tables. No external volume snapshot, cloud backup policy, or off-cluster backup captures `memory.db` either, so it is not separately backed up.
-
-Backups are also written under the same `/data` PVC. That protects against SQLite file corruption or accidental local overwrite of `agentweaver.db`, but it does not protect against loss of the entire PVC. Durable off-cluster protection for both databases would require an external snapshot or backup policy on the data volume.
+The `agentweaver-sqlite-backup` CronJob (`k8s/backup-cronjob.yaml`) is a legacy SQLite backup job retained from before the Postgres migration. It mounts the `agentweaver-data` PVC (which is retained but no longer mounted by the API) and backs up `agentweaver.db`. It does not back up Postgres data. For production data protection, configure Azure Database for PostgreSQL's built-in automated backups and point-in-time restore via the Azure portal or `az postgres flexible-server` CLI.
 
 Where this lives: `k8s/pvc-data.yaml`, `k8s/pvc-workspace.yaml`, `k8s/storageclass-workspace.yaml`, `k8s/backup-cronjob.yaml`, `apps/Agentweaver.Api/Program.cs`.
 
