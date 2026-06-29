@@ -114,6 +114,7 @@ done
 echo ""
 echo "Applying identity, secrets, RBAC, quotas, and PVCs..."
 apply_rendered serviceaccount-api.yaml
+apply_rendered serviceaccount-agenthost.yaml
 kubectl wait \
   --for=jsonpath='{.metadata.annotations.azure\.workload\.identity/client-id}'="${IDENTITY_CLIENT_ID}" \
   serviceaccount/agentweaver-api \
