@@ -65,7 +65,7 @@ The algorithm runs in this order:
 1. **Resolve the project default first.** `WorkflowRegistry.ResolveDefault(project)` produces the project's effective default (the project's `DefaultWorkflowId` when valid, else the built-in `default`). It is held as the deterministic fallback this method returns whenever a later step throws or nothing is eligible.
 2. **Build the available list.** `WorkflowRegistry.GetOrLoad(project).Available` (validation-passing workflows) is ordered **default first**, then by id (`StringComparer.Ordinal`). The first entry is, by convention, the deterministic fallback for the selector.
 3. **Resolve the invocation kind.** `ResolveInvocationKindAsync` maps the run's origin to a `WorkflowInvocationKind`: a run stamped `RunOrigin.BacklogPickup` (the heartbeat picked up a Ready task) becomes `WorkflowInvocationKind.Heartbeat`; every other origin — and any lookup failure — becomes `WorkflowInvocationKind.Manual`.
-4. **Honor a backlog task override (if eligible).** If the run's backlog task carries a `WorkflowOverrideId`, that workflow is used **only if** it exists in the available set **and** its trigger is eligible for this invocation (`WorkflowTriggerEvaluator.IsEligible`). An unavailable or trigger-ineligible override is logged and ignored, and selection continues.
+4. **Honor a request-level or backlog task override (if eligible).** The `StartOrchestrationRequest.workflow_override_id` (dialog override) takes precedence over the backlog task pin. If either carries a `WorkflowOverrideId`, that workflow is used **only if** it exists in the available set **and** its trigger is eligible for this invocation (`WorkflowTriggerEvaluator.IsEligible`). An unavailable or trigger-ineligible override is logged and ignored, and selection continues.
 5. **Filter by trigger eligibility.** The available list is reduced to workflows whose declared trigger matches the invocation kind via `WorkflowTriggerEvaluator.IsEligible`.
 6. **No eligible candidate → project default.** If nothing passes the trigger filter, the project default is returned (never a trigger-mismatched workflow).
 7. **Exactly one eligible candidate → use it.** A single eligible workflow is used directly, with no model call and no selection event.
@@ -96,8 +96,11 @@ Every workflow declares exactly one `WorkflowTrigger { Type, Event }`:
 
 | Channel | Source | Resolution |
 | --- | --- | --- |
-| **Backlog task override** | `BacklogTask.WorkflowOverrideId`, set before pickup. | Step 4: used only when the workflow exists and is trigger-eligible. `CoordinatorPickupService` additionally prepends `use <id>` to the goal text so the conversational path also sees it. |
+| **Dialog override** | `StartOrchestrationRequest.workflow_override_id`, set in the **Start task** dialog. | Step 4: checked first, before the backlog task pin. Used only when the workflow exists and is trigger-eligible. |
+| **Backlog task override** | `BacklogTask.WorkflowOverrideId`, set before pickup. | Step 4: used when no dialog override is present. Used only when the workflow exists and is trigger-eligible. `CoordinatorPickupService` additionally prepends `use <id>` to the goal text so the conversational path also sees it. |
 | **Conversational override** | A human message matching `use <workflow-id>` in the revise feedback. | Step 8: `WorkflowSelector.TryParseOverride` matches the pattern; the requested workflow wins if it is among the eligible candidates. |
+
+**Precedence order (highest to lowest):** dialog override → backlog-task pin → conversational `use {workflow-id}` → LLM auto-select → project default.
 
 An override never escapes the candidate safety boundary: it cannot run a workflow the registry cannot resolve or the trigger evaluator rejects.
 

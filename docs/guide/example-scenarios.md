@@ -97,21 +97,7 @@ After a successful merge, a **Scribe** pass runs automatically. It auto-merges `
 
 ---
 
-## Scenario 2 — Single-agent run
-
-For a focused task that doesn't need a full team, run a single named agent.
-
-1. Submit a run scoped to one agent: `POST /api/projects/{id}/runs` with a `task` and an `agent_name` (or, outside a project, `POST /api/runs` with a `task`, `model_source`, and `repository_path`).
-2. Watch the execution view stream live over SSE. The full pipeline applies: `agent → rai → review → merge → scribe`.
-3. Answer any questions the agent raises at the question gate (`POST /api/runs/{runId}/questions/{requestId}/answer`).
-4. Approve tool calls if the sandbox policy requires it (`POST /api/runs/{runId}/tool-approvals` / `.../tool-denials`), or toggle **Auto-approve tools** (`POST /api/runs/{runId}/auto-approve`).
-5. Review and merge exactly as in Scenario 1.
-
-The originating branch is never touched until you approve and the merge step completes.
-
----
-
-## Scenario 3 — Pick up a backlog task with the board and heartbeat
+## Scenario 2 — Pick up a backlog task with the board and heartbeat
 
 Use the Kanban board to queue work and let the heartbeat dispatch it.
 
@@ -141,17 +127,17 @@ See [Board and Backlog](./board).
 
 ---
 
-## Scenario 4 — Decompose a specification into backlog tasks
+## Scenario 3 — Decompose a specification into backlog tasks
 
 Turn a PRD, design doc, or feature spec already in the repository into queued work.
 
 1. Open the **Workspace** page (`/projects/{id}/workspace`) and browse the repository (`GET /api/projects/{id}/workspace`, `GET /api/projects/{id}/workspace/files`).
 2. Select a Markdown spec file and choose **Decompose into tasks** (`POST /api/projects/{id}/backlog/decompose` with the `file_path`). The response lists proposed backlog items (and flags any that already exist).
-3. The proposed items are added to the **Backlog**. Review and edit them (`PATCH .../backlog/tasks/{taskId}`), then move the ones you want to **Ready** to let the heartbeat pick them up (Scenario 3).
+3. The proposed items are added to the **Backlog**. Review and edit them (`PATCH .../backlog/tasks/{taskId}`), then move the ones you want to **Ready** to let the heartbeat pick them up (Scenario 2).
 
 ---
 
-## Scenario 5 — Drive the full lifecycle from an MCP client (Copilot CLI)
+## Scenario 4 — Drive the full lifecycle from an MCP client (Copilot CLI)
 
 Everything above is available programmatically through the [MCP server](/reference/mcp). Any MCP-compatible client can run the complete lifecycle. The tool names below are exact.
 
@@ -159,11 +145,10 @@ Everything above is available programmatically through the [MCP server](/referen
 2. **Create a project** — `project_create`; list with `project_list`.
 3. **Cast a team** — `catalog_list_roles` / `catalog_list_scenarios`, then `team_cast`; inspect with `team_get`.
 4. **Capture and queue work** — `backlog_capture_task`, then `backlog_move_to_ready` (or `send_all_backlog_to_ready`); view the board with `backlog_get_board`.
-5. **Start an orchestration** — `coordinator_start`, then gate the spec with `coordinator_outcome_spec_get` and `coordinator_outcome_spec_confirm` (or `coordinator_outcome_spec_revise`).
-6. **Observe and steer** — `coordinator_work_plan_get`, `coordinator_children_get`, `orchestration_topology`, and `coordinator_steer`.
-7. **Run a single agent** — `run_submit`, `run_status`, `run_watch` (SSE), `run_show_artifacts`, `run_get_file`.
-8. **Review** — `run_review` with the approve / request-changes / decline decision.
-9. **Record knowledge** — `decision_inbox_submit` or `squad_decide`, `memory_record`, `memory_search`; export with `memory_export`.
+5. **Start an orchestration** — `coordinator_start` with optional `workflow_override_id` to pin a specific workflow (omit for auto-selection), then gate the spec with `coordinator_outcome_spec_get` and `coordinator_outcome_spec_confirm` (or `coordinator_outcome_spec_revise`).
+6. **Observe and steer** — `coordinator_work_plan_get`, `coordinator_children_get`, `orchestration_topology`, `coordinator_steer`; monitor child runs with `run_status`, `run_watch` (SSE), `run_show_artifacts`, `run_get_file`.
+7. **Review** — `run_review` with the approve / request-changes / decline decision.
+8. **Record knowledge** — `decision_inbox_submit` or `squad_decide`, `memory_record`, `memory_search`; export with `memory_export`.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','edgeLabelBackground':'#FFFFFF'}}}%%

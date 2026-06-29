@@ -6,9 +6,9 @@ title: Submitting and Watching Runs
 
 A **Run** is a unit of work that Agentweaver executes on your behalf. You describe what you want in plain language; the coordinator agent scopes it, confirms it with you, and then drives the team of agents to produce the result — all inside isolated sandboxes.
 
-## Two ways to start a run
+## Starting a run
 
-### Start a coordinator orchestration
+### Coordinator orchestration
 
 From inside a project, open the **Board** page and click **Start task** (or use the **Start task** button from the runs list or Flow page).
 
@@ -23,6 +23,14 @@ Click **Start task**. The coordinator orchestration begins and you're taken to t
 ::: tip Be specific about outcomes
 Describe what success looks like, not just what to do. The coordinator uses your description to draft an OutcomeSpec — the more concrete your goal, the sharper the spec.
 :::
+
+#### Workflow selection
+
+When you click **Start**, the coordinator automatically selects the best-fit workflow for your goal using an LLM pass over your team's available workflows, their descriptions, and team roles. The selection and its rationale are shown in the coordinator conversation.
+
+To override: open the **Workflow** dropdown in the **Start task** dialog and choose a specific workflow. The dropdown shows only workflows with a manual trigger; it is hidden when only one workflow is available. Leave it on **Auto** to let the coordinator choose.
+
+You can also override mid-conversation by typing `use {workflow-id}` before confirming the OutcomeSpec.
 
 ### Single-agent run
 

@@ -48,17 +48,16 @@ Agentweaver is **alpha software** under active development. Expect breaking chan
 
 ```mermaid
 flowchart LR
-    A[Submit goal or task] --> B{Mode}
-    B -->|Single agent| C[Isolated worktree run]
-    B -->|Coordinator| D[OutcomeSpec drafted]
-    D --> E[You confirm spec]
-    E --> F[WorkPlan: subtask DAG]
-    F --> G[Parallel child runs]
-    G --> H[RAI check per agent]
-    H --> I[Single collective review]
-    C --> J[Per-run review gate]
-    I --> K[Merge + Scribe memory pass]
-    J --> K
+    A[Submit goal or task] --> B[Coordinator drafts OutcomeSpec]
+    B --> W[Selects workflow]
+    W --> C{You confirm?}
+    C -- Yes --> D[WorkPlan: subtask DAG]
+    C -- Revise --> B
+    D --> E[Parallel child runs]
+    E --> F[RAI check per agent]
+    F --> G[Single collective review]
+    G -- Approve --> H[Merge + Scribe memory pass]
+    G -- Decline --> I[Declined]
 ```
 
-Agentweaver supports two submission modes. In **single-agent mode**, one named agent works in an isolated workspace — you watch live, review the result, then approve or decline. In **coordinator mode**, you submit a goal: the coordinator drafts a plan, you confirm it before any work starts, and a squad of specialists works in parallel. You review the assembled work once, behind a single gate that includes a Responsible AI check.
+Submit a goal. The coordinator drafts a plan — you confirm it before any work starts. A squad of specialists works in parallel, each in an isolated sandbox. Review the assembled work once, behind a single gate that includes a Responsible AI check.

@@ -10,30 +10,29 @@ Agentweaver is a self-hosted, multi-agent orchestration platform. Submit a goal 
 
 ![Agentweaver](/guide/images/overview.png)
 
-## Two submission modes
-
-### Single-agent run
-
-Submit a task. One named agent works in an isolated git worktree. You stream every step live — messages, tool calls, results, questions — review the diff, then approve, decline, or request changes. Nothing commits until you say so.
+## How it works
 
 ### Coordinator orchestration
 
 Submit a goal. The coordinator:
 
 1. Drafts an **OutcomeSpec** — goal, desired outcome, scope, assumptions
-2. Asks for your confirmation before any work starts
-3. Decomposes the confirmed spec into a **WorkPlan** — subtasks arranged in a dependency graph
-4. Dispatches child agents in parallel, each in their own sandbox
-5. Shows a **live topology graph** of every agent and its status
-6. Lets you **steer mid-run** — send a directive, redirect a child, amend the plan, or stop
-7. Assembles all results into one combined diff
-8. Routes through a **single review gate** (RAI + human approval)
-9. Runs a **Scribe pass** after merge to record what the team learned
+2. Selects the best-fit **workflow** for your task via an LLM pass over available workflows and team roles — surfacing the choice and rationale. You can override from the **Start task** dialog or by typing `use {workflow-id}` in the coordinator chat.
+3. Asks for your confirmation before any work starts
+4. Decomposes the confirmed spec into a **WorkPlan** — subtasks arranged in a dependency graph
+5. Dispatches child agents in parallel, each in their own sandbox
+6. Shows a **live topology graph** of every agent and its status
+7. Lets you **steer mid-run** — send a directive, redirect a child, amend the plan, or stop
+8. Assembles all results into one combined diff
+9. Routes through a **single review gate** (RAI + human approval)
+10. Runs a **Scribe pass** after merge to record what the team learned
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     A[Submit goal] --> B[Coordinator drafts OutcomeSpec]
-    B --> C{You confirm?}
+    B --> W[Selects workflow]
+    W --> C{You confirm?}
     C -- Yes --> D[WorkPlan: subtask DAG]
     C -- Revise --> B
     D --> E[Parallel child runs\nin isolated worktrees]
