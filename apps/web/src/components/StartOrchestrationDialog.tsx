@@ -107,7 +107,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
                   rows={4}
                 />
               </Field>
-              {manualWorkflows.length > 1 && (
+              {manualWorkflows.length > 0 && (
                 <Field label="Workflow">
                   <Select
                     value={workflowOverride ?? ''}
