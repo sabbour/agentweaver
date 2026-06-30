@@ -7,11 +7,11 @@ metadata:
     app.kubernetes.io/part-of: agentweaver
 spec:
   hard:
-    pods: "25"
-    requests.cpu: "12"
-    requests.memory: 24Gi
-    limits.cpu: "24"
-    limits.memory: 48Gi
+    pods: "30"
+    requests.cpu: "16"
+    requests.memory: 32Gi
+    limits.cpu: "32"
+    limits.memory: 64Gi
     persistentvolumeclaims: "4"
     requests.storage: 80Gi
     count/sandboxclaims.extensions.agents.x-k8s.io: "20"
