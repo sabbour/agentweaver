@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Threading.Channels;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
@@ -13,12 +12,15 @@ namespace Agentweaver.Api.Infrastructure;
 /// <summary>
 /// EF Core / PostgreSQL implementation of <see cref="IRunEventStream"/>.
 ///
-/// <para>Mirrors <see cref="SqliteRunEventStream"/>'s two-layer design:
+/// <para>Postgres is the cross-replica relay: every append is durable before acknowledgement, and
+/// subscribers poll the shared <c>RunEvents</c> table from their cursor. This intentionally avoids
+/// per-pod channels for live delivery so a browser connected to replica B observes events written by
+/// a run executing on replica A without sticky sessions.</para>
+///
+/// <para>Write path:
 /// <list type="number">
 ///   <item><b>Durable layer</b> — every <see cref="AppendAsync"/> writes to <c>RunEvents</c> via
 ///   EF (a <c>MemoryDbContext</c> factory-created context per call) before acknowledging.</item>
-///   <item><b>In-process channel</b> — same bounded <see cref="Channel{T}"/> fan-out, replay-then-tail
-///   pattern as the SQLite implementation.</item>
 /// </list></para>
 ///
 /// <para>Sequence assignment uses a serializable-read transaction so that two concurrent
@@ -27,8 +29,8 @@ namespace Agentweaver.Api.Infrastructure;
 /// </summary>
 public sealed class EfRunEventStream : IRunEventStream
 {
-    private const int ChannelCapacity = 1000;
     private const int MaxSequenceRetries = 3;
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
     private static readonly HashSet<string> TerminalTypes = new(StringComparer.Ordinal)
     {
@@ -48,9 +50,7 @@ public sealed class EfRunEventStream : IRunEventStream
     };
 
     private readonly IDbContextFactory<MemoryDbContext> _factory;
-    private readonly ConcurrentDictionary<string, Channel<RunEvent>> _channels = new();
     private readonly ConcurrentDictionary<string, byte> _completedRuns = new();
-    private readonly object _channelsGate = new();
     private readonly ILogger<EfRunEventStream>? _logger;
 
     public EfRunEventStream(IDbContextFactory<MemoryDbContext> factory, ILogger<EfRunEventStream>? logger = null)
@@ -70,76 +70,40 @@ public sealed class EfRunEventStream : IRunEventStream
 
         var sequence = await WriteThroughAsync(runId, evt, ct).ConfigureAwait(false);
 
-        var stamped = evt.Sequence == sequence ? evt : new RunEvent(sequence, evt.Type, evt.Payload);
-        lock (_channelsGate)
-        {
-            if (_completedRuns.ContainsKey(runId))
-            {
-                _logger?.LogWarning(
-                    "Run {RunId} completed while appending event {EventType}; durable event {Sequence} will not resurrect live channel",
-                    runId, evt.Type, sequence);
-                return;
-            }
-
-            var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
-            channel.Writer.TryWrite(stamped);
-        }
+        _ = sequence;
     }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<RunEvent> SubscribeAsync(
         string runId, int fromSequence = 0, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        Channel<RunEvent>? channel;
-        lock (_channelsGate)
+        var lastSeen = fromSequence;
+        while (!ct.IsCancellationRequested)
         {
-            channel = _completedRuns.ContainsKey(runId)
-                ? null
-                : _channels.GetOrAdd(runId, _ => CreateChannel());
-        }
+            var emitted = false;
+            await foreach (var evt in LoadFromSequenceAsync(runId, lastSeen, ct).ConfigureAwait(false))
+            {
+                emitted = true;
+                yield return evt;
+                lastSeen = evt.Sequence;
+                if (TerminalTypes.Contains(evt.Type))
+                    yield break;
+            }
 
-        var lastReplayed = fromSequence;
-        await foreach (var evt in LoadFromSequenceAsync(runId, fromSequence, ct).ConfigureAwait(false))
-        {
-            yield return evt;
-            lastReplayed = evt.Sequence;
-            if (TerminalTypes.Contains(evt.Type))
+            if (!emitted && _completedRuns.ContainsKey(runId))
                 yield break;
-        }
 
-        if (channel is null)
-            yield break;
-
-        await foreach (var evt in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-        {
-            if (evt.Sequence <= lastReplayed)
-                continue;
-            yield return evt;
-            lastReplayed = evt.Sequence;
-            if (TerminalTypes.Contains(evt.Type))
-                yield break;
+            if (!emitted)
+                await Task.Delay(PollInterval, ct).ConfigureAwait(false);
         }
     }
 
     /// <inheritdoc />
     public ValueTask CompleteAsync(string runId, CancellationToken ct = default)
     {
-        lock (_channelsGate)
-        {
-            _completedRuns[runId] = 0;
-            if (_channels.TryRemove(runId, out var channel))
-                channel.Writer.TryComplete();
-        }
+        _completedRuns[runId] = 0;
         return ValueTask.CompletedTask;
     }
-
-    private static Channel<RunEvent> CreateChannel() =>
-        Channel.CreateBounded<RunEvent>(new BoundedChannelOptions(ChannelCapacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = false,
-            SingleWriter = false,
-        });
 
     /// <summary>
     /// Durably writes the event to the <c>RunEvents</c> table and returns the assigned sequence.

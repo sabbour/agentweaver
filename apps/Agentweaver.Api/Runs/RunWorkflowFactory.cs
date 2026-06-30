@@ -1482,21 +1482,8 @@ internal sealed class RecordingChannelWriter : ChannelWriter<RunEvent>
     {
         var sequence = _entry.RecordNext(item.Type, item.Payload);
 
-        // Durable write-through. The entry-assigned sequence keeps the persisted log aligned with
-        // in-memory history. Best-effort: a durable-write failure must not break live streaming;
-        // PersistRunEventsAsync provides a terminal backfill safety net for any gaps.
-        if (sequence > 0 && _runId is not null && _eventStream is not null)
-        {
-            try
-            {
-                _eventStream.AppendAsync(_runId, new RunEvent(sequence, item.Type, item.Payload))
-                    .AsTask().GetAwaiter().GetResult();
-            }
-            catch
-            {
-                // Swallow: durability is reconciled by the terminal PersistRunEventsAsync backfill.
-            }
-        }
+        // RunStreamEntry mirrors each append to IRunEventStream. Keep these fields for constructor
+        // compatibility; terminal PersistRunEventsAsync remains the idempotent backfill safety net.
 
         return true;
     }

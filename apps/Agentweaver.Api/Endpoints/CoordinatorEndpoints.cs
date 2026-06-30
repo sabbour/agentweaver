@@ -50,7 +50,7 @@ app.MapGet("/api/runs/{id}/outcome-spec", async (
     if (run is null) return Results.NotFound();
     if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-    var spec = await coordinator.GetOutcomeSpecAsync(id, ct);
+    var spec = await ReadOutcomeSpecWithBriefWaitAsync(coordinator, id, ct);
     if (spec is null) return Results.NotFound();
 
     return Results.Json(MapOutcomeSpec(spec));
@@ -85,8 +85,10 @@ app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
     return outcome switch
     {
         CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
-        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
-        CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
+        CoordinatorGateOutcome.RunNotActive => await ReadConfirmedOutcomeSpecResultAsync(coordinator, id, ct)
+            ?? Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
+        CoordinatorGateOutcome.NoPendingGate => await ReadConfirmedOutcomeSpecResultAsync(coordinator, id, ct)
+            ?? Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
         _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
     };
 });
@@ -162,7 +164,7 @@ app.MapGet("/api/runs/{coordinatorRunId}/work-plan", async (
     if (run is null) return Results.NotFound();
     if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-    var plan = await coordinator.GetWorkPlanAsync(coordinatorRunId, ct);
+    var plan = await ReadWorkPlanWithBriefWaitAsync(coordinator, coordinatorRunId, ct);
     if (plan is null) return Results.NotFound();
 
     return Results.Json(MapWorkPlan(plan));
@@ -564,6 +566,39 @@ static async Task<OutcomeSpecResponse?> ReadOutcomeSpecAsync(
 {
     var spec = await coordinator.GetOutcomeSpecAsync(runId, ct);
     return spec is null ? null : MapOutcomeSpec(spec);
+}
+
+static async Task<OutcomeSpec?> ReadOutcomeSpecWithBriefWaitAsync(
+    CoordinatorRunService coordinator, string runId, CancellationToken ct)
+{
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(3);
+    while (true)
+    {
+        var spec = await coordinator.GetOutcomeSpecAsync(runId, ct);
+        if (spec is not null || DateTimeOffset.UtcNow >= deadline)
+            return spec;
+        await Task.Delay(100, ct);
+    }
+}
+
+static async Task<IResult?> ReadConfirmedOutcomeSpecResultAsync(
+    CoordinatorRunService coordinator, string runId, CancellationToken ct)
+{
+    var spec = await coordinator.GetOutcomeSpecAsync(runId, ct);
+    return spec?.Status == "confirmed" ? Results.Json(MapOutcomeSpec(spec)) : null;
+}
+
+static async Task<CoordinatorWorkPlanView?> ReadWorkPlanWithBriefWaitAsync(
+    CoordinatorRunService coordinator, string runId, CancellationToken ct)
+{
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+    while (true)
+    {
+        var plan = await coordinator.GetWorkPlanAsync(runId, ct);
+        if (plan is not null || DateTimeOffset.UtcNow >= deadline)
+            return plan;
+        await Task.Delay(150, ct);
+    }
 }
 
 // Reads the run's persisted FailureReason (the terminal Result code, e.g. "agent_quota_exceeded")

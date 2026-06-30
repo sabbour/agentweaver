@@ -17,6 +17,8 @@ public sealed class RunStreamEntry
     /// in-progress runs where the persistent Run record might not yet be fetched.
     /// </summary>
     public string Owner { get; }
+    private readonly string _runId;
+    private readonly IRunEventStream? _eventStream;
 
     private readonly List<RunEvent> _history = [];
     private bool _isCompleted;
@@ -25,9 +27,11 @@ public sealed class RunStreamEntry
     private readonly TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile TaskCompletionSource _eventSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public RunStreamEntry(string owner)
+    public RunStreamEntry(string owner, string runId = "", IRunEventStream? eventStream = null)
     {
         Owner = owner ?? throw new ArgumentNullException(nameof(owner));
+        _runId = runId;
+        _eventStream = eventStream;
     }
 
     public bool IsCompleted
@@ -91,6 +95,7 @@ public sealed class RunStreamEntry
             previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
         previous.TrySetResult();
+        PersistBestEffort(new RunEvent(seq, type, payload));
         return seq;
     }
 
@@ -107,6 +112,7 @@ public sealed class RunStreamEntry
             previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
         previous.TrySetResult();
+        PersistBestEffort(evt);
     }
 
     /// <summary>
@@ -154,6 +160,21 @@ public sealed class RunStreamEntry
         await Task.WhenAny(eventTask, completionTask, timeout).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
     }
+
+    private void PersistBestEffort(RunEvent evt)
+    {
+        if (_eventStream is null || string.IsNullOrWhiteSpace(_runId))
+            return;
+
+        try
+        {
+            _eventStream.AppendAsync(_runId, evt).AsTask().GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Best-effort mirror only. Terminal backfill paths reconcile any missed events.
+        }
+    }
 }
 
 public sealed class RunStreamStore
@@ -164,10 +185,16 @@ public sealed class RunStreamStore
 
     private readonly ConcurrentDictionary<string, (RunStreamEntry Entry, DateTimeOffset CreatedAt)> _entries = new();
     private readonly ConcurrentQueue<string> _completedOrder = new();
+    private readonly IRunEventStream? _eventStream;
+
+    public RunStreamStore(IRunEventStream? eventStream = null)
+    {
+        _eventStream = eventStream;
+    }
 
     public RunStreamEntry Create(string runId, string owner)
     {
-        var entry = new RunStreamEntry(owner);
+        var entry = new RunStreamEntry(owner, runId, _eventStream);
         _entries[runId] = (entry, DateTimeOffset.UtcNow);
         return entry;
     }
