@@ -42,6 +42,8 @@ public sealed class MetricsService
     private readonly IProjectStore _projectStore;
     private readonly HeartbeatStatusStore _heartbeatStore;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ITokenUsageStore _usageStore;
+    private readonly ILogger<MetricsService>? _logger;
     private readonly bool _isPostgres;
 
     public MetricsService(
@@ -49,12 +51,16 @@ public sealed class MetricsService
         IProjectStore projectStore,
         HeartbeatStatusStore heartbeatStore,
         IServiceScopeFactory scopeFactory,
-        IConfiguration configuration)
+        ITokenUsageStore usageStore,
+        IConfiguration configuration,
+        ILogger<MetricsService>? logger = null)
     {
         _db = db;
         _projectStore = projectStore;
         _heartbeatStore = heartbeatStore;
         _scopeFactory = scopeFactory;
+        _usageStore = usageStore;
+        _logger = logger;
         var provider = configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
         _isPostgres = provider is "postgres" or "postgresql";
     }
@@ -102,6 +108,18 @@ public sealed class MetricsService
         var agentRoles = ReadAgentRoles(project);
         var leaderboard = ReadLeaderboard(runs, weekAgo, agentRoles);
 
+        TokenUsageSummaryDto? tokenUsage = null;
+        try
+        {
+            var from = now.AddDays(-30);
+            var usage = await _usageStore.GetProjectUsageAsync(pid, from, now, ct).ConfigureAwait(false);
+            tokenUsage = ToSummaryDto(usage);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "MetricsService: could not load token usage for project {ProjectId}.", pid);
+        }
+
         return new ProjectDashboardDto
         {
             ProjectId       = pid,
@@ -110,6 +128,7 @@ public sealed class MetricsService
             Summary         = summary,
             Throughput      = throughput,
             AgentLeaderboard = leaderboard,
+            TokenUsage      = tokenUsage,
         };
     }
 
@@ -317,6 +336,18 @@ public sealed class MetricsService
         var activeProjects = ReadActiveProjects(runs, readyProjectIds, names);
         var recent = ReadRecentActivity(runs, names);
 
+        AppUsageDto? tokenUsage = null;
+        try
+        {
+            var from = now.AddDays(-30);
+            var appUsage = await _usageStore.GetAppUsageAsync(from, now, ct).ConfigureAwait(false);
+            tokenUsage = ToAppUsageDto(appUsage, from, now);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "MetricsService: could not load app-level token usage.");
+        }
+
         return new OverviewDto
         {
             GeneratedUtc       = now,
@@ -325,6 +356,7 @@ public sealed class MetricsService
             ActiveWorkflowRuns = workflowRuns,
             ActiveProjects     = activeProjects,
             RecentActivity     = recent,
+            TokenUsage         = tokenUsage,
         };
     }
 
@@ -578,5 +610,71 @@ public sealed class MetricsService
             head = head[..lastSpace];
 
         return head.TrimEnd() + Ellipsis;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Token usage DTO mapping helpers (Feature 019)
+    // ---------------------------------------------------------------------------------
+
+    internal static TokenUsageSummaryDto ToSummaryDto(TokenUsageSummary summary) =>
+        new()
+        {
+            InputTokens  = summary.InputTokens,
+            OutputTokens = summary.OutputTokens,
+            TotalTokens  = summary.TotalTokens,
+            TotalNanoAiu = summary.TotalNanoAiu,
+            ByModel      = summary.ByModel.Select(m => new TokenUsageByModelDto
+            {
+                ModelId      = m.ModelId,
+                InputTokens  = m.InputTokens,
+                OutputTokens = m.OutputTokens,
+                TotalNanoAiu = m.TotalNanoAiu,
+            }).ToList(),
+        };
+
+    internal static AppUsageDto ToAppUsageDto(
+        IReadOnlyList<TokenUsageByProject> byProject, DateTimeOffset from, DateTimeOffset to)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var allModels = byProject
+            .SelectMany(p => p.ByModel)
+            .GroupBy(m => m.ModelId, StringComparer.Ordinal)
+            .Select(g => new TokenUsageByModelDto
+            {
+                ModelId      = g.Key,
+                InputTokens  = g.Sum(m => m.InputTokens),
+                OutputTokens = g.Sum(m => m.OutputTokens),
+                TotalNanoAiu = g.Sum(m => m.TotalNanoAiu),
+            })
+            .ToList();
+
+        var totalTokens = byProject.Sum(p => p.TotalTokens);
+        var totalNano   = byProject.Sum(p => p.TotalNanoAiu);
+
+        var projectDtos = byProject.Select(p => new ProjectUsageDto
+        {
+            ProjectId    = p.ProjectId,
+            ProjectName  = p.ProjectName,
+            TotalTokens  = p.TotalTokens,
+            TotalNanoAiu = p.TotalNanoAiu,
+            ByModel      = p.ByModel.Select(m => new TokenUsageByModelDto
+            {
+                ModelId      = m.ModelId,
+                InputTokens  = m.InputTokens,
+                OutputTokens = m.OutputTokens,
+                TotalNanoAiu = m.TotalNanoAiu,
+            }).ToList(),
+        }).ToList();
+
+        return new AppUsageDto
+        {
+            GeneratedUtc = now,
+            FromUtc      = from,
+            ToUtc        = to,
+            TotalTokens  = totalTokens,
+            TotalNanoAiu = totalNano,
+            ByProject    = projectDtos,
+            ByModel      = allModels,
+        };
     }
 }

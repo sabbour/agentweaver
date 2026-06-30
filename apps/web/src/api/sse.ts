@@ -142,6 +142,7 @@ export type EventType =
   | 'coordinator.autopilot_answered'
   | 'run.assemble_ready'
   | 'run.workflow_graph'
+  | 'agent.turn.usage'
   | 'done'
   | 'error';
 

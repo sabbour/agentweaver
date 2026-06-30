@@ -37,7 +37,7 @@ You are an operator for **Agentweaver**, a multi-agent orchestration platform. Y
   Everything outside the BEGIN/END markers is hand-written and preserved.
 -->
 
-The Agentweaver MCP server exposes **80 tools** across **13 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
+The Agentweaver MCP server exposes **82 tools** across **13 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
 
 - **Backlog:** `backlog_archive_task`, `backlog_capture_task`, `backlog_decompose_spec`, `backlog_delete_task`, `backlog_edit_task`, `backlog_get_board`, `backlog_get_settings`, `backlog_get_workflow_stages`, `backlog_move_to_backlog`, `backlog_move_to_ready`, `backlog_reorder_task`, `backlog_set_settings`, `send_all_backlog_to_ready`
 - **Blueprint:** `blueprint_generate`, `list_blueprints`, `validate_blueprint`
@@ -46,8 +46,8 @@ The Agentweaver MCP server exposes **80 tools** across **13 categories**. Tool n
 - **Diagnostics:** `diagnostics_get`, `heartbeat_status`
 - **GitHub Auth:** `github_signin`, `github_signout`, `github_status`
 - **Memory:** `decision_create`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_update`, `memory_export`, `memory_get`, `memory_import`, `memory_list`, `memory_record`, `memory_search`, `session_current`, `session_start`, `session_update`, `squad_decide`
-- **Project:** `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_relink`, `project_rename`
-- **Run:** `run_archive`, `run_get_file`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_watch`, `start_preview`
+- **Project:** `get_project_usage`, `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_relink`, `project_rename`
+- **Run:** `get_run_usage`, `run_archive`, `run_get_file`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_watch`, `start_preview`
 - **Sandbox Policy:** `sandbox_policy_get`, `sandbox_policy_set`
 - **Team:** `team_cast`, `team_get`, `team_member_add`, `team_member_get_charter`, `team_member_retire`
 - **Workflow:** `workflow_generate`, `workflow_get`, `workflow_save`, `workflows_list`, `workflows_sync`

@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **80 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **82 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 ## Backlog
 
@@ -99,6 +99,7 @@ The Agentweaver MCP server exposes **80 tools** across **13 categories**. This i
 
 | Tool | Description |
 | --- | --- |
+| `get_project_usage` | Get token and AI Credit usage for a project over a time range (default: last 30 days). |
 | `project_configure` | Configure the AI model provider settings for a project. |
 | `project_create` | Create a new Agentweaver project. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
@@ -112,6 +113,7 @@ The Agentweaver MCP server exposes **80 tools** across **13 categories**. This i
 
 | Tool | Description |
 | --- | --- |
+| `get_run_usage` | Get token and AI Credit usage for a specific run. |
 | `run_archive` | Archive a run off active project board/list projections. |
 | `run_get_file` | Get the content or diff of a specific file changed by a run. |
 | `run_retry` | Retry a failed run by creating a fresh run from its original inputs. |

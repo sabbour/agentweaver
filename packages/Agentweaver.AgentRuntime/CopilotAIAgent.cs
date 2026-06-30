@@ -111,6 +111,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // --- Per-run run-event emission state (reset in SetupAsync) ---
     private StringBuilder _sb = new();
     private int _seq;
+    private long _turnInputTokens;
+    private long _turnOutputTokens;
+    private long _turnNanoAiu;
+    private string? _turnModelId;
     private readonly object _emitLock = new();
     private int _deltaCount;
     private HashSet<string> _streamedMessageIds = new(StringComparer.Ordinal);
@@ -199,6 +203,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _degradedToolName = null;
         _degradedReason = null;
         _runDegradedEmitted = 0;
+        _turnInputTokens = 0;
+        _turnOutputTokens = 0;
+        _turnNanoAiu = 0;
+        _turnModelId = null;
 
         _logger.LogInformation(
             "SetupAsync entered — workingDirectory={WorkingDirectory}, runId={RunId}, streamIsNull={StreamIsNull}",
@@ -519,6 +527,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (_degradedFlagged)
             EmitRunDegradedOnce(_degradedToolName ?? "unknown", _degradedReason ?? "Sandbox denied a tool call.");
 
+        Emit(EventTypes.AgentTurnUsage, new
+        {
+            inputTokens = _turnInputTokens,
+            outputTokens = _turnOutputTokens,
+            totalTokens = _turnInputTokens + _turnOutputTokens,
+            totalNanoAiu = _turnNanoAiu,
+            modelId = _turnModelId ?? _modelId
+        });
+
         Emit("agent.turn.end", new { turnId = "0" });
 
         if (_suppressedCallIds.Count > 0)
@@ -580,7 +597,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             if (chunk.Contents is not null)
             {
                 foreach (var c in chunk.Contents)
+                {
                     TranslateToolLifecycle(c.RawRepresentation);
+                    if (c.RawRepresentation is AssistantUsageEvent usageEvent && usageEvent.Data is not null)
+                    {
+                        _turnInputTokens += usageEvent.Data.InputTokens ?? 0;
+                        _turnOutputTokens += usageEvent.Data.OutputTokens ?? 0;
+                        _turnNanoAiu += (long)(usageEvent.Data.CopilotUsage?.TotalNanoAiu ?? 0.0);
+                        _turnModelId ??= usageEvent.Data.Model;
+                    }
+                }
             }
         }
     }

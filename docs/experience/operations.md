@@ -423,3 +423,8 @@ When the API is not deployed on AKS (or the cluster diagnostics endpoint returns
 
 > **Full user guide:** see [Cluster page guide](./cluster-page.md) for a walkthrough of each KPI and how to interpret quota warnings.
 > **API reference:** see [Cluster diagnostics reference](../reference/cluster-diagnostics.md) for the full response schema.
+
+## See also
+
+- [Token usage monitoring](./token-usage-monitoring.md) — project and app-level AI Credit dashboards, part of the broader operations picture.
+

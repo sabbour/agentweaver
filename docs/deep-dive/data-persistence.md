@@ -272,6 +272,7 @@ It should hold:
 - **Backlog tasks**: ordered project work items, claim state, and run linkage.
 - **Run revisions**: immutable review feedback history.
 - **Cast proposals**: persisted casting proposals that should survive API restarts.
+- **Token usage records** (`token_usage_records`): one row per `agent.turn.usage` event, storing `run_id`, `workflow_run_id`, `project_id`, `model_id`, `input_tokens`, `output_tokens`, `total_tokens`, `total_nano_aiu`, and a UTC timestamp. Enables efficient aggregation at run, workflow-run, project, and app levels without scanning the raw event payload columns. Schema added in `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs`; also backed by an EF Core entity in `apps/Agentweaver.Api/Infrastructure/Ef/EfTokenUsageStore.cs`.
 
 ### Consistency model
 
@@ -526,3 +527,7 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 - A missing worktree directory is recoverable only if the database metadata and git branch still exist.
 - Successful merges clean up worktrees; conflicted merges preserve them for inspection.
 - The backup CronJob covers `agentweaver.db` only.
+
+## See also
+
+- [Token usage monitoring — Deep Dive](./token-usage-monitoring.md) — the `token_usage_records` schema, projection service, and aggregation hierarchy.

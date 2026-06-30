@@ -154,6 +154,28 @@ public sealed class SqliteDb
         // relative path from which a task was imported; used for idempotency by (project_id,
         // source_file_path, title). NULL for tasks captured manually or through other methods.
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN source_file_path TEXT;", ct);
+
+        // Token usage records for Feature 019 (AI Credit and token monitoring).
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS token_usage_records (
+                id              TEXT PRIMARY KEY,
+                run_id          TEXT NOT NULL,
+                workflow_run_id TEXT,
+                project_id      TEXT,
+                model_id        TEXT NOT NULL,
+                input_tokens    INTEGER NOT NULL DEFAULT 0,
+                output_tokens   INTEGER NOT NULL DEFAULT 0,
+                total_nano_aiu  INTEGER NOT NULL DEFAULT 0,
+                recorded_at     TEXT NOT NULL
+            );
+            """, ct);
+        await TryAlterAsync(connection,
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage_records (run_id);", ct);
+        await TryAlterAsync(connection,
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_project_time ON token_usage_records (project_id, recorded_at);", ct);
+        await TryAlterAsync(connection,
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_wfr ON token_usage_records (workflow_run_id);", ct);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)

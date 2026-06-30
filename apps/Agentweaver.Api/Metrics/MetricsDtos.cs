@@ -60,7 +60,7 @@ public sealed record AgentLeaderboardEntryDto
 /// <summary>
 /// Per-project dashboard response. workflow_health is intentionally absent: a run row carries no
 /// reference to the workflow DEFINITION it executed (workflow_run_id is an orchestration grouping id,
-/// not a workflow type), so per-workflow pass-rate cannot be computed from real data. No cost field.
+/// not a workflow type), so per-workflow pass-rate cannot be computed from real data.
 /// </summary>
 public sealed record ProjectDashboardDto
 {
@@ -70,6 +70,7 @@ public sealed record ProjectDashboardDto
     [JsonPropertyName("summary")]          public required DashboardSummaryDto                 Summary          { get; init; }
     [JsonPropertyName("throughput")]       public required IReadOnlyList<ThroughputPointDto>   Throughput       { get; init; }
     [JsonPropertyName("agent_leaderboard")] public required IReadOnlyList<AgentLeaderboardEntryDto> AgentLeaderboard { get; init; }
+    [JsonPropertyName("token_usage")]      public TokenUsageSummaryDto?                        TokenUsage       { get; init; }
 }
 
 // =====================================================================================
@@ -149,4 +150,46 @@ public sealed record OverviewDto
     [JsonPropertyName("active_workflow_runs")] public required IReadOnlyList<ActiveWorkflowRunDto>     ActiveWorkflowRuns { get; init; }
     [JsonPropertyName("active_projects")]      public required IReadOnlyList<ActiveProjectDto>         ActiveProjects     { get; init; }
     [JsonPropertyName("recent_activity")]      public required IReadOnlyList<RecentActivityDto>        RecentActivity     { get; init; }
+    [JsonPropertyName("token_usage")]          public AppUsageDto?                                     TokenUsage         { get; init; }
+}
+
+// =====================================================================================
+// TOKEN USAGE DTOs (Feature 019: AI Credit and token monitoring)
+// =====================================================================================
+
+public sealed record TokenUsageByModelDto
+{
+    [JsonPropertyName("model_id")]       public required string ModelId      { get; init; }
+    [JsonPropertyName("input_tokens")]   public required long   InputTokens  { get; init; }
+    [JsonPropertyName("output_tokens")]  public required long   OutputTokens { get; init; }
+    [JsonPropertyName("total_nano_aiu")] public required long   TotalNanoAiu { get; init; }
+}
+
+public sealed record TokenUsageSummaryDto
+{
+    [JsonPropertyName("input_tokens")]   public required long                              InputTokens  { get; init; }
+    [JsonPropertyName("output_tokens")]  public required long                              OutputTokens { get; init; }
+    [JsonPropertyName("total_tokens")]   public required long                              TotalTokens  { get; init; }
+    [JsonPropertyName("total_nano_aiu")] public required long                              TotalNanoAiu { get; init; }
+    [JsonPropertyName("by_model")]       public required IReadOnlyList<TokenUsageByModelDto> ByModel    { get; init; }
+}
+
+public sealed record ProjectUsageDto
+{
+    [JsonPropertyName("project_id")]     public required string                              ProjectId    { get; init; }
+    [JsonPropertyName("project_name")]   public required string                              ProjectName  { get; init; }
+    [JsonPropertyName("total_tokens")]   public required long                                TotalTokens  { get; init; }
+    [JsonPropertyName("total_nano_aiu")] public required long                                TotalNanoAiu { get; init; }
+    [JsonPropertyName("by_model")]       public required IReadOnlyList<TokenUsageByModelDto> ByModel      { get; init; }
+}
+
+public sealed record AppUsageDto
+{
+    [JsonPropertyName("generated_utc")]  public required DateTimeOffset                      GeneratedUtc { get; init; }
+    [JsonPropertyName("from_utc")]       public required DateTimeOffset                      FromUtc      { get; init; }
+    [JsonPropertyName("to_utc")]         public required DateTimeOffset                      ToUtc        { get; init; }
+    [JsonPropertyName("total_tokens")]   public required long                                TotalTokens  { get; init; }
+    [JsonPropertyName("total_nano_aiu")] public required long                                TotalNanoAiu { get; init; }
+    [JsonPropertyName("by_project")]     public required IReadOnlyList<ProjectUsageDto>      ByProject    { get; init; }
+    [JsonPropertyName("by_model")]       public required IReadOnlyList<TokenUsageByModelDto> ByModel      { get; init; }
 }

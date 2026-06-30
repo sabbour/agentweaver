@@ -464,3 +464,4 @@ Tool-call details can be large. The watch page truncates very large argument or 
 - [Run event stream](../run-event-stream.md)
 - [Events & Observability](../deep-dive/events-observability.md)
 - [Sandbox browser preview](./sandbox-browser-preview.md) — open a live HTTPS preview of a server an agent started inside its run's sandbox pod, from the run/watch view.
+- [Token usage monitoring](./token-usage-monitoring.md) — the live token counter that appears on the Watch page and how to read AI Credit values.

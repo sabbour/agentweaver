@@ -469,3 +469,32 @@ test.describe('User Guide · Operations (spec-006)', () => {
     }, 'run-pending-capacity');
   });
 });
+
+// ============================================================================
+// token-usage-monitoring.md — token usage screenshots (spec-019 additions)
+// ============================================================================
+test.describe('User Guide · Token usage monitoring (spec-019)', () => {
+  test('watch-token-counter.png', async ({ page }) => {
+    test.skip(!PROJECT_ID || !RUN_ID || !EXECUTION_ID, 'Set PROJECT_ID, RUN_ID, and EXECUTION_ID to capture this screenshot.');
+    await captureAt(page, projectRoute(`/runs/${RUN_ID}/execution/${EXECUTION_ID}`), async () => {
+      // Wait for the token counter panel to appear below the timeline.
+      await page.getByText('Total tokens').first().waitFor().catch(() => undefined);
+    }, 'watch-token-counter');
+  });
+
+  test('dashboard-token-usage.png', async ({ page }) => {
+    test.skip(!PROJECT_ID, 'Set PROJECT_ID to capture project-scoped screenshots.');
+    await captureAt(page, projectRoute('/dashboard'), async () => {
+      // Wait for the token usage section to render on the dashboard.
+      await page.getByText('Token usage').first().waitFor().catch(() => undefined);
+    }, 'dashboard-token-usage');
+  });
+
+  test('overview-token-usage.png', async ({ page }) => {
+    test.skip(!BASE_URL, 'Set BASE_URL to capture this screenshot.');
+    await captureAt(page, '/overview', async () => {
+      // Wait for the app-level token usage section (admin-only).
+      await page.getByText('Token usage').first().waitFor().catch(() => undefined);
+    }, 'overview-token-usage');
+  });
+});

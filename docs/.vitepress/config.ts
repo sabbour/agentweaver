@@ -80,6 +80,7 @@ export default withMermaid({
             { text: 'Sandbox pods', link: '/reference/sandbox-pods' },
             { text: 'Sandbox browser preview', link: '/reference/sandbox-browser-preview' },
             { text: 'Sandbox setup', link: '/reference/sandbox-setup' },
+            { text: 'Token usage', link: '/reference/token-usage' },
             { text: 'A2A transport', link: '/reference/a2a' },
             { text: 'Cluster diagnostics', link: '/reference/cluster-diagnostics' },
             { text: 'Scaling & data layer', link: '/reference/scaling-data-layer' },
@@ -106,6 +107,7 @@ export default withMermaid({
             { text: 'Distributed agents (A2A)', link: '/experience/a2a-distributed-agents' },
             { text: 'Scaling & operations', link: '/experience/scaling-operations' },
             { text: 'Agent communication', link: '/experience/agent-communication' },
+            { text: 'Token usage monitoring', link: '/experience/token-usage-monitoring' },
           ],
         },
         {
@@ -160,6 +162,7 @@ export default withMermaid({
             { text: 'Distributed execution & scaling', link: '/deep-dive/distributed-execution-scaling' },
             { text: 'Memory & decisions', link: '/deep-dive/memory-decisions' },
             { text: 'Events & observability', link: '/deep-dive/events-observability' },
+            { text: 'Token usage monitoring', link: '/deep-dive/token-usage-monitoring' },
             { text: 'Frontend', link: '/deep-dive/frontend' },
             { text: 'Infrastructure', link: '/deep-dive/infra-deployment' },
             { text: 'Testing strategy', link: '/deep-dive/testing-strategy' },
