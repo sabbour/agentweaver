@@ -61,7 +61,7 @@ internal sealed class AgentHostStartupService : IHostedService
 
         // Env-var launch: seed runtime state from options and provision the agent now.
         _runtimeState.InitializeFromOptions(opts);
-        await RunSetupAsync(opts.RunId, opts.UserId, cancellationToken).ConfigureAwait(false);
+        await RunSetupAsync(opts.RunId, opts.UserId, workingDirectoryOverride: null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -74,24 +74,37 @@ internal sealed class AgentHostStartupService : IHostedService
         string turnBearerToken,
         string? kvUserSecretName,
         string? gitHubAccessToken,
+        string? workingDirectory,
         CancellationToken ct)
     {
         _standby = false;
         _logger.LogInformation(
             "AgentHostStartupService: /configure received — provisioning agent for run {RunId}.", runId);
-        await RunSetupAsync(runId, userId, ct).ConfigureAwait(false);
+        await RunSetupAsync(runId, userId, workingDirectory, ct).ConfigureAwait(false);
     }
 
-    private async Task RunSetupAsync(string runId, string? userId, CancellationToken ct)
+    private async Task RunSetupAsync(string runId, string? userId, string? workingDirectoryOverride, CancellationToken ct)
     {
         var opts = _options;
+
+        // Warm pods carry a static AgentHost__WorkingDirectory env (the /workspace mount root). The
+        // per-run worktree path delivered via /configure overrides it so the pod's file-tool root
+        // matches the directory the run's system prompt references — without this override, sibling
+        // agents of one parent write to divergent dirs and later stages cannot find earlier output.
+        var workingDirectory = string.IsNullOrWhiteSpace(workingDirectoryOverride)
+            ? opts.WorkingDirectory
+            : workingDirectoryOverride!;
+        var repositoryPath = string.IsNullOrWhiteSpace(workingDirectoryOverride)
+            ? opts.RepositoryPath
+            : workingDirectoryOverride!;
+
         _logger.LogInformation(
-            "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir}",
-            runId, opts.WorkingDirectory);
+            "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir} (override={HasOverride})",
+            runId, workingDirectory, !string.IsNullOrWhiteSpace(workingDirectoryOverride));
 
         await _agent.SetupAsync(
-            workingDirectory: opts.WorkingDirectory,
-            repositoryPath: opts.RepositoryPath,
+            workingDirectory: workingDirectory,
+            repositoryPath: repositoryPath,
             runId: runId,
             modelId: opts.ModelId,
             systemPromptContext: opts.SystemPromptContext,

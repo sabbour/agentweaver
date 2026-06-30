@@ -22,6 +22,21 @@ public interface IRunSubmittingUserResolver
     /// run is unknown or has no submitting user.
     /// </summary>
     Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the per-run working directory (the shared orchestration worktree path,
+    /// <see cref="Run.WorktreePath"/>) for <paramref name="runId"/>, or <see langword="null"/> if the
+    /// run is unknown or has no worktree path yet.
+    ///
+    /// <para>
+    /// Delivered to the warm-pool pod via <c>POST /configure</c> so its in-pod <c>SetupAsync</c> uses
+    /// the SAME working directory the run's system prompt references. Without this, warm pods default
+    /// to the static <c>AgentHost__WorkingDirectory</c> env (<c>/workspace</c> root) while the prompt
+    /// points at <c>/workspace/{worktree}</c>, so sibling agents of one parent write to divergent
+    /// directories and later stages cannot find files produced by earlier stages.
+    /// </para>
+    /// </summary>
+    Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -46,8 +61,23 @@ public sealed class RunStoreSubmittingUserResolver : IRunSubmittingUserResolver
 
     public async Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default)
     {
-        // Strip known coordinator sub-run suffixes so callers using sub-run IDs resolve the
-        // parent run's submitting user (and therefore the correct user token).
+        var run = await ResolveRunAsync(runId, ct).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(run?.SubmittingUser) ? null : run!.SubmittingUser;
+    }
+
+    public async Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default)
+    {
+        var run = await ResolveRunAsync(runId, ct).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(run?.WorktreePath) ? null : run!.WorktreePath;
+    }
+
+    /// <summary>
+    /// Loads the run row for <paramref name="runId"/>, stripping known coordinator sub-run suffixes
+    /// first so callers using sub-run IDs (e.g. <c>{parent}-coordinator-decompose</c>) resolve the
+    /// parent run — whose submitting user and shared orchestration worktree the sub-run inherits.
+    /// </summary>
+    private async Task<Run?> ResolveRunAsync(string runId, CancellationToken ct)
+    {
         foreach (var suffix in _coordinatorSuffixes)
         {
             if (runId.EndsWith(suffix, StringComparison.Ordinal))
@@ -60,7 +90,6 @@ public sealed class RunStoreSubmittingUserResolver : IRunSubmittingUserResolver
         if (!RunId.TryParse(runId, out var id))
             return null;
 
-        var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
-        return string.IsNullOrWhiteSpace(run?.SubmittingUser) ? null : run!.SubmittingUser;
+        return await _runStore.GetAsync(id, ct).ConfigureAwait(false);
     }
 }

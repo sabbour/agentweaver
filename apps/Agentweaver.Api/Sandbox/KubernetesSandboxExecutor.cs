@@ -381,9 +381,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
             // Warm-pool deferred /configure: inject the per-run RunId/UserId/TurnBearerToken and the
             // KV secret name into the already-warm pod, which then runs SetupAsync and becomes ready.
+            // workingDirectory = the run's shared orchestration worktree path so the pod's SetupAsync
+            // (and therefore its file-tool root) matches the path the run's system prompt references —
+            // without it, warm pods default to the static /workspace env and sibling agents of one
+            // parent write to divergent dirs, breaking cross-stage file hand-off.
             await CallAgentHostConfigureAsync(
                 podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
-                await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false), ct)
+                await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
+                await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false), ct)
                 .ConfigureAwait(false);
 
             _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
@@ -446,7 +451,30 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
-    /// Creates a <c>SandboxClaim</c> that binds to the SHARED, pre-warmed AgentHost warm pool
+    /// Resolves the per-run working directory (shared orchestration worktree path) for
+    /// <paramref name="runId"/> via the injected resolver, never throwing (a lookup failure must not
+    /// fail the launch — it degrades to omitting the working directory, so the pod falls back to its
+    /// static <c>AgentHost__WorkingDirectory</c> env default).
+    /// </summary>
+    private async Task<string?> ResolveWorkingDirectoryAsync(string runId, CancellationToken ct)
+    {
+        if (_submittingUserResolver is null)
+            return null;
+
+        try
+        {
+            return await _submittingUserResolver.GetWorkingDirectoryAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "KubernetesSandboxExecutor: failed to resolve working directory for run {RunId}; " +
+                "AgentHost__WorkingDirectory env default will be used.",
+                runId);
+            return null;
+        }
+    }
     /// (<c>AgentHostWarmPoolRef</c>, replicas: 2). No <c>spec.env</c> is injected — the v0.5.0
     /// controller bypasses warm pool adoption whenever <c>spec.env</c> or
     /// <c>spec.volumeClaimTemplates</c> are present. All static config lives in the SandboxTemplate
@@ -516,7 +544,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
-        string kvUserSecretName, string? gitHubAccessToken, CancellationToken ct)
+        string kvUserSecretName, string? gitHubAccessToken, string? workingDirectory,
+        CancellationToken ct)
     {
         if (_httpClientFactory is null)
         {
@@ -537,6 +566,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             turnBearerToken,
             kvUserSecretName,
             gitHubAccessToken,
+            workingDirectory,
         };
 
         _logger.LogInformation(

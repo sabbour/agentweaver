@@ -150,6 +150,8 @@ public sealed class AgentHostReadinessProbeTests
         public StubSubmittingUserResolver(string? user) => _user = user;
         public Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(_user);
+        public Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
     }
 
     private sealed class RecordingProbe : IAgentHostReadinessProbe

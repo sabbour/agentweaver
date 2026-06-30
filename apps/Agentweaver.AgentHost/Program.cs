@@ -215,7 +215,7 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     await startup.ConfigureAsync(
         body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-        body.KvUserSecretName, body.GitHubAccessToken, ctx.RequestAborted).ConfigureAwait(false);
+        body.KvUserSecretName, body.GitHubAccessToken, body.WorkingDirectory, ctx.RequestAborted).ConfigureAwait(false);
 
     return Results.Ok(new { configured = true, runId = body.RunId });
 });
@@ -293,4 +293,13 @@ internal sealed record ConfigureRequest
     /// When present, the pod skips the Key Vault fetch entirely — no OIDC or KV egress needed.
     /// </summary>
     public string? GitHubAccessToken { get; init; }
+
+    /// <summary>
+    /// The run's shared orchestration worktree path (e.g. <c>/workspace/{worktree}</c>). When present,
+    /// the pod runs <c>SetupAsync</c> with this as its working directory — and therefore its file-tool
+    /// root — instead of the static <c>AgentHost__WorkingDirectory</c> env default. This keeps every
+    /// warm pod serving a run of the same parent rooted at the SAME directory the run's system prompt
+    /// references, so files produced by one stage are visible to the next.
+    /// </summary>
+    public string? WorkingDirectory { get; init; }
 }

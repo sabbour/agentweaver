@@ -50,6 +50,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         public StubSubmittingUserResolver(string? user) => _user = user;
         public Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(_user);
+        public Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
     }
 
     // Records the /configure POST so the warm-pool deferred-config contract can be asserted.
