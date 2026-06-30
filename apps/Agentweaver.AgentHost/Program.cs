@@ -45,7 +45,9 @@ if (!requireMtls && !kestrelEndpointsConfigured)
 {
     // PoC path: no explicit Kestrel endpoint config → bind plain HTTP on the A2A port.
     // MUST NOT be used in production (set AgentHost:RequireMtls=true + provide Kestrel:Endpoints).
-    builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenAnyIP(a2aPort));
+    // Use IPAddress.Any (0.0.0.0) rather than ListenAnyIP ([::]) so the pod is reachable on
+    // single-stack IPv4 clusters where the IPv4 podIP is dialled directly by the API.
+    builder.WebHost.ConfigureKestrel(kestrel => kestrel.Listen(IPAddress.Any, a2aPort));
 }
 
 // ── GitHub credential chain ────────────────────────────────────────────────────

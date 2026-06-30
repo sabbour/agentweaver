@@ -15,3 +15,10 @@ spec:
       targetPort: 8080
       protocol: TCP
   type: ClusterIP
+  # Stop-gap for per-replica in-memory RunStreamStore: pin each browser session to the owning
+  # replica so the UI always reads the replica that has full graph state.  Real fix: move
+  # RunStreamStore to shared state (tracked separately).
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours

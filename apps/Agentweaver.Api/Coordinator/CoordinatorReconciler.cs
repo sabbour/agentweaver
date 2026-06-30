@@ -44,7 +44,8 @@ public sealed class CoordinatorReconciler
     /// <summary>
     /// How long a pod's coordinator lease is considered fresh. Another pod's claim is only stolen
     /// after the owning pod has not updated the WorkPlan row for longer than this window.
-    /// Configurable via <c>Coordinator:PodLeaseStaleTtlSeconds</c> (default 60 s).
+    /// Configurable via <c>Coordinator:PodLeaseStaleTtlSeconds</c> (default 120 s — must exceed
+    /// the 90 s /healthz probe timeout to prevent split-brain during the probe wait window).
     /// </summary>
     private readonly TimeSpan _staleLeaseTtl;
 
@@ -68,7 +69,9 @@ public sealed class CoordinatorReconciler
                    ?? Environment.GetEnvironmentVariable("HOSTNAME")
                    ?? Environment.MachineName;
 
-        var staleSecs = configuration?.GetValue("Coordinator:PodLeaseStaleTtlSeconds", 60) ?? 60;
+        // Default 120 s (must exceed the 90 s /healthz probe timeout with margin to prevent
+        // the non-owning replica from stealing the coordinator lease during the probe wait window).
+        var staleSecs = configuration?.GetValue("Coordinator:PodLeaseStaleTtlSeconds", 120) ?? 120;
         _staleLeaseTtl = TimeSpan.FromSeconds(Math.Max(10, staleSecs));
     }
 
