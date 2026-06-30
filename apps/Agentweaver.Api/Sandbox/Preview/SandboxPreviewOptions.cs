@@ -58,6 +58,12 @@ public sealed class SandboxPreviewOptions
     /// <summary>Highest target port a preview may expose (inclusive). See <see cref="AllowedPortMin"/>.</summary>
     public int AllowedPortMax { get; init; } = 9000;
 
+    /// <summary>Maximum simultaneously active previews for one run, enforced from HTTPRoute state.</summary>
+    public int MaxConcurrentSessionsPerRun { get; init; } = 3;
+
+    /// <summary>Maximum simultaneously active previews for the deployment, enforced from HTTPRoute state.</summary>
+    public int MaxConcurrentSessionsGlobal { get; init; } = 20;
+
     /// <summary>
     /// Pure check: is <paramref name="port"/> within the inclusive preview port range
     /// [<paramref name="min"/>, <paramref name="max"/>]? Used by the preview endpoint to reject
