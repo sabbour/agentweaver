@@ -1,4 +1,4 @@
-import { Badge, Button, Caption1, Input, Popover, PopoverSurface, PopoverTrigger, Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { Badge, Button, Caption1, Popover, PopoverSurface, PopoverTrigger, Text, Textarea, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { AddRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
 import type { BoardColumnDto, RunCardDto, TaskCardDto } from '../../api/types';
@@ -87,15 +87,16 @@ const useStyles = makeStyles({
   addSurface: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalS,
     minWidth: '260px',
   },
-  addRow: {
+  addActions: {
     display: 'flex',
-    gap: tokens.spacingHorizontalS,
+    justifyContent: 'flex-end',
   },
-  addInput: {
-    flex: 1,
+  addTextarea: {
+    width: '100%',
+    resize: 'none',
   },
   addError: {
     color: tokens.colorPaletteRedForeground1,
@@ -275,17 +276,20 @@ export function KanbanColumn(props: KanbanColumnProps) {
               </PopoverTrigger>
               <PopoverSurface aria-label={`Add task to ${column.label}`}>
                 <div className={styles.addSurface}>
-                  <div className={styles.addRow}>
-                    <Input
-                      className={styles.addInput}
-                      value={addTitle}
-                      placeholder={`Add a task to ${column.label}`}
-                      aria-label={`New task title for ${column.label}`}
-                      disabled={addBusy}
-                      autoFocus
-                      onChange={(_, v) => { setAddTitle(v.value); if (addError) setAddError(null); }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void submitAdd(); }}
-                    />
+                  <Textarea
+                    className={styles.addTextarea}
+                    value={addTitle}
+                    placeholder={`Add a task to ${column.label}`}
+                    aria-label={`New task title for ${column.label}`}
+                    disabled={addBusy}
+                    autoFocus
+                    rows={3}
+                    resize="none"
+                    onChange={(_, v) => { setAddTitle(v.value); if (addError) setAddError(null); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submitAdd(); } }}
+                  />
+                  {addError && <Text className={styles.addError}>{addError}</Text>}
+                  <div className={styles.addActions}>
                     <Button
                       appearance="primary"
                       icon={<AddRegular />}
@@ -295,7 +299,6 @@ export function KanbanColumn(props: KanbanColumnProps) {
                       Add
                     </Button>
                   </div>
-                  {addError && <Text className={styles.addError}>{addError}</Text>}
                 </div>
               </PopoverSurface>
             </Popover>

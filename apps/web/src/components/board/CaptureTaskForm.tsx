@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Input, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Text, Textarea, makeStyles, tokens } from '@fluentui/react-components';
 import { AddRegular } from '@fluentui/react-icons';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
@@ -9,13 +9,19 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  row: {
+  textarea: {
+    width: '100%',
+    // Resize handle hidden; height is set by rows prop.
+    resize: 'none',
+  },
+  actions: {
     display: 'flex',
-    gap: tokens.spacingHorizontalS,
-  },
-  input: {
-    flex: 1,
+    justifyContent: 'flex-end',
   },
   error: {
     color: tokens.colorPaletteRedForeground1,
@@ -56,21 +62,23 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
 
   return (
     <div className={styles.root}>
-      <div className={styles.row}>
-        <Input
-          className={styles.input}
-          value={title}
-          placeholder="Capture a task into Backlog"
-          aria-label="New task title"
-          disabled={busy}
-          onChange={(_, v) => { setTitle(v.value); if (error) setError(null); }}
-          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
-        />
+      <Textarea
+        className={styles.textarea}
+        value={title}
+        placeholder="Capture a task into Backlog"
+        aria-label="New task title"
+        disabled={busy}
+        rows={3}
+        resize="none"
+        onChange={(_, v) => { setTitle(v.value); if (error) setError(null); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
+      />
+      {error && <Text className={styles.error}>{error}</Text>}
+      <div className={styles.actions}>
         <Button appearance="primary" icon={<AddRegular />} disabled={busy || !title.trim()} onClick={() => void submit()}>
           Add
         </Button>
       </div>
-      {error && <Text className={styles.error}>{error}</Text>}
     </div>
   );
 }

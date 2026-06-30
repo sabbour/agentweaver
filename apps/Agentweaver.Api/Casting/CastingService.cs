@@ -1082,6 +1082,19 @@ public sealed class CastingService
         await SeedInitialMemoriesAsync(projectId, team, addedNames, chartersByName, now, ct)
             .ConfigureAwait(false);
 
+        // Auto-commit all written squad files so the team is immediately visible without a manual Sync.
+        try
+        {
+            var scribe = CreateScribe(project);
+            var status = scribe.GetStatus();
+            var commitMessage = $"init: squad team for {project.Name}";
+            scribe.Commit(status.ChangeSetHash, commitMessage, "Agentweaver", "agentweaver@localhost");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Auto-commit after team creation failed for project {ProjectId} — squad files are written but not committed", projectId);
+        }
+
         return team;
     }
 
@@ -1213,26 +1226,12 @@ public sealed class CastingService
         sb.Append("| Signal | Agent |\n");
         sb.Append("|--------|-------|\n");
 
-        foreach (var member in team.Members.Where(m => m.Status == CastMemberStatus.Active))
+        // Emit one row per active non-builtin member with a signal derived from their specific role title.
+        // Use the role title directly — it is already unique per agent and specific enough for routing.
+        var builtins = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai", "Coordinator" };
+        foreach (var member in team.Members.Where(m => m.Status == CastMemberStatus.Active && !builtins.Contains(m.Name)))
         {
-            var signal = member.Role.Title switch
-            {
-                var t when t.Contains("Frontend", StringComparison.OrdinalIgnoreCase) => "UI / frontend work",
-                var t when t.Contains("Backend", StringComparison.OrdinalIgnoreCase) => "API / backend / server work",
-                var t when t.Contains("Architect", StringComparison.OrdinalIgnoreCase) => "Architecture decisions, system design",
-                var t when t.Contains("QA", StringComparison.OrdinalIgnoreCase) || t.Contains("Quality", StringComparison.OrdinalIgnoreCase) => "Testing, quality, bug fixes",
-                var t when t.Contains("PM", StringComparison.OrdinalIgnoreCase) || t.Contains("Product", StringComparison.OrdinalIgnoreCase) => "Product decisions, scope, prioritization",
-                var t when t.Contains("Docs", StringComparison.OrdinalIgnoreCase) || t.Contains("Writer", StringComparison.OrdinalIgnoreCase) => "Documentation, content, guides",
-                var t when t.Contains("Research", StringComparison.OrdinalIgnoreCase) => "Research, investigation, analysis",
-                var t when t.Contains("Designer", StringComparison.OrdinalIgnoreCase) => "Design, prototyping, UX",
-                var t when t.Contains("Agent", StringComparison.OrdinalIgnoreCase) || t.Contains("Prompt", StringComparison.OrdinalIgnoreCase) => "AI agent design, prompt engineering",
-                var t when t.Contains("Security", StringComparison.OrdinalIgnoreCase) || t.Contains("Safety", StringComparison.OrdinalIgnoreCase) => "Security, safety, compliance",
-                var t when t.Contains("Incident", StringComparison.OrdinalIgnoreCase) => "Incidents, escalations, on-call",
-                var t when t.Contains("Triage", StringComparison.OrdinalIgnoreCase) => "Issue triage, backlog prioritization",
-                var t when t.Contains("Library", StringComparison.OrdinalIgnoreCase) || t.Contains("Maintainer", StringComparison.OrdinalIgnoreCase) => "Library direction, contribution review",
-                _ => member.Role.Title + " work",
-            };
-            sb.Append($"| {signal} | {member.Name} |\n");
+            sb.Append($"| {member.Role.Title} | {member.Name} |\n");
         }
 
         sb.Append("\n## Built-in Agents\n\n");
