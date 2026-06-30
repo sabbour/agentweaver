@@ -25,3 +25,5 @@ spec:
   sandboxTemplateRef:
     name: agentweaver-agent-host
   replicas: 2
+  updateStrategy:
+    type: OnReplenish
