@@ -30,6 +30,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Generate and save custom workflows](./workflows-automation/generate-and-save-workflows.md) — [#12](https://github.com/sabbour/agentweaver/issues/12)
 - [Automate pickup of Ready work](./workflows-automation/automate-ready-pickup.md) — [#13](https://github.com/sabbour/agentweaver/issues/13)
 - [Open a pull request as a workflow action](./workflows-automation/open-pull-request-action.md) — [#49](https://github.com/sabbour/agentweaver/issues/49)
+- [Trigger tasks for scheduled and event workflows](./workflows-automation/trigger-tasks-for-scheduled-and-event-workflows.md) — [#53](https://github.com/sabbour/agentweaver/issues/53)
 
 ## Orchestration & runs
 
@@ -51,6 +52,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 ## Agent configuration
 
 - [Assign skills to project agents](./agent-configuration/assign-skills-to-agents.md) — [#51](https://github.com/sabbour/agentweaver/issues/51)
+- [Import and sync skills into a project](./agent-configuration/import-and-sync-skills.md) — [#56](https://github.com/sabbour/agentweaver/issues/56)
 
 ## Memory & decisions
 
