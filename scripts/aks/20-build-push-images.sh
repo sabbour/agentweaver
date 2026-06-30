@@ -5,10 +5,10 @@
 #   agentweaver-api      -- .NET 10 API         (context: repo root, Dockerfile: apps/Agentweaver.Api/Dockerfile)
 #   agentweaver-frontend -- ASP.NET Core + SPA   (context: repo root, Dockerfile: apps/web/Dockerfile)
 #   agentweaver-mcp      -- MCP server           (context: repo root, Dockerfile: apps/Agentweaver.Mcp/Dockerfile)
-#   agentweaver-sandbox  -- sandbox base image   (context: apps/agentweaver-sandbox/, Dockerfile: apps/agentweaver-sandbox/Dockerfile)
+#   agentweaver-agent-host -- pod-per-run AgentHost (context: repo root, Dockerfile: apps/Agentweaver.AgentHost/Dockerfile)
 #
-# The first three images use the repo root as build context because their Dockerfiles
-# reference multiple subdirectories. The sandbox image is self-contained.
+# All images use the repo root as build context because their Dockerfiles reference
+# multiple subdirectories.
 #
 # Usage:
 #   source scripts/aks/00-variables.sh
@@ -73,22 +73,7 @@ az acr build \
 echo ""
 echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-mcp:${IMAGE_TAG}"
 
-# -- Image 4: agentweaver-sandbox --------------------------------------------
-# Build context: apps/agentweaver-sandbox/ (self-contained; no repo-root refs)
-# Dockerfile: apps/agentweaver-sandbox/Dockerfile
-echo ""
-echo "--- Building agentweaver-sandbox ---"
-az acr build \
-  --registry "${ACR_NAME}" \
-  --resource-group "${RESOURCE_GROUP}" \
-  --image "agentweaver-sandbox:${IMAGE_TAG}" \
-  --file "apps/agentweaver-sandbox/Dockerfile" \
-  "apps/agentweaver-sandbox"
-
-echo ""
-echo "  Pushed: ${ACR_LOGIN_SERVER}/agentweaver-sandbox:${IMAGE_TAG}"
-
-# -- Image 5: agentweaver-agent-host (spec-018 pod-per-run AgentHost) ----------
+# -- Image 4: agentweaver-agent-host (spec-018 pod-per-run AgentHost) ----------
 # Build context: repo root (Dockerfile COPYs apps/Agentweaver.AgentHost + packages/).
 # Tagged with AGENTHOST_IMAGE_TAG (defaults to IMAGE_TAG) so the SandboxTemplate
 # agentweaver-agent-host references a real, pushed image.
@@ -113,7 +98,6 @@ echo ""
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}"
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-frontend:${IMAGE_TAG}"
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-mcp:${IMAGE_TAG}"
-echo "  ${ACR_LOGIN_SERVER}/agentweaver-sandbox:${IMAGE_TAG}"
 echo "  ${ACR_LOGIN_SERVER}/agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}"
 echo ""
 echo "Export for deploy step:"

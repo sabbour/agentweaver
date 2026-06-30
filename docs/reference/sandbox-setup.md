@@ -96,8 +96,8 @@ The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecut
 
 | CRD | Agentweaver manifest | Role |
 | --- | --- | --- |
-| `SandboxTemplate` | `k8s/sandbox-template.yaml` (`agentweaver-sandbox`) | The pod shape + hardening (Kata runtime class, non-root, read-only rootfs, dropped caps, `/workspace` PVC, A2A port `8088`). |
-| `SandboxWarmPool` | `k8s/sandbox-warmpool.yaml` (`agentweaver-sandbox`, `replicas: 3`) and `k8s/sandbox-warmpool-agenthost.yaml` (`agentweaver-agent-host`, `replicas: 2`) | Keeps warm pods pre-built from a template so claims bind quickly. The AgentHost pool pre-warms two pods in standby; per-run context is delivered later by `POST /configure`, so warm spares no longer CrashLoop without `RunId`. |
+| `SandboxTemplate` | `k8s/sandbox-template-agenthost.yaml` (`agentweaver-agent-host`) | AgentHost pod shape + hardening (Kata runtime class, non-root, `/workspace` PVC, A2A port `8088`, workload identity). |
+| `SandboxWarmPool` | `k8s/sandbox-warmpool-agenthost.yaml` (`agentweaver-agent-host`, `replicas: 2`) | Keeps AgentHost pods pre-built in standby so claims bind quickly; per-run context is delivered later by `POST /configure`. |
 | `SandboxClaim` | created per run by `KubernetesSandboxExecutor` (shape in `k8s/sandbox-claim-template.yaml`) | A request for one sandbox instance (`spec.warmPoolRef.name` + `spec.lifecycle`); the controller binds it to a warm pod from that pool. |
 
 The controller watches `SandboxClaim` objects, adopts a warm pod from the matching pool, and signals binding via a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) plus the bound pod's name in `status.sandbox.name`. There is no `status.phase` field. On claim deletion (or TTL expiry) the controller garbage-collects the pod and its service.
@@ -107,23 +107,21 @@ The controller watches `SandboxClaim` objects, adopts a warm pod from the matchi
 1. The executor creates a `SandboxClaim` (`apiVersion: extensions.agents.x-k8s.io/v1beta1`, plural `sandboxclaims`, `spec.warmPoolRef.name` + `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}` + `spec.env[]`), which binds to a warm pod from the referenced pool.
 2. It polls every 2 s until the claim's `Ready` condition is `True`, then reads the pod name from `status.sandbox.name`.
 3. For a run-scoped command it registers the pod name in `PodNameRegistry` (keyed by run id) so preview/port-forward can find it later.
-4. It runs the command via pod-exec (the Kubernetes WebSocket exec API) against the `agentweaver-sandbox` container.
-5. **Cleanup differs by command kind:** ad-hoc commands delete the claim immediately; run-scoped commands retain the claim until run cleanup or TTL so preview stays available.
+4. On the live pod-per-run path, the worker/API talks to the bound AgentHost pod over A2A after `/configure`; the legacy sleep-infinity pod-exec image is no longer deployed.
+5. Cleanup deletes/releases the claim when the run completes or suspends; the controller garbage-collects the bound pod and replenishes the AgentHost pool.
 
 Configuration is bound from the `Sandbox:Kubernetes` section. AgentHost pods also require `AgentHost:KeyVaultUri` so the warm pod can fetch the configured user token after `/configure`:
 
 | Option | Default | Notes |
 | --- | --- | --- |
 | `Namespace` | `agentweaver` | Namespace the claims and pods live in. |
-| `WarmPoolRef` | `agentweaver-sandbox` | The SandboxWarmPool a generic claim binds to (`spec.warmPoolRef.name`). Pod-per-run AgentHost claims use `AgentHostWarmPoolRef` (`agentweaver-agent-host`). |
+| `AgentHostWarmPoolRef` | `agentweaver-agent-host` | The live pod-per-run AgentHost SandboxWarmPool (`spec.warmPoolRef.name`). |
 | `TimeoutSeconds` | `600` | Claim lifecycle TTL (`spec.lifecycle.ttlSecondsAfterFinished`); per-command timeouts are clamped below it so the controller cannot GC a pod mid-exec. |
 | `AgentHost:KeyVaultUri` | *(unset)* | Static AgentHost config injected into the claim env. Enables runtime Key Vault user-token fetch; per-run `RunId`/`UserId`/turn token/KV secret name arrive via `/configure`, not env. |
 
-### The `agentweaver-sandbox` image
+### The `agentweaver-agent-host` image
 
-The generic warm pods run the image built from `apps/agentweaver-sandbox/Dockerfile`. It ships the language runtimes agent workloads need: `git`, Python 3, Node.js/npm, and the .NET SDK. The container runs as non-root (uid/gid 1000) to match the SandboxTemplate `securityContext`. `readOnlyRootFilesystem` is enforced by the template; writable mounts are provided at `/workspace` (the shared workspace PVC) and `/tmp` (an `emptyDir`).
-
-Pod-per-run AgentHost pods use the separate `agentweaver-agent-host` image built from `apps/Agentweaver.AgentHost/Dockerfile`. Its publish step must include `dotnet publish --runtime linux-x64 --self-contained false`; the RID causes `GitHub.Copilot.SDK` to extract the native `copilot` CLI into `/app/runtimes/linux-x64/native/copilot`. Without that path in the image, pods crash with `Copilot runtime not found at '/app/runtimes/linux-x64/native/copilot'`. AgentHost exposes the A2A listener on container port `8088` and starts in standby when no `RunId` is present; `/configure` runs `SetupAsync` and flips readiness. The agent-host template requests materially more CPU/memory than the shell-only baseline because it pre-warms the .NET/Copilot runtime.
+Pod-per-run AgentHost pods use the `agentweaver-agent-host` image built from `apps/Agentweaver.AgentHost/Dockerfile`. Its publish step must include `dotnet publish --runtime linux-x64 --self-contained false`; the RID causes `GitHub.Copilot.SDK` to extract the native `copilot` CLI into `/app/runtimes/linux-x64/native/copilot`. Without that path in the image, pods crash with `Copilot runtime not found at '/app/runtimes/linux-x64/native/copilot'`. AgentHost exposes the A2A listener on container port `8088` and starts in standby when no `RunId` is present; `/configure` runs `SetupAsync` and flips readiness. The agent-host template requests materially more CPU/memory than the shell-only baseline because it pre-warms the .NET/Copilot runtime.
 
 ### Port-forwarding to a sandbox pod (preview)
 

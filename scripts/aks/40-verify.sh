@@ -25,12 +25,12 @@ echo ""
 api_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-api --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
 fe_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-frontend --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
 mcp_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-mcp --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
-warm_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-sandbox --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
+agenthost_warm_running=$(kubectl get pods -n "${NAMESPACE}" -l app.kubernetes.io/component=agent-host --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
 
 [[ "${api_running}" -ge 1 ]] && ok "API pod(s) running (${api_running})" || fail "No API pods in Running state"
 [[ "${fe_running}" -ge 1 ]] && ok "Frontend pod(s) running (${fe_running})" || fail "No Frontend pods in Running state"
 [[ "${mcp_running}" -ge 1 ]] && ok "MCP pod(s) running (${mcp_running})" || fail "No MCP pods in Running state"
-[[ "${warm_running}" -ge 1 ]] && ok "WarmPool sandbox pod(s) running (${warm_running})" || fail "No WarmPool sandbox pods in Running state"
+[[ "${agenthost_warm_running}" -ge 1 ]] && ok "AgentHost warm-pool pod(s) running (${agenthost_warm_running})" || fail "No AgentHost warm-pool pods in Running state"
 
 echo ""
 echo "--- Gateway status ---"
@@ -108,8 +108,8 @@ fi
 echo ""
 echo "--- Sandbox CRDs/resources ---"
 if kubectl get runtimeclass kata-vm-isolation &>/dev/null; then ok "kata-vm-isolation RuntimeClass present"; else fail "kata-vm-isolation RuntimeClass missing"; fi
-if kubectl get sandboxtemplate agentweaver-sandbox -n "${NAMESPACE}" >/dev/null 2>&1; then ok "SandboxTemplate agentweaver-sandbox exists"; else fail "SandboxTemplate agentweaver-sandbox missing"; fi
-if kubectl get sandboxwarmpool agentweaver-sandbox -n "${NAMESPACE}" >/dev/null 2>&1; then ok "SandboxWarmPool agentweaver-sandbox exists"; else fail "SandboxWarmPool agentweaver-sandbox missing"; fi
+if kubectl get sandboxtemplate agentweaver-agent-host -n "${NAMESPACE}" >/dev/null 2>&1; then ok "SandboxTemplate agentweaver-agent-host exists"; else fail "SandboxTemplate agentweaver-agent-host missing"; fi
+if kubectl get sandboxwarmpool agentweaver-agent-host -n "${NAMESPACE}" >/dev/null 2>&1; then ok "SandboxWarmPool agentweaver-agent-host exists"; else fail "SandboxWarmPool agentweaver-agent-host missing"; fi
 
 echo ""
 echo "==================================================="

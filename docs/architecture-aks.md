@@ -30,7 +30,6 @@ flowchart TB
 
             subgraph exec["Kata VM sandbox execution (katapool · NoSchedule taint)"]
                 ahpool(["AgentHost Warm Pool ×2<br/>agentweaver-agent-host<br/>standby → /configure → active<br/>A2A :8088 · workload identity"])
-                sbpool(["Generic Sandbox Pool ×3<br/>agentweaver-sandbox<br/>command-exec · :8088"])
             end
 
             ws[("Workspace PVC<br/>Azure Files RWX<br/>/workspace")]
@@ -50,7 +49,6 @@ flowchart TB
     gw -->|"/mcp"| mcp
     mcp -->|"API calls :8080"| api
     api & worker -->|"SandboxClaim + POST /configure<br/>A2A Bearer :8088"| ahpool
-    api & worker -->|"SandboxClaim + kube-exec-stdio<br/>ad-hoc command path"| sbpool
     api --- ws
     worker --- ws
     ahpool --- ws
@@ -82,7 +80,7 @@ flowchart TB
     class gw,fe,mcp svc
     class api core
     class worker workerStyle
-    class ahpool,sbpool runtime
+    class ahpool runtime
     class ws,spc data
     class kv,pg,acr,gh ext
 ```
@@ -92,11 +90,8 @@ flowchart TB
 
 ## AgentHost warm-pool lifecycle
 
-AgentHost has its own warm pool, separate from the generic command sandbox pool. The Worker now runs
-in `pod-per-run`, so coordinator child agents execute in AgentHost pods via this pool rather than
-in-process on the Worker:
+The Worker now runs in `pod-per-run`, so coordinator child agents execute in AgentHost pods via this warm pool rather than in-process on the Worker:
 
-- **Generic sandbox pool** — `agentweaver-sandbox`, `k8s/sandbox-warmpool.yaml`, `replicas: 3`, used for the worker/API ad-hoc command-exec path.
 - **AgentHost pool** — `agentweaver-agent-host`, `k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed for live agent turns.
 
 Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with `{ runId, userId, turnBearerToken, kvUserSecretName, workingDirectory }`, then waits for `/healthz` to become ready before sending the first `message:stream` turn. `workingDirectory` is the run's `WorktreePath`, so pod setup and file tools share the worktree path named by the system prompt. The pod lifecycle is:

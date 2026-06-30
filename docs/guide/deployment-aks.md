@@ -267,17 +267,16 @@ AgentHost user tokens do **not** use a shared fan-out SPC or per-run SPC. Each a
 bash scripts/aks/20-build-push-images.sh
 ```
 
-Builds five images via `az acr build` (no local Docker daemon required). The build runs remotely in ACR:
+Builds four images via `az acr build` (no local Docker daemon required). The build runs remotely in ACR:
 
 | Image | Dockerfile | Build context |
 |-------|-----------|---------------|
 | `agentweaver-api:${IMAGE_TAG}` | `apps/Agentweaver.Api/Dockerfile` | repo root |
 | `agentweaver-frontend:${IMAGE_TAG}` | `apps/web/Dockerfile` | repo root |
 | `agentweaver-mcp:${IMAGE_TAG}` | `apps/Agentweaver.Mcp/Dockerfile` | repo root |
-| `agentweaver-sandbox:${IMAGE_TAG}` | `apps/agentweaver-sandbox/Dockerfile` | `apps/agentweaver-sandbox/` |
 | `agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}` | `apps/Agentweaver.AgentHost/Dockerfile` | repo root |
 
-The API, frontend, MCP, and AgentHost images use the repo root as the build context because their Dockerfiles reference multiple project subdirectories. The sandbox base image is self-contained.
+The API, frontend, MCP, and AgentHost images use the repo root as the build context because their Dockerfiles reference multiple project subdirectories.
 
 The AgentHost Dockerfile publishes with `dotnet publish --runtime linux-x64 --self-contained false`. The RID is required for `GitHub.Copilot.SDK` to extract its native `copilot` CLI into the publish output. Without it, AgentHost pods crash with `Copilot runtime not found at '/app/runtimes/linux-x64/native/copilot'`.
 
@@ -286,7 +285,6 @@ Example output after a successful build:
 agentweaverregistry.azurecr.io/agentweaver-api:abc1234
 agentweaverregistry.azurecr.io/agentweaver-frontend:abc1234
 agentweaverregistry.azurecr.io/agentweaver-mcp:abc1234
-agentweaverregistry.azurecr.io/agentweaver-sandbox:abc1234
 agentweaverregistry.azurecr.io/agentweaver-agent-host:abc1234
 ```
 
@@ -319,7 +317,7 @@ The script aborts if `IDENTITY_CLIENT_ID`, `KEYVAULT_NAME`, or `TENANT_ID` are u
    - `serviceaccount-api.yaml` → `secret-provider-class.yaml` → `rbac-api.yaml` → `quota.yaml` → `pvc-data.yaml` → `pvc-workspace.yaml`
    - Network policies and Cilium egress policies
    - Services, Gateway, HTTPRoutes, backup CronJob
-   - Sandbox template and warm pool (skipped if CRDs not installed)
+   - AgentHost sandbox template and warm pool (skipped if CRDs not installed)
 6. Waits for Gateway `Programmed=True`
 7. Applies deployments (api, frontend, mcp)
 8. Waits for all three rollouts to complete
@@ -393,9 +391,7 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `sandbox-template.yaml` | SandboxTemplate | Template for isolated pods — `kata-vm-isolation` runtime, non-root, read-only rootfs, workspace PVC |
 | `sandbox-template-agenthost.yaml` | SandboxTemplate | AgentHost template — image `${AGENTHOST_IMAGE_TAG}`, workload identity, `AgentHost__KeyVaultUri`, no user-token CSI mount. Per-run context is delivered by `/configure`. |
-| `sandbox-warmpool.yaml` | SandboxWarmPool | Keeps 3 pre-warmed generic sandbox pods ready (`agentweaver-sandbox`) |
 | `sandbox-warmpool-agenthost.yaml` | SandboxWarmPool | `agentweaver-agent-host` pool (`replicas: 2`) — keeps two AgentHost pods pre-warmed in standby; ops can tune this file for startup/capacity trade-offs |
 | `sandbox-claim-template.yaml` | (template) | Reference v1beta1 SandboxClaim shape — `spec.warmPoolRef.name` + `spec.lifecycle` |
 
@@ -518,31 +514,31 @@ kubectl api-resources --api-group=extensions.agents.x-k8s.io
 
 ### Sandbox pod characteristics
 
-From `k8s/sandbox-template.yaml`:
+From `k8s/sandbox-template-agenthost.yaml`:
 - **Runtime**: `kata-vm-isolation` — hardware VM-grade isolation (not just container isolation)
-- **Security**: non-root (UID 1000), read-only rootfs, no capabilities, seccomp RuntimeDefault
+- **Security**: non-root (UID 1000), dropped capabilities, seccomp RuntimeDefault; AgentHost keeps writable runtime state in scoped volumes
 - **Volumes**: workspace PVC at `/workspace`, `emptyDir` at `/tmp`
-- **Resources**: 256Mi–4Gi RAM, 250m–1000m CPU
-- **Env injection**: Disallowed (sandbox cannot inherit API pod env vars)
+- **Resources**: sized for the AgentHost .NET/Copilot runtime; tune `sandbox-template-agenthost.yaml` and namespace quota together
+- **Configuration**: static AgentHost config comes from the template/configmap; per-run context arrives via `POST /configure`
 
 ### Verify warm pool
 
 ```bash
-# Should show 3 pods in Running state
-kubectl get pods -n agentweaver -l app=agentweaver-sandbox
+# Should show AgentHost warm pods in Running state
+kubectl get pods -n agentweaver -l app.kubernetes.io/component=agent-host
 
 # Check warm pool status
-kubectl get sandboxwarmpool agentweaver-sandbox -n agentweaver \
+kubectl get sandboxwarmpool agentweaver-agent-host -n agentweaver \
   -o jsonpath='{.status}' | jq
-# status.readyReplicas should equal 3
+# status.readyReplicas should equal 2
 ```
 
 ### Claim lifecycle
 
 1. API creates a `SandboxClaim` (e.g. `run-a1b2c3d4e5f6g7h8`)
 2. Controller binds it to a warm pod (sub-second when pool is warm)
-3. API runs commands via Kubernetes `pods/exec` WebSocket
-4. On completion, claim is deleted; controller terminates the pod and refills the pool
+3. API/Worker configures the bound AgentHost pod and sends turns over A2A
+4. On completion or suspend, claim is released/deleted; controller terminates the pod and refills the pool
 
 ---
 
@@ -737,7 +733,7 @@ The pod should have `AgentHost__KeyVaultUri`, workload identity labels/env, no `
 ### Sandbox pods not appearing in warm pool
 
 ```bash
-kubectl describe sandboxwarmpool agentweaver-sandbox -n agentweaver
+kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver
 kubectl get events -n agentweaver --sort-by='.lastTimestamp' | tail -20
 ```
 

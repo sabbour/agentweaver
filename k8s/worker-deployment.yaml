@@ -142,8 +142,6 @@ spec:
               value: pod-per-run
             - name: Sandbox__Kubernetes__Namespace
               value: agentweaver
-            - name: Sandbox__Kubernetes__TemplateRef
-              value: agentweaver-sandbox
             # GitHub OAuth metadata (callback/frontend for any per-run GitHub auth flows).
             - name: Auth__GitHub__AllowedOrg
               value: microsoft

@@ -225,12 +225,9 @@ whole agent turn) runs in a pod the agent-sandbox controller bound for the run. 
 
 The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecutor` targets the `v1beta1` storage version — [`SandboxClaimConventions.cs:23`](#source)) Agentweaver applies are:
 
-- **`SandboxTemplate`** (`k8s/sandbox-template.yaml`, `agentweaver-sandbox`) — the pod shape and hardening:
-  `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, read-only root
-  filesystem, `/workspace` PVC, and the A2A listener on container port `8088`.
-- **`SandboxWarmPool`** — keeps warm pods pre-built from a template so a claim binds without a cold
-  start. Two pools ship: generic `agentweaver-sandbox` (`k8s/sandbox-warmpool.yaml`, `replicas: 3`)
-  and pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). The AgentHost pool pre-warms the .NET process and Copilot SDK; per-run context arrives later via `/configure`.
+- **`SandboxTemplate`** (`k8s/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) — the live AgentHost pod shape and hardening:
+  `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, and the A2A listener on container port `8088`.
+- **`SandboxWarmPool`** — keeps AgentHost pods pre-built from a template so a claim binds without a cold start. The live pool is `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). It pre-warms the .NET process and Copilot SDK; per-run context arrives later via `/configure`.
 - **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.warmPoolRef.name`
   (the pool to bind), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and
   `spec.env[]` for static values only on the AgentHost path (`AgentHost__KeyVaultUri`, paths, port, mTLS settings). `RunId`, `UserId`, `TurnBearerToken`, and `KvUserSecretName` are delivered after binding by `POST /configure`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
@@ -337,8 +334,7 @@ az aks nodepool add \
 | `apppool`   | User   | *(standard)*    | 1–5 nodes   | *(none)*                          | —                           | api, worker, mcp, frontend, jobs |
 | `katapool`  | User   | KataVmIsolation | 1–5 nodes   | `sandbox=kata:NoSchedule`         | `agentweaver.io/kata=true`  | Sandbox / AgentHost pods       |
 
-The Kata `SandboxTemplate` pod specs (`k8s/sandbox-template-agenthost.yaml`,
-`k8s/sandbox-template.yaml`) wire pods to `katapool` — the CRD `podTemplate.spec` is a full PodSpec,
+The Kata `SandboxTemplate` pod spec (`k8s/sandbox-template-agenthost.yaml`) wires pods to `katapool` — the CRD `podTemplate.spec` is a full PodSpec,
 so `tolerations`/`affinity` pass straight through to the rendered pod:
 
 - a **toleration** for `sandbox=kata:NoSchedule` admits pods onto the tainted `katapool`; and

@@ -194,7 +194,7 @@ Where this lives:
 - `apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs`
 - `k8s/api-deployment.yaml`
 - `k8s/pvc-workspace.yaml`
-- `k8s/sandbox-template.yaml`
+- `k8s/sandbox-template-agenthost.yaml`
 
 ## Why workspace isolation matters
 

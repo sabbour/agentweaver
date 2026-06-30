@@ -692,7 +692,7 @@ Response `200 OK`:
   "session_id": "pf-abc123",
   "local_port": 54321,
   "target_port": 3000,
-  "pod_name": "agentweaver-sandbox-...",
+  "pod_name": "agentweaver-agent-host-...",
   "started_at": "2026-06-07T21:00:00+00:00"
 }
 ```

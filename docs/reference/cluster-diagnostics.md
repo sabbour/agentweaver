@@ -81,10 +81,10 @@ Standard bearer-token authentication is required. See [API reference → Authent
   ],
   "warm_pools": [
     {
-      "name": "agentweaver-sandbox",
-      "desired_replicas": 3,
-      "ready_replicas": 3,
-      "available_replicas": 3,
+      "name": "agentweaver-agent-host",
+      "desired_replicas": 2,
+      "ready_replicas": 2,
+      "available_replicas": 2,
       "status": "healthy",
       "age_seconds": 86400
     }
@@ -95,8 +95,8 @@ Standard bearer-token authentication is required. See [API reference → Authent
       "phase": "standby",
       "ready": true,
       "pod_name": "sandbox-abc123-pod",
-      "template_ref": "agentweaver-sandbox-template",
-      "warm_pool": "agentweaver-sandbox",
+      "template_ref": "agentweaver-agent-host",
+      "warm_pool": "agentweaver-agent-host",
       "age_seconds": 3600
     }
   ],
@@ -107,7 +107,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
       "ready": true,
       "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6",
       "bound_sandbox": "sandbox-abc123",
-      "warm_pool": "agentweaver-sandbox",
+      "warm_pool": "agentweaver-agent-host",
       "age_seconds": 120
     }
   ]
@@ -148,7 +148,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `github_installation_token` | GitHub token-store validity for the configured scope |
 | `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
 | `agent_pod_quota` | CPU headroom ≥ 2 cores in the sandbox namespace |
-| `warm_pool` | Warm-pool agent-sandbox availability for both pools: generic `agentweaver-sandbox` (`replicas: 3`) and AgentHost `agentweaver-agent-host` (`replicas: 2`) |
+| `warm_pool` | Warm-pool agent-sandbox availability for the live AgentHost pool `agentweaver-agent-host` (`replicas: 2`) |
 | `kubernetes_api` | Kubernetes API server reachability |
 
 ### NamespaceQuotaDto

@@ -97,7 +97,7 @@ The sandbox controller adds higher-level objects such as sandbox templates and w
 
 The trade-off is platform maturity and availability: the deploy script only applies sandbox resources when the CRDs are installed. A rebuild can run the core web/API/MCP stack without the sandbox CRDs, but agent execution that depends on Kubernetes sandboxes will not behave the same.
 
-Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`.
+Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`.
 
 ## Workloads and their responsibilities
 
@@ -370,5 +370,4 @@ Use these paths for implementation details only after the concepts above are cle
 - Frontend/docs image and static host: `apps/web/Dockerfile`, `apps/Agentweaver.Web`.
 - API image/runtime: `apps/Agentweaver.Api`.
 - MCP image/runtime: `apps/Agentweaver.Mcp`.
-- Sandbox base image: `apps/agentweaver-sandbox`.
 - AgentHost image/runtime: `apps/Agentweaver.AgentHost`.

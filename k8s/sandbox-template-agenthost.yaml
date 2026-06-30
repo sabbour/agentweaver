@@ -1,13 +1,13 @@
 # SandboxTemplate — agentweaver-agent-host (spec-018 P1.5, pod-per-run).
 #
-# This is the template referenced by KubernetesSandboxOptions.AgentHostTemplateRef
+# This is the template reached through KubernetesSandboxOptions.AgentHostWarmPoolRef
 # (default "agentweaver-agent-host"). KubernetesSandboxExecutor.LaunchAgentHostPodAsync
-# creates a SandboxClaim with templateRef=agentweaver-agent-host; the pod runs
+# creates a SandboxClaim with warmPoolRef=agentweaver-agent-host; the pod runs
 # Agentweaver.AgentHost which hosts the A2ATurnBridgeAgent over A2A and the
 # worker/api connects via RemoteAgentProxy.
 #
-# Differences from agentweaver-sandbox (k8s/sandbox-template.yaml):
-#   - image: agentweaver-agent-host (the real AgentHost), NOT the sleep-infinity image.
+# This supersedes the removed legacy sleep-infinity agentweaver-sandbox template/image.
+#   - image: agentweaver-agent-host (the real AgentHost), NOT the old sleep-infinity image.
 #   - envVarsInjectionPolicy: Allowed — the executor injects AgentHost__RunId etc.
 #   - PoC: RequireMtls=false comes from the mounted configmap-agenthost (plain http :8088).
 #   - PoC: readOnlyRootFilesystem relaxed to false (CopilotClient / git write to $HOME).

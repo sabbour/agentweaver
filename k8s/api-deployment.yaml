@@ -134,8 +134,6 @@ spec:
               value: kubernetes
             - name: Sandbox__Kubernetes__Namespace
               value: agentweaver
-            - name: Sandbox__Kubernetes__TemplateRef
-              value: agentweaver-sandbox
             # spec-018 P1.5 live flip: execute agent turns inside a per-run AgentHost
             # sandbox pod over the A2A bridge (default in-api). RequireMtls=false is the
             # PoC plain-http path; the pod reads the shared RWX token store (UseSharedTokenStore).
