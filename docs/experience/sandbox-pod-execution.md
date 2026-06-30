@@ -177,13 +177,13 @@ sequenceDiagram
     participant Run as Run (worker-owned)
     participant Pod as Sandbox pod
     U->>Run: submit work
-    Run->>Pod: claim warm pod (agent turn)
+    Run->>Pod: claim warm pod + /configure (agent turn)
     Pod-->>U: live tokens + pod pill 'pod-A'
     Run-->>U: reach review gate (pause)
     Run->>Pod: checkpoint + release pod
     Note over U,Run: human reviews — no pod held
     U->>Run: approve / request changes
-    Run->>Pod: re-claim warm pod + rehydrate
+    Run->>Pod: re-claim warm pod + /configure + rehydrate
     Pod-->>U: live again + pod pill 'pod-B'
     Run-->>U: run completes
 ```
@@ -202,9 +202,7 @@ back when it's waiting."** Concretely:
   including instability in the experimental transport — flipping back to `in-api` restores in-process
   execution immediately, no redeploy. `Sandbox:ReleasePodOnSuspend` (default on) tunes whether pods are
   released during suspensions.
-- **Capacity is warm-pool + quota.** More concurrent runs means more claimed pods; the warm-pool size and
-  the namespace `ResourceQuota` (pod count, CPU/memory, sandbox-claim count) bound how many runs can
-  execute at once. Heavier per-pod agent runtimes mean these caps must be raised deliberately in the
+- **Capacity is warm-pool + quota.** More concurrent runs means more claimed pods; the generic sandbox pool keeps 3 command pods warm and the AgentHost pool keeps 2 run pods pre-warmed, while the namespace `ResourceQuota` (pod count, CPU/memory, sandbox-claim count) bounds how many runs can execute at once. Heavier per-pod agent runtimes mean these caps must be raised deliberately in the
   manifests, not patched live. See [Operations](./operations.md) and the
   [reference](../reference/sandbox-pods.md#pod-identity-and-quota).
 - **The isolation backend is chosen per host.** Independently of pod-per-run, every host selects one

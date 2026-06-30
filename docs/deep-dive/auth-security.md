@@ -621,73 +621,64 @@ Where this lives:
 - `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
 - `apps/Agentweaver.Mcp/Program.cs`
 
-## Agent-host token delivery
+## Agent-host warm-pool token delivery and `/configure`
 
-Agent-host pods need a valid GitHub token for the signed-in user so they can call GitHub APIs, clone repositories, and act on behalf of that user. The AKS delivery model is per-user Key Vault storage plus run-scoped CSI projection:
+AgentHost pods need a valid GitHub token for the signed-in user so they can call GitHub APIs, clone repositories, and act on behalf of that user. The AKS model is now: per-user Key Vault storage plus runtime fetch from a warm pod after one-time `/configure`.
 
 - **Per-user source of truth.** OAuth callbacks store only the authenticated caller's token in `GitHubTokenScope.ForUser(login)`, backed by a Key Vault secret named `ghtok-user--{base32(userId)}`.
 - **No shared storage mirror.** GitHub tokens are not written to the workspace PVC or any shared filesystem.
-- **CSI secrets-store delivery.** The run owner's token is projected into the agent-host pod's filesystem by the CSI secrets-store driver.
+- **No user-token CSI mount.** AgentHost no longer creates per-run `SecretProviderClass` objects or mounts `/mnt/user-tokens`. The pod fetches the configured user's secret with workload identity.
 
 ### End-to-end flow
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant User as User (browser)
-    participant API as Agentweaver API
+    participant API as Agentweaver API / Executor
+    participant Claim as SandboxClaim
+    participant Pod as Warm AgentHost pod
     participant KV as Azure Key Vault
-    participant SPC as SecretProviderClass<br/>(per-run user token SPC)
-    participant CSI as CSI driver
-    participant Pod as AgentHost pod
+    participant Agent as CopilotAIAgent
 
     User->>API: sign in (GitHub OAuth)
-    API->>KV: store token as secret<br/>ghtok-user--{base32(userId)}
-    API->>SPC: create run-scoped SPC<br/>for only this user token
-    loop every 2 minutes
-        CSI->>KV: rotate projected file from KV
-    end
-    Pod->>Pod: read /mnt/user-tokens/user_{userId}.json<br/>(CsiMountedGitHubTokenStore)
+    API->>KV: store token as secret ghtok-user--{base32(userId)}
+    API->>Claim: bind shared agentweaver-agent-host warm pool
+    Claim-->>API: pod IP
+    API->>Pod: POST /configure(runId, userId, turnBearerToken, kvUserSecretName)
+    Pod->>Pod: AgentHostRuntimeState.TryConfigure once
+    Pod->>Agent: SetupAsync after configure
+    Agent->>KV: KeyVaultUserTokenProvider fetches kvUserSecretName
+    API->>Pod: POST /a2a/agent/v1/message:stream
+    Note over API,Pod: Authorization: Bearer {turnBearerToken}
 ```
 
-On AgentHost launch, `KubernetesSandboxExecutor` creates a per-run `SecretProviderClass` named `agentweaver-user-token-{runId}` that references only the run owner's Key Vault secret (`ghtok-user--{base32(userId)}`) and aliases it to `user_{userId}.json`. It then clones the base AgentHost `SandboxTemplate` and points that pod's CSI volume at the run-scoped SPC, so the mounted `/mnt/user-tokens/` directory contains only that run owner's token. `AgentHostUserTokenSyncService` has been removed; no sign-in path patches a shared SPC.
+`AgentHostRuntimeState` is the mutable singleton that bridges warm-pool startup and per-run configuration. If a pod starts without `RunId`, `AgentHostStartupService` enters standby and logs that it is waiting for `/configure`. If a pod is launched with env vars for backward compatibility, `InitializeFromOptions` seeds the same runtime state and SetupAsync runs immediately.
 
-The in-pod `CsiMountedGitHubTokenStore` reads from that path. Because the file may not be present immediately on pod cold-start (the CSI volume needs a moment to project the first sync), the store performs a **cold-start retry** of up to 6 attempts with 5-second intervals before failing.
+`POST /configure` accepts `{ runId, userId, turnBearerToken, kvUserSecretName? }`. It returns `400` when `runId` is missing and `409` when the pod was already configured. It is excluded from the readiness gate so standby pods can receive configuration before they are A2A-ready.
 
-The agent-host pod uses the dedicated workload-identity service account `agentweaver-agent-host` (defined in `k8s/serviceaccount-agenthost.yaml`), which is federated with the managed identity that has `get`/`list` access to the Key Vault secrets.
+### Security model
 
-The A2A turn endpoint has a separate application-layer bearer check. At AgentHost pod launch, `KubernetesSandboxExecutor` generates a 256-bit `AgentHostOptions.TurnBearerToken`, injects it as `AgentHost__TurnBearerToken`, and stores it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {per-run token}` on every `POST /a2a/agent/v1/message:stream` call. The token is unique per run, so a token stolen from one pod cannot be reused against another pod; NetworkPolicy/mTLS remain the transport and reachability layers, not the only auth boundary.
+- `/configure` is **one-time**: `Interlocked.CompareExchange` prevents retargeting an already configured warm pod.
+- `/configure` is **not protected by `TurnBearerToken`** because it delivers that token. The guard is Kubernetes NetworkPolicy: AgentHost ingress on port `8088` is restricted to API/worker pods.
+- `POST /a2a/agent/v1/message:stream` is unchanged: it still requires `Authorization: Bearer {per-run token}` and rejects mismatches.
+- `TurnBearerToken` is no longer written into `SandboxClaim.spec.env` in etcd; it travels over in-cluster HTTP from executor to claimed pod.
+- User GitHub token isolation moved from infrastructure-layer CSI projection (pod filesystem contained only one user's file) to application-layer isolation (AgentHost fetches only the configured Key Vault secret name using workload identity). This is an explicit trade-off for warm-pool prewarming.
 
 ### Configuration
 
-`AgentHostOptions.KvTokenMountPath` controls CSI delivery:
+`AgentHost:KeyVaultUri` enables the warm-pool runtime fetch path. The AgentHost template injects it as static config because the pod must know which vault to call before `/configure` arrives. `AgentHost:KvTokenMountPath` and `AgentHost:UseSharedTokenStore` remain legacy/local compatibility paths, not the AKS production path.
 
-| `KvTokenMountPath` | `UseSharedTokenStore` | Active mode |
-|---|---|---|
-| set (e.g. `/mnt/user-tokens`) | *(any)* | **Key Vault CSI projection** |
-| unset | `true` | Legacy/local shared-store compatibility only; not the AKS token-storage model |
-| unset | `false` | no GitHub token delivery |
-
-When `KvTokenMountPath` is set it takes precedence over `UseSharedTokenStore`. In production AKS, the API Key Vault token store uses `diskMirror: null`, so `UseSharedTokenStore` does not receive OAuth token writes from the API.
-
-### Security properties
-
-- No GitHub token ever transits over the network between API and agent-host pod — it is delivered via Kubernetes Secret projection from Key Vault.
-- The CSI-mounted secret is read-only from the pod's perspective.
-- The 2-minute rotation window limits the exposure window if a pod is compromised.
-- The workload-identity SA is scoped to Key Vault get/list only — no write access to KV.
-- Each authenticated user's GitHub token is stored in Azure Key Vault under a per-user key and is never written to shared storage.
-- `message:stream` is bearer-protected per run, so the A2A turn path is not merely NetworkPolicy-gated.
-
-> **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) explains the CSI delivery model, the cold-start retry, and the workload-identity service account.
+> **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) covers `AgentHostRuntimeState`, `KeyVaultUserTokenProvider`, the configure endpoint, and the security trade-off.
 
 Where this lives:
 
 - `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`
-- `apps/Agentweaver.AgentHost/CsiMountedGitHubTokenStore.cs`
-- `apps/Agentweaver.AgentHost/AgentHostOptions.cs`
+- `apps/Agentweaver.AgentHost/Program.cs`
+- `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs`
+- `apps/Agentweaver.AgentHost/AgentHostStartupService.cs`
+- `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs`
 - `k8s/serviceaccount-agenthost.yaml`
-- `k8s/secret-provider-class.yaml`
+- `k8s/sandbox-warmpool-agenthost.yaml`
 - `k8s/sandbox-template-agenthost.yaml`
 
 ## Rebuild checklist

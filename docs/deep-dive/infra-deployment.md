@@ -9,7 +9,7 @@ The deployment is built around five ideas:
 1. **One public HTTPS entry point** routes browser, API, OAuth, and MCP traffic by path.
 2. **Three long-running application workloads** run separately: API, frontend/static host, and MCP server.
 3. **State is explicit**: PostgreSQL Flexible Server holds all application state; the workspace volume is a shared multi-writer file share for worktrees and sandbox files.
-4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets through the CSI driver.
+4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets; API app secrets use CSI, while AgentHost user tokens are fetched at runtime from Key Vault after `/configure`.
 5. **Networking starts closed**: default deny policies are opened only for the paths each component actually needs.
 
 The deployment scripts default to `agentweaver-rg`, `agentweaver-aks-2`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied.
@@ -36,11 +36,13 @@ flowchart TD
 
   ApiPod --> WorkspacePVC["RWX workspace PVC<br/>worktrees + sandbox workspace"]
   ApiPod --> Postgres["Azure Database<br/>for PostgreSQL<br/>Flexible Server"]
-  SandboxPool["Warm sandbox pool<br/>Kata-isolated pods"] --> WorkspacePVC
+  SandboxPool["Warm sandbox pool<br/>generic ×3"] --> WorkspacePVC
+  AgentHostPool["Warm AgentHost pool<br/>replicas:2 · standby"] --> WorkspacePVC
 
   KeyVault["Azure Key Vault"] --> CSI["Secrets Store CSI"]
   CSI --> ApiPod
   CSI --> McpPod
+  KeyVault --> AgentHostPool
 
   ACR["Azure Container Registry"] --> ApiPod
   ACR --> McpPod
@@ -95,7 +97,7 @@ The sandbox controller adds higher-level objects such as sandbox templates and w
 
 The trade-off is platform maturity and availability: the deploy script only applies sandbox resources when the CRDs are installed. A rebuild can run the core web/API/MCP stack without the sandbox CRDs, but agent execution that depends on Kubernetes sandboxes will not behave the same.
 
-Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`.
+Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`.
 
 ## Workloads and their responsibilities
 
@@ -124,7 +126,7 @@ This split keeps MCP protocol concerns out of the frontend and avoids making the
 
 ### Sandbox workload
 
-Sandbox pods are not normal always-on services. They are ephemeral execution environments created from a template and optionally kept warm by a warm pool. They mount the shared workspace volume, run as non-root, disable service account token mounting, use a read-only root filesystem, and rely on an explicit temporary volume for writable scratch space.
+Sandbox pods are not normal always-on services. They are ephemeral execution environments created from templates and kept warm by two pools: the generic sandbox pool (`replicas: 3`) for command execution and the AgentHost pool (`replicas: 2`) for pod-per-run turns. AgentHost warm pods start in standby and are configured by `/configure` after a claim binds. The generic sandboxes disable service account token mounting; AgentHost uses a dedicated workload-identity service account so it can fetch the configured user token from Key Vault.
 
 The API has narrow RBAC for creating and interacting with these sandbox resources. That is intentional: the API needs to create sandbox claims/pods and exec into them, but it should not be a broad cluster administrator.
 
@@ -204,11 +206,11 @@ flowchart LR
 
 The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
-The API reads GitHub OAuth client settings and the OAuth signing key. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). Both the `agentweaver-api` and `agentweaver-agent-host` service accounts use the same managed identity (`agentweaver-api-identity`), each with its own federated credential (`agentweaver-api-fedcred` and `agentweaver-agenthost-fedcred` respectively). The static `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
+The API reads GitHub OAuth client settings and the OAuth signing key from CSI-mounted files. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). Both the `agentweaver-api` and `agentweaver-agent-host` service accounts use the same managed identity (`agentweaver-api-identity`), each with its own federated credential (`agentweaver-api-fedcred` and `agentweaver-agenthost-fedcred` respectively). The static `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
 
-AgentHost user tokens are mounted through per-run SecretProviderClasses. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never mirrored to the shared workspace PVC. The committed `agentweaver-user-tokens` SPC is safe to re-apply because it no longer accumulates users. At pod launch the API creates `agentweaver-user-token-{runId}` with only the run owner's per-user secret aliased to `user_{userId}.json`, clones the AgentHost SandboxTemplate to use it, and deletes those run-scoped resources on release or reaper cleanup.
+AgentHost user tokens are fetched at runtime, not mounted through per-run SecretProviderClasses. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never mirrored to the shared workspace PVC. `sandbox-warmpool-agenthost.yaml` keeps two AgentHost pods pre-warmed in standby; at run launch the API claims one, calls `/configure` with the run owner's secret name, and the pod uses workload identity to fetch exactly that secret. There are no per-run SPCs, cloned templates, or per-run warm pools to clean up.
 
-Rotation constraint: the CSI driver can refresh mounted files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
+Rotation constraint: the CSI driver can refresh mounted API files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
 OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `scripts/aks/16-provision-oauth-signing-key.sh` before the first `30-deploy.sh`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
@@ -321,7 +323,7 @@ Apply order matters:
 7. Deployments last.
 8. Rollout waits and post-deploy verification.
 
-This order prevents common race conditions: pods should not start before secrets can mount, before volumes exist, before identity is annotated, or before the Gateway host is known. Re-applying the static SecretProviderClasses is safe because dynamic user-token SPCs are created separately per AgentHost run.
+This order prevents common race conditions: pods should not start before API secrets can mount, before volumes exist, before identity is annotated, or before the Gateway host is known. Re-applying the static SecretProviderClass is safe because AgentHost user tokens are fetched at runtime from Key Vault; no dynamic user-token SPCs are created per run.
 
 ### Rollout and verification
 

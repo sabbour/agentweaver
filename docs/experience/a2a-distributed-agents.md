@@ -45,7 +45,7 @@ The differences are all on the operations side.
 
 | Aspect | In-process (`in-api`) | Distributed (`pod-per-run`) |
 |---|---|---|
-| Where a turn runs | In the worker process | In a per-run sandbox pod |
+| Where a turn runs | In the worker process | In a warm AgentHost sandbox pod configured for the run |
 | Isolation | Shared worker process | Kata-isolated pod, scoped credential, default-deny egress |
 | Memory footprint | Worker holds every active session | Heavy SDK session lives and dies in the pod |
 | Failure blast radius | A bad turn can pressure the worker | A bad turn is contained to its pod |
@@ -63,14 +63,15 @@ A few mental models keep distributed execution easy to reason about.
 
 **The transport is the sole wire, and the rollback is a flag.** A2A is the only wire transport for agent turns. If anything goes wrong with it, the rollback is not "switch to another protocol" — it is `Sandbox:AgentExecutionMode=in-api`, which reverts to in-process execution instantly. Operators reason about *one* transport and *one* flag, not a matrix of fallback protocols.
 
-**Every turn is authenticated to that run's pod.** The worker path is `API/worker → RemoteAgentProxy → Authorization: Bearer {per-run token} → AgentHost message:stream`. The token is generated when the pod is launched, injected as `AgentHost__TurnBearerToken`, and accepted only by that pod. NetworkPolicy and mTLS still restrict who can reach the listener, but the turn endpoint also has application-layer bearer auth.
+**Every turn is authenticated to that run's pod.** The worker path is `API/worker → claim warm pod → POST /configure → RemoteAgentProxy → Authorization: Bearer {per-run token} → AgentHost message:stream`. The token is generated at run launch, delivered by `/configure`, and accepted only by that pod. NetworkPolicy and mTLS still restrict who can reach the listener, but the turn endpoint also has application-layer bearer auth.
 
 **More pods to watch, same run model.** The new operational surface is sandbox pods alongside worker pods. Their warm-pool sizing, isolation, and credential model are covered in [sandbox pods reference](../reference/sandbox-pods.md). The run timeline, review gates, and event stream you already know are unchanged.
 
 ```mermaid
 flowchart TD
-    Turn[Agent turn starts] --> Pod[Launch / claim per-run pod]
-    Pod --> Run[Stream turn over A2A<br/>Bearer {per-run token}]
+    Turn[Agent turn starts] --> Pod[Claim warm AgentHost pod]
+    Pod --> Configure[POST /configure<br/>RunId/UserId/token/KV secret]
+    Configure --> Run[Stream turn over A2A<br/>Bearer {per-run token}]
     Run -->|completes| Commit[Turn output committed]
     Run -->|suspend on review gate| Release[Checkpoint + release pod]
     Release -->|human resumes| Rehydrate[Re-launch per-run pod, rehydrate]
@@ -83,7 +84,7 @@ flowchart TD
 
 - **Web UI.** The run and board views are unchanged. The timeline, token streaming, and review/merge surfaces look and behave the same in both execution modes. There is no transport widget to learn.
 - **MCP.** The MCP tool surface that drives and observes runs is unchanged — starting, confirming, watching, steering, and reviewing a run work identically whether turns are in-process or distributed. (The MCP server itself is a separate inbound surface; see the [MCP server deep dive](../deep-dive/mcp-server.md) and [MCP client experience](../experience/mcp-client.md).)
-- **Diagnostics.** Where distributed execution *does* become visible is in operational diagnostics: pod counts, warm-pool state, per-run pod claims, and the execution-mode flag. These are operator-facing signals, not user-facing run state. East-west connectivity and the bridge's health belong to [agent communication](../deep-dive/agent-communication.md).
+- **Diagnostics.** Where distributed execution *does* become visible is in operational diagnostics: pod counts, warm-pool state (including two pre-warmed AgentHost pods), per-run pod claims, and the execution-mode flag. These are operator-facing signals, not user-facing run state. East-west connectivity and the bridge's health belong to [agent communication](../deep-dive/agent-communication.md).
 
 ## 6. The one caveat to keep in mind
 

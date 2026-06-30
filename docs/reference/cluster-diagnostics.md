@@ -113,7 +113,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `github_installation_token` | GitHub token-store validity for the configured scope |
 | `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
 | `agent_pod_quota` | CPU headroom ≥ 2 cores in the sandbox namespace |
-| `warm_pool` | Warm-pool agent-sandbox availability |
+| `warm_pool` | Warm-pool agent-sandbox availability for both pools: generic `agentweaver-sandbox` (`replicas: 3`) and AgentHost `agentweaver-agent-host` (`replicas: 2`) |
 | `kubernetes_api` | Kubernetes API server reachability |
 
 ### NamespaceQuotaDto
@@ -158,6 +158,7 @@ Appears in both `active_agent_pods` and `orphaned_agent_pods`.
 
 - All 6 component health checks run **concurrently**. The total response time is bounded by the slowest single check (5-second timeout), not the sum.
 - The `agent_pod_quota` check and the `namespace_quota` DTO are computed separately: the check reports a pass/warn/fail threshold judgment; the DTO reports the raw values for the quota bars in the UI.
+- The `warm_pool` check covers both the generic command sandbox pool and the AgentHost warm pool; an AgentHost pool below its intended two standby pods indicates slower run starts or capacity pressure.
 - Orphaned pods in `orphaned_agent_pods` are not terminated by this endpoint; they will be reaped on the next `AgentHostReaperService` sweep (default: every ~2 minutes via `Coordinator:ReaperIntervalTicks`).
 
 ## Source

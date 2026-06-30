@@ -217,7 +217,7 @@ The script:
 4. Grants the managed identity **Key Vault Secrets User** on the vault
 5. Enables OIDC issuer + workload identity on the cluster (if not already enabled)
 6. Creates a **federated credential** (`agentweaver-api-fedcred`) linking `serviceaccount/agentweaver-api` in namespace `agentweaver` to the managed identity
-7. Creates a second **federated credential** (`agentweaver-agenthost-fedcred`) linking `serviceaccount/agentweaver-agent-host` to the same managed identity — required for agent-host pods to mount Key Vault secrets via CSI
+7. Creates a second **federated credential** (`agentweaver-agenthost-fedcred`) linking `serviceaccount/agentweaver-agent-host` to the same managed identity — required for warm agent-host pods to fetch the configured user token from Key Vault at `/configure` time
 
 > **Required before first deploy:** run `bash scripts/aks/16-provision-oauth-signing-key.sh` to provision the `mcp-oauth-signing-key` secret in Key Vault. Do not pass `--skip-oauth-key` / `-SkipOauthKey` for a production first deploy; use it only when you have verified the secret already exists. Missing this step shows up in diagnostics as `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
@@ -257,7 +257,7 @@ The MCP pod mounts no secrets; its auth relies only on the OAuth paths.
 
 The CSI volume mount is what triggers `SecretProviderClass` synchronization — without the volume attached, secrets are never fetched.
 
-AgentHost user tokens do **not** use a shared fan-out SPC. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`). The static `agentweaver-user-tokens` object in `secret-provider-class.yaml` is installation-only: it contains `ghtok-installation` plus the shared Azure parameters and contains no dynamic per-user entries. When a run launches, `KubernetesSandboxExecutor` creates one run-scoped SPC named `agentweaver-user-token-{runId}`, containing only the run owner's per-user secret with `objectAlias: user_{userId}.json`. The AgentHost pod mounts that SPC at `/mnt/user-tokens/`, so the only user token visible in the pod is `/mnt/user-tokens/user_{userId}.json`. The run SPC is deleted when the pod is released (and by the reaper for orphaned claims). Re-applying `secret-provider-class.yaml` is safe because it contains no per-user token list.
+AgentHost user tokens do **not** use a shared fan-out SPC or per-run SPC. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`). The AgentHost template receives `AgentHost__KeyVaultUri` as static config, and warm AgentHost pods run in standby at `replicas: 2`. When a run launches, `KubernetesSandboxExecutor` claims one warm pod and calls `POST /configure` with the run owner's Key Vault secret name. The pod fetches only that secret via workload identity (`SecretClient` + `DefaultAzureCredential`) and caches it in memory. There is no `/mnt/user-tokens/` mount and no per-run SPC/template/warm-pool cleanup.
 
 ---
 
@@ -343,14 +343,14 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 |------|------|---------|
 | `namespace.yaml` | Namespace | `agentweaver` namespace with `app.kubernetes.io/part-of: agentweaver` label |
 | `serviceaccount-api.yaml` | ServiceAccount | `agentweaver-api` SA, annotated with managed identity client ID for workload identity |
-| `rbac-api.yaml` | Role + RoleBinding | Grants `agentweaver-api` SA permission to create/delete `SandboxClaim`, run-scoped `SandboxTemplate`/`SandboxWarmPool`/`SecretProviderClass`, get/create pods, create `pods/exec` |
+| `rbac-api.yaml` | Role + RoleBinding | Grants `agentweaver-api` SA permission to create/delete `SandboxClaim`, read/update sandbox resources, get/create pods, and create `pods/exec`. Per-run SPC/template/warm-pool creation is no longer part of AgentHost launch. |
 | `quota.yaml` | ResourceQuota + LimitRange + PodDisruptionBudget | Namespace quota (25 pods, 8 CPU req, 16Gi mem req, 20 sandbox claims); default container limits; PDBs for api/mcp/frontend |
 
 ### Secrets
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `secret-provider-class.yaml` | SecretProviderClass | Defines `agentweaver-secrets` for API app secrets and the installation-only `agentweaver-user-tokens` base SPC. Per-run user-token SPCs are created dynamically at AgentHost launch. |
+| `secret-provider-class.yaml` | SecretProviderClass | Defines `agentweaver-secrets` for API app secrets. AgentHost user tokens are fetched from Key Vault at `/configure` time; no per-run user-token SPC is created. |
 
 ### Storage
 
@@ -394,12 +394,12 @@ All manifests live in `k8s/`. The deploy script applies them in dependency order
 | File | Kind | Purpose |
 |------|------|---------|
 | `sandbox-template.yaml` | SandboxTemplate | Template for isolated pods — `kata-vm-isolation` runtime, non-root, read-only rootfs, workspace PVC |
-| `sandbox-template-agenthost.yaml` | SandboxTemplate | Base AgentHost (pod-per-run) template — allows per-run env injection; image `${AGENTHOST_IMAGE_TAG}`. The API clones it per run to point the CSI volume at `agentweaver-user-token-{runId}`. |
+| `sandbox-template-agenthost.yaml` | SandboxTemplate | AgentHost template — image `${AGENTHOST_IMAGE_TAG}`, workload identity, `AgentHost__KeyVaultUri`, no user-token CSI mount. Per-run context is delivered by `/configure`. |
 | `sandbox-warmpool.yaml` | SandboxWarmPool | Keeps 3 pre-warmed generic sandbox pods ready (`agentweaver-sandbox`) |
-| `sandbox-warmpool-agenthost.yaml` | SandboxWarmPool | `agentweaver-agent-host` pool (`replicas: 0`) — template reference for pod-per-run AgentHost claims (env injection forces a cold start, so no warm spare is kept) |
+| `sandbox-warmpool-agenthost.yaml` | SandboxWarmPool | `agentweaver-agent-host` pool (`replicas: 2`) — keeps two AgentHost pods pre-warmed in standby; ops can tune this file for startup/capacity trade-offs |
 | `sandbox-claim-template.yaml` | (template) | Reference v1beta1 SandboxClaim shape — `spec.warmPoolRef.name` + `spec.lifecycle` |
 
-AgentHost launch creates and later deletes three run-scoped resources: `agentweaver-user-token-{runId}` (`SecretProviderClass`), a cloned `SandboxTemplate`, and a zero-replica `SandboxWarmPool` that the `SandboxClaim` binds to. `AgentHostUserTokenSyncService` no longer exists; sign-in stores the user's token, and pod launch decides which single token to mount.
+AgentHost launch no longer creates per-run SPCs, cloned templates, or per-run warm pools. It binds a pod from the shared warm pool, calls `/configure` with run/user/token/KV-secret context, and releases only the claim when the run completes or suspends.
 
 ---
 
@@ -633,7 +633,7 @@ Checks performed:
 - Pod running counts (api ≥1, frontend ≥1, mcp ≥1, sandbox warm pods ≥1)
 - Gateway `Programmed=True` with an assigned address
 - All three HTTPRoutes `Accepted=True` and `ResolvedRefs=True`
-- Static `agentweaver-secrets` and installation-only `agentweaver-user-tokens` SecretProviderClasses exist; at least one mounted SPC has synced
+- Static `agentweaver-secrets` SecretProviderClass exists and at least one mounted API SPC has synced; AgentHost user tokens are fetched at runtime from Key Vault, not mounted via SPC
 - API RBAC Role and RoleBinding present; SA can create SandboxClaims and `pods/exec`
 - `kata-vm-isolation` RuntimeClass present
 - `SandboxTemplate` and `SandboxWarmPool` exist
@@ -725,14 +725,14 @@ If the managed identity federation is misconfigured, the CSI driver will log 403
 
 If cluster diagnostics show `key_vault: critical: secret 'mcp-oauth-signing-key' not found`, the required signing-key provisioning step was skipped. Run `bash scripts/aks/16-provision-oauth-signing-key.sh` and redeploy; do not work around this with `--skip-oauth-key` in production.
 
-For AgentHost pods, also check the run-scoped SPC:
+For AgentHost pods, there is no run-scoped SPC to check. Verify the warm pool and pod configuration instead:
 
 ```bash
-kubectl get secretproviderclass -n agentweaver | grep agentweaver-user-token
+kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver
 kubectl describe pod <agenthost-pod-name> -n agentweaver
 ```
 
-The run-scoped SPC should reference only one user token and the pod should mount exactly `/mnt/user-tokens/user_{userId}.json`.
+The pod should have `AgentHost__KeyVaultUri`, workload identity labels/env, no `/mnt/user-tokens` mount, and logs showing standby followed by `/configure` and `agent ready`.
 
 ### Sandbox pods not appearing in warm pool
 

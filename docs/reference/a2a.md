@@ -30,12 +30,12 @@ Pin a single A2A build aligned with Agentweaver's existing `Microsoft.Agents.AI.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `…/v1/message:stream` | `POST` | Streaming agent turn over SSE. The only data-plane endpoint. **Requires `Authorization: Bearer {AgentHostOptions.TurnBearerToken}`.** |
+| `…/v1/message:stream` | `POST` | Streaming agent turn over SSE. The only data-plane endpoint. **Requires `Authorization: Bearer {runtime turn token}`.** |
 | `…/v1/card` | `GET` | The agent card — capability + security-scheme discovery. **Authz-gated, not anonymous.** |
 
-So at the default path the live routes are `POST /a2a/agent/v1/message:stream` and `GET /a2a/agent/v1/card`. The hosted agent is **not** `CopilotAIAgent` directly: it is `A2ATurnBridgeAgent` (a `DelegatingAIAgent` registered under the MAF name `agentweaver-pod`) wrapping the pod's singleton `CopilotAIAgent`. The A2A server is configured with `AgentRunMode.DisallowBackground` (turns are synchronous streams, never detached tasks). A startup readiness gate returns `503` for every route except `/healthz` until `AgentHostStartupService` has finished the pod's run-scoped `CopilotAIAgent.SetupAsync`.
+So at the default path the live routes are `POST /a2a/agent/v1/message:stream` and `GET /a2a/agent/v1/card`. The hosted agent is **not** `CopilotAIAgent` directly: it is `A2ATurnBridgeAgent` (a `DelegatingAIAgent` registered under the MAF name `agentweaver-pod`) wrapping the pod's singleton `CopilotAIAgent`. The A2A server is configured with `AgentRunMode.DisallowBackground` (turns are synchronous streams, never detached tasks). A startup readiness gate returns `503` for every route except `/healthz` and `/configure` until `AgentHostStartupService` has finished the pod's run-scoped `CopilotAIAgent.SetupAsync`. Warm-pool pods start in standby and run setup only after `/configure`.
 
-`message:stream` is not protected by NetworkPolicy alone. `KubernetesSandboxExecutor` generates a 256-bit random turn token for each run, injects it into the pod as `AgentHost__TurnBearerToken`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` reads the token and sets `Authorization: Bearer {per-run token}` on all turn calls. Because each pod has its own token, a token stolen from one run cannot be reused against another run's AgentHost.
+`message:stream` is not protected by NetworkPolicy alone. `KubernetesSandboxExecutor` generates a 256-bit random turn token for each run, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` reads the token and sets `Authorization: Bearer {per-run token}` on all turn calls. Because each pod has its own configured token, a token stolen from one run cannot be reused against another run's AgentHost. `/configure` itself is not bearer-protected because it delivers the token; scoped NetworkPolicy is the guard.
 
 Messages are keyed by `messageId` and `contextId` (the worker uses the run id as `contextId`). The server maintains a per-`contextId` conversation history, which Agentweaver treats as **ephemeral** (see §4). The surface is intentionally bounded: a fixed streaming endpoint plus a discovery endpoint, narrower than any ad-hoc executor surface.
 
@@ -62,7 +62,7 @@ Agentweaver uses A2A in **message/stream mode only**.
 
 ### What crosses the wire
 
-1. The **turn input** — the first A2A `message:stream` message carries an `AgentSetupParams` `DataPart` (media type `application/x-agentweaver-agent-setup+json`) followed by the task `TextPart`. The pod's bridge reads only the per-turn `IsRevision` flag from it; the run-scoped setup already ran at pod startup.
+1. The **turn input** — the first A2A `message:stream` message carries an `AgentSetupParams` `DataPart` (media type `application/x-agentweaver-agent-setup+json`) followed by the task `TextPart`. The pod's bridge reads only the per-turn `IsRevision` flag from it; the run-scoped setup already ran after `/configure`.
 2. The agent's **streaming output** — assistant text deltas, accumulated on the worker into the turn result.
 3. The **`RunEvent` side-channel**, encoded as A2A `DataContent` parts (media type `application/x-agentweaver-run-event+json`, via `RunEventDataPartCodec`) on `message:stream`, decoded back into `RunEvent`s on the worker. These are forwarded **in-band** on the same stream today; an external-bus fan-out is a future option, not what ships.
 
@@ -83,7 +83,7 @@ A2A requires an in-pod HTTP listener and an east-west ingress rule onto Kata-iso
 |---|---|
 | **H1 — Transport identity** | TLS **plus** a workload-identity-bound pod server certificate. **mTLS / SPIFFE preferred.** This is now the **production default**: `AgentHostOptions.RequireMtls` / `SandboxAgentOptions.RequireMtls` default to `true`, which selects the `https` scheme and drives the mounted `appsettings.k8s.json` Kestrel endpoint with the workload-bound server cert + `RequireCertificate`. A **plain-HTTP PoC fallback** remains (`RequireMtls=false` → no Kestrel endpoint config, listener binds plain HTTP on the A2A port) and **must not** be used in production. |
 | **H2 — Scoped ingress** | A `NetworkPolicy` ingress rule scoped to **worker-pod → sandbox:port only** (expressed for both plain NetworkPolicy and Cilium). Sandbox pods are otherwise ingress deny-all. |
-| **H3 — A2A app-layer authz** | `/v1/message:stream` requires the per-run `AgentHostOptions.TurnBearerToken`; `/v1/card` is authz-gated and minimized. No anonymous discovery. |
+| **H3 — A2A app-layer authz** | `/v1/message:stream` requires the per-run runtime turn token delivered by `/configure`; `/v1/card` is authz-gated and minimized. No anonymous discovery. |
 | **H4 — Bounded listener** | Explicit Kestrel timeout, request-body, and stream limits, **plus SSE heartbeats** so a request-timeout does not kill the long-lived turn stream. |
 | **H5 — Idempotent resume** | Resume via Agentweaver's DB checkpoint with **idempotent, sequence-based re-injection**. On mid-turn drop, **re-drive the turn from the last checkpoint** (A2A `message:stream` has no Last-Event-ID replay). |
 | **H6 — No egress broadening** | The sandbox egress allowlist is unchanged: model endpoint, the API broker endpoint, and the run's legitimate git remote(s). Everything else is default-deny. A2A adds **no** egress. |
@@ -138,13 +138,14 @@ A `kube-exec-stdio` channel exists for its own per-command purposes and remains 
 | `Sandbox:AgentHost:RequireMtls` | `true` *(default)* / `false` | `true` = mTLS/`https` (production); `false` = plain-HTTP PoC listener. Mirrored to the pod as `AgentHost:RequireMtls`. |
 | `Sandbox:AgentHost:Port` | `8088` *(default)* | Pod A2A listener port. |
 | `Sandbox:AgentHost:A2APath` | `/a2a/agent` *(default)* | Base A2A path; routes are `{path}/v1/message:stream` and `{path}/v1/card`. Must match the pod's `AgentHost:A2APath`. |
-| `AgentHost:TurnBearerToken` | generated per run | 256-bit random bearer required on `POST …/v1/message:stream`; injected into the pod as `AgentHost__TurnBearerToken` and stored worker-side in `IAgentHostTurnTokenRegistry`. Empty is local/test only. |
+| Runtime turn token | generated per run | 256-bit random bearer required on `POST …/v1/message:stream`; delivered to the claimed warm pod by `POST /configure` and stored worker-side in `IAgentHostTurnTokenRegistry`. Empty is local/test only. |
 | `AgentHost:CardBearerToken` | token / empty | Bearer required on `…/v1/card` (H3); empty disables the gate (dev/test only). |
-| `AgentHost:KvTokenMountPath` | path / empty | When set (for example `/mnt/user-tokens`), pod reads the run owner's per-user GitHub OAuth token from the run-scoped Key Vault CSI projection. |
+| `AgentHost:KeyVaultUri` | URI / empty | Enables warm-pool runtime fetch of the configured user token from Key Vault via workload identity. |
+| `AgentHost:KvTokenMountPath` | path / empty | Legacy CSI-mounted token path; superseded by `AgentHost:KeyVaultUri` in AKS. |
 | `AgentHost:UseSharedTokenStore` | `true` / `false` *(default)* | Legacy/local compatibility only. Production AKS stores per-user GitHub tokens in Key Vault and does not mirror them to the shared workspace PVC. |
 
 ### Pod-per-run lifecycle
 
-In `pod-per-run` mode the AgentHost pod is **lazily launched per run**. `KubernetesPodAgentEndpointResolver.TryResolveEndpointAsync(runId)` is the single chokepoint every turn passes through (via `RemoteAgentProxy.SetupAsync`); on the first resolve for a run with no registered pod it calls `IAgentHostPodLifecycle.LaunchAgentHostPodAsync(runId)`, which creates a `SandboxClaim`, waits for it to bind, reads the pod IP, registers the `scheme://podIP:port{path}` endpoint, and records that run's turn bearer token. Concurrent launches for the same run are deduped. On suspend, `RunWatchLoopService` calls `ReleaseAgentHostPodAsync(runId)` when `Sandbox:ReleasePodOnSuspend=true`, which also unregisters the token. Outside a cluster the resolver is a no-op and `pod-per-run` fails fast with a clear message (set `in-api`).
+In `pod-per-run` mode the AgentHost endpoint resolver is the chokepoint every turn passes through (via `RemoteAgentProxy.SetupAsync`). On first resolve for a run with no registered pod, it calls `IAgentHostPodLifecycle.LaunchAgentHostPodAsync(runId)`, which creates a `SandboxClaim` against the shared `agentweaver-agent-host` warm pool, waits for binding, reads the pod IP, calls `POST /configure`, waits for `/healthz`, registers the `scheme://podIP:port{path}` endpoint, and records that run's turn bearer token. Concurrent launches for the same run are deduped. On suspend, `RunWatchLoopService` calls `ReleaseAgentHostPodAsync(runId)` when `Sandbox:ReleasePodOnSuspend=true`, which also unregisters the token. Outside a cluster the resolver is a no-op and `pod-per-run` fails fast with a clear message (set `in-api`).
 
 See the [A2A bridge deep dive](../deep-dive/a2a-bridge.md) for how these settings interact with checkpointing and resume, and the [distributed-agents experience doc](../experience/a2a-distributed-agents.md) for what they change operationally.

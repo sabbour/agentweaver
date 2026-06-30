@@ -49,7 +49,7 @@ Color coding:
 > *Shows:* the Cluster page with the CPU quota bar showing a red near-limit state, and one or more subtasks in the Pending-capacity runs table.
 > *Path:* open a project → click **Cluster** → observe a red CPU bar.
 
-A red CPU bar combined with entries in the **Pending-capacity runs** table means new pods cannot be scheduled. Options:
+A red CPU bar combined with entries in the **Pending-capacity runs** table means new pods cannot be scheduled. If the Warm pool row warns, AgentHost may still work but run launch loses the fastest path because fewer than two pods are pre-warmed. Options:
 
 1. Wait for running pods to finish (the reaper will clean orphans within 2 minutes).
 2. Check the **Orphaned pods** table — if there are orphaned pods, they will be reaped on the next sweep.
@@ -65,7 +65,7 @@ Six checks run concurrently each time the page loads:
 | **GitHub token store** | Configured GitHub token store validity for the current scope | Token expiry, missing per-user token, GitHub API outage |
 | **Azure Key Vault** | Key Vault reachability and required `mcp-oauth-signing-key` lookup | Managed identity misconfiguration, network policy, or skipped `scripts/aks/16-provision-oauth-signing-key.sh` |
 | **Agent pod quota** | CPU headroom ≥ 2 cores | Too many active pods, under-provisioned node pool |
-| **Warm pool** | Warm-pool agent-sandbox availability | Warm-pool replica count zero, SandboxTemplate CRD issue |
+| **Warm pool** | Warm-pool agent-sandbox availability for generic sandboxes (`replicas: 3`) and AgentHost (`replicas: 2`) | Warm-pool replica count below target, SandboxTemplate CRD issue |
 | **Kubernetes API** | Kubernetes API server reachability | In-cluster network policy, apiserver overload |
 
 Each check shows:
