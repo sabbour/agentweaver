@@ -326,6 +326,31 @@ flowchart TD
 
 Only `assemble_ready` and `completed` satisfy dependencies. A failed or RAI-flagged dependency fails its still-pending dependents with recovery guidance, because serial dependents cannot safely proceed from a bad prerequisite.
 
+### Distributed pod lease on `dispatching` plans
+
+`Dispatching` is a **distributed single-writer section** now, not just an in-memory one. The
+`WorkPlan` row carries `CoordinatorPodId`, which stores the pod/hostname currently holding the
+dispatch lease for that plan.
+
+When a pod starts dispatch — or re-arms a previously orphaned dispatch loop — it first claims the
+lease by atomically updating the `WorkPlan` row (`ExecuteUpdateAsync`) to stamp
+`CoordinatorPodId = <this pod>` and refresh `UpdatedAt`. Only the replica whose conditional UPDATE
+actually affects the row proceeds to `StartDispatch`.
+
+This was needed because the old reconciler relied on each process's local `IsDispatchActive`
+dictionary. In a multi-replica deployment, the Worker pod could have an active dispatch loop that
+API replicas could not see, so every replica sweeping "orphaned" `dispatching` plans could re-arm
+the same coordinator independently.
+
+The reconciler now checks two things before trying to steal a plan:
+
+- if another pod owns `CoordinatorPodId` **and** that claim is still fresh, it skips the plan; and
+- if the claim is missing or stale, it tries one conditional UPDATE to take ownership.
+
+A lease is considered stale after `Coordinator:PodLeaseStaleTtlSeconds` (default **60 s**). In
+practice that means a healthy owner keeps the plan by touching `UpdatedAt`, while another replica
+may recover the work if the owner dies and stops refreshing the row.
+
 ### Shared worktree conflict control
 
 Child subtasks share one orchestration worktree. `IsolationStrategy` helps communicate intent, but it is not an enforced sandbox.
@@ -351,6 +376,8 @@ For each dispatched subtask, the coordinator creates a child run with:
 The child task includes the subtask title/scope, any recovery guidance, the parent OutcomeSpec, dependency summaries, and completed sibling outputs. That gives workers enough local context without asking them to rediscover the entire plan.
 
 Child runs use the trimmed child workflow. They produce work and pass child-level safety checks, then stop at the assemble-ready boundary. They do not each perform human review, merge, or scribe.
+In production, the Worker executes those child agent turns in `pod-per-run` mode, so the live agent
+session runs inside a dedicated AgentHost pod rather than in-process on the Worker.
 
 ### Observation and bubbling
 
@@ -480,7 +507,11 @@ The coordinator assumes in-memory drivers can disappear. Recovery routes by dura
 | `complete` | Settle the coordinator run as completed if it was still in progress. |
 | blocked/failed/declined assembly states | Settle the coordinator run as failed or declined with the recorded reason. |
 
-The heartbeat also runs a reconciler. It scans for orphaned dispatching, awaiting-assembly, and assembling plans whose in-memory loop is gone, recreates the coordinator stream if needed, and re-arms the correct service. Each candidate is isolated by try/catch so one corrupt plan does not stop the sweep.
+The heartbeat also runs a reconciler. It scans for orphaned dispatching, awaiting-assembly, and
+assembling plans whose in-memory loop is gone, recreates the coordinator stream if needed, and
+re-arms the correct service. For `dispatching` plans it honors the distributed `CoordinatorPodId`
+lease first, skipping freshly owned plans and stealing only stale ones. Each candidate is isolated
+by try/catch so one corrupt plan does not stop the sweep.
 
 ### Reaper as the 3rd heartbeat phase
 

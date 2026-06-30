@@ -108,9 +108,69 @@ bash install.sh --aks --image-tag <git-sha>
 
 > **Never use `:latest`.** The default tag is the short git SHA (`git rev-parse --short HEAD`). Always pin to a specific SHA for reproducible deployments. Image tags are immutable per build.
 
+## AKS architecture
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart TB
+    client(["🌐 Browser / AI client\nHTTPS :443"])
+
+    subgraph aks["AKS Cluster — namespace: agentweaver"]
+        gw{{"Gateway\napproutinging-istio · TLS :443"}}
+
+        subgraph core["Core services"]
+            fe(["Frontend ×2\nReact SPA"])
+            api(["API ×2\npod-per-run mode"])
+            worker(["Worker ×1+HPA\npod-per-run mode"])
+            mcp(["MCP ×1\nOAuth · MCP protocol"])
+        end
+
+        subgraph exec["Kata VM sandbox execution"]
+            ahpool(["AgentHost Warm Pool ×2\nstandby → /configure → active\nA2A :8088"])
+            sbpool(["Generic Sandbox Pool ×3\ncommand-exec · :8088"])
+        end
+
+        ws[("Workspace PVC\nAzure Files RWX")]
+    end
+
+    kv(["Azure Key Vault\nuser tokens · app secrets"])
+    pg(["Azure PostgreSQL\nruns · events · memory"])
+    gh(["GitHub\nOAuth · api.github.com"])
+
+    client -->|"HTTPS :443"| gw
+    gw -->|"/"| fe
+    gw -->|"/api /auth"| api
+    gw -->|"/mcp"| mcp
+    mcp -->|"API calls :8080"| api
+    api -->|"SandboxClaim\n+ POST /configure"| ahpool
+    worker -->|"in-api exec"| sbpool
+    api & worker --- ws
+    ahpool --- ws
+    api & worker -->|"TLS :5432"| pg
+    api -->|"workload identity"| kv
+    ahpool -->|"fetch user token"| kv
+    api & mcp -->|"OAuth · REST"| gh
+
+    classDef svc fill:#F3F2F1,stroke:#8A8886,color:#242424
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424
+    classDef worker fill:#D9EFD9,stroke:#107C10,stroke-width:2px,color:#242424
+    classDef runtime fill:#DDF3DD,stroke:#107C10,color:#242424
+    classDef data fill:#FFF4CE,stroke:#C19C00,color:#242424
+    classDef ext fill:#F0E8F8,stroke:#8764B8,color:#242424
+
+    class gw,fe,mcp svc
+    class api core
+    class worker worker
+    class ahpool,sbpool runtime
+    class ws data
+    class kv,pg,gh ext
+```
+
+> Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/architecture-aks.md)
+
 ## Key docs
 
 - [Getting started](docs/guide/getting-started.md)
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
-- [Architecture overview](docs/architecture/overview.md)
+- [AKS architecture](docs/architecture-aks.md)

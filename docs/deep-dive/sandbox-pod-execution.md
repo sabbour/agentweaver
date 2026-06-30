@@ -2,16 +2,15 @@
 
 ## Why this exists: one fix for two problems
 
-Agentweaver historically runs **every run's heavy execution state inside a single API pod**. That one
-pod holds the live GitHub Copilot SDK session for each active run, the in-process workflow runner, the
-streaming buffers, the tool/shell execution, and an in-memory history of recent runs. Because all of it
-lives in one process, memory scales with *concurrent + recently-completed runs × (SDK session + graph +
-history)*, and the pod runs out of memory. It cannot be scaled out either, because the single-writer
-data store pins it to one replica.
+Before pod-per-run shipped, production agent subtasks ran **in-process inside the shared Worker
+pod**. That pod held the live GitHub Copilot SDK session for each active run, the in-process
+workflow runner, the streaming buffers, the tool/shell execution, and an in-memory history of
+recent runs. Because all of it lived in one process, memory scaled with *concurrent +
+recently-completed runs × (SDK session + graph + history)*, and the pod ran out of memory.
 
-Sandbox pod execution starts from a single insight: **memory relief and security isolation are the same
-fix**. Moving each run's agent execution out of the shared API process and into its own per-run,
-Kata-isolated pod simultaneously:
+Sandbox pod execution starts from a single insight: **memory relief and security isolation are the
+same fix**. Moving each run's agent execution out of the shared Worker process and into its own
+per-run, Kata-isolated pod simultaneously:
 
 1. **relieves the OOM** — the heavy SDK session, the runner, and tool execution leave the shared
    process, so no single process holds more than the runs it actively owns; and
@@ -27,18 +26,18 @@ orchestration graph. The heavy, untrusted work runs elsewhere, per run, and dies
 > exhaustive flag/identity/token reference is [Sandbox pods reference](../reference/sandbox-pods.md), and
 > the operator/user-facing view is [Sandbox pod execution experience](../experience/sandbox-pod-execution.md).
 
-## As-is vs to-be: where agent execution runs
+## Before and after: where agent execution runs
 
-### As-is: single-API-pod execution
+### Before pod-per-run: single-Worker-pod execution
 
-Today the leaf agent — the object that wraps a live Copilot SDK session — is created and driven **inside
-the API process**. The workflow graph runs in-process there too, the coordinator drives its own
-decomposition turn in-process, and the sandbox pod is used only to **exec one shell command at a time**
-through a warm-pool claim. The pod is a place to run `run_command`; it is *not* where the agent lives.
+Before this rollout, the leaf agent — the object that wraps a live Copilot SDK session — was
+created and driven **inside the Worker process**. The workflow graph ran in-process there too, and
+the sandbox pod was used only to **exec one shell command at a time** through a warm-pool claim.
+The pod was a place to run `run_command`; it was *not* where the agent lived.
 
 ```mermaid
 flowchart LR
-    subgraph API["API pod (single replica, ~4Gi)"]
+    subgraph Worker["Worker pod (shared runner)"]
         Graph[Workflow graph<br/>in-process runner]
         Agent[Agent + live Copilot SDK session]
         Hist[In-memory run-event history]
@@ -49,10 +48,10 @@ flowchart LR
     Hist --> SSE[SSE to clients]
 ```
 
-Every box inside the API pod multiplies by concurrent and recent runs. That is why it OOMs, and why a
-single-writer store keeps it pinned to one replica.
+Every box inside the Worker pod multiplies by concurrent and recent runs. That is why it OOMed, and
+why production had to keep subtasks on one shared in-process owner.
 
-### To-be: per-run sandbox pod
+### Now: per-run sandbox pod
 
 Under pod-per-run, the **leaf agent turn relocates into the pod**. The orchestration graph and its
 human-in-the-loop (HITL) gates stay in the worker tier; only the agent *turn* — the part that holds the
@@ -105,6 +104,10 @@ A key simplification: because remoting is at the leaf seam, AgentHost does **not
 graph. The graph lives only in the worker. AgentHost hosts one `AIAgent` and serves its turns. The
 worktree commit/diff stays on the worker side, over the **shared workspace volume** both tiers mount, so
 the database-write logic stays central and the pod stays stateless beyond the live turn.
+
+With the Worker deployment now set to `Sandbox:AgentExecutionMode=pod-per-run`, the dedicated
+AgentHost warm pool is on the live execution path: its standby pods are claimed, configured, and
+serve real child-run turns instead of sitting idle.
 
 The existing per-command exec path is **retained for its current utility purpose** (ad-hoc
 `run_command`); it is simply never the agent-turn transport. Nothing about pod-per-run deletes that
@@ -274,7 +277,12 @@ itself) is **operationally configured by the agent-sandbox release**, not specif
 
 ### Warm-pool configure and readiness gate (AgentHost)
 
-A bound claim means the controller assigned a pod; it does **not** mean the run-specific AgentHost is ready to serve turns. AgentHost warm pods start with no `RunId`, enter standby, and log that they are waiting for `/configure`. This lets `k8s/sandbox-warmpool-agenthost.yaml` run at `replicas: 2` without CrashLooping: the .NET process and Copilot SDK host are already warm, but no run context is required until a claim binds.
+A bound claim means the controller assigned a pod; it does **not** mean the run-specific AgentHost
+is ready to serve turns. AgentHost warm pods start with no `RunId`, enter standby, and log that
+they are waiting for `/configure`. This lets
+`k8s/sandbox-warmpool-agenthost.yaml` run at `replicas: 2` without CrashLooping: the .NET process
+and Copilot SDK host are already warm, but no run context is required until a claim binds. With the
+Worker now in `pod-per-run`, those two standby pods are the hot path for coordinator child turns.
 
 At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, and `kvUserSecretName`. `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
 
@@ -456,13 +464,14 @@ capabilities the sandboxed code can grant itself. The AKS NetworkPolicy
 
 Everything above is gated behind a single flag so the change is reversible at any moment:
 
-`Sandbox:AgentExecutionMode` ∈ { **`in-api`**, **`pod-per-run`** }, default **`in-api`**.
+`Sandbox:AgentExecutionMode` ∈ { **`in-api`**, **`pod-per-run`** }.
 
-- **`in-api`** is today's in-process behavior, and it is the **rollback path**. If pod-per-run misbehaves
-  — including any instability in the `-preview` A2A transport — flipping back to `in-api` restores
-  in-process execution instantly, with no second wire transport to deploy.
-- **`pod-per-run`** activates the bridge and the per-run pod. The hybrid release behavior is internal to
-  this mode and is itself tuned by `Sandbox:ReleasePodOnSuspend` (default `true`).
+- **`pod-per-run`** is now the production Worker setting. It activates the bridge and the per-run
+  AgentHost pod, with the hybrid release behavior tuned by `Sandbox:ReleasePodOnSuspend` (default
+  `true`).
+- **`in-api`** remains available as the **fallback / rollback path**. If pod-per-run misbehaves —
+  including any instability in the `-preview` A2A transport — flipping back to `in-api` restores
+  the old in-process execution model without deploying a second transport.
 
 This "default to today's behavior, flip per environment, roll back by flag" discipline is the same
 posture used across the distributed-execution rollout. Pod-per-run is the first, independently shippable
@@ -486,8 +495,8 @@ To rebuild pod-per-run from these ideas:
    `Sandbox:ReleasePodOnSuspend`.
 6. **Give the pod run-scoped context** via one-time `/configure`: RunId, UserId, the A2A turn bearer token, and the Key Vault user-secret name. Fetch the user token with workload identity and no broker.
 7. **Default deny egress** to model + worker + git only; never let the pod reach the database.
-8. **Gate the whole thing behind `Sandbox:AgentExecutionMode`**, defaulting to `in-api` for instant
-   rollback.
+8. **Gate the whole thing behind `Sandbox:AgentExecutionMode`** so production can run `pod-per-run`
+   while retaining `in-api` as an instant rollback path.
 
 ## Security invariants
 

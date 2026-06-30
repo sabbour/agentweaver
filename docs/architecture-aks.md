@@ -24,7 +24,7 @@ flowchart TB
             subgraph core["Core services"]
                 fe(["Frontend ×2<br/>React SPA · :8080"])
                 api(["API ×2<br/>.NET 10 · RollingUpdate<br/>mode: pod-per-run"])
-                worker(["Worker ×1 + HPA<br/>.NET 10 · RollingUpdate<br/>mode: in-api"])
+                worker(["Worker ×1 + HPA<br/>.NET 10 · RollingUpdate<br/>mode: pod-per-run"])
                 mcp(["MCP ×1<br/>.NET 10 · :8080<br/>OAuth · MCP protocol"])
             end
 
@@ -49,8 +49,8 @@ flowchart TB
     gw -->|"/api · /auth"| api
     gw -->|"/mcp"| mcp
     mcp -->|"API calls :8080"| api
-    api -->|"SandboxClaim + POST /configure<br/>A2A Bearer :8088"| ahpool
-    worker -->|"in-api exec<br/>A2A :8088"| sbpool
+    api & worker -->|"SandboxClaim + POST /configure<br/>A2A Bearer :8088"| ahpool
+    api & worker -->|"SandboxClaim + kube-exec-stdio<br/>ad-hoc command path"| sbpool
     api --- ws
     worker --- ws
     ahpool --- ws
@@ -92,10 +92,12 @@ flowchart TB
 
 ## AgentHost warm-pool lifecycle
 
-AgentHost has its own warm pool, separate from the generic command sandbox pool:
+AgentHost has its own warm pool, separate from the generic command sandbox pool. The Worker now runs
+in `pod-per-run`, so coordinator child agents execute in AgentHost pods via this pool rather than
+in-process on the Worker:
 
-- **Generic sandbox pool** — `agentweaver-sandbox`, `k8s/sandbox-warmpool.yaml`, `replicas: 3`, used for the worker/API pod-exec command path.
-- **AgentHost pool** — `agentweaver-agent-host`, `k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed.
+- **Generic sandbox pool** — `agentweaver-sandbox`, `k8s/sandbox-warmpool.yaml`, `replicas: 3`, used for the worker/API ad-hoc command-exec path.
+- **AgentHost pool** — `agentweaver-agent-host`, `k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed for live agent turns.
 
 Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with `{ runId, userId, turnBearerToken, kvUserSecretName }`, then waits for `/healthz` to become ready before sending the first `message:stream` turn. The pod lifecycle is:
 
