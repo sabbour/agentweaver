@@ -440,28 +440,16 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
     /// <summary>
     /// Creates a <c>SandboxClaim</c> that binds to the SHARED, pre-warmed AgentHost warm pool
-    /// (<c>AgentHostWarmPoolRef</c>, replicas: 2). Only STATIC config is injected via the claim
-    /// env — the per-run context (RunId / UserId / TurnBearerToken / KV secret name) is delivered
-    /// after bind via the <c>POST /configure</c> call (<see cref="CallAgentHostConfigureAsync"/>),
-    /// so a warm pod never needs a RunId at startup.
+    /// (<c>AgentHostWarmPoolRef</c>, replicas: 2). No <c>spec.env</c> is injected — the v0.5.0
+    /// controller bypasses warm pool adoption whenever <c>spec.env</c> or
+    /// <c>spec.volumeClaimTemplates</c> are present. All static config lives in the SandboxTemplate
+    /// or agenthost-config ConfigMap. The per-run context (RunId / UserId / TurnBearerToken /
+    /// KV secret name) is delivered after bind via <c>POST /configure</c>
+    /// (<see cref="CallAgentHostConfigureAsync"/>).
     /// </summary>
     private Task CreateAgentHostClaimAsync(
         string claimName, string warmPoolName, CancellationToken ct)
     {
-        var env = new List<object>
-        {
-            new { name = "AgentHost__WorkingDirectory", value = _options.WorkspaceMountPath },
-            new { name = "AgentHost__RepositoryPath", value = _options.WorkspaceMountPath },
-            new { name = "AgentHost__A2APath", value = _options.AgentHostA2APath },
-            new { name = "AgentHost__RequireMtls", value = _options.RequireMtls ? "true" : "false" },
-            new { name = "AgentHost__Port", value = _options.AgentHostPort.ToString(System.Globalization.CultureInfo.InvariantCulture) },
-        };
-
-        // AgentHost__KeyVaultUri is baked into the SandboxTemplate pod spec and must NOT be
-        // re-injected via the SandboxClaim: the AKS sandbox controller blocks overriding env vars
-        // that are already defined in the template (even when envVarsInjectionPolicy=Allowed).
-        // The KV URI is static for all runs; the per-run secret NAME arrives via POST /configure.
-
         var manifest = new
         {
             apiVersion = $"{ApiGroup}/{ApiVersion}",
@@ -474,8 +462,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 // v0.4.x/v1alpha1 deprecated fields.
                 warmPoolRef = new { name = warmPoolName },
                 lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
-                // Static config only — the per-run context arrives via POST /configure after bind.
-                env = env.ToArray(),
             },
         };
 

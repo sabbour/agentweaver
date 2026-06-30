@@ -2,9 +2,9 @@
 #
 # This is the template referenced by KubernetesSandboxOptions.AgentHostTemplateRef
 # (default "agentweaver-agent-host"). KubernetesSandboxExecutor.LaunchAgentHostPodAsync
-# creates a SandboxClaim with templateRef=agentweaver-agent-host and injects per-run
-# AgentHost__* env vars; the pod runs Agentweaver.AgentHost which hosts the
-# A2ATurnBridgeAgent over A2A and the worker/api connects via RemoteAgentProxy.
+# creates a SandboxClaim with templateRef=agentweaver-agent-host; the pod runs
+# Agentweaver.AgentHost which hosts the A2ATurnBridgeAgent over A2A and the
+# worker/api connects via RemoteAgentProxy.
 #
 # Differences from agentweaver-sandbox (k8s/sandbox-template.yaml):
 #   - image: agentweaver-agent-host (the real AgentHost), NOT the sleep-infinity image.
@@ -39,10 +39,10 @@ metadata:
     app.kubernetes.io/part-of: agentweaver
     app.kubernetes.io/component: agent-host
 spec:
-  # The executor injects only STATIC config (AgentHost__WorkingDirectory / RepositoryPath /
-  # A2APath / RequireMtls / Port / KeyVaultUri) into the SandboxClaim spec.env at launch. The
-  # per-run context (RunId / UserId / TurnBearerToken / KV secret name) is delivered AFTER bind
-  # via POST /configure, so a pre-warmed spare needs no per-run env to boot.
+  # No env vars are injected via SandboxClaim spec.env — the v0.5.0 controller bypasses warm
+  # pool adoption whenever spec.env is present. All static config lives here in the template or
+  # in the agenthost-config ConfigMap mount. Per-run context (RunId / UserId / TurnBearerToken /
+  # KV secret name) is delivered AFTER bind via POST /configure.
   envVarsInjectionPolicy: Allowed
   podTemplate:
     metadata:
@@ -120,6 +120,12 @@ spec:
             # from Key Vault at /configure-time via DefaultAzureCredential (Managed Identity) — NO CSI
             # volume mount. The KV URI is also injected at claim time; the per-user secret NAME arrives
             # in the /configure POST. ${AGENTHOST_KEYVAULT_URI} is substituted at apply time.
+            # Static workspace paths — always /workspace for this deployment.
+            # These live here (not in the SandboxClaim) so warm pool adoption is not bypassed.
+            - name: AgentHost__WorkingDirectory
+              value: "/workspace"
+            - name: AgentHost__RepositoryPath
+              value: "/workspace"
             - name: AgentHost__KeyVaultUri
               value: "${AGENTHOST_KEYVAULT_URI}"
           resources:

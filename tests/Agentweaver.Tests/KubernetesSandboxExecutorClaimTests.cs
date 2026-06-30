@@ -129,14 +129,11 @@ public sealed class KubernetesSandboxExecutorClaimTests
             .BeFalse("warmpool is a deprecated v0.4.x/v1alpha1 field — must be gone");
         spec.TryGetProperty("templateRef", out _).Should().BeFalse("the deprecated templateRef key must be gone");
 
-        // Per-run context is delivered via POST /configure — NOT baked into the claim env.
-        var envNames = spec.GetProperty("env").EnumerateArray()
-            .Select(e => e.GetProperty("name").GetString()).ToList();
-        envNames.Should().NotContain("AgentHost__RunId");
-        envNames.Should().NotContain("AgentHost__TurnBearerToken");
-        envNames.Should().NotContain("AgentHost__UserId");
-        envNames.Should().Contain("AgentHost__WorkingDirectory");
-        envNames.Should().Contain("AgentHost__Port");
+        // v0.5.0: spec.env must NOT be present — the controller bypasses warm pool adoption
+        // whenever spec.env or spec.volumeClaimTemplates are set. All static config lives in the
+        // SandboxTemplate / agenthost-config ConfigMap. Per-run context arrives via POST /configure.
+        spec.TryGetProperty("env", out _).Should()
+            .BeFalse("spec.env must be absent so the v0.5.0 controller can assign a pre-warmed pool pod");
 
         // No per-run SecretProviderClass is created any more (token fetched from KV at /configure).
         handler.Requests.Should().NotContain(r =>
