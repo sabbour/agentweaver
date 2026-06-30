@@ -15,87 +15,76 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TB
-    client(["Browser / AI client<br/>HTTPS :443"])
+    client(["🌐 Browser / AI client<br/>HTTPS :443"])
 
-    gw{{"Gateway<br/>agentweaver-gateway<br/>approuting-istio · TLS :443"}}
+    subgraph azure["Azure"]
+        subgraph aks["AKS Cluster — namespace: agentweaver"]
+            gw{{"Gateway: agentweaver-gateway<br/>approuting-istio · TLS :443<br/>DefaultDomainCertificate"}}
 
-    subgraph routes["HTTPRoutes"]
-        rApi(["/api · /auth · /oauth<br/>+ AS metadata"])
-        rMcp(["/mcp · /.well-known<br/>protected-resource"])
-        rFe(["/ catch-all"])
-    end
+            subgraph core["Core services"]
+                fe(["Frontend ×2<br/>React SPA · :8080"])
+                api(["API ×2<br/>.NET 10 · RollingUpdate<br/>mode: pod-per-run"])
+                worker(["Worker ×1 + HPA<br/>.NET 10 · RollingUpdate<br/>mode: in-api"])
+                mcp(["MCP ×1<br/>.NET 10 · :8080<br/>OAuth · MCP protocol"])
+            end
 
-    subgraph ns["namespace: agentweaver"]
-        feSvc(["frontend Service :80"])
-        fe(["frontend Deploy ×2<br/>:8080"])
-        apiSvc(["api Service :8080"])
-        api(["api Deploy ×2<br/>.NET 10 · RollingUpdate"])
-        mcpSvc(["mcp Service :8080"])
-        mcp(["mcp Deploy ×1<br/>:8080"])
+            subgraph exec["Kata VM sandbox execution (katapool · NoSchedule taint)"]
+                ahpool(["AgentHost Warm Pool ×2<br/>agentweaver-agent-host<br/>standby → /configure → active<br/>A2A :8088 · workload identity"])
+                sbpool(["Generic Sandbox Pool ×3<br/>agentweaver-sandbox<br/>command-exec · :8088"])
+            end
 
-        subgraph execpool["Sandbox execution"]
-            warm(["SandboxWarmPool<br/>generic sandbox ×3<br/>AgentHost warm ×2"])
-            claim(["SandboxClaim<br/>run-{id} · warmPoolRef"])
-            cfg(["POST /configure<br/>RunId · UserId · token · KV secret"])
-            sb(["Sandbox pods<br/>Kata VM · non-root"])
+            ws[("Workspace PVC<br/>Azure Files RWX<br/>/workspace")]
+            spc["CSI SecretProviderClass<br/>github-client-id<br/>github-client-secret<br/>mcp-oauth-signing-key"]
         end
 
-        ws[("agentweaver-workspace<br/>Azure Files RWX · /workspace")]
-
-        subgraph netpol["NetworkPolicies"]
-            pDeny{{"default-deny<br/>ingress + egress"}}
-            pMcp{{"allow mcp→api :8080"}}
-            pA2A{{"allow worker/API→AgentHost :8088<br/>mTLS + per-run bearer"}}
-            pSb{{"sandbox egress<br/>DNS + :443 allowlist"}}
-        end
+        kv(["Azure Key Vault<br/>agentweaver-kv<br/>user tokens: ghtok-user--{id}<br/>app secrets: client-id/secret/oauth-key"])
+        pg(["Azure PostgreSQL<br/>Flexible Server<br/>runs · events · projects · memory"])
+        acr(["Azure Container Registry<br/>agentweaverregistry"])
     end
 
-    kv(["Azure Key Vault<br/>CSI for app secrets<br/>runtime fetch for AgentHost tokens"])
-    gh(["GitHub<br/>OAuth · api.github.com"])
-    ai(["Azure AI Foundry<br/>npmjs · Copilot"])
-    pg(["Azure Database<br/>for PostgreSQL<br/>Flexible Server"])
+    gh(["GitHub<br/>OAuth · api.github.com · Copilot"])
 
     client -->|"HTTPS :443"| gw
-    gw --> rApi --> apiSvc --> api
-    gw --> rMcp --> mcpSvc --> mcp
-    gw --> rFe --> feSvc --> fe
-    mcp -->|":8080 JWKS / calls"| apiSvc
-    api -->|"SandboxClaim"| claim
-    warm --> claim --> sb
-    api -->|"claim binds warm AgentHost pod"| claim
-    api -->|"POST /configure"| cfg --> sb
-    api -->|"pods/exec (commands)"| sb
-    api -->|"RemoteAgentProxy<br/>Authorization: Bearer {per-run token}<br/>A2A message:stream :8088"| sb
+    gw -->|"/ catch-all"| fe
+    gw -->|"/api · /auth"| api
+    gw -->|"/mcp"| mcp
+    mcp -->|"API calls :8080"| api
+    api -->|"SandboxClaim + POST /configure<br/>A2A Bearer :8088"| ahpool
+    worker -->|"in-api exec<br/>A2A :8088"| sbpool
     api --- ws
-    sb --- ws
-    api -->|"CSI app secrets"| kv
-    mcp -->|"CSI app secrets"| kv
-    sb -->|"workload identity<br/>fetch configured user token"| kv
-    api -->|"OAuth · REST"| gh
+    worker --- ws
+    ahpool --- ws
     api -->|"TLS :5432"| pg
-    sb -->|"egress allowlist"| gh
-    sb -->|"egress allowlist"| ai
+    worker -->|"TLS :5432"| pg
+    spc -->|"CSI volume mount"| api
+    spc -->|"CSI volume mount"| mcp
+    spc -->|"CSI volume mount"| worker
+    spc -.->|"reads secrets"| kv
+    ahpool -->|"workload identity<br/>fetch run-owner token"| kv
+    api -->|"workload identity<br/>token read / write"| kv
+    api -->|"OAuth · REST"| gh
+    ahpool -->|"egress allowlist<br/>(Cilium FQDN policy)"| gh
+    acr -.->|"image pull"| api
+    acr -.->|"image pull"| worker
+    acr -.->|"image pull"| mcp
+    acr -.->|"image pull"| fe
+    acr -.->|"image pull"| ahpool
 
-    pDeny -. enforces .-> api
-    pMcp -. allows .-> mcp
-    pA2A -. allows .-> sb
-    pSb -. restricts .-> sb
+    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424
+    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424
+    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424
+    classDef workerStyle fill:#D9EFD9,stroke:#107C10,stroke-width:2px,color:#242424
+    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424
+    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424
+    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class client client;
-    class gw,rApi,rMcp,rFe,feSvc,fe,mcpSvc,mcp,apiSvc svc;
-    class api core;
-    class warm,claim,sb runtime;
-    class ws data;
-    class pDeny,pMcp,pSb evt;
-    class kv,gh,ai,pg ext;
+    class client client
+    class gw,fe,mcp svc
+    class api core
+    class worker workerStyle
+    class ahpool,sbpool runtime
+    class ws,spc data
+    class kv,pg,acr,gh ext
 ```
 
 ---
