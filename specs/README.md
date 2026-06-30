@@ -31,6 +31,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Automate pickup of Ready work](./workflows-automation/automate-ready-pickup.md) — [#13](https://github.com/sabbour/agentweaver/issues/13)
 - [Open a pull request as a workflow action](./workflows-automation/open-pull-request-action.md) — [#49](https://github.com/sabbour/agentweaver/issues/49)
 - [Trigger tasks for scheduled and event workflows](./workflows-automation/trigger-tasks-for-scheduled-and-event-workflows.md) — [#53](https://github.com/sabbour/agentweaver/issues/53)
+- [Edit workflows with the generation prompt](./workflows-automation/edit-workflows-with-generation-prompt.md) — [#59](https://github.com/sabbour/agentweaver/issues/59)
 
 ## Orchestration & runs
 
