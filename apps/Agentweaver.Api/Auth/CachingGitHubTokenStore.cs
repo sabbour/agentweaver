@@ -12,10 +12,13 @@ namespace Agentweaver.Api.Auth;
 /// Eviction: on <see cref="SetAsync"/> or <see cref="SignOutAsync"/> for the affected scope.
 /// Thread-safe via <see cref="ConcurrentDictionary{TKey,TValue}"/>.
 /// </summary>
-public sealed class CachingGitHubTokenStore : IGitHubTokenStore
+public sealed class CachingGitHubTokenStore : IGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore
 {
+    private static readonly TimeSpan RefreshSkew = TimeSpan.FromSeconds(60);
+
     private readonly IGitHubTokenStore _inner;
     private readonly TimeSpan _ttl;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _localLeaseGates = new(StringComparer.Ordinal);
 
     private sealed record CachedEntry(
         GitHubTokenStatus Status,
@@ -88,6 +91,18 @@ public sealed class CachingGitHubTokenStore : IGitHubTokenStore
         SetCache(scope, GitHubTokenStatus.SignedOut, null);
     }
 
+    public Task<IDistributedGitHubTokenRefreshLease?> TryAcquireRefreshLeaseAsync(
+        GitHubTokenScope scope,
+        string owner,
+        TimeSpan ttl,
+        CancellationToken ct = default)
+    {
+        if (_inner is IDistributedGitHubTokenRefreshLeaseStore leaseStore)
+            return leaseStore.TryAcquireRefreshLeaseAsync(scope, owner, ttl, ct);
+
+        return AcquireLocalRefreshLeaseAsync(scope, ct);
+    }
+
     // ── Cache helpers ─────────────────────────────────────────────────────────
 
     private CachedEntry? TryGetCached(GitHubTokenScope scope)
@@ -99,8 +114,38 @@ public sealed class CachingGitHubTokenStore : IGitHubTokenStore
 
     private void SetCache(GitHubTokenScope scope, GitHubTokenStatus status, GitHubToken? token)
     {
-        _cache[scope.Key] = new CachedEntry(status, token, DateTimeOffset.UtcNow + _ttl);
+        var expiresAt = DateTimeOffset.UtcNow + _ttl;
+        if (token?.ExpiresAt is DateTimeOffset tokenExpiresAt)
+        {
+            var refreshBoundary = tokenExpiresAt - RefreshSkew;
+            if (refreshBoundary < expiresAt)
+                expiresAt = refreshBoundary;
+        }
+
+        _cache[scope.Key] = new CachedEntry(status, token, expiresAt);
     }
 
     private void Evict(GitHubTokenScope scope) => _cache.TryRemove(scope.Key, out _);
+
+    private async Task<IDistributedGitHubTokenRefreshLease?> AcquireLocalRefreshLeaseAsync(
+        GitHubTokenScope scope,
+        CancellationToken ct)
+    {
+        var gate = _localLeaseGates.GetOrAdd(scope.Key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        return new LocalRefreshLease(gate);
+    }
+
+    private sealed class LocalRefreshLease : IDistributedGitHubTokenRefreshLease
+    {
+        private readonly SemaphoreSlim _gate;
+
+        public LocalRefreshLease(SemaphoreSlim gate) => _gate = gate;
+
+        public ValueTask DisposeAsync()
+        {
+            _gate.Release();
+            return ValueTask.CompletedTask;
+        }
+    }
 }

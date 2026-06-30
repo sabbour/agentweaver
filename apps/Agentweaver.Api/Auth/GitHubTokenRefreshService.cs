@@ -22,23 +22,27 @@ namespace Agentweaver.Api.Auth;
 ///  - Refresh not possible (no refresh token, GitHub error, revoked/expired refresh token)
 ///       -> sign out the scope (clean re-auth-required state) and return null. Never loops.
 ///
-/// A per-scope <see cref="SemaphoreSlim"/> serializes refreshes so concurrent callers on an
-/// expired token trigger exactly one network refresh; later callers re-read the freshly stored
-/// token instead of refreshing again. Raw token values are never logged.
+/// A per-scope refresh lease serializes refreshes so concurrent callers on an expired token
+/// trigger exactly one network refresh across replicas when the backing token store supports
+/// distributed leases; later callers re-read the freshly stored token instead of refreshing again.
+/// Raw token values are never logged.
 /// </summary>
 public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
 {
     // Refresh when the access token is within this window of expiry (clock-skew safety margin).
     private static readonly TimeSpan ExpirySkew = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan RefreshLeaseTtl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RefreshLeasePollInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly string _baseUrl;
     private readonly string? _clientId;
     private readonly string? _clientSecret;
     private readonly IGitHubTokenStore _tokenStore;
+    private readonly IDistributedGitHubTokenRefreshLeaseStore? _leaseStore;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GitHubTokenRefreshService> _logger;
-
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
+    private readonly string _leaseOwner = $"{Environment.MachineName}:{Guid.NewGuid():N}";
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _localGates = new(StringComparer.Ordinal);
 
     public GitHubTokenRefreshService(
         IConfiguration configuration,
@@ -50,6 +54,7 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
         _clientId = configuration["Auth:GitHub:ClientId"];
         _clientSecret = configuration["Auth:GitHub:ClientSecret"];
         _tokenStore = tokenStore;
+        _leaseStore = tokenStore as IDistributedGitHubTokenRefreshLeaseStore;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
@@ -63,45 +68,90 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
         if (!NeedsRefresh(token))
             return token.AccessToken;
 
-        // Refresh required — serialize per scope so parallel callers don't double-refresh.
-        var gate = _gates.GetOrAdd(scope.Key, _ => new SemaphoreSlim(1, 1));
+        return await RefreshWithLeaseAsync(scope, token, ct).ConfigureAwait(false);
+    }
+
+    private async Task<string?> RefreshWithLeaseAsync(
+        GitHubTokenScope scope,
+        GitHubToken observedToken,
+        CancellationToken ct)
+    {
+        while (true)
+        {
+            await using var lease = _leaseStore is not null
+                ? await _leaseStore.TryAcquireRefreshLeaseAsync(scope, _leaseOwner, RefreshLeaseTtl, ct).ConfigureAwait(false)
+                : await AcquireLocalRefreshLeaseAsync(scope, ct).ConfigureAwait(false);
+
+            if (lease is not null)
+                return await RefreshAsLeaseOwnerAsync(scope, observedToken, ct).ConfigureAwait(false);
+
+            var deadline = DateTimeOffset.UtcNow + RefreshLeaseTtl;
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(RefreshLeasePollInterval, ct).ConfigureAwait(false);
+                var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
+                if (token is null)
+                    return null;
+                if (!SameRefreshMaterial(token, observedToken) || !NeedsRefresh(token))
+                    return token.AccessToken;
+            }
+
+            observedToken = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false) ?? observedToken;
+        }
+    }
+
+    private async Task<string?> RefreshAsLeaseOwnerAsync(
+        GitHubTokenScope scope,
+        GitHubToken observedToken,
+        CancellationToken ct)
+    {
+        // Re-read after acquiring the lease: another replica may have already rotated the token.
+        var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
+        if (token is null)
+            return null;
+        if (!SameRefreshMaterial(token, observedToken) || !NeedsRefresh(token))
+            return token.AccessToken;
+
+        if (string.IsNullOrWhiteSpace(token.RefreshToken))
+        {
+            // Expired and nothing to refresh with -> re-authentication required.
+            _logger.LogWarning(
+                "GitHub access token for scope {Scope} is expired and has no refresh token; sign-in required.",
+                scope.Key);
+            await _tokenStore.SignOutAsync(scope, ct).ConfigureAwait(false);
+            return null;
+        }
+
+        var refreshed = await RequestRefreshAsync(token, ct).ConfigureAwait(false);
+        if (refreshed is null)
+        {
+            var latest = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
+            if (latest is not null && (!SameRefreshMaterial(latest, token) || !NeedsRefresh(latest)))
+                return latest.AccessToken;
+
+            _logger.LogWarning(
+                "GitHub token refresh failed for scope {Scope}; sign-in required.", scope.Key);
+            await _tokenStore.SignOutAsync(scope, ct).ConfigureAwait(false);
+            return null;
+        }
+
+        await _tokenStore.SetAsync(scope, refreshed, ct).ConfigureAwait(false);
+        _logger.LogInformation("Refreshed GitHub access token for scope {Scope}.", scope.Key);
+        return refreshed.AccessToken;
+    }
+
+    private static bool SameRefreshMaterial(GitHubToken left, GitHubToken right) =>
+        string.Equals(left.AccessToken, right.AccessToken, StringComparison.Ordinal)
+        && string.Equals(left.RefreshToken, right.RefreshToken, StringComparison.Ordinal)
+        && left.ExpiresAt == right.ExpiresAt;
+
+    private async Task<IDistributedGitHubTokenRefreshLease> AcquireLocalRefreshLeaseAsync(
+        GitHubTokenScope scope,
+        CancellationToken ct)
+    {
+        var gate = _localGates.GetOrAdd(scope.Key, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            // Re-read inside the lock: another caller may have already rotated the token.
-            token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
-            if (token is null)
-                return null;
-            if (!NeedsRefresh(token))
-                return token.AccessToken;
-
-            if (string.IsNullOrWhiteSpace(token.RefreshToken))
-            {
-                // Expired and nothing to refresh with -> re-authentication required.
-                _logger.LogWarning(
-                    "GitHub access token for scope {Scope} is expired and has no refresh token; sign-in required.",
-                    scope.Key);
-                await _tokenStore.SignOutAsync(scope, ct).ConfigureAwait(false);
-                return null;
-            }
-
-            var refreshed = await RequestRefreshAsync(token, ct).ConfigureAwait(false);
-            if (refreshed is null)
-            {
-                _logger.LogWarning(
-                    "GitHub token refresh failed for scope {Scope}; sign-in required.", scope.Key);
-                await _tokenStore.SignOutAsync(scope, ct).ConfigureAwait(false);
-                return null;
-            }
-
-            await _tokenStore.SetAsync(scope, refreshed, ct).ConfigureAwait(false);
-            _logger.LogInformation("Refreshed GitHub access token for scope {Scope}.", scope.Key);
-            return refreshed.AccessToken;
-        }
-        finally
-        {
-            gate.Release();
-        }
+        return new LocalGitHubTokenRefreshLease(gate);
     }
 
     private static bool NeedsRefresh(GitHubToken token)
@@ -189,5 +239,18 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
         public long? RefreshTokenExpiresIn { get; set; }
 
         [JsonPropertyName("error")] public string? Error { get; set; }
+    }
+
+    private sealed class LocalGitHubTokenRefreshLease : IDistributedGitHubTokenRefreshLease
+    {
+        private readonly SemaphoreSlim _gate;
+
+        public LocalGitHubTokenRefreshLease(SemaphoreSlim gate) => _gate = gate;
+
+        public ValueTask DisposeAsync()
+        {
+            _gate.Release();
+            return ValueTask.CompletedTask;
+        }
     }
 }
