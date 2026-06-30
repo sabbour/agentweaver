@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — FR-015 has one open clarification (per-model dashboard breakdown)
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,5 +31,4 @@
 
 ## Notes
 
-- One [NEEDS CLARIFICATION] marker remains in FR-015 regarding whether per-model usage breakdowns should appear in the dashboard UI. This is a scope decision with UX implications but does not block planning; a reasonable default (track model per record, defer dashboard exposure to a follow-on) is documented in Assumptions.
-- Run `/speckit.clarify` to resolve FR-015 before planning if per-model dashboard exposure is in scope for the initial version.
+- All checklist items pass. Spec is ready for `/speckit.plan`.

@@ -100,7 +100,7 @@ An administrator opens the application-wide usage dashboard and sees total token
 - **FR-012**: Token usage data MUST be retained for a minimum of 90 days from the date of the run.
 - **FR-013**: The system MUST NOT expose one project's usage data to users who are not members of that project.
 - **FR-014**: Token usage records MUST survive run cancellation and partial execution — any tokens consumed before a run ends in any terminal state MUST be recorded.
-- **FR-015**: The system MUST record which model was used for each GitHub Copilot call, associated with its token usage record. [NEEDS CLARIFICATION: Should per-model breakdowns be surfaced in the dashboard UI, or is model tracking limited to raw data for future use?]
+- **FR-015**: The system MUST record which model was used for each GitHub Copilot call, associated with its token usage record. Both the project-level and application-level dashboards MUST display a breakdown of token usage by model, allowing users to see how consumption is distributed across the models available within GitHub Copilot.
 
 ### Key Entities
 
@@ -126,7 +126,7 @@ An administrator opens the application-wide usage dashboard and sees total token
 - GitHub Copilot is the only model provider used by this application, consistent with the constitution's Principle II. Cost monitoring is therefore scoped entirely to GitHub Copilot token usage and does not need to support other providers.
 - GitHub Copilot's API returns token usage metadata (input tokens, output tokens) in the response to each model call. If a specific call or model variant does not return this metadata, the record is stored with null token counts and flagged.
 - Token counts are treated as the primary cost signal. Mapping tokens to a monetary cost figure is considered out of scope for this feature, as GitHub Copilot is subscription-based and does not publish per-token pricing. Raw token counts are sufficient for relative cost analysis.
-- The retention period for usage data defaults to 90 days. Configuration of this period is out of scope for this feature.
+- Per-model token breakdowns are displayed in both the project-level and app-level dashboards, reflecting the user's choice of model within GitHub Copilot.
 - Access control relies on existing project membership and administrator role definitions already present in the system. This feature does not introduce new role types.
 - Mobile support for the cost dashboards is out of scope for the initial version.
 - Export/download of usage data (CSV, etc.) is out of scope for the initial version but should be considered a natural follow-on.
