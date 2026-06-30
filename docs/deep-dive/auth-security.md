@@ -319,6 +319,25 @@ Where this lives:
 - `apps/Agentweaver.Api/appsettings.json`
 - `k8s/api-deployment.yaml`
 
+## Resource ownership authorization
+
+Org authorization answers only whether a caller may use this Agentweaver deployment. It does not grant access to every resource in the deployment. Project, team, run, backlog, workspace, workflow, and memory endpoints still enforce resource ownership in the handler or service layer, typically by loading the resource and checking `caller.Owns(...)` before returning or mutating it.
+
+The ownership model is intentionally username-neutral: there is no built-in superuser role derived from a GitHub login, and no GitHub username such as `admin` receives special cross-user access. A caller can act on a resource only when the resource owner matches the authenticated caller identity (or when a feature explicitly creates a resource on behalf of that caller). Non-owners receive `403 Forbidden` or, for existence-hiding reads, `404 Not Found`.
+
+### Invariants to preserve when rebuilding
+
+- Treat org/team membership as deployment admission, not resource authorization.
+- Use `caller.Owns(...)` or the equivalent owner comparison for every user-owned project, run, team, backlog, and memory resource.
+- Do not introduce username-based superuser bypasses; elevated operational paths should be explicit roles or separate administrative capabilities, not magic GitHub logins.
+
+Where this lives:
+
+- `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs`
+- `apps/Agentweaver.Api/Endpoints/TeamEndpoints.cs`
+- `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs`
+- `apps/Agentweaver.Api/Endpoints/BacklogEndpoints.cs`
+
 ## OAuth 2.1 Authorization Server for MCP
 
 MCP clients are public clients: they cannot safely hold a GitHub client secret, and Agentweaver should not hand them the user's GitHub token. The solution is to make `Agentweaver.Api` an OAuth 2.1 Authorization Server for the MCP resource.
@@ -637,6 +656,8 @@ The in-pod `CsiMountedGitHubTokenStore` reads from that path. Because the file m
 
 The agent-host pod uses the dedicated workload-identity service account `agentweaver-agent-host` (defined in `k8s/serviceaccount-agenthost.yaml`), which is federated with the managed identity that has `get`/`list` access to the Key Vault secrets.
 
+The A2A turn endpoint has a separate application-layer bearer check. At AgentHost pod launch, `KubernetesSandboxExecutor` generates a 256-bit `AgentHostOptions.TurnBearerToken`, injects it as `AgentHost__TurnBearerToken`, and stores it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {per-run token}` on every `POST /a2a/agent/v1/message:stream` call. The token is unique per run, so a token stolen from one pod cannot be reused against another pod; NetworkPolicy/mTLS remain the transport and reachability layers, not the only auth boundary.
+
 ### Configuration
 
 `AgentHostOptions.KvTokenMountPath` controls CSI delivery:
@@ -656,6 +677,7 @@ When `KvTokenMountPath` is set it takes precedence over `UseSharedTokenStore`. I
 - The 2-minute rotation window limits the exposure window if a pod is compromised.
 - The workload-identity SA is scoped to Key Vault get/list only — no write access to KV.
 - Each authenticated user's GitHub token is stored in Azure Key Vault under a per-user key and is never written to shared storage.
+- `message:stream` is bearer-protected per run, so the A2A turn path is not merely NetworkPolicy-gated.
 
 > **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) explains the CSI delivery model, the cold-start retry, and the workload-identity service account.
 

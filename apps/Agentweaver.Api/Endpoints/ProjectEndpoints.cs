@@ -709,7 +709,7 @@ private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-
 private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
 {
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    return caller.Owns(project.Owner) || string.Equals(caller.User, "admin", StringComparison.OrdinalIgnoreCase);
+    return caller.Owns(project.Owner);
 }
 
 private static bool IsAllowedModelId(string? modelId) =>

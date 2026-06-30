@@ -71,7 +71,7 @@ flowchart LR
         Tools[tool / shell / file exec]
         Host --> SDK --> Tools
     end
-    Proxy <-->|turn input · streamed updates| Host
+    Proxy <-->|turn input + Bearer token · streamed updates| Host
     Worker --> DB[(Brokered checkpoint store)]
     Pod -. shared workspace PVC .- Worker
 ```
@@ -95,6 +95,7 @@ The pod runs a minimal host process — **AgentHost** — baked into the sandbox
 the pod-side counterpart of the leaf seam:
 
 - it **receives the forwarded turn** (setup + run) from the worker;
+- it **requires the run's bearer token** on `POST /a2a/agent/v1/message:stream`;
 - it **hosts the real leaf agent** (the Copilot SDK session) directly, and runs the turn locally;
 - it **executes tools, shell, and file operations in-pod**, inside the Kata VM boundary; and
 - it **streams agent updates and token deltas back** to the worker, which re-injects them into the
@@ -226,10 +227,10 @@ The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecut
   filesystem, `/workspace` PVC, and the A2A listener on container port `8088`.
 - **`SandboxWarmPool`** — keeps warm pods pre-built from a template so a claim binds without a cold
   start. Two pools ship: generic `agentweaver-sandbox` (`k8s/sandbox-warmpool.yaml`, `replicas: 3`)
-  and pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 0`).
+  and pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). The AgentHost pool pre-warms the .NET process and Copilot SDK; per-run context arrives later via `/configure`.
 - **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.warmPoolRef.name`
   (the pool to bind), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and
-  `spec.env[]`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
+  `spec.env[]` for static values only on the AgentHost path (`AgentHost__KeyVaultUri`, paths, port, mTLS settings). `RunId`, `UserId`, `TurnBearerToken`, and `KvUserSecretName` are delivered after binding by `POST /configure`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -251,7 +252,11 @@ sequenceDiagram
     Claim-->>Exec: Ready True → pod name
     Exec->>Reg: Register(runId, podName)
     opt AgentHost pod-per-run
+        Exec->>Exec: Generate 256-bit turn bearer token
+        Exec->>Reg: RegisterTurnToken(runId, token)
         Exec->>Pod: GetPodIpAsync → status.podIP
+        Exec->>Pod: POST /configure(runId, userId, token, kvUserSecretName)
+        Pod->>Pod: TryConfigure once + SetupAsync
         loop poll /healthz until 200 (≤90s)
             Exec->>Pod: GET http[s]://podIP:8088/healthz
         end
@@ -267,35 +272,13 @@ expire) and the controller garbage-collects the pod and its service. Anything no
 manifests or the executor code (controller replica count, leader election, image, RBAC of the controller
 itself) is **operationally configured by the agent-sandbox release**, not specified by Agentweaver.
 
-### Cold-start readiness gate (AgentHost)
+### Warm-pool configure and readiness gate (AgentHost)
 
-A bound claim only means the **pod** is `Running` — the in-pod **AgentHost** Kestrel listener takes a further
-~20–30 s to bind `:8088`. With the agent-host warm pool at `replicas: 0`
-([`k8s/sandbox-warmpool-agenthost.yaml`](#source)), **every** run cold-starts a pod, so without a gate the
-worker's first A2A turn races that boot window and gets `Connection refused (podIP:8088)` → the run
-transitions to `Failed`. The fix is defense-in-depth:
+A bound claim means the controller assigned a pod; it does **not** mean the run-specific AgentHost is ready to serve turns. AgentHost warm pods start with no `RunId`, enter standby, and log that they are waiting for `/configure`. This lets `k8s/sandbox-warmpool-agenthost.yaml` run at `replicas: 2` without CrashLooping: the .NET process and Copilot SDK host are already warm, but no run context is required until a claim binds.
 
-- **Executor readiness gate (authoritative).** After the claim binds and the endpoint is built,
-  `LaunchAgentHostPodAsync` polls `GET {scheme}://{podIP}:8088/healthz` until it returns `200` before it
-  registers the endpoint and returns ([`KubernetesSandboxExecutor.cs`](#source) — `IAgentHostReadinessProbe` /
-  `HttpAgentHostReadinessProbe`). The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt
-  timeout) and honors the launch cancellation token. On timeout the launch fails *deterministically*
-  (`InvalidOperationException`) instead of letting a turn refuse mid-run. It reuses the **same
-  `a2a-sandbox-pod` HttpClient** that serves real turns (so it carries the mTLS client cert in production).
-  Config keys: `Sandbox:Kubernetes:AgentHostHealthzPath` (`/healthz`), `…:AgentHostReadyTimeoutSeconds`
-  (`90`), `…:AgentHostReadyPollIntervalMs` (`1000`).
-- **Connect-refused retry (defense).** The `a2a-sandbox-pod` client carries a `ConnectRefusedRetryHandler`
-  that retries **only** a refused TCP connect (`SocketError.ConnectionRefused` /
-  `HttpRequestError.ConnectionError`) — safe even for non-idempotent streaming sends because a refused
-  connect delivers no bytes — so any send that still races boot rides through
-  ([`ConnectRefusedRetryHandler.cs`](#source), wired in [`Program.cs`](#source)).
-- **tcpSocket probe (recommended, k8s-level defense).** A `startupProbe` / `readinessProbe` on port `8088`
-  on the agent-host `SandboxTemplate` (`k8s/sandbox-template-agenthost.yaml`) would keep the pod out of
-  Service endpoints until the port is open. Use `tcpSocket` (not `httpGet`) so it works under both
-  plain-http (PoC) and mTLS (prod). **Note:** the agent-sandbox v1beta1 controller binds the claim on pod
-  `Running` regardless of container readiness, so this probe alone does **not** close the race — the executor
-  `/healthz` gate is the reliable wait, and the probe is a supplementary defense only. *(Manifest change owned
-  by the cluster/infra side, not the API.)*
+At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, and `kvUserSecretName`. `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
+
+After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync`; only then does `/healthz` return `200` and the executor registers the A2A endpoint. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
 
 ### Node topology: the dedicated kata user pool
 
@@ -366,11 +349,13 @@ Agentweaver therefore uses a **hybrid**: pod-per-run **with checkpoint-and-relea
 ```mermaid
 stateDiagram-v2
     [*] --> Claiming
-    Claiming --> Warm: pod bound, session live
+    Claiming --> Standby: warm pod bound
+    Standby --> Warm: /configure + SetupAsync<br/>session live
     Warm --> Warm: consecutive agent turns<br/>(reasoning burst stays warm)
     Warm --> Released: graph suspends on RequestPort<br/>(HITL/review) or coordinator idles
     Released --> Reclaiming: resume signal<br/>(decision / child completion)
-    Reclaiming --> Warm: re-claim warm pod<br/>+ rehydrate from checkpoint
+    Reclaiming --> Standby: re-claim warm pod
+    Standby --> Warm: /configure + rehydrate from checkpoint
     Warm --> [*]: run completes → release pod
     Released --> [*]: run cancelled / TTL
 ```
@@ -395,8 +380,7 @@ the suspended external request. Two facts make rehydration cheap and safe:
 
 - the **worktree is already durable** on the shared workspace volume, so no file state needs to travel in
   the checkpoint; and
-- the **run-scoped credential is re-injected at re-claim**, so a resumed pod gets a fresh token rather
-  than inheriting a stale one (see the credential model below).
+- the **run-scoped context is re-delivered at re-claim via `/configure`**, so a resumed pod gets a fresh turn token and configured Key Vault secret name rather than inheriting stale state (see the credential model below).
 
 A tuning sub-flag, `Sandbox:ReleasePodOnSuspend` (default **true**), disables the release for
 low-latency-resume or debugging — the pod then stays warm across a suspension at the cost of holding
@@ -423,12 +407,13 @@ and no bespoke duplex sandbox-agent protocol. The previous "pods hold no secrets
 *recommendation*, not a requirement; relaxing it to "pods hold only a run-scoped, short-lived credential"
 is what lets the broker disappear.
 
-The same principle drives **GitHub access**: the run acts *as its signed-in user*, so the pod receives a
-short-lived, run-scoped GitHub **access** token (no refresh material), delivered for that one run and
-cleaned up when the run ends. The detailed sourcing, delivery, lifetime, and pod-side read are in
-[Sandbox pods reference](../reference/sandbox-pods.md#run-scoped-github-token-injection). The
-security principle is that the pod holds *only* its own run's short-lived access token — never refresh
-material, never another user's scope.
+The same principle drives **GitHub access**: the run acts *as its signed-in user*, so the pod receives only the run owner's Key Vault secret name in `/configure`. `KeyVaultUserTokenProvider` fetches that one user's stored GitHub token with workload identity and caches it in memory for the pod lifetime. The old infrastructure-layer CSI projection has been replaced by application-layer isolation inside AgentHost; the trade-off and mechanics are in [Agent-host token delivery](./agent-token-delivery.md). The security principle is that the pod serves only the configured user's scope — never another user's scope and never a shared workspace token mirror.
+
+The A2A turn path has its own run-scoped secret. At AgentHost launch, `KubernetesSandboxExecutor`
+generates a 256-bit bearer token, sends it in `POST /configure`, and registers it in
+`IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends that value as `Authorization: Bearer ...` on
+every `message:stream` call, and AgentHost accepts only its own token. This means NetworkPolicy/mTLS are
+not the only gates on the turn endpoint, and a token stolen from one run cannot reach another run's pod.
 
 Egress is **default-deny** with a narrow allowlist: the model endpoint, the API/worker bridge endpoint,
 and the git remote(s) the run legitimately needs. Everything else — especially arbitrary in-cluster
@@ -492,15 +477,14 @@ To rebuild pod-per-run from these ideas:
    Remote at the `AIAgent` seam so the graph never crosses the wire.
 2. **Introduce a remote leaf proxy** on the worker that forwards setup/run to the pod and re-emits the
    pod's update stream locally, so the rest of the graph and the SSE relay are unchanged.
-3. **Bake a minimal AgentHost** into the sandbox image that hosts the real leaf agent and runs tools
-   in-pod; stream updates back to the worker.
+3. **Bake a minimal AgentHost** into the sandbox image that hosts the real leaf agent, requires the
+   per-run bearer on `message:stream`, and runs tools in-pod; stream updates back to the worker.
 4. **Make checkpoints brokered/durable** so any worker (and a re-claimed pod) can read them — the
    serialized session blob plus superstep state, including the suspended external-request correlation id.
 5. **Implement the hybrid lifecycle:** warm across consecutive turns; checkpoint-and-release on
    `RequestPort`/coordinator-idle suspension; re-claim + rehydrate on resume. Gate the release with
    `Sandbox:ReleasePodOnSuspend`.
-6. **Give the pod a run-scoped credential** via workload identity (preferred) or claim-time injection —
-   no broker — and re-inject a fresh credential on each re-claim.
+6. **Give the pod run-scoped context** via one-time `/configure`: RunId, UserId, the A2A turn bearer token, and the Key Vault user-secret name. Fetch the user token with workload identity and no broker.
 7. **Default deny egress** to model + worker + git only; never let the pod reach the database.
 8. **Gate the whole thing behind `Sandbox:AgentExecutionMode`**, defaulting to `in-api` for instant
    rollback.
@@ -511,8 +495,9 @@ To rebuild pod-per-run from these ideas:
   compromised pod cannot rewrite *what happens next*.
 - Each run's heavy execution is confined to its **own Kata-isolated pod** with a **default-deny egress
   allowlist**; the pod cannot reach the database or arbitrary in-cluster services.
-- The pod holds **only a short-lived, run-scoped credential** — never a broker key, never refresh
-  material, never another run's or user's scope.
+- The pod holds **only the configured run owner's credential in memory** after `/configure` — never a broker key, never another run's or user's scope.
+- The A2A turn endpoint is application-layer authenticated with a per-run bearer token; a token from one
+  pod is not valid against any other pod.
 - The pod is **disposable and re-creatable**: durable state lives in the shared workspace volume and the
   brokered checkpoint, so killing a pod loses no run.
 - The whole capability is **reversible by a single flag** (`Sandbox:AgentExecutionMode=in-api`).

@@ -27,6 +27,12 @@ Every project receives an Agentweaver project id. That id is more than a databas
 
 The project name is user-facing and renameable. The project id is internal and stable.
 
+### Ownership is the project authorization boundary
+
+The project owner is the authenticated caller that created the project. Project-scoped APIs use that owner as the authorization boundary for the project itself and for teams, backlog tasks, runs, workflows, workspace browsing, and memory under the project. The endpoint layer should enforce this with `caller.Owns(...)` or an equivalent owner comparison; membership in the allowed GitHub org admits a caller to the deployment but does not grant access to another caller's projects.
+
+There is no built-in superuser derived from a GitHub username. A login named `admin` is just another project owner when it creates its own projects, and it cannot bypass ownership checks for someone else's project.
+
 ### Origin describes how the base repository was born
 
 Agentweaver recognizes two project origins:

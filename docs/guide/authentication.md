@@ -27,6 +27,8 @@ You do not need a separate API key for GitHub Copilot after signing in.
 
 Depending on how Agentweaver is deployed in your organization, access may require membership in a specific GitHub organization or team. If you see an authorization error after signing in, contact your administrator to confirm your GitHub account has the required org membership.
 
+Organization access is not the same as access to every project. Project, run, team, backlog, and memory actions are scoped to resources you own. Agentweaver does not include a built-in superuser GitHub username; a user named `admin` has the same ownership rules as any other user.
+
 ## How sessions work
 
 Agentweaver uses server-side sessions backed by your GitHub OAuth token. After a successful sign-in:

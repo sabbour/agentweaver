@@ -241,7 +241,7 @@ The exact service/store calls differ by feature, but the responsibilities stay s
 
 1. **Bind** route values, query values, and JSON bodies into typed request objects.
 2. **Authenticate globally** through middleware before handler execution.
-3. **Authorize locally** by checking ownership or resource relationship. For example, a run must belong to the caller/project being accessed.
+3. **Authorize locally** by checking ownership or resource relationship. For example, a run must belong to the caller/project being accessed. Do not special-case GitHub usernames such as `admin`; there is no built-in username-derived superuser role.
 4. **Validate dangerous inputs centrally**, especially filesystem-relative paths used by workspace and file routes.
 5. **Delegate behavior** to a service or store.
 6. **Project the result** into a DTO that is safe and stable for clients.
@@ -425,7 +425,7 @@ These rules are the practical knowledge needed to rebuild or extend the host saf
 
 - **The endpoint mapping list is the routing seam.** A new feature should add a mapping extension and be called from startup explicitly.
 - **Custom auth middleware is path-based.** Public routes require explicit middleware exemption, not just endpoint metadata.
-- **Resource ownership is layered.** Global auth proves who the caller is; handlers/services still need project/run ownership checks.
+- **Resource ownership is layered.** Global auth proves who the caller is; handlers/services still need project/run ownership checks through `caller.Owns(...)` or an equivalent owner comparison. A GitHub login never implies superuser access by name.
 - **Filesystem paths are dangerous inputs.** File and diff routes should use centralized relative-path validation and reject rooted, parent-traversal, device, UNC, drive-relative, control-character, or alternate-data-stream tricks.
 - **SSE has both live and durable layers.** Live buffers optimize active UI sessions; durable run events support replay and restart recovery.
 - **Database split matters.** Operational state and EF memory/run-event state may live in different databases.
@@ -446,7 +446,7 @@ A safe extension normally follows this sequence:
 3. **Create or extend a service.** Put lifecycle, transaction, retry, and multi-store coordination logic outside the endpoint handler.
 4. **Register dependencies.** Pick singleton/scoped/hosted/client lifetimes based on actual behavior, not convenience.
 5. **Map endpoints in a feature module.** Keep route definitions together and call the module from startup.
-6. **Apply auth and ownership.** Confirm both global middleware behavior and resource-specific authorization.
+6. **Apply auth and ownership.** Confirm both global middleware behavior and resource-specific authorization. Resource authorization should be ownership-based and must not depend on magic usernames.
 7. **Add diagnostics or metrics only if they are real.** Avoid placeholder health checks and fabricated counters.
 8. **Validate with the smallest relevant test/build path.** Endpoint changes should prove request binding, auth behavior, ownership behavior, and persistence effects where applicable.
 

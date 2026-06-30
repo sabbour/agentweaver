@@ -32,7 +32,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
-            $"api/projects/{project_id}/decisions/inbox",
+            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox",
             new { agent_name, slug, type, title, content, rationale }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -46,7 +46,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/decisions/inbox{BuildQs(("agent", agent), ("type", type), ("status", status))}", ct);
+            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox{BuildQs(("agent", agent), ("type", type), ("status", status))}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -56,7 +56,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Inbox entry ID")] string entry_id,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>($"api/projects/{project_id}/decisions/inbox/{entry_id}/merge", null, ct);
+        var result = await api.PostAsync<object>($"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox/{Uri.EscapeDataString(entry_id)}/merge", null, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -66,7 +66,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Inbox entry ID")] string entry_id,
         CancellationToken ct = default)
     {
-        await api.PostAsync($"api/projects/{project_id}/decisions/inbox/{entry_id}/reject", null, ct);
+        await api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox/{Uri.EscapeDataString(entry_id)}/reject", null, ct);
         return "rejected";
     }
 
@@ -83,7 +83,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
-            $"api/projects/{project_id}/decisions",
+            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions",
             new { agent_name, type, title, content, rationale }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -100,7 +100,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
-            $"api/projects/{project_id}/decisions/inbox",
+            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox",
             new { agent_name, slug, type, title, content, rationale }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -113,7 +113,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/decisions{BuildQs(("type", type), ("agent", agent))}", ct);
+            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions{BuildQs(("type", type), ("agent", agent))}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -128,7 +128,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PutAsync<object>(
-            $"api/projects/{project_id}/decisions/{decision_id}",
+            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/{Uri.EscapeDataString(decision_id)}",
             new { status, content, rationale, superseded_by_id }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -147,7 +147,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
-            $"api/projects/{project_id}/agents/{Uri.EscapeDataString(agent_name)}/memory",
+            $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory",
             new { session_id, type, content, importance, tags }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -161,7 +161,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/agents/{Uri.EscapeDataString(agent_name)}/memory{BuildQs(("type", type), ("importance", importance))}", ct);
+            $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory{BuildQs(("type", type), ("importance", importance))}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -173,7 +173,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/agents/{Uri.EscapeDataString(agent_name)}/memory/{memory_id}", ct);
+            $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory/{Uri.EscapeDataString(memory_id)}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -185,7 +185,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.GetAsync<object>(
-            $"api/projects/{project_id}/memory{BuildQs(("type", type), ("tags", tags))}", ct);
+            $"api/projects/{Uri.EscapeDataString(project_id)}/memory{BuildQs(("type", type), ("tags", tags))}", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -202,7 +202,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PostAsync<object>(
-            $"api/projects/{project_id}/sessions",
+            $"api/projects/{Uri.EscapeDataString(project_id)}/sessions",
             new { session_id, focus_area, active_issues, summary, serialized_state }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -212,7 +212,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         CancellationToken ct = default)
     {
-        var result = await api.GetAsync<object>($"api/projects/{project_id}/sessions/current", ct);
+        var result = await api.GetAsync<object>($"api/projects/{Uri.EscapeDataString(project_id)}/sessions/current", ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
@@ -227,7 +227,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         CancellationToken ct = default)
     {
         var result = await api.PutAsync<object>(
-            $"api/projects/{project_id}/sessions/current",
+            $"api/projects/{Uri.EscapeDataString(project_id)}/sessions/current",
             new { focus_area, active_issues, summary, serialized_state, end }, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
     }
@@ -239,7 +239,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         CancellationToken ct = default)
     {
-        await api.PostAsync($"api/projects/{project_id}/memory/export", null, ct);
+        await api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/memory/export", null, ct);
         return "exported";
     }
 
@@ -248,7 +248,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         CancellationToken ct = default)
     {
-        await api.PostAsync($"api/projects/{project_id}/memory/import", null, ct);
+        await api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/memory/import", null, ct);
         return "imported";
     }
 }

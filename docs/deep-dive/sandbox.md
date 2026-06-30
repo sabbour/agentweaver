@@ -256,22 +256,24 @@ Ad-hoc commands have no reason to keep a sandbox alive after the command returns
 
 Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs`, `apps/Agentweaver.Api/Sandbox/PortForwardService.cs`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `k8s/sandbox-template.yaml`, `k8s/sandbox-warmpool.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`, `k8s/sandbox-claim-template.yaml`
 
-### Agent-host per-run env contract (and why the user identity must be injected)
+### AgentHost warm-pool configure contract
 
-When the executor launches a pod-per-run agent-host, it injects per-run configuration as `spec.env` on the SandboxClaim. The pod reads these as the `AgentHost` config section (env prefix `AgentHost__`, bound to `AgentHostOptions`):
+AgentHost claims now bind to the shared `agentweaver-agent-host` warm pool (`replicas: 2`). Warm pods boot without `RunId` and enter standby; they do not call `SetupAsync` until the executor configures them for a run. The SandboxClaim environment carries only static config the pod needs before configuration, such as workspace paths, A2A port/path, mTLS settings, and `AgentHost__KeyVaultUri`.
 
-| Env var | Purpose |
+Per-run values are delivered by `POST /configure` after the claim binds:
+
+| `/configure` field | Purpose |
 | --- | --- |
-| `AgentHost__RunId` | The Agentweaver run this pod executes (required; pod refuses to start without it). |
-| `AgentHost__WorkingDirectory` / `AgentHost__RepositoryPath` | Workspace + repo paths inside the mounted PVC. |
-| `AgentHost__A2APath` | URL prefix where the A2A endpoints are mounted. |
-| `AgentHost__RequireMtls` | Whether the A2A listener requires mTLS (production default true). |
-| `AgentHost__Port` | A2A listener port (default 8088). |
-| `AgentHost__UserId` | **The run's submitting user.** Scopes the pod's GitHub Copilot auth to that user's signed-in token. |
+| `runId` | The Agentweaver run this pod executes; missing values return `400`. |
+| `userId` | The submitting user; drives `RuntimeUserScopeProvider`. |
+| `turnBearerToken` | 256-bit per-run bearer token required on `POST /a2a/agent/v1/message:stream`. |
+| `kvUserSecretName` | Key Vault secret name for the run owner's GitHub token (`ghtok-user--{base32(userId)}`). |
 
-`AgentHost__UserId` is critical for GitHub Copilot auth. On the CSI path, the executor creates `agentweaver-user-token-{runId}` with only that user's Key Vault-backed token (`ghtok-user--{base32(userId)}` projected as `user_{userId}.json`). The pod's scope provider then resolves `GitHubTokenScope.ForUser(id)` and reads only that file from `/mnt/user-tokens/`. The executor resolves the run's `SubmittingUser` (via `IRunSubmittingUserResolver` over `IRunStore`) and injects `AgentHost__UserId` at claim time; if no user can be resolved, it fails before pod creation because it cannot create a run-owner-scoped token mount. If AgentHost still starts without a resolvable user id, `SharedUserScopeProvider` logs a warning and falls back to installation scope instead of enumerating token directories or adopting another user's identity.
+`AgentHostRuntimeState.TryConfigure(...)` stores these values exactly once with `Interlocked.CompareExchange`; a second configure attempt returns `409`. `/configure` cannot be protected by the turn token because it delivers that token, so the guard is the NetworkPolicy that restricts AgentHost port `8088` to API/worker pods. The turn endpoint itself still requires `Authorization: Bearer ...` and reads the expected token from runtime state.
 
-Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs`, `apps/Agentweaver.AgentHost/Program.cs`, `apps/Agentweaver.AgentHost/SharedUserScopeProvider.cs`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+The previous run-scoped CSI path is gone: the executor no longer creates per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. Instead `KeyVaultUserTokenProvider` fetches only the configured user's Key Vault secret via workload identity and caches it for the pod lifetime.
+
+Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs`, `apps/Agentweaver.AgentHost/Program.cs`, `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs`, `apps/Agentweaver.AgentHost/AgentHostStartupService.cs`, `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
 
 ## Production pod isolation and hardening
 
@@ -350,4 +352,3 @@ If rebuilding this subsystem from scratch, implement it in this order:
 ## See also
 
 - [Sandbox browser preview](./sandbox-browser-preview.md) - exposing a server running inside a run's sandbox pod to the user over a public HTTPS reverse proxy (per-preview HTTPRoute -> per-run ClusterIP Service -> pod).
-

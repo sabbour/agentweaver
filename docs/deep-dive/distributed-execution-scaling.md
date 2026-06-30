@@ -94,7 +94,7 @@ flowchart TD
 
 P1 relocates only the heavy execution into sandbox pods over a thin agent bridge (the `RemoteAgentProxy` → AgentHost A2A seam, enabled by `Sandbox:AgentExecutionMode=pod-per-run`). It keeps a **single** orchestrating process and the existing SQLite file. This is deliberate and safe: the pod is a *compute satellite*, never a database writer. The `RemoteAgentProxy` carries no `ICheckpointStore` and the pod opens no database connection, so every checkpoint and run-event write is proxied back through the one worker, which remains the sole owner of durable state. Because there is still exactly one writer, SQLite's single-writer invariant holds and nothing forces Postgres yet.
 
-P1 stops the OOM on its own. The dominant per-run footprint — the live model session plus its tool buffers — leaves the API process and dies with the pod. The orchestration graph, the watch loop, and the bounded event history that stay behind are comparatively light.
+P1 stops the OOM on its own. The dominant per-run footprint — the live model session plus its tool buffers — leaves the API process and dies with the pod. The orchestration graph, the watch loop, and the bounded event history that stay behind are comparatively light. The AgentHost warm pool now runs at `replicas: 2`, so the .NET process and Copilot SDK native binary are pre-warmed before any run starts. Run launch claims a warm pod and calls `/configure`; moving SDK initialization out of the critical path typically removes about 7–20 seconds of cold-start latency, and two concurrent runs can start without waiting for a new AgentHost pod to boot.
 
 The rule that keeps P1 single-writer-safe is precise: the pod must never open a database connection or mount the data volume, all checkpoint and event writes must be proxied through the single worker, and no second orchestrating replica may be added. Only the introduction of a *second writer process* would force the data-layer migration early.
 
@@ -132,8 +132,8 @@ flowchart TB
         W2["Worker pod B<br/>orchestration graph"]
     end
     subgraph Pods["Sandbox pods — one per run"]
-        Pod1["AgentHost + CopilotAIAgent"]
-        Pod2["AgentHost + CopilotAIAgent"]
+        Pod1["Warm AgentHost + CopilotAIAgent<br/>configured at launch"]
+        Pod2["Warm AgentHost + CopilotAIAgent<br/>configured at launch"]
     end
     DB[("Azure PostgreSQL<br/>runs · run-event log · leases")]
 
@@ -143,8 +143,8 @@ flowchart TB
     WebB -->|enqueue · read events| DB
     W1 -->|claim+reserve · checkpoint · event writes| DB
     W2 -->|claim+reserve · checkpoint · event writes| DB
-    W1 -. agent bridge — A2A .-> Pod1
-    W2 -. agent bridge — A2A .-> Pod2
+    W1 -. "agent bridge — A2A\nBearer {per-run token}" .-> Pod1
+    W2 -. "agent bridge — A2A\nBearer {per-run token}" .-> Pod2
     DB -. events tailed by cursor .-> WebA
     DB -. events tailed by cursor .-> WebB
 

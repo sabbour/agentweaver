@@ -198,6 +198,8 @@ If no token is supplied, the MCP server returns a bearer challenge that advertis
 
 Once a bearer token is accepted, the MCP server stores both the resolved identity and the original bearer for the request. Tool implementations then call the backend API with that same bearer token. This keeps the backend authorization model honest: the API sees the user's Agentweaver JWT or GitHub token, not just the MCP process identity. In local STDIO mode, when there is no inbound HTTP request context, the MCP client falls back to its configured API key for backend calls.
 
+Downstream resource authorization remains ownership-based. A valid bearer token and allowed org membership let the caller reach protected APIs, but project, team, run, backlog, workflow, workspace, and memory operations still require the caller to own the target resource. Agentweaver does not assign superuser privileges from GitHub usernames, including `admin`.
+
 ## GitHub auth tools in MCP
 
 The MCP server exposes three GitHub auth tools for agents that need to check or repair GitHub connectivity during an assistant-driven session:

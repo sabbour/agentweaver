@@ -433,8 +433,7 @@ public static class BacklogEndpoints
         if (project is null) return (Results.NotFound(), null);
 
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-        if (!caller.Owns(project.Owner) &&
-            !string.Equals(caller.User, "admin", StringComparison.OrdinalIgnoreCase))
+        if (!caller.Owns(project.Owner))
             return (Results.StatusCode(StatusCodes.Status403Forbidden), null);
 
         return (null, project);

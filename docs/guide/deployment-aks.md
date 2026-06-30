@@ -24,10 +24,12 @@ curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh
 | Flag (bash) | Flag (PowerShell) | Effect |
 |---|---|---|
 | `--skip-postgres` | `-SkipPostgres` | Skip Postgres provisioning (step 17) if it already exists |
-| `--skip-oauth-key` | `-SkipOauthKey` | Skip OAuth signing key provisioning (step 16) if it already exists |
+| `--skip-oauth-key` | `-SkipOauthKey` | Skip OAuth signing key provisioning (step 16) **only for a verified existing secret**. Do **not** use this in production first-deploys. |
 | `--image-tag <tag>` | `-ImageTag <tag>` | Use this image tag instead of the short git SHA (see [Redeploy](#redeploy--update)) |
 
 The installer will clone the repo to `~/agentweaver` if you don't already have a local checkout, then run all provisioning steps in order.
+
+> **Production warning:** `scripts/aks/16-provision-oauth-signing-key.sh` is required before the first deploy. Skipping it leaves Key Vault without `mcp-oauth-signing-key`; cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`, and OAuth/JWT validation will not be production-stable.
 
 > **Prerequisites before running:** `az login`, `kubectl`, `envsubst`, `openssl`, and the `aks-preview` Azure CLI extension. See [Prerequisites](#prerequisites) below for install links.
 
@@ -61,7 +63,7 @@ The one-liner above calls these 11 scripts internally, in order. Run them manual
 1. `scripts/aks/00-variables.sh` — shared environment variables (source, don't run directly)
 2. `scripts/aks/10-create-cluster.sh` — ACR + AKS cluster
 3. `scripts/aks/15-setup-identity.sh` — managed identity + Key Vault secrets
-4. `scripts/aks/16-provision-oauth-signing-key.sh` — OAuth signing key
+4. `scripts/aks/16-provision-oauth-signing-key.sh` — OAuth signing key **(required before first deploy)**
 5. `scripts/aks/17-provision-postgres.sh` — Azure Database for PostgreSQL
 6. `scripts/aks/20-build-push-images.sh` — build and push container images (no local Docker required)
 7. `scripts/aks/gen-a2a-mtls-certs.sh` — A2A mTLS certificates *(must run before step 8)*
@@ -217,7 +219,7 @@ The script:
 6. Creates a **federated credential** (`agentweaver-api-fedcred`) linking `serviceaccount/agentweaver-api` in namespace `agentweaver` to the managed identity
 7. Creates a second **federated credential** (`agentweaver-agenthost-fedcred`) linking `serviceaccount/agentweaver-agent-host` to the same managed identity — required for agent-host pods to mount Key Vault secrets via CSI
 
-> **Before first deploy:** run `bash scripts/aks/16-provision-oauth-signing-key.sh` to provision the `mcp-oauth-signing-key` secret in Key Vault.
+> **Required before first deploy:** run `bash scripts/aks/16-provision-oauth-signing-key.sh` to provision the `mcp-oauth-signing-key` secret in Key Vault. Do not pass `--skip-oauth-key` / `-SkipOauthKey` for a production first deploy; use it only when you have verified the secret already exists. Missing this step shows up in diagnostics as `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
 At completion, export the identity client ID for use in Step 5:
 
@@ -265,7 +267,7 @@ AgentHost user tokens do **not** use a shared fan-out SPC. Each authenticated us
 bash scripts/aks/20-build-push-images.sh
 ```
 
-Builds four images via `az acr build` (no local Docker daemon required). The build runs remotely in ACR:
+Builds five images via `az acr build` (no local Docker daemon required). The build runs remotely in ACR:
 
 | Image | Dockerfile | Build context |
 |-------|-----------|---------------|
@@ -273,8 +275,11 @@ Builds four images via `az acr build` (no local Docker daemon required). The bui
 | `agentweaver-frontend:${IMAGE_TAG}` | `apps/web/Dockerfile` | repo root |
 | `agentweaver-mcp:${IMAGE_TAG}` | `apps/Agentweaver.Mcp/Dockerfile` | repo root |
 | `agentweaver-sandbox:${IMAGE_TAG}` | `apps/agentweaver-sandbox/Dockerfile` | `apps/agentweaver-sandbox/` |
+| `agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}` | `apps/Agentweaver.AgentHost/Dockerfile` | repo root |
 
-The API, frontend, and MCP images use the repo root as the build context because their Dockerfiles reference multiple project subdirectories. The sandbox image is self-contained.
+The API, frontend, MCP, and AgentHost images use the repo root as the build context because their Dockerfiles reference multiple project subdirectories. The sandbox base image is self-contained.
+
+The AgentHost Dockerfile publishes with `dotnet publish --runtime linux-x64 --self-contained false`. The RID is required for `GitHub.Copilot.SDK` to extract its native `copilot` CLI into the publish output. Without it, AgentHost pods crash with `Copilot runtime not found at '/app/runtimes/linux-x64/native/copilot'`.
 
 Example output after a successful build:
 ```
@@ -282,6 +287,7 @@ agentweaverregistry.azurecr.io/agentweaver-api:abc1234
 agentweaverregistry.azurecr.io/agentweaver-frontend:abc1234
 agentweaverregistry.azurecr.io/agentweaver-mcp:abc1234
 agentweaverregistry.azurecr.io/agentweaver-sandbox:abc1234
+agentweaverregistry.azurecr.io/agentweaver-agent-host:abc1234
 ```
 
 ---
@@ -463,6 +469,7 @@ The `agentweaver` namespace enforces **default-deny** with explicit allow rules.
 | `allow-gateway-to-frontend` | `app: agentweaver-frontend` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
 | `allow-gateway-to-mcp` | `app: agentweaver-mcp` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
 | `sandbox-deny-ingress` | `app: agentweaver-sandbox` | Denies all ingress by default; preview ingress on TCP 3000–9000 from the preview gateway is explicitly allowed by `sandbox-allow-preview-ingress` (see [Sandbox browser preview](#sandbox-browser-preview)) |
+| `allow-worker-to-agenthost-a2a` | `app: agentweaver-sandbox` | Allows only worker/API pods to reach AgentHost on TCP :8088; `message:stream` also requires the per-run bearer token |
 
 Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentweaver-gateway`, which the `approuting-istio` controller sets automatically.
 
@@ -474,6 +481,8 @@ Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentwea
 | `allow-app-dns-egress` | api, mcp, frontend pods | UDP/TCP :53 to `kube-dns` in `kube-system` |
 | `allow-app-internal-egress` | api, mcp, frontend pods | TCP :8080 to other `app.kubernetes.io/part-of: agentweaver` pods |
 | `allow-app-external-https-egress` | api, mcp pods only | TCP :443 to any external host |
+| `allow-api-agenthost-egress` | api pods | TCP :8088 to AgentHost pods for A2A turns |
+| `allow-worker-agenthost-egress` | worker pods | TCP :8088 to AgentHost pods for A2A turns |
 | `sandbox-egress-allowlist` | `app: agentweaver-sandbox` | DNS + TCP :443 to GitHub IP range `140.82.112.0/20` |
 
 ### Cilium FQDN egress (sandbox)
@@ -714,6 +723,8 @@ kubectl logs -n kube-system -l app=secrets-store-csi-driver | tail -50
 
 If the managed identity federation is misconfigured, the CSI driver will log 403 errors from Key Vault.
 
+If cluster diagnostics show `key_vault: critical: secret 'mcp-oauth-signing-key' not found`, the required signing-key provisioning step was skipped. Run `bash scripts/aks/16-provision-oauth-signing-key.sh` and redeploy; do not work around this with `--skip-oauth-key` in production.
+
 For AgentHost pods, also check the run-scoped SPC:
 
 ```bash
@@ -734,6 +745,10 @@ Common causes:
 - `kata-vm-isolation` RuntimeClass missing — re-run `scripts/aks/10-create-cluster.sh` or check `kubectl get runtimeclass`
 - Agent-sandbox controller not running: `kubectl get pods -n agent-sandbox-system`
 - ACR pull failure for sandbox image — check pod events on a sandbox pod
+
+### AgentHost pod crashes with missing Copilot runtime
+
+If an AgentHost pod logs `Copilot runtime not found at '/app/runtimes/linux-x64/native/copilot'`, rebuild `agentweaver-agent-host` from `apps/Agentweaver.AgentHost/Dockerfile`. Its `dotnet publish` step must include `--runtime linux-x64 --self-contained false`; publishing without a RID omits the `GitHub.Copilot.SDK` native binary from the image.
 
 ### Istio / `approuting-istio` clarification
 

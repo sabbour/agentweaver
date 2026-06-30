@@ -29,7 +29,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/projects/{project_id}", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -74,7 +74,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         try
         {
             var body = new { name };
-            var result = await api.PatchAsync<JsonElement>($"/api/projects/{project_id}", body, ct);
+            var result = await api.PatchAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -90,7 +90,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         try
         {
             var body = new { working_directory };
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/relink", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/relink", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -104,7 +104,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     {
         try
         {
-            await api.DeleteAsync($"/api/projects/{project_id}?confirm=true", ct);
+            await api.DeleteAsync($"/api/projects/{Uri.EscapeDataString(project_id)}?confirm=true", ct);
             return "Project deleted successfully.";
         }
         catch (McpApiException) { throw; }
@@ -122,7 +122,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         try
         {
             var body = new { default_provider, default_model_github_copilot, default_model_microsoft_foundry };
-            await api.PutAsync($"/api/projects/{project_id}/provider-settings", body, ct);
+            await api.PutAsync($"/api/projects/{Uri.EscapeDataString(project_id)}/provider-settings", body, ct);
             return "Project provider settings updated successfully.";
         }
         catch (McpApiException) { throw; }
@@ -136,7 +136,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/projects/{project_id}/runs", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/runs", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

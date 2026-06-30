@@ -28,7 +28,7 @@ public sealed class RunTools(AgentweaverApiClient api)
         try
         {
             var body = new { task, agent_name, base_branch, model_source };
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/runs", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/runs", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -42,7 +42,7 @@ public sealed class RunTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -57,7 +57,7 @@ public sealed class RunTools(AgentweaverApiClient api)
     {
         try
         {
-            await foreach (var evt in api.StreamSseAsync($"/api/runs/{run_id}/stream", ct))
+            await foreach (var evt in api.StreamSseAsync($"/api/runs/{Uri.EscapeDataString(run_id)}/stream", ct))
             {
                 var eventType = evt.EventType;
                 if (eventType == "done") break;
@@ -88,7 +88,7 @@ public sealed class RunTools(AgentweaverApiClient api)
                 catch { /* skip unparseable events */ }
             }
 
-            var finalState = await api.GetAsync<JsonElement>($"/api/runs/{run_id}", ct);
+            var finalState = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}", ct);
             return JsonSerializer.Serialize(finalState, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -105,7 +105,7 @@ public sealed class RunTools(AgentweaverApiClient api)
         try
         {
             var body = new { approved };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/review", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/review", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -121,7 +121,7 @@ public sealed class RunTools(AgentweaverApiClient api)
         try
         {
             var body = new { target_port = port };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/sandbox/preview", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/sandbox/preview", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -135,7 +135,7 @@ public sealed class RunTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/files", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/files", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -151,7 +151,7 @@ public sealed class RunTools(AgentweaverApiClient api)
         try
         {
             var encodedPath = string.Join("/", path.TrimStart('/').Split('/', '\\').Select(Uri.EscapeDataString));
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/files/{encodedPath}", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/files/{encodedPath}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -166,8 +166,8 @@ public sealed class RunTools(AgentweaverApiClient api)
         try
         {
             var result = await api.PostAsync<RetryRunResponse>(
-                $"/api/runs/{run_id}/retry", body: null, ct);
-            return $"Retried run {run_id} -> new run {result.RunId}.";
+                $"/api/runs/{Uri.EscapeDataString(run_id)}/retry", body: null, ct);
+            return $"Retried run {Uri.EscapeDataString(run_id)} -> new run {result.RunId}.";
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
@@ -180,7 +180,7 @@ public sealed class RunTools(AgentweaverApiClient api)
     {
         try
         {
-        var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/archive", body: null, ct);
+        var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/archive", body: null, ct);
         return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

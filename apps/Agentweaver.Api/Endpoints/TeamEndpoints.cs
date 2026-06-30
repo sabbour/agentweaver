@@ -441,6 +441,6 @@ app.MapPost("/api/projects/{projectId}/team/sync", async (
     private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
     {
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-        return caller.Owns(project.Owner) || string.Equals(caller.User, "admin", StringComparison.OrdinalIgnoreCase);
+        return caller.Owns(project.Owner);
     }
 }

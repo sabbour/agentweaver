@@ -32,13 +32,13 @@ Standard bearer-token authentication is required. See [API reference → Authent
       "duration_ms": 230
     },
     {
-      "name": "azure_key_vault",
+      "name": "key_vault",
       "status": "pass",
       "detail": null,
       "duration_ms": 45
     },
     {
-      "name": "namespace_quota",
+      "name": "agent_pod_quota",
       "status": "warn",
       "detail": "CPU headroom: 1.2 cores (threshold: 2 cores)",
       "duration_ms": 38
@@ -109,10 +109,10 @@ Standard bearer-token authentication is required. See [API reference → Authent
 
 | `name` | What it tests |
 | --- | --- |
-| `postgres` | Postgres connectivity |
+| `postgresql` | Postgres connectivity |
 | `github_installation_token` | GitHub token-store validity for the configured scope |
-| `azure_key_vault` | Azure Key Vault reachability |
-| `namespace_quota` | CPU headroom ≥ 2 cores in the sandbox namespace |
+| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
+| `agent_pod_quota` | CPU headroom ≥ 2 cores in the sandbox namespace |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |
 
@@ -157,7 +157,7 @@ Appears in both `active_agent_pods` and `orphaned_agent_pods`.
 ## Notes
 
 - All 6 component health checks run **concurrently**. The total response time is bounded by the slowest single check (5-second timeout), not the sum.
-- The `namespace_quota` check and the `namespace_quota` DTO are computed separately: the check reports a pass/warn/fail threshold judgment; the DTO reports the raw values for the quota bars in the UI.
+- The `agent_pod_quota` check and the `namespace_quota` DTO are computed separately: the check reports a pass/warn/fail threshold judgment; the DTO reports the raw values for the quota bars in the UI.
 - Orphaned pods in `orphaned_agent_pods` are not terminated by this endpoint; they will be reaped on the next `AgentHostReaperService` sweep (default: every ~2 minutes via `Coordinator:ReaperIntervalTicks`).
 
 ## Source

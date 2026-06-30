@@ -23,7 +23,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/projects/{project_id}/workflows", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/workflows", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -38,7 +38,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/projects/{project_id}/workflows/{Uri.EscapeDataString(workflow_id)}", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/{Uri.EscapeDataString(workflow_id)}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -52,7 +52,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/workflows/sync", body: null, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/sync", body: null, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -76,12 +76,12 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
         {
             var body = new { description };
             var result = await api.PostAsync<GenerateWorkflowResponse>(
-                $"/api/projects/{project_id}/workflows/generate", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/generate", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException ex) when (ex.StatusCode == 404)
         {
-            throw new McpApiException(404, $"Project {project_id} not found");
+            throw new McpApiException(404, $"Project {Uri.EscapeDataString(project_id)} not found");
         }
         catch (McpApiException ex) when (ex.StatusCode == 400)
         {
@@ -109,12 +109,12 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
         {
             var body = new { yaml };
             var result = await api.PutAsync<JsonElement>(
-                $"/api/projects/{project_id}/workflows/{Uri.EscapeDataString(workflow_id)}", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/{Uri.EscapeDataString(workflow_id)}", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException ex) when (ex.StatusCode == 404)
         {
-            throw new McpApiException(404, $"Project {project_id} not found");
+            throw new McpApiException(404, $"Project {Uri.EscapeDataString(project_id)} not found");
         }
         catch (McpApiException ex) when (ex.StatusCode == 400)
         {

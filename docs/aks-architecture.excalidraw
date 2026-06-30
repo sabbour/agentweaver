@@ -350,7 +350,7 @@
       "y": 315,
       "width": 190,
       "height": 70,
-      "text": "Azure Key Vault\nagentweaver-kv\n(github-client-id/secret)",
+      "text": "Azure Key Vault\nagentweaver-kv\n(github-client-id/secret\nmcp-oauth-signing-key)",
       "fontSize": 12,
       "fontFamily": 3,
       "strokeColor": "#000000",

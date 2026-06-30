@@ -16,7 +16,9 @@ The three channels are:
 
 > **Precision note.** Channels 1 and 2 are how the *team* coordinates. Channel 3
 > is how a *single agent turn* is *executed*. A2A is not a way for two agents to
-> chat. Do not map agent-to-agent coordination onto the A2A surfaces.
+> chat. Do not map agent-to-agent coordination onto the A2A surfaces. The A2A turn
+> surface is `RemoteAgentProxy → Authorization: Bearer {per-run token} →
+> AgentHost message:stream`; each AgentHost pod accepts only its own run's token.
 
 ```mermaid
 flowchart TB
@@ -29,7 +31,7 @@ flowchart TB
         T4[coordinator_start\ncoordinator_work_plan_get\ncoordinator_children_get\ncoordinator_steer]
     end
     subgraph Ch3[Channel 3 — A2A transport]
-        T5[worker ↔ sandbox pod\nsee A2A reference]
+        T5[worker ↔ sandbox pod\nmessage:stream + per-run bearer\nsee A2A reference]
     end
 ```
 

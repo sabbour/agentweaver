@@ -120,7 +120,9 @@ Configuration is bound from the `Sandbox:Kubernetes` section:
 
 ### The `agentweaver-sandbox` image
 
-The warm pods run the image built from `apps/agentweaver-sandbox/Dockerfile`. It ships the language runtimes agent workloads need: `git`, Python 3, Node.js/npm, and the .NET SDK. The container runs as non-root (uid/gid 1000) to match the SandboxTemplate `securityContext`. `readOnlyRootFilesystem` is enforced by the template; writable mounts are provided at `/workspace` (the shared workspace PVC) and `/tmp` (an `emptyDir`). Under pod-per-run the pod hosts a live A2A AgentHost runtime on container port `8088` rather than a `sleep infinity` placeholder, which is why the template requests materially more CPU/memory than the shell-only baseline.
+The generic warm pods run the image built from `apps/agentweaver-sandbox/Dockerfile`. It ships the language runtimes agent workloads need: `git`, Python 3, Node.js/npm, and the .NET SDK. The container runs as non-root (uid/gid 1000) to match the SandboxTemplate `securityContext`. `readOnlyRootFilesystem` is enforced by the template; writable mounts are provided at `/workspace` (the shared workspace PVC) and `/tmp` (an `emptyDir`).
+
+Pod-per-run AgentHost pods use the separate `agentweaver-agent-host` image built from `apps/Agentweaver.AgentHost/Dockerfile`. Its publish step must include `dotnet publish --runtime linux-x64 --self-contained false`; the RID causes `GitHub.Copilot.SDK` to extract the native `copilot` CLI into `/app/runtimes/linux-x64/native/copilot`. Without that path in the image, pods crash with `Copilot runtime not found at '/app/runtimes/linux-x64/native/copilot'`. AgentHost exposes the A2A listener on container port `8088`, which is why the agent-host template requests materially more CPU/memory than the shell-only baseline.
 
 ### Port-forwarding to a sandbox pod (preview)
 

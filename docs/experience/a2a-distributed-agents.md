@@ -63,12 +63,14 @@ A few mental models keep distributed execution easy to reason about.
 
 **The transport is the sole wire, and the rollback is a flag.** A2A is the only wire transport for agent turns. If anything goes wrong with it, the rollback is not "switch to another protocol" — it is `Sandbox:AgentExecutionMode=in-api`, which reverts to in-process execution instantly. Operators reason about *one* transport and *one* flag, not a matrix of fallback protocols.
 
+**Every turn is authenticated to that run's pod.** The worker path is `API/worker → RemoteAgentProxy → Authorization: Bearer {per-run token} → AgentHost message:stream`. The token is generated when the pod is launched, injected as `AgentHost__TurnBearerToken`, and accepted only by that pod. NetworkPolicy and mTLS still restrict who can reach the listener, but the turn endpoint also has application-layer bearer auth.
+
 **More pods to watch, same run model.** The new operational surface is sandbox pods alongside worker pods. Their warm-pool sizing, isolation, and credential model are covered in [sandbox pods reference](../reference/sandbox-pods.md). The run timeline, review gates, and event stream you already know are unchanged.
 
 ```mermaid
 flowchart TD
     Turn[Agent turn starts] --> Pod[Launch / claim per-run pod]
-    Pod --> Run[Stream turn over A2A]
+    Pod --> Run[Stream turn over A2A<br/>Bearer {per-run token}]
     Run -->|completes| Commit[Turn output committed]
     Run -->|suspend on review gate| Release[Checkpoint + release pod]
     Release -->|human resumes| Rehydrate[Re-launch per-run pod, rehydrate]

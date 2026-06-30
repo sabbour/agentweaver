@@ -19,7 +19,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         try
         {
             var body = new { goal, modelId = model_id };
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/orchestrations", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/orchestrations", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -33,7 +33,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/outcome-spec", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/outcome-spec", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -47,7 +47,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/outcome-spec/confirm", null, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/outcome-spec/confirm", null, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -63,7 +63,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         try
         {
             var body = new { feedback };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/outcome-spec/revise", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/outcome-spec/revise", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -77,7 +77,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/work-plan", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/work-plan", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -91,7 +91,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/children", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/children", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -109,7 +109,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         try
         {
             var body = new { kind, targetChildRunId = target_child_run_id, instruction };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{run_id}/steer", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/steer", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -123,8 +123,8 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     {
         try
         {
-            var workPlan = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/work-plan", ct);
-            var children = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/children", ct);
+            var workPlan = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/work-plan", ct);
+            var children = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/children", ct);
             var snapshot = new
             {
                 coordinatorRunId = run_id,

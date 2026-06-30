@@ -12,6 +12,8 @@ This page is generated from the MCP server source. Do not edit it by hand — ru
 
 The Agentweaver MCP server exposes **82 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
+MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
+
 ## Backlog
 
 | Tool | Description |

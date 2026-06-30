@@ -28,9 +28,13 @@ Keys map to the user accountable for the runs they submit. You can configure mul
 
 A request without a recognized key returns `401 Unauthorized`. A request for a run the caller does not own returns `403 Forbidden`. When no keys are configured, authenticated API requests are unauthorized.
 
+Authorization is ownership-based after authentication. Project, team, run, backlog, workflow, workspace, and memory endpoints load the relevant resource and require the authenticated caller to own it (`caller.Owns(...)` in endpoint code) before returning or mutating it. Agentweaver has no built-in superuser role derived from a GitHub username: a login named `admin` is treated like any other caller and does not bypass ownership checks.
+
 ## Endpoints
 
 ### Runs
+
+Run endpoints are owner-scoped. The authenticated caller must own the run being read, streamed, reviewed, retried, archived, merged, steered, or used for sandbox preview; there is no username-based administrative override.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -143,6 +147,8 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 
 ### Team casting
 
+Team and casting endpoints are project-scoped and use the project owner check before exposing or changing rosters, charters, proposals, or sync state. A caller who does not own the project cannot manage that project's team.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/casting/templates` | List available scenario groupings (team templates) |
@@ -175,6 +181,8 @@ Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case
 | `POST` | `/api/blueprints/validate` | Validate an inline blueprint |
 
 ### Backlog, board, and workflow setup
+
+Backlog, board, review-policy, and workflow endpoints are project-scoped and require ownership of the containing project. Backlog tasks do not introduce separate cross-user privileges; callers manage only tasks in projects they own.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -234,10 +242,10 @@ Six component health checks run **concurrently** with a 5-second individual time
 
 | Check name | What it tests |
 | --- | --- |
-| `postgres` | Postgres connectivity |
+| `postgresql` | Postgres connectivity |
 | `github_installation_token` | GitHub token-store validity for the configured scope |
-| `azure_key_vault` | Azure Key Vault reachability |
-| `namespace_quota` | CPU headroom ≥ 2 CPU in the sandbox namespace |
+| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
+| `agent_pod_quota` | CPU headroom ≥ 2 CPU in the sandbox namespace |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |
 
@@ -246,8 +254,8 @@ Response `200 OK` — a `ClusterDiagnosticsDto`:
 ```json
 {
   "component_health": [
-    { "name": "postgres", "status": "pass", "detail": null, "duration_ms": 12 },
-    { "name": "namespace_quota", "status": "warn", "detail": "CPU headroom: 1.2 cores", "duration_ms": 45 }
+    { "name": "postgresql", "status": "pass", "detail": null, "duration_ms": 12 },
+    { "name": "agent_pod_quota", "status": "warn", "detail": "CPU headroom: 1.2 cores", "duration_ms": 45 }
   ],
   "namespace_quota": {
     "cpu_used": 3.8,
@@ -962,6 +970,8 @@ Reports the terminal outcome of a `run_command` invocation. **Planned — not ye
 
 ## Project endpoints
 
+All project endpoints are caller-owned unless explicitly documented as public metadata. Creating a project records the authenticated caller as `owner`; listing returns only that caller's projects; project-scoped mutation and child-resource endpoints require that same ownership. Non-owned resources return `403 Forbidden` or `404 Not Found` depending on the endpoint's existence-leak behavior.
+
 ### POST /api/projects
 
 Creates a new project. Set `origin` to `"blank"` to register a local directory as a project, or `"github"` to clone a GitHub repository into the working directory first.
@@ -1038,11 +1048,11 @@ Returns public server metadata. Response `200 OK`:
 
 ### GET /api/projects/{id}
 
-Returns a single project. Returns `404 Not Found` when no project exists for the given id.
+Returns a single project owned by the caller. Returns `404 Not Found` when no project exists for the given id or the caller does not own it.
 
 ### PATCH /api/projects/{id}
 
-Renames a project.
+Renames a caller-owned project.
 
 Request:
 
@@ -1050,11 +1060,11 @@ Request:
 { "name": "new-name" }
 ```
 
-Response `204 No Content` on success. `400` when `name` is missing. `404` when the project does not exist.
+Response `204 No Content` on success. `400` when `name` is missing. `404` when the project does not exist or is not owned by the caller.
 
 ### PUT /api/projects/{id}/provider-settings
 
-Updates the provider and model defaults for a project.
+Updates the provider and model defaults for a caller-owned project.
 
 Request:
 
@@ -1070,7 +1080,7 @@ All fields are optional. Omitting a field leaves it unchanged. Response `204 No 
 
 ### POST /api/projects/{id}/relink
 
-Updates the working directory path for a project. Use this after moving a repository to a new location.
+Updates the working directory path for a caller-owned project. Use this after moving a repository to a new location.
 
 Request:
 
@@ -1082,7 +1092,7 @@ Response `204 No Content` on success. `400` when the new path is missing or not 
 
 ### DELETE /api/projects/{id}
 
-Deletes the project record. Does not touch the working directory or git history. Active runs for the project are cancelled; each cancelled run emits a `run.cancelled` event on its stream.
+Deletes a caller-owned project record. Does not touch the working directory or git history. Active runs for the project are cancelled; each cancelled run emits a `run.cancelled` event on its stream.
 
 Requires the query parameter `confirm=true`:
 

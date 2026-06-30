@@ -43,7 +43,7 @@ flowchart TB
         direction LR
         W["Worker<br/>orchestration graph"]
         P["Sandbox pod<br/>AgentHost"]
-        W -- "one agent turn over A2A" --> P
+        W -- "one agent turn over A2A\nAuthorization: Bearer {per-run token}" --> P
         P -- "turn output stream" --> W
     end
     TEAM -. "a single agent turn is remoted" .-> EXEC
@@ -69,7 +69,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | Indirect / shared-state | The whole team's accepted truth and learnings | Read at spawn and mid-run; write via inbox | Decisions ledger + cross-agent memory |
 | Coordinator-mediated handoff | One goal decomposed into bounded subtasks | Coordinator → children; results flow up | WorkPlan / subtask DAG |
-| Direct transport (A2A) | A single agent turn's execution | Worker ↔ sandbox pod | A2A wire protocol |
+| Direct transport (A2A) | A single agent turn's execution | Worker ↔ sandbox pod | claim warm AgentHost pod, one-time `/configure`, then A2A `message:stream` with per-run bearer auth |
 
 The rest of this document explains each channel, then explains **why** the team
 coordinates through a shared blackboard instead of direct chat.

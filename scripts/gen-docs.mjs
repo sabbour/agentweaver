@@ -144,6 +144,10 @@ function buildToolsDoc(groups, total) {
     `The Agentweaver MCP server exposes **${total} tools** across **${groups.length} categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the \`[McpServerTool]\` attributes in the server source.`
   );
   lines.push("");
+  lines.push(
+    "MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding."
+  );
+  lines.push("");
 
   for (const g of groups) {
     lines.push(`## ${g.category}`);

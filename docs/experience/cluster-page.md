@@ -63,8 +63,8 @@ Six checks run concurrently each time the page loads:
 |---|---|---|
 | **Postgres** | Connectivity to the Postgres database | Network policy, password rotation |
 | **GitHub token store** | Configured GitHub token store validity for the current scope | Token expiry, missing per-user token, GitHub API outage |
-| **Azure Key Vault** | Key Vault reachability | Managed identity misconfiguration, network policy |
-| **Namespace quota** | CPU headroom ≥ 2 cores | Too many active pods, under-provisioned node pool |
+| **Azure Key Vault** | Key Vault reachability and required `mcp-oauth-signing-key` lookup | Managed identity misconfiguration, network policy, or skipped `scripts/aks/16-provision-oauth-signing-key.sh` |
+| **Agent pod quota** | CPU headroom ≥ 2 cores | Too many active pods, under-provisioned node pool |
 | **Warm pool** | Warm-pool agent-sandbox availability | Warm-pool replica count zero, SandboxTemplate CRD issue |
 | **Kubernetes API** | Kubernetes API server reachability | In-cluster network policy, apiserver overload |
 
@@ -75,6 +75,8 @@ Each check shows:
 - The duration the check took in milliseconds.
 
 All six checks have a **5-second individual timeout**. A timed-out check appears as `fail` with the detail `"timed out"`.
+
+If the Key Vault row shows `critical: secret 'mcp-oauth-signing-key' not found`, the required OAuth signing-key provisioning step was skipped. Run `scripts/aks/16-provision-oauth-signing-key.sh` before redeploying; do not use the installer `--skip-oauth-key` flag for a production first deploy.
 
 ## Active agent pods table
 

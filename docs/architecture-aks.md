@@ -34,8 +34,9 @@ flowchart TB
         mcp(["mcp Deploy ×1<br/>:8080"])
 
         subgraph execpool["Sandbox execution"]
-            warm(["SandboxWarmPool<br/>sandbox ×3 · agent-host ×1"])
+            warm(["SandboxWarmPool<br/>generic sandbox ×3<br/>AgentHost warm ×2"])
             claim(["SandboxClaim<br/>run-{id} · warmPoolRef"])
+            cfg(["POST /configure<br/>RunId · UserId · token · KV secret"])
             sb(["Sandbox pods<br/>Kata VM · non-root"])
         end
 
@@ -44,11 +45,12 @@ flowchart TB
         subgraph netpol["NetworkPolicies"]
             pDeny{{"default-deny<br/>ingress + egress"}}
             pMcp{{"allow mcp→api :8080"}}
+            pA2A{{"allow worker/API→AgentHost :8088<br/>mTLS + per-run bearer"}}
             pSb{{"sandbox egress<br/>DNS + :443 allowlist"}}
         end
     end
 
-    kv(["Azure Key Vault<br/>CSI + Workload Identity"])
+    kv(["Azure Key Vault<br/>CSI for app secrets<br/>runtime fetch for AgentHost tokens"])
     gh(["GitHub<br/>OAuth · api.github.com"])
     ai(["Azure AI Foundry<br/>npmjs · Copilot"])
     pg(["Azure Database<br/>for PostgreSQL<br/>Flexible Server"])
@@ -60,11 +62,15 @@ flowchart TB
     mcp -->|":8080 JWKS / calls"| apiSvc
     api -->|"SandboxClaim"| claim
     warm --> claim --> sb
-    api -->|"pods/exec"| sb
+    api -->|"claim binds warm AgentHost pod"| claim
+    api -->|"POST /configure"| cfg --> sb
+    api -->|"pods/exec (commands)"| sb
+    api -->|"RemoteAgentProxy<br/>Authorization: Bearer {per-run token}<br/>A2A message:stream :8088"| sb
     api --- ws
     sb --- ws
-    api -->|"CSI"| kv
-    mcp -->|"CSI"| kv
+    api -->|"CSI app secrets"| kv
+    mcp -->|"CSI app secrets"| kv
+    sb -->|"workload identity<br/>fetch configured user token"| kv
     api -->|"OAuth · REST"| gh
     api -->|"TLS :5432"| pg
     sb -->|"egress allowlist"| gh
@@ -72,6 +78,7 @@ flowchart TB
 
     pDeny -. enforces .-> api
     pMcp -. allows .-> mcp
+    pA2A -. allows .-> sb
     pSb -. restricts .-> sb
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
@@ -90,6 +97,30 @@ flowchart TB
     class pDeny,pMcp,pSb evt;
     class kv,gh,ai,pg ext;
 ```
+
+---
+
+
+## AgentHost warm-pool lifecycle
+
+AgentHost has its own warm pool, separate from the generic command sandbox pool:
+
+- **Generic sandbox pool** — `agentweaver-sandbox`, `k8s/sandbox-warmpool.yaml`, `replicas: 3`, used for the worker/API pod-exec command path.
+- **AgentHost pool** — `agentweaver-agent-host`, `k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed.
+
+Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with `{ runId, userId, turnBearerToken, kvUserSecretName }`, then waits for `/healthz` to become ready before sending the first `message:stream` turn. The pod lifecycle is:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Standby: warm pool creates pod\n.NET + SDK process pre-warmed
+    Standby --> Configuring: POST /configure\nRunId/UserId/token/KV secret
+    Configuring --> Ready: SetupAsync completes\n/healthz 200
+    Ready --> Serving: A2A message:stream turns
+    Serving --> Released: run completes / suspends\nclaim deleted or TTL
+    Released --> [*]
+```
+
+`/configure` has one-time semantics (`409` after the first successful configuration). It is not protected by the turn bearer token because it delivers that token; the NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
 
 ---
 
@@ -197,7 +228,8 @@ flowchart LR
     API -->|"pods/exec<br/>via kube-apiserver"| SB
 
     API & MCP -->|":443 HTTPS<br/>FQDN allowlist"| GH["api.github.com<br/>github.com"]
-    API & MCP -->|"CSI driver"| KV["Azure Key Vault"]
+    API & MCP -->|"CSI driver for app secrets"| KV["Azure Key Vault"]
+    SB -->|"workload identity<br/>runtime user-token fetch"| KV
     API & MCP & FE -->|"UDP/TCP :53"| DNS["kube-dns"]
 
     SB -->|":443 FQDN only<br/>api.github.com<br/>npmjs.org<br/>Azure AI"| EXT["External Services"]
@@ -229,15 +261,17 @@ flowchart LR
 | `allow-app-dns-egress` | api, mcp, frontend | UDP/TCP :53 to `kube-dns` |
 | `allow-app-internal-egress` | api, mcp, frontend | TCP :8080 to other `app.kubernetes.io/part-of: agentweaver` pods |
 | `allow-app-external-https-egress` | api, mcp only | TCP :443 to any external host |
-| `sandbox-deny-ingress` | `app: agentweaver-sandbox` | Denies all ingress |
+| `sandbox-deny-ingress` | `app: agentweaver-sandbox` | Denies all ingress by default |
+| `allow-worker-to-agenthost-a2a` | `app: agentweaver-sandbox` | Opens TCP :8088 only from worker/API pods for AgentHost A2A turns |
 | `sandbox-egress-allowlist` | `app: agentweaver-sandbox` | DNS + TCP :443 to `140.82.112.0/20` (GitHub) |
 
 Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentweaver-gateway`, set automatically by the approuting-istio controller.
 
 #### Sandbox isolation
 
-Sandbox pods (`k8s/networkpolicy-sandbox.yaml`) have two policies:
-- **Ingress deny-all** — the API accesses sandbox pods via pod-exec through the kube-apiserver, not direct networking.
+Sandbox pods (`k8s/networkpolicy-sandbox.yaml` plus `k8s/networkpolicy-agenthost.yaml`) have a deny-by-default posture with one turn-path exception:
+- **Ingress deny-all by default** — command execution still uses pod-exec through the kube-apiserver.
+- **A2A ingress exception** — `allow-worker-to-agenthost-a2a` opens only TCP `8088` from worker/API pods to AgentHost pods. `POST /configure` is intentionally not protected by the turn bearer token because it delivers that token; NetworkPolicy is the guard. `POST /a2a/agent/v1/message:stream` still requires `Authorization: Bearer {per-run token}`, delivered by `/configure` and unique per run.
 - **Egress allow-list** — DNS (`kube-dns`) + HTTPS on port 443 to the GitHub IP range `140.82.112.0/20` only. The cluster-internal pod and service CIDRs are not in the allow-list, so sandbox pods cannot reach API or other workload pods via the network.
 
 The FQDN-based `CiliumNetworkPolicy` in `k8s/cilium-network-policy-sandbox.yaml` further narrows sandbox internet egress to specific hostnames: `api.github.com`, `registry.npmjs.org` (and `*.npmjs.org`), and Azure AI service domains. This policy requires `--network-dataplane cilium --enable-acns` at cluster creation and must be applied alongside `networkpolicy-sandbox.yaml`.
@@ -257,7 +291,7 @@ See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
 
 ### Secrets management
 
-Secrets are delivered from **Azure Key Vault** via the **Secrets Store CSI driver** and **Azure Workload Identity** — there are no static credentials in any manifest.
+Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are fetched at `/configure` time by the pod itself using workload identity and the configured Key Vault URI. There are no static credentials in any manifest.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -270,17 +304,17 @@ flowchart LR
     KV["Azure Key Vault<br/>agentweaver-kv"]
 
     SPC["SecretProviderClass<br/>agentweaver-secrets"]
-    RUNSPC["Per-run SecretProviderClass<br/>agentweaver-user-token-{runId}"]
+    USERSECRET["Per-user GitHub token secret<br/>ghtok-user--{base32(userId)}"]
 
     API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-oauth-signing-key"]
-    AGENT["AgentHost Pod<br/>/mnt/user-tokens/user_{userId}.json"]
+    AGENT["Warm AgentHost Pod<br/>KeyVaultUserTokenProvider"]
     MCP["MCP Pod<br/>(no mounted secrets)"]
 
     SA -->|"federated credential"| OIDC --> MI
     SA2 -->|"federated credential"| OIDC2 --> MI
     MI -->|"Key Vault Secrets User"| KV
     KV --> SPC -->|"CSI volume mount"| API
-    KV --> RUNSPC -->|"CSI volume mount"| AGENT
+    KV --> USERSECRET -->|"SecretClient + DefaultAzureCredential<br/>after POST /configure"| AGENT
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -290,12 +324,12 @@ flowchart LR
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class SA,SA2,SPC,RUNSPC,MCP svc;
+    class SA,SA2,SPC,USERSECRET,MCP svc;
     class API,AGENT core;
     class MI,OIDC,KV ext;
 ```
 
-The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing agent-host pods to mount Key Vault secrets via CSI.
+The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing warm AgentHost pods to call Key Vault directly with workload identity.
 
 One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
 
@@ -311,9 +345,7 @@ The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 
-Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`). The CSI driver re-fetches Key Vault secrets on this interval. API app secrets are read at startup; AgentHost user-token projections are read from the run-scoped CSI mount by the in-pod token store.
-
-AgentHost user tokens use a separate per-pod model. The static `agentweaver-user-tokens` SPC is installation-only (it contains `ghtok-installation`), and each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) rather than shared storage. At AgentHost launch, `KubernetesSandboxExecutor` creates a run-scoped SPC named `agentweaver-user-token-{runId}` containing exactly one Key Vault object for the run owner, aliased to `/mnt/user-tokens/user_{userId}.json`. It clones the AgentHost `SandboxTemplate` to reference that SPC, then deletes the SPC/template/warm-pool on pod release; the orphan reaper performs the same cleanup for abandoned claims. `AgentHostUserTokenSyncService` has been removed.
+Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. AgentHost user tokens no longer use CSI projection, per-run `SecretProviderClass` objects, or cloned templates/warm pools. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`). At run launch, `KubernetesSandboxExecutor` claims a pod from the shared `agentweaver-agent-host` pool, calls `POST /configure` with the run owner's secret name, and the pod's `KeyVaultUserTokenProvider` fetches only that secret through `SecretClient` + `DefaultAzureCredential`, caching it for the pod lifetime. `AgentHostUserTokenSyncService` and per-run SPC cleanup have both been removed.
 
 ---
 

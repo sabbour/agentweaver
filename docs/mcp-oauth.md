@@ -138,6 +138,8 @@ Signed JWT (RS256). Claims:
 | `Auth:OAuth:Issuer` | Optional issuer override. When empty, the issuer is derived from the request host. |
 | `Auth:OAuth:Audience` | Optional audience override. Defaults to `{issuer}/mcp`. |
 | `Auth:GitHub:ClientId` / `ClientSecret` / `CallbackUrl` / `Scopes` | Existing confidential GitHub OAuth app (reused for the broker leg). |
+
+For AKS production, provision the signing key before first deploy with `scripts/aks/16-provision-oauth-signing-key.sh`. The installer's `--skip-oauth-key` flag is only safe when that Key Vault secret already exists; otherwise cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 | `Auth:GitHub:AllowedOrg` | Organization enforced at token issuance (`microsoft`). |
 | `Auth:GitHub:ScopeProvider` | Defaults to `caller` for per-user token isolation. Set to `installation` only to revert to the old shared installation scope for single-user local dev. |
 

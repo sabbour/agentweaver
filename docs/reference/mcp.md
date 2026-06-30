@@ -45,6 +45,10 @@ GET /healthz → 200 { "status": "healthy" }
 
 All tools surface API errors as MCP tool errors with human-readable messages. HTTP 4xx errors include the API's error detail. HTTP 5xx errors are distinguished from client-side failures.
 
+## Route parameter encoding
+
+MCP tools treat every route path parameter as data, not as part of the URL structure. Before forwarding a tool call to the Agentweaver API, tool implementations URI-escape path segments such as `project_id`, `run_id`, `agent_name`, backlog task ids, workflow ids, and session ids with `Uri.EscapeDataString()`. This means a crafted identifier containing `../`, `/`, or other reserved path characters cannot traverse to another endpoint or alter the route being called. Query-string parameters are not part of this path hardening and continue to use normal query encoding.
+
 ---
 
 ## Projects

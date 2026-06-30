@@ -45,7 +45,7 @@ flowchart LR
         Tools["tool / shell / file exec"]
         Host --> Copilot --> Tools
     end
-    Proxy -- "A2A message:stream (HTTP+JSON) — leaf turn only" --> Host
+    Proxy -- "A2A message:stream + Authorization: Bearer {per-run token}" --> Host
     Host -- "updates + token deltas + RunEvent DataParts" --> Proxy
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
@@ -72,18 +72,20 @@ The bridge is a pair of components on either side of the A2A wire.
 
 `RemoteAgentProxy` is an `AIAgent`. It is a **drop-in replacement** for the concrete leaf agent the worker's turn executor used to hold directly. The executor still calls the same surface — set up the agent, run the turn, stream updates — and never learns that the agent is now remote. Instead of holding a heavy Copilot SDK session, the proxy forwards each call over A2A and **re-emits** the pod's event and token-delta stream locally, so the rest of the worker graph (and the SSE relay to the browser) is unchanged.
 
-In code this proxy is `RemoteAgentProxy : IWorkflowTurnAgent`. It is realized by the framework-native A2A client — a `Microsoft.Agents.AI.A2A.A2AAgent` wrapping an `A2AHttpJsonClient` — rather than a bespoke HTTP proxy. The transport is A2A's **HTTP+JSON** profile (`MapA2AHttpJson` on the host, `A2AHttpJsonClient` on the worker), **not** JSON-RPC: the two A2A client transports are not interchangeable, and the JSON-RPC `A2AClient` would 404 against the HTTP+JSON routes. The only thing Agentweaver writes is a thin adapter that maps its turn-setup parameters (`AgentSetupParams`: worktree, repo, run id, model id, system prompt, project/agent identity, API broker URL/key, user id, and the per-turn `IsRevision` flag) onto the A2A message — encoded as the first `DataContent` part of the turn message, not a separate init call. `RemoteWorkflowAgentFactory` returns a `RemoteAgentProxy` for **all four** workflow roles (worker, RAI, Rubberduck, Scribe); the proxy holds **no** `ICheckpointStore` and the pod has **no** database connection.
+In code this proxy is `RemoteAgentProxy : IWorkflowTurnAgent`. It is realized by the framework-native A2A client — a `Microsoft.Agents.AI.A2A.A2AAgent` wrapping an `A2AHttpJsonClient` — rather than a bespoke HTTP proxy. The transport is A2A's **HTTP+JSON** profile (`MapA2AHttpJson` on the host, `A2AHttpJsonClient` on the worker), **not** JSON-RPC: the two A2A client transports are not interchangeable, and the JSON-RPC `A2AClient` would 404 against the HTTP+JSON routes. The only thing Agentweaver writes is a thin adapter that maps its turn-setup parameters (`AgentSetupParams`: worktree, repo, run id, model id, system prompt, project/agent identity, API broker URL/key, user id, and the per-turn `IsRevision` flag) onto the A2A message — encoded as the first `DataContent` part of the turn message, not a separate init call. `RemoteAgentProxy` also reads the run's turn token from `IAgentHostTurnTokenRegistry` and sets `Authorization: Bearer {token}` on every A2A turn call. `RemoteWorkflowAgentFactory` returns a `RemoteAgentProxy` for **all four** workflow roles (worker, RAI, Rubberduck, Scribe); the proxy holds **no** `ICheckpointStore` and the pod has **no** database connection.
 
 ### AgentHost (server side, in-pod)
 
-`Agentweaver.AgentHost` is a minimal per-run process baked into the sandbox image. It does **not** run a MAF graph. It hosts a singleton `CopilotAIAgent`, but it does not expose it directly: the agent registered with the A2A server is `A2ATurnBridgeAgent` (a `DelegatingAIAgent` whose MAF name is `agentweaver-pod`), wired via `builder.AddAIAgent(name, factory, Singleton).AddA2AServer(...)` and mounted with `app.MapA2AHttpJson(builder, A2APath)`. The default path is `/a2a/agent`, so it exposes exactly two HTTP endpoints — `POST /a2a/agent/v1/message:stream` and `GET /a2a/agent/v1/card` — on port `8088` by default.
+`Agentweaver.AgentHost` is a minimal per-run process baked into the sandbox image. It does **not** run a MAF graph. It hosts a singleton `CopilotAIAgent`, but it does not expose it directly: the agent registered with the A2A server is `A2ATurnBridgeAgent` (a `DelegatingAIAgent` whose MAF name is `agentweaver-pod`), wired via `builder.AddAIAgent(name, factory, Singleton).AddA2AServer(...)` and mounted with `app.MapA2AHttpJson(builder, A2APath)`. The default path is `/a2a/agent`, so it exposes exactly two HTTP endpoints — `POST /a2a/agent/v1/message:stream` and `GET /a2a/agent/v1/card` — on port `8088` by default. The turn endpoint is application-layer authenticated: `POST /message:stream` must carry `Authorization: Bearer {AgentHostOptions.TurnBearerToken}`.
 
 The bridge exists to close two gaps a direct `CopilotAIAgent` registration would leave open:
 
 - **Inbound:** it decodes the inbound message's first `AgentSetupParams` `DataPart` and forwards its `IsRevision` flag into `CopilotAIAgent.RunTurnAsync`, so a revision turn resumes the session instead of starting fresh.
 - **Outbound:** it installs a per-turn channel as the runner's stream writer and re-emits each pod-side `RunEvent` back over A2A as a `DataContent` part, interleaved with the assistant text.
 
-The **run-scoped** setup — provisioning the real Copilot session, governance, and working directory — runs **once at pod startup**: `AgentHostStartupService` reads `AgentHostOptions` (injected as env vars at claim time), calls `CopilotAIAgent.SetupAsync` to completion, and only then flips a readiness flag. Until that flag is set, the listener returns `503` (with a `/healthz` liveness probe). The bridge never re-runs `SetupAsync`; it only swaps the per-turn stream writer and passes the per-turn `isRevision`. All tool, shell, and file execution happens **inside** the pod, where it is already Kata-isolated.
+The **run-scoped** setup is now deferred until a warm pod is claimed. AgentHost starts without a `RunId`, enters standby, and accepts `POST /configure` while still excluded from the readiness gate. The executor binds a pod from the shared `agentweaver-agent-host` warm pool, then posts `runId`, `userId`, `turnBearerToken`, and `kvUserSecretName`. `AgentHostRuntimeState.TryConfigure(...)` stores those values once, `AgentHostStartupService.ConfigureAsync(...)` runs `CopilotAIAgent.SetupAsync`, and only then `/healthz` returns ready. Backward-compatible env-launched pods still initialize from `AgentHostOptions` at startup.
+
+The security property remains per-run: each AgentHost pod accepts only the token configured for that run on `message:stream`. A stolen token from one run cannot be replayed against another run's pod because the other pod has a different runtime token, and NetworkPolicy/mTLS still constrain which callers can reach port `8088`. `/configure` itself is not protected by that token (it delivers it); the NetworkPolicy restricting AgentHost ingress to API/worker pods is the guard.
 
 MAF therefore stays **in-process on the worker only**. The pod is just a hosted leaf agent behind a thin bridge.
 
@@ -104,18 +106,21 @@ This `RunEvent` codec is the **only shim the bridge owns** — and it is require
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     autonumber
-    participant Boot as AgentHostStartupService (pod boot)
+    participant Boot as AgentHostStartupService (standby pod)
+    participant Exec as KubernetesSandboxExecutor
     participant Graph as MAF graph (worker)
     participant Proxy as RemoteAgentProxy (A2AAgent + A2AHttpJsonClient)
     participant Host as A2ATurnBridgeAgent (MapA2AHttpJson, pod)
     participant Agent as CopilotAIAgent (pod)
     participant Stream as RunStreamStore → SSE
 
-    Boot->>Agent: SetupAsync once at startup (run-scoped config), gate readiness
+    Boot-->>Exec: warm pod waiting for /configure
+    Exec->>Boot: POST /configure(runId, userId, token, kvSecret)
+    Boot->>Agent: SetupAsync after configure, gate readiness
     Graph->>Proxy: SetupAsync(worktree, repo, runId, model, prompt)
     Proxy->>Proxy: resolve pod endpoint, create A2A session (contextId = runId)
     Graph->>Proxy: RunTurnAsync(task, isRevision)
-    Proxy->>Host: POST /a2a/agent/v1/message:stream<br/>[AgentSetupParams DataPart (IsRevision) + task TextPart]
+    Proxy->>Host: POST /a2a/agent/v1/message:stream<br/>Authorization: Bearer {per-run token}<br/>[AgentSetupParams DataPart (IsRevision) + task TextPart]
     Host->>Agent: RunTurnAsync(task, isRevision)
     loop streaming updates
         Agent-->>Host: text deltas + RunEvent (side-channel)
@@ -176,7 +181,7 @@ flowchart TD
     Stream -->|"stream completes"| Done["Commit turn output"]
     Stream -->|"mid-turn drop — no Last-Event-ID replay"| Reclaim["Worker re-claims run"]
     Reclaim --> Restore["Restore latest checkpoint blob"]
-    Restore --> Respawn["Re-spawn / re-attach pod, replay session"]
+    Restore --> Respawn["Re-claim warm pod + /configure, replay session"]
     Respawn --> Stream
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;

@@ -35,7 +35,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var body = new { title, description };
             var result = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/tasks", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -54,7 +54,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var body = new { title, description };
             var result = await api.PatchAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/tasks/{task_id}", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -69,7 +69,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
     {
         try
         {
-            await api.DeleteAsync($"/api/projects/{project_id}/backlog/tasks/{task_id}", ct);
+            await api.DeleteAsync($"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}", ct);
             return "Task deleted successfully.";
         }
         catch (McpApiException) { throw; }
@@ -87,7 +87,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var body = target_index.HasValue ? (object)new { target_index } : new { };
             var result = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/tasks/{task_id}/ready", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}/ready", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -105,7 +105,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var body = target_index.HasValue ? (object)new { target_index } : new { };
             var result = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/tasks/{task_id}/backlog", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}/backlog", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -123,7 +123,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var body = new { target_index };
             var result = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/tasks/{task_id}/reorder", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}/reorder", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -140,7 +140,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var flag = include_terminal_history ?? false;
             var result = await api.GetAsync<JsonElement>(
-                $"/api/projects/{project_id}/board?include_terminal_history={flag}", ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/board?include_terminal_history={flag}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -156,7 +156,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         try
         {
             var result = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/tasks/{task_id}/archive", body: null, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}/archive", body: null, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -171,7 +171,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         try
         {
             var result = await api.GetAsync<JsonElement>(
-                $"/api/projects/{project_id}/workflow-stages", ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/workflow-stages", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -186,7 +186,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         try
         {
             var result = await api.GetAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/settings", ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/settings", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -201,7 +201,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         try
         {
             var result = await api.PostAsync<ReadyAllResponse>(
-                $"/api/projects/{project_id}/backlog/ready-all", body: null, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/ready-all", body: null, ct);
             return result.Moved > 0
                 ? $"Promoted {result.Moved} backlog task(s) to Ready."
                 : "No backlog tasks to promote.";
@@ -222,7 +222,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var body = new { max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools };
             var result = await api.PutAsync<JsonElement>(
-                $"/api/projects/{project_id}/backlog/settings", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/settings", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -248,12 +248,12 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         {
             var body = new { file_path, confirm };
             var result = await api.PostAsync<DecomposeResponse>(
-                $"/api/projects/{project_id}/backlog/decompose", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/decompose", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException ex) when (ex.StatusCode == 404)
         {
-            throw new McpApiException(404, $"Project {project_id} not found");
+            throw new McpApiException(404, $"Project {Uri.EscapeDataString(project_id)} not found");
         }
         catch (McpApiException) { throw; }
         catch (HttpRequestException)

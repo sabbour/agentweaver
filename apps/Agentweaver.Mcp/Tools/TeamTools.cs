@@ -16,7 +16,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/projects/{project_id}/team", ct);
+            var result = await api.GetAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/team", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -42,7 +42,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
             {
                 var confirmBody = new { intent };
                 var confirmResult = await api.PostAsync<JsonElement>(
-                    $"/api/projects/{project_id}/casting/proposals/{Uri.EscapeDataString(confirm_proposal_id)}/confirm",
+                    $"/api/projects/{Uri.EscapeDataString(project_id)}/casting/proposals/{Uri.EscapeDataString(confirm_proposal_id)}/confirm",
                     confirmBody, ct);
                 return JsonSerializer.Serialize(confirmResult, JsonOpts);
             }
@@ -52,7 +52,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
 
             var body = new { goal, mode };
             var proposal = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/casting/proposals", body, ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/casting/proposals", body, ct);
 
             if (!confirm)
                 return JsonSerializer.Serialize(proposal, JsonOpts);
@@ -67,7 +67,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
 
             var confirmAutoBody = new { intent };
             var confirmed = await api.PostAsync<JsonElement>(
-                $"/api/projects/{project_id}/casting/proposals/{Uri.EscapeDataString(proposalId)}/confirm",
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/casting/proposals/{Uri.EscapeDataString(proposalId)}/confirm",
                 confirmAutoBody, ct);
             return JsonSerializer.Serialize(confirmed, JsonOpts);
         }
@@ -86,7 +86,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
         try
         {
             var body = new { name, role_id, model_id };
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{project_id}/team/members", body, ct);
+            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/team/members", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -101,7 +101,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
     {
         try
         {
-            await api.DeleteAsync($"/api/projects/{project_id}/team/members/{Uri.EscapeDataString(member_name)}", ct);
+            await api.DeleteAsync($"/api/projects/{Uri.EscapeDataString(project_id)}/team/members/{Uri.EscapeDataString(member_name)}", ct);
             return $"Team member '{member_name}' retired successfully.";
         }
         catch (McpApiException) { throw; }
@@ -117,7 +117,7 @@ public sealed class TeamTools(AgentweaverApiClient api)
         try
         {
             var result = await api.GetAsync<JsonElement>(
-                $"/api/projects/{project_id}/team/members/{Uri.EscapeDataString(member_name)}/charter", ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/team/members/{Uri.EscapeDataString(member_name)}/charter", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

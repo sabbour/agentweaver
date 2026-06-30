@@ -32,7 +32,7 @@ isolation model — filesystem containment, governance, executor selection, and 
   [A2A reference](./a2a.md) for the transport's preview status and pinning.
 
 > A related delivery flag, `Sandbox:GitHubTokenDelivery`, governs how the run-scoped GitHub token reaches
-> the pod (see [Run-scoped GitHub token injection](#run-scoped-github-token-injection)).
+> the pod (see [Run-scoped GitHub token delivery](#run-scoped-github-token-delivery)).
 
 ## Pod identity and quota
 
@@ -47,6 +47,7 @@ turns) rather than only ad-hoc shell commands.
 | Cluster API access | None. The pod does not automatically receive Kubernetes API credentials; the sandbox stays tokenless for the cluster API even when workload identity is enabled for the model endpoint. |
 | Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is `Bound` to a concrete pod. For pod-per-run AgentHost pods it then **waits for the in-pod AgentHost to serve `/healthz` on `:8088`** before returning the A2A endpoint (a bound claim only means the pod is `Running` — Kestrel binds `:8088` ~20–30 s later). Warm-pool size is a capacity decision balanced against claim latency and quota. |
 | AgentHost readiness gate | With the agent-host warm pool at `replicas: 0` every run cold-starts, so the executor polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn; on timeout the launch fails deterministically rather than refusing mid-run. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. (A supplementary `tcpSocket` startup/readiness probe on `8088` in the agent-host template is *recommended* but owned by the cluster/infra side.) |
+| A2A turn authentication | Pod launch generates a 256-bit random `AgentHost:TurnBearerToken`, injects it as `AgentHost__TurnBearerToken`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {token}` on `message:stream`; each pod accepts only its own run's token. |
 | Per-pod resources | Sized for a real agent runtime (a live session + model I/O), not a `sleep infinity` placeholder — materially larger CPU/memory requests than the shell-only baseline. Exact numbers are a capacity decision. |
 | Quota | Namespace `ResourceQuota` caps pod count, CPU/memory requests, and sandbox-claim count. Heavier per-pod requests plus multiple web/worker replicas require these caps to be **raised deliberately** via a reviewed manifest change, never a live patch. |
 | Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; pods never persist past the run. |
@@ -135,6 +136,18 @@ sequenceDiagram
         Host->>Host: serve token; writes refused
     end
 ```
+
+## A2A turn bearer token
+
+The A2A turn endpoint has a separate per-run bearer token from the GitHub user token above:
+
+1. `KubernetesSandboxExecutor` creates 32 random bytes (`256` bits) at AgentHost pod launch.
+2. The token is injected into the pod environment as `AgentHost__TurnBearerToken`.
+3. The same token is stored in `IAgentHostTurnTokenRegistry` for the owning run.
+4. `RemoteAgentProxy` reads the registry and sends `Authorization: Bearer {token}` on all calls to `POST /a2a/agent/v1/message:stream`.
+5. `AgentHost` rejects turn requests whose header does not exactly match its own `AgentHostOptions.TurnBearerToken`.
+
+This is application-layer auth on top of the A2A NetworkPolicy/mTLS boundary. The important blast-radius property is that a stolen token from one run cannot be reused against another run's pod.
 
 ## Pod naming and the executing-pod surface
 
@@ -262,6 +275,7 @@ sequenceDiagram
 | Execution isolation | Each run's agent turn, tools, shell, and file ops run in the run's **own Kata-isolated pod** (`kata-vm-isolation`), not a shared process. |
 | Control-plane isolation | The orchestration graph, HITL decisions, and run record stay in the **worker**; a compromised pod cannot alter *what happens next*. |
 | Credential blast radius | The pod holds **only a short-lived, run-scoped credential** — never a broker key, never refresh material, never another run's or user's scope. There is **no `CapabilityTokenService`** and no central token broker. |
+| A2A turn auth | `message:stream` requires `Authorization: Bearer {per-run token}`. The token is injected only into that run's AgentHost pod and removed from the registry when the pod is released. |
 | GitHub token exposure | **Access token only** (bounded lifetime, no refresh), readable by the run's own pod, removed at run end; cannot mint new tokens or reach another user's scope. |
 | Egress | **Default-deny** with a narrow allowlist: model endpoint, the API/worker bridge endpoint, and the run's legitimate git remote(s). The **database is not reachable** from sandbox pods — all run-state I/O flows through the worker. |
 | At rest / past run | Token material does not persist past the run; under the per-run-Secret hardening it lives in an etcd-encrypted Secret on a per-pod `tmpfs` `0400` mount and is GC'd with the claim. |

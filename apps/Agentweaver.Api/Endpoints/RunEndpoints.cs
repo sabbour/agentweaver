@@ -2274,8 +2274,7 @@ static async Task<(IResult? Error, Project? Project)> AuthorizeRepositoryPathAsy
     if (project is null) return (Results.NotFound(new { error = "repository_path is not a known project workspace." }), null);
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    if (!caller.Owns(project.Owner) &&
-        !string.Equals(caller.User, "admin", StringComparison.OrdinalIgnoreCase))
+    if (!caller.Owns(project.Owner))
         return (Results.StatusCode(StatusCodes.Status403Forbidden), null);
 
     return (null, project);

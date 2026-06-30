@@ -251,6 +251,7 @@ A rebuild should preserve this pattern:
 3. Avoid hidden side effects in MCP that bypass API authorization or audit behavior.
 4. Let the MCP SDK generate protocol schemas from tool declarations.
 5. Forward the caller's bearer token for every backend call when one exists.
+6. URI-escape every API route path segment (`project_id`, `run_id`, `agent_name`, task ids, workflow ids, etc.) before interpolation. Path parameters must be encoded with `Uri.EscapeDataString()` so a malicious id containing `../` or `/` stays inside its segment instead of rewriting the target API route.
 
 ### Capability map
 
@@ -304,6 +305,8 @@ The deployment pins Resource Server identity configuration:
 - `Auth:Mcp:JwksUri` can point at the internal API service to avoid public-gateway hairpinning.
 
 This distinction is crucial: issuer and audience describe token identity and must be public/stable; JWKS URI is just where the pod fetches signing keys and may be internal.
+
+In AKS, the Authorization Server's private signing key must be provisioned before first deploy with `scripts/aks/16-provision-oauth-signing-key.sh`, which creates the Key Vault secret `mcp-oauth-signing-key`. Do not use the installer `--skip-oauth-key` flag for production first-deploys unless that secret already exists; otherwise cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
 **Where this lives**
 

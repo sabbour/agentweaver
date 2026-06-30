@@ -19,7 +19,7 @@ public sealed class WorkspaceTools(AgentweaverApiClient api)
         try
         {
             var result = await api.GetAsync<WorkspaceRefsResponse>(
-                $"/api/projects/{project_id}/workspace/refs", ct);
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/workspace/refs", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -36,8 +36,8 @@ public sealed class WorkspaceTools(AgentweaverApiClient api)
         try
         {
             var path = string.IsNullOrWhiteSpace(@ref)
-                ? $"/api/projects/{project_id}/workspace"
-                : $"/api/projects/{project_id}/workspace?ref={Uri.EscapeDataString(@ref)}";
+                ? $"/api/projects/{Uri.EscapeDataString(project_id)}/workspace"
+                : $"/api/projects/{Uri.EscapeDataString(project_id)}/workspace?ref={Uri.EscapeDataString(@ref)}";
             var result = await api.GetAsync<IReadOnlyList<WorkspaceNode>>(path, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
@@ -57,8 +57,8 @@ public sealed class WorkspaceTools(AgentweaverApiClient api)
         {
             var encodedPath = string.Join("/", path.Split('/', '\\').Select(Uri.EscapeDataString));
             var url = string.IsNullOrWhiteSpace(@ref)
-                ? $"/api/projects/{project_id}/workspace/files/{encodedPath}/content"
-                : $"/api/projects/{project_id}/workspace/files/{encodedPath}/content?ref={Uri.EscapeDataString(@ref)}";
+                ? $"/api/projects/{Uri.EscapeDataString(project_id)}/workspace/files/{encodedPath}/content"
+                : $"/api/projects/{Uri.EscapeDataString(project_id)}/workspace/files/{encodedPath}/content?ref={Uri.EscapeDataString(@ref)}";
             var result = await api.GetAsync<WorkspaceFileContent>(url, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
