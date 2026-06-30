@@ -22,12 +22,14 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 
 - [Capture and rank backlog work](./work-intake-board/capture-and-rank-backlog.md) — [#9](https://github.com/sabbour/agentweaver/issues/9)
 - [Monitor work on the project board](./work-intake-board/monitor-board-workflow-state.md) — [#10](https://github.com/sabbour/agentweaver/issues/10)
+- [Sync connected repository issues with the backlog](./work-intake-board/sync-github-issues-to-backlog.md) — [#48](https://github.com/sabbour/agentweaver/issues/48)
 
 ## Workflows & automation
 
 - [Manage reusable workflow definitions](./workflows-automation/manage-workflow-library.md) — [#11](https://github.com/sabbour/agentweaver/issues/11)
 - [Generate and save custom workflows](./workflows-automation/generate-and-save-workflows.md) — [#12](https://github.com/sabbour/agentweaver/issues/12)
 - [Automate pickup of Ready work](./workflows-automation/automate-ready-pickup.md) — [#13](https://github.com/sabbour/agentweaver/issues/13)
+- [Open a pull request as a workflow action](./workflows-automation/open-pull-request-action.md) — [#49](https://github.com/sabbour/agentweaver/issues/49)
 
 ## Orchestration & runs
 
@@ -46,6 +48,10 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Isolate agent execution and workspaces](./agent-execution-sandbox/isolate-agent-workspaces.md) — [#20](https://github.com/sabbour/agentweaver/issues/20)
 - [Preview apps running inside a sandbox](./agent-execution-sandbox/preview-sandbox-apps.md) — [#21](https://github.com/sabbour/agentweaver/issues/21)
 
+## Agent configuration
+
+- [Assign skills to project agents](./agent-configuration/assign-skills-to-agents.md) — [#51](https://github.com/sabbour/agentweaver/issues/51)
+
 ## Memory & decisions
 
 - [Curate the decision inbox](./memory-decisions/curate-decision-inbox.md) — [#22](https://github.com/sabbour/agentweaver/issues/22)
@@ -62,6 +68,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 
 - [Drive Agentweaver through MCP tools](./mcp-integrations/drive-agentweaver-through-mcp.md) — [#33](https://github.com/sabbour/agentweaver/issues/33)
 - [Provide a Copilot agent for every project](./mcp-integrations/provide-project-copilot-agent.md) — [#35](https://github.com/sabbour/agentweaver/issues/35)
+- [Operate Agentweaver from a browser chat control console](./mcp-integrations/browser-chat-control-console.md) — [#50](https://github.com/sabbour/agentweaver/issues/50)
 
 ## Deployment & platform
 

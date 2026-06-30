@@ -16,14 +16,13 @@ The scenarios are intentionally outcome-based rather than brittle click scripts.
 
 | Persona | Domain | Example Agentweaver scenarios |
 |---|---|---|
+| [Jordan Lee](greenfield-aks-automatic-developer.md) | Greenfield app delivery / AKS Automatic | Blank idea to AKS Automatic; minimal-guidance deployment setup; post-deploy iteration |
+| [Casey Morgan](existing-repo-aks-automatic-developer.md) | Existing repo modernization / AKS Automatic | Repo readiness assessment; fill deployment gaps and deploy; failed rollout recovery |
 | [Devon Rivera](devon-platform-engineer.md) | Platform engineering / operations | Incident runbook execution; release readiness review; architecture decision follow-up |
 | [Maya Chen](maya-market-strategist.md) | Market and competitive strategy | Competitive landscape synthesis; product positioning brief; launch risk scan |
 | [Priya Nair](priya-customer-support-lead.md) | Customer support operations | Ticket triage swarm; escalation packet creation; support knowledge-base refresh |
-| [Luca Moretti](luca-content-director.md) | Content production | Campaign content pipeline; executive blog post room; localization readiness pass |
 | [Nina Alvarez](nina-legal-compliance-counsel.md) | Legal, privacy, compliance | Policy review board; vendor due-diligence packet; regulatory change impact scan |
 | [Omar Haddad](omar-data-analyst.md) | Data analysis / business intelligence | KPI anomaly investigation; survey synthesis; experiment readout |
-| [Elena Park](elena-learning-designer.md) | Education and enablement | Course design studio; learner feedback synthesis; assessment quality review |
-| [Samir Patel](samir-founder-operator.md) | Startup operations / strategy | Board memo prep; hiring plan workshop; operating cadence design |
 | [Ari Thompson](ari-research-scientist.md) | Scientific and technical research | Literature review swarm; grant proposal critique; replication-plan review |
 
 ## How to convert a persona into a Playwright agent later
