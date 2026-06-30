@@ -45,3 +45,26 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+    # Azure Key Vault — agent-host reads per-user OAuth tokens from KV at /configure time.
+    - toFQDNs:
+        - matchPattern: "*.vault.azure.net"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # Azure AD / Entra ID — Workload Identity OIDC token exchange to authenticate to Key Vault.
+    - toFQDNs:
+        - matchName: "login.microsoftonline.com"
+        - matchPattern: "*.login.microsoftonline.com"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # GitHub Copilot API — agent-host uses the user's Copilot token to serve A2A turns.
+    - toFQDNs:
+        - matchName: "api.githubcopilot.com"
+        - matchName: "copilot-proxy.githubusercontent.com"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
