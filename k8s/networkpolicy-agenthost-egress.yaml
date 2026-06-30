@@ -1,0 +1,64 @@
+# NetworkPolicy — Egress for AgentHost warm-pool pods.
+#
+# Agent-host pods carry app.kubernetes.io/component: agent-host in addition to
+# app: agentweaver-sandbox. The shared sandbox-egress-allowlist (networkpolicy-sandbox.yaml)
+# only opens 140.82.112.0/20 (GitHub API range), but the Copilot CLI SDK also calls
+# copilot-proxy.githubusercontent.com (138.91.x.x — Azure CDN) for SDK token validation
+# during session.create. Without this policy, that call is blocked → "fetch failed".
+#
+# Kata VM isolation is the primary security boundary; this policy is defense-in-depth.
+# Allowing all public HTTPS from agent-host pods is correct — the kata VM kernel, the
+# workspace filesystem isolation, and the governance sandbox handle the rest.
+#
+# This policy is ADDITIVE with sandbox-egress-allowlist (NetworkPolicy is additive).
+# Pure sandbox pods (app: agentweaver-sandbox, but NOT component: agent-host) are
+# unaffected — their egress remains restricted to 140.82.112.0/20.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agenthost-egress-allowlist
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  # Target: agent-host warm-pool pods only (narrower than app: agentweaver-sandbox).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: agent-host
+  policyTypes:
+    - Egress
+  egress:
+    # DNS: kube-dns for hostname resolution (needed for GitHub/Copilot API FQDNs).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # All public HTTPS. Excludes RFC-1918 and link-local to prevent in-cluster lateral
+    # movement. Copilot CLI calls: api.github.com (140.82.x.x), api.githubcopilot.com
+    # (140.82.x.x), copilot-proxy.githubusercontent.com (138.91.x.x — Azure CDN), and
+    # other GitHub/Microsoft endpoints that may change over time.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - fc00::/7
+              - fe80::/10
+      ports:
+        - protocol: TCP
+          port: 443
