@@ -1,5 +1,5 @@
-using System.Text.Json;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.AgentHost;
 
@@ -13,22 +13,21 @@ namespace Agentweaver.AgentHost;
 /// <list type="number">
 ///   <item>An explicitly configured user id (<c>AgentHost:UserId</c> / the run's submitting user),
 ///   if present, -&gt; <see cref="GitHubTokenScope.ForUser(string)"/>.</item>
-///   <item>Otherwise discover the single signed-in <c>user_*.json</c> in the shared auth dir and
-///   reconstruct its scope. Suits the controlled single-user PoC where the worker does not inject
-///   the user id into the pod.</item>
-///   <item>Fall back to <see cref="GitHubTokenScope.Installation"/> if nothing is found.</item>
+///   <item>Fall back to <see cref="GitHubTokenScope.Installation"/> if no user id is configured.</item>
 /// </list>
 /// </summary>
 internal sealed class SharedUserScopeProvider : IGitHubTokenScopeProvider
 {
-    private const string UserKeyPrefix = "user_";
-    private readonly string _authDir;
     private readonly string? _configuredUserId;
+    private readonly ILogger<SharedUserScopeProvider>? _logger;
 
-    public SharedUserScopeProvider(string authDir, string? configuredUserId)
+    public SharedUserScopeProvider(
+        string authDir,
+        string? configuredUserId,
+        ILogger<SharedUserScopeProvider>? logger = null)
     {
-        _authDir = authDir;
         _configuredUserId = string.IsNullOrWhiteSpace(configuredUserId) ? null : configuredUserId;
+        _logger = logger;
     }
 
     public GitHubTokenScope Resolve(string? userId)
@@ -37,43 +36,7 @@ internal sealed class SharedUserScopeProvider : IGitHubTokenScopeProvider
         if (effective is not null)
             return GitHubTokenScope.ForUser(effective);
 
-        var discovered = DiscoverSignedInUserId();
-        return discovered is not null
-            ? GitHubTokenScope.ForUser(discovered)
-            : GitHubTokenScope.Installation;
-    }
-
-    /// <summary>
-    /// Returns the user id of the first signed-in <c>user_*.json</c> in the shared auth dir, or null.
-    /// The file name maps back to the scope via the FileSystemGitHubTokenStore sanitization
-    /// (<c>user:&lt;id&gt;</c> -&gt; <c>user_&lt;id&gt;</c>), so stripping the prefix recovers the id
-    /// for login-style ids.
-    /// </summary>
-    private string? DiscoverSignedInUserId()
-    {
-        if (!Directory.Exists(_authDir))
-            return null;
-
-        foreach (var file in Directory.EnumerateFiles(_authDir, $"{UserKeyPrefix}*.json"))
-        {
-            try
-            {
-                var stored = JsonSerializer.Deserialize<SharedHomeGitHubTokenStore.StoredCredential>(
-                    File.ReadAllText(file));
-                var signedIn = stored?.Status == "signed-in" && !string.IsNullOrEmpty(stored.AccessToken);
-                if (!signedIn)
-                    continue;
-
-                var name = Path.GetFileNameWithoutExtension(file); // e.g. user_sabbour
-                if (name.Length > UserKeyPrefix.Length)
-                    return name[UserKeyPrefix.Length..];
-            }
-            catch (Exception)
-            {
-                // malformed — skip
-            }
-        }
-
-        return null;
+        _logger?.LogWarning("AgentHost userId not configured — falling back to installation scope");
+        return GitHubTokenScope.Installation;
     }
 }

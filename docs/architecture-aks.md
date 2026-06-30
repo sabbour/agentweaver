@@ -270,14 +270,17 @@ flowchart LR
     KV["Azure Key Vault<br/>agentweaver-kv"]
 
     SPC["SecretProviderClass<br/>agentweaver-secrets"]
+    RUNSPC["Per-run SecretProviderClass<br/>agentweaver-user-token-{runId}"]
 
     API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-oauth-signing-key"]
+    AGENT["AgentHost Pod<br/>/mnt/user-tokens/user_{userId}.json"]
     MCP["MCP Pod<br/>(no mounted secrets)"]
 
     SA -->|"federated credential"| OIDC --> MI
     SA2 -->|"federated credential"| OIDC2 --> MI
     MI -->|"Key Vault Secrets User"| KV
     KV --> SPC -->|"CSI volume mount"| API
+    KV --> RUNSPC -->|"CSI volume mount"| AGENT
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -287,12 +290,14 @@ flowchart LR
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class SA,SA2,SPC,MCP svc;
-    class API core;
+    class SA,SA2,SPC,RUNSPC,MCP svc;
+    class API,AGENT core;
     class MI,OIDC,KV ext;
 ```
 
-The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing agent-host pods to mount Key Vault secrets via CSI. One `SecretProviderClass` object syncs secrets from Key Vault into the API pod volume:
+The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing agent-host pods to mount Key Vault secrets via CSI.
+
+One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
 
 **`agentweaver-secrets`** (used by API pod, `k8s/secret-provider-class.yaml`):
 
@@ -306,7 +311,9 @@ The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 
-Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`). The CSI driver re-fetches Key Vault secrets on this interval, but pods must be restarted to pick up new values (the startup shell script reads files once on launch).
+Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`). The CSI driver re-fetches Key Vault secrets on this interval. API app secrets are read at startup; AgentHost user-token projections are read from the run-scoped CSI mount by the in-pod token store.
+
+AgentHost user tokens use a separate per-pod model. The static `agentweaver-user-tokens` SPC is installation-only (it contains `ghtok-installation`), and each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) rather than shared storage. At AgentHost launch, `KubernetesSandboxExecutor` creates a run-scoped SPC named `agentweaver-user-token-{runId}` containing exactly one Key Vault object for the run owner, aliased to `/mnt/user-tokens/user_{userId}.json`. It clones the AgentHost `SandboxTemplate` to reference that SPC, then deletes the SPC/template/warm-pool on pod release; the orphan reaper performs the same cleanup for abandoned claims. `AgentHostUserTokenSyncService` has been removed.
 
 ---
 
@@ -322,8 +329,9 @@ Agentweaver uses **GitHub OAuth** for user authentication. There are no API keys
 4. User authorizes on GitHub; GitHub redirects back to `https://<host>/auth/github/callback`
 5. API exchanges the authorization code for an access token using `github-client-id` and `github-client-secret` (from Key Vault)
 6. API validates the token by calling `GET https://api.github.com/user` — the token is the user's GitHub OAuth token
-7. API checks the user's org membership (`Auth__GitHub__AllowedOrg: microsoft`) — users not in the org are rejected
-8. API issues a session and returns a cookie or Bearer token to the frontend
+7. API stores the token only in the authenticated user's Key Vault-backed scope (`GitHubTokenScope.ForUser(login)`, `ghtok-user--{base32(userId)}`)
+8. API checks the user's org membership (`Auth__GitHub__AllowedOrg: microsoft`) — users not in the org are rejected
+9. API issues a session and returns a cookie or Bearer token to the frontend
 
 ### MCP authentication
 
@@ -367,7 +375,7 @@ PVC: agentweaver-workspace (Azure Files, RWX)
   storageClass: azurefile-csi-premium
   mountPath: /workspace
   │
-  ├── .home/                   (shared HOME dir — token store, Copilot CLI session)
+  ├── .home/                   (shared HOME dir — app/runtime state; no GitHub token mirror)
   ├── worktrees/               (git worktrees per run)
   └── <project workspaces>     (project working directories)
 ```

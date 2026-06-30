@@ -165,6 +165,10 @@ function Install-Local {
     Write-Host "  LOCAL DEV READY" -ForegroundColor White
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host ""
+    Write-Host "  Configure the GitHub OAuth client secret (once):"
+    Write-Host "    cd apps\Agentweaver.Api"
+    Write-Host '    dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"'
+    Write-Host ""
     Write-Host "  Launching start-dev.ps1 ..." -ForegroundColor DarkGray
     Write-Host ""
 

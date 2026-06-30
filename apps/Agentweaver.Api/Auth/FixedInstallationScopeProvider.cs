@@ -5,7 +5,7 @@ namespace Agentweaver.Api.Auth;
 /// <summary>
 /// Local scope provider: always returns GitHubTokenScope.Installation.
 /// Used on developer machines where a single OS user is the only identity.
-/// Selected when Auth:GitHub:ScopeProvider is "installation" (default).
+/// Selected when Auth:GitHub:ScopeProvider is "installation"; the default is "caller".
 /// </summary>
 public sealed class FixedInstallationScopeProvider : IGitHubTokenScopeProvider
 {

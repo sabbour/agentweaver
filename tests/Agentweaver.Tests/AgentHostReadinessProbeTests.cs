@@ -78,6 +78,7 @@ public sealed class AgentHostReadinessProbeTests
             """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
             """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+        StubAgentHostBaseResources(handler);
 
         var probe = new RecordingProbe();
         var executor = NewExecutor(handler, probe);
@@ -100,6 +101,7 @@ public sealed class AgentHostReadinessProbeTests
             """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
             """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+        StubAgentHostBaseResources(handler);
 
         var probe = new ThrowingProbe(new TimeoutException("never ready"));
         var executor = NewExecutor(handler, probe);
@@ -125,7 +127,30 @@ public sealed class AgentHostReadinessProbeTests
 
     private static KubernetesSandboxExecutor NewExecutor(FakeKubeHandler handler, IAgentHostReadinessProbe probe) =>
         new(new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, handler),
-            Options(), NullLogger<KubernetesSandboxExecutor>.Instance, podRegistry: null, readinessProbe: probe);
+            Options(), NullLogger<KubernetesSandboxExecutor>.Instance, podRegistry: null, readinessProbe: probe,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"));
+
+    private static void StubAgentHostBaseResources(FakeKubeHandler handler)
+    {
+        handler.OnGet(
+            "/apis/secrets-store.csi.x-k8s.io/v1/namespaces/agentweaver/secretproviderclasses/agentweaver-user-tokens",
+            """
+            {"apiVersion":"secrets-store.csi.x-k8s.io/v1","kind":"SecretProviderClass","metadata":{"name":"agentweaver-user-tokens"},"spec":{"provider":"azure","parameters":{"usePodIdentity":"false","useVMManagedIdentity":"false","clientID":"cid","keyvaultName":"kv","tenantId":"tid","objects":"array:\n  - |\n    objectName: ghtok-installation\n    objectType: secret\n"}}}
+            """);
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxtemplates/agentweaver-agent-host",
+            """
+            {"apiVersion":"extensions.agents.x-k8s.io/v1beta1","kind":"SandboxTemplate","metadata":{"name":"agentweaver-agent-host","namespace":"agentweaver","resourceVersion":"1"},"spec":{"podTemplate":{"spec":{"volumes":[{"name":"csi-user-tokens","csi":{"volumeAttributes":{"secretProviderClass":"agentweaver-user-tokens"}}}]}}}}
+            """);
+    }
+
+    private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
+    {
+        private readonly string? _user;
+        public StubSubmittingUserResolver(string? user) => _user = user;
+        public Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(_user);
+    }
 
     private sealed class RecordingProbe : IAgentHostReadinessProbe
     {

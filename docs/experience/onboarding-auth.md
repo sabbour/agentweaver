@@ -59,7 +59,7 @@ sequenceDiagram
     API->>GitHub: Exchange code server-side
     GitHub-->>API: GitHub access token
     API->>GitHub: Read authenticated GitHub profile
-    API->>Store: Store token and identity
+    API->>Store: Store per-user token and identity
     API->>API: Issue one-time web session code
     API-->>Web: Redirect with auth=success and code
     Web->>API: POST one-time code for session token
@@ -78,7 +78,7 @@ The default GitHub scopes support the product experience:
 - user profile access so Agentweaver can show the GitHub login and avatar;
 - organization visibility so Agentweaver can enforce required organization membership when that policy is configured.
 
-After the GitHub exchange, Agentweaver reads the authenticated GitHub profile and stores the resulting token and identity server-side. On Windows, the token store uses OS credential storage. On other platforms, the fallback store keeps scoped token files under Agentweaver's data area with restrictive permissions where the platform supports them.
+After the GitHub exchange, Agentweaver reads the authenticated GitHub profile and stores the resulting token and identity server-side in the authenticated user's scope. In AKS, each user's GitHub OAuth token is stored in Azure Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never written to shared storage. Local development uses OS credential storage on Windows or scoped token files under the developer data area on other platforms.
 
 A successful web sign-in also creates a short-lived one-time web session code. The frontend receives only that opaque code in the redirect URL, then immediately redeems it with a POST request. The actual session bearer is returned in the POST response body and stored in browser `sessionStorage` under Agentweaver's session keys. Agentweaver strips the `auth` and `code` query parameters after the exchange so they do not remain in the address bar.
 

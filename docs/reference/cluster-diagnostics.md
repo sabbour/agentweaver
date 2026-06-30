@@ -110,7 +110,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `name` | What it tests |
 | --- | --- |
 | `postgres` | Postgres connectivity |
-| `github_installation_token` | GitHub installation token validity |
+| `github_installation_token` | GitHub token-store validity for the configured scope |
 | `azure_key_vault` | Azure Key Vault reachability |
 | `namespace_quota` | CPU headroom ≥ 2 cores in the sandbox namespace |
 | `warm_pool` | Warm-pool agent-sandbox availability |

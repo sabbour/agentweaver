@@ -53,17 +53,17 @@ turns) rather than only ad-hoc shell commands.
 | Egress | Default-deny NetworkPolicy with a narrow allowlist (see [Security properties](#security-properties)). |
 | Storage | Mounts the **shared workspace volume** (the worktree path) so worktree commit/diff stays on the worker side; the pod is otherwise stateless beyond the live turn. |
 
-## Run-scoped GitHub token injection
+## Run-scoped GitHub token delivery
 
 A pod-per-run sandbox acts **as the run's signed-in user** and needs a GitHub credential to clone/push
-the worktree and call GitHub API tools. The mechanism delivers a **short-lived, run-scoped GitHub access
-token** to *that run's pod*, then removes it when the run ends. No refresh material ever reaches the pod.
+the worktree and call GitHub API tools. The mechanism projects that user's Key Vault-backed GitHub OAuth
+token into *that run's pod* through a run-scoped CSI mount. No token is written to the shared workspace PVC.
 
 ### Sourcing
 
 - The token is obtained by the **worker/API at claim-creation time** through the existing valid-access-
   token provider, which reads from the source-of-truth token store, transparently refreshes a near-expiry
-  token, persists the rotation, and returns **only the access-token string** — never the refresh token.
+  token, and persists the rotation to the user's Key Vault secret.
 - **Scope is the user, not the installation.** A user-initiated run resolves to the owning user's scope;
   installation scope is reserved for background/system tasks with no caller and is never injected into a
   user's run.
@@ -74,10 +74,12 @@ token** to *that run's pod*, then removes it when the run ends. No refresh mater
 
 ### Delivery to the executing pod
 
-The token is delivered through the **shared RWX workspace store** that the executing pod mounts: the
-worker writes the run-scoped access token where *that run's* AgentHost reads it, keyed to the run, so the
-pod consumes its own run's token from its own mount path. The token is a GitHub **access** token only;
-the refresh token is never written to the pod-readable location.
+Each authenticated user's GitHub token is stored in Azure Key Vault under a per-user key
+(`ghtok-user--{base32(userId)}`) and is never written to shared storage. For pod-per-run execution,
+`KubernetesSandboxExecutor` creates a run-scoped `SecretProviderClass` that references only the run
+owner's Key Vault secret and aliases it to `user_{userId}.json`. The sandbox pod mounts that CSI
+projection at `AgentHost:KvTokenMountPath` (for example `/mnt/user-tokens`) and reads only its own
+user's token file.
 
 The pod consumes the value directly:
 
@@ -86,33 +88,21 @@ The pod consumes the value directly:
   without further wiring; and/or
 - as a raw token file the pod wires into `GITHUB_TOKEN`/askpass for GitHub API tools.
 
-> **Hardening direction.** The shared RWX delivery is being tightened toward a **per-run Kubernetes
-> Secret projected as a read-only file** (mode `0400`) on a non-workspace `tmpfs` mount, so the token is
-> readable by exactly one pod and confined to the per-run Kata microVM rather than living on a volume
-> every run's pod can mount. This is governed by `Sandbox:GitHubTokenDelivery` ∈ { `shared-file`,
-> `injected` } (default `shared-file` during bring-up), and is the same direction as the run-scoped
-> *model* credential (workload identity / claim-time projected secret). The sourcing, lifetime, and
-> pod-side read described here are identical for both delivery shapes.
-
 ### Lifetime and cleanup
 
-- **Short-lived by construction.** The injected value is an access token (bounded by the GitHub App
-  user-to-server token lifetime). No refresh token is ever placed where the pod can read it, so a pod can
-  never mint new tokens.
+- **Key Vault is the source of truth.** The API writes OAuth callback and refresh results only to the
+  per-user Key Vault secret; the Key Vault token store uses no disk mirror in AKS.
 - **Bounded by the run/claim.** The token's lifetime is tied to the run; it never outlives the run.
-- **Removed when the run ends.** The token material is deleted on run cleanup / claim deletion. Under the
-  per-run-Secret hardening, cleanup is by owner-reference garbage collection (the Secret is owned by the
-  claim/pod and GC'd when the claim is deleted), belt-and-suspenders explicit deletion in the same
-  cleanup path, and a label-selected reaper for orphans (e.g. a crash between create and claim).
-- **Rotation on re-claim.** Under the hybrid release/re-claim model, each re-claim **re-runs sourcing**
-  and writes a **fresh** token; the prior token material is removed with the prior claim. Tokens never
-  accumulate, and a long run that outlives a single token naturally rotates at burst/re-claim boundaries.
+- **Projection is run-scoped.** The CSI mount is tied to the run's pod and contains only the run owner's
+  token alias.
+- **Rotation follows Key Vault/CSI.** The CSI driver refreshes the projected file from Key Vault, and a
+  re-claim creates a fresh run-scoped projection for the same per-user secret.
 
 ### AgentHost pod-side read
 
 In-pod, the token is served through a **read-only, single-scope** token store:
 
-- it reads the token **once** from its delivered location and serves it for the **single** run scope the
+- it reads the token from the CSI-mounted per-user file and serves it for the **single** run scope the
   pod was launched for — no scope enumeration, no listing of other users' directories;
 - it implements the standard token-store contract so nothing downstream changes: it returns the injected
   access token (with expiry if provided) and **`RefreshToken = null`**, and identity (login) if provided;
@@ -120,26 +110,29 @@ In-pod, the token is served through a **read-only, single-scope** token store:
   write credential state back to a shared location. The **worker/API owns refresh**; the pod only ever
   *receives* a fresh access token.
 
-If the token file is absent at container start, the pod should **fail fast** rather than proceed
-unauthenticated.
+If the token file is absent at container start, the pod retries briefly for the first CSI sync and then
+fails clearly rather than proceeding unauthenticated.
 
 ```mermaid
 sequenceDiagram
     participant Worker as Worker / API
-    participant Store as Token source-of-truth
-    participant Mount as Shared RWX store (run-keyed)
+    participant Provider as GitHub access-token provider
+    participant KV as Azure Key Vault
+    participant SPC as Run-scoped SecretProviderClass
+    participant Mount as CSI mount
     participant Host as AgentHost (in pod)
-    Worker->>Store: GetValidAccessToken(userScope)
+    Worker->>Provider: GetValidAccessToken(userScope)
     alt no valid token
-        Store-->>Worker: null
+        Provider-->>Worker: null
         Worker-->>Worker: fail claim → typed re-auth error (no pod)
     else valid access token
-        Store-->>Worker: access token (no refresh)
-        Worker->>Mount: write run-scoped access token
+        Provider->>KV: read/refresh ghtok-user--{base32(userId)}
+        Provider-->>Worker: valid per-user token
+        Worker->>SPC: reference only this user's secret
         Worker->>Host: claim/adopt pod
-        Host->>Mount: read token once (single scope)
-        Host->>Host: serve token (RefreshToken=null); writes refused
-        Note over Worker,Mount: on run end / re-claim:<br/>delete + rotate token
+        SPC->>Mount: project user_{userId}.json
+        Host->>Mount: read token (single scope)
+        Host->>Host: serve token; writes refused
     end
 ```
 

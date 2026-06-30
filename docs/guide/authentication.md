@@ -33,6 +33,7 @@ Agentweaver uses server-side sessions backed by your GitHub OAuth token. After a
 
 - Your session is stored on the server and identified by a secure browser cookie
 - The cookie is `HttpOnly` and `SameSite` — it is never accessible to JavaScript
+- Your GitHub OAuth token is stored server-side in your own Key Vault-backed user scope (`ghtok-user--{base32(userId)}`) and is never written to shared storage
 - You remain signed in until you explicitly sign out or the session expires on the server
 
 No GitHub tokens are stored in `localStorage`, `sessionStorage`, or any other browser-accessible location.

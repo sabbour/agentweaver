@@ -237,12 +237,12 @@ Agentweaver supports two GitHub sign-in flows:
 1. **Device flow** for CLI-style sign-in.
 2. **OAuth redirect flow** for web sign-in and MCP OAuth broker flows.
 
-Both flows persist tokens through `IGitHubTokenStore`. On Windows, the default store uses Windows Credential Manager. On non-Windows platforms, it falls back to an owner-only JSON file under the Agentweaver data directory. Explicit sign-out writes a tombstone so configuration fallback does not silently re-authenticate a user who signed out.
+Both flows persist tokens through `IGitHubTokenStore`. In AKS, each authenticated user's GitHub OAuth token is stored in Azure Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never written to shared storage. Local development uses Windows Credential Manager on Windows or an owner-only JSON file under the Agentweaver data directory on other platforms. Explicit sign-out writes a tombstone so configuration fallback does not silently re-authenticate a user who signed out.
 
 A token scope provider decides whether credentials are installation-wide or caller-specific:
 
-- installation scope is the local/developer default;
-- caller scope isolates credentials per user for hosted or multi-tenant deployments;
+- caller scope is the default and isolates credentials per authenticated user;
+- installation scope is used only when `Auth:GitHub:ScopeProvider` is explicitly set to `installation`;
 - background work without a caller can fall back to installation scope.
 
 Before consumers use GitHub, they ask `IGitHubAccessTokenProvider` for a valid token. The refresh service returns non-expiring tokens as-is, refreshes near-expiry tokens with the stored refresh token, serializes refreshes per scope, and signs the scope out if refresh cannot succeed.

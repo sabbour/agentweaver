@@ -414,7 +414,7 @@ The page provides:
 
 - **KPI cards** — Active pods, Orphaned pods, CPU used/total, Pending-capacity runs
 - **Quota bars** — CPU (used vs. limit) and memory (used vs. limit), color-coded green/amber/red by saturation
-- **Component health table** — 6 checks: Postgres, GitHub installation token, Azure Key Vault, namespace quota, warm-pool, Kubernetes API server
+- **Component health table** — 6 checks: Postgres, GitHub token store, Azure Key Vault, namespace quota, warm-pool, Kubernetes API server
 - **Active agent pods table** — pods currently serving a live run
 - **Orphaned agent pods table** — pods with no matching active run (will be reaped on the next sweep)
 - **Pending-capacity runs table** — subtasks waiting for CPU headroom
@@ -423,4 +423,3 @@ When the API is not deployed on AKS (or the cluster diagnostics endpoint returns
 
 > **Full user guide:** see [Cluster page guide](./cluster-page.md) for a walkthrough of each KPI and how to interpret quota warnings.
 > **API reference:** see [Cluster diagnostics reference](../reference/cluster-diagnostics.md) for the full response schema.
-

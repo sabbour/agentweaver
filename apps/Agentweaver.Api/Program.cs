@@ -143,17 +143,22 @@ if (string.Equals(tokenStoreProvider, "keyvault", StringComparison.OrdinalIgnore
 {
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
     var kvSecretStore = new KeyVaultSecretStore(secretClient);
-    var diskFs = new FileSystemGitHubTokenStore(); // migration source AND mirror
-    var kvTokenStore = new KeyVaultGitHubTokenStore(kvSecretStore, diskFallback: diskFs, diskMirror: diskFs);
+    var diskFs = new FileSystemGitHubTokenStore(); // migration source only
+    var kvTokenStore = new KeyVaultGitHubTokenStore(kvSecretStore, diskFallback: diskFs, diskMirror: null);
     var cachedTokenStore = new CachingGitHubTokenStore(kvTokenStore);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
     builder.Services.AddSingleton<IGitHubTokenStore>(cachedTokenStore);
+    builder.Services.AddSingleton(secretClient); // exposed for SPC startup re-sync
 }
 else
 {
     builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
 }
-builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
+var scopeProviderName = builder.Configuration["Auth:GitHub:ScopeProvider"] ?? "caller";
+if (string.Equals(scopeProviderName, "installation", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
+else
+    builder.Services.AddSingleton<IGitHubTokenScopeProvider, CallerTokenScopeProvider>();
 builder.Services.AddSingleton<IGitHubAccessTokenProvider, GitHubTokenRefreshService>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
@@ -409,36 +414,6 @@ if (SandboxExecutorFactory.IsInCluster)
 // SandboxRuntimeOptions: controls ReleasePodOnSuspend and AgentExecutionMode at runtime.
 // Bound from the same "Sandbox" section; the IsPodPerRun computed prop used by RunWatchLoopService.
 builder.Services.Configure<SandboxRuntimeOptions>(builder.Configuration.GetSection("Sandbox"));
-
-// Option B (CSI): AgentHostUserTokenSyncService patches the agentweaver-user-tokens
-// SecretProviderClass on sign-in so the CSI driver mounts + rotates each user's KV token.
-// Registered only when in-cluster (same gate as the Kubernetes sandbox/pod registrations);
-// outside K8s the GitHubOAuthRedirectService receives null (optional parameter) and no-ops.
-if (SandboxExecutorFactory.IsInCluster)
-{
-    builder.Services.AddSingleton<AgentHostUserTokenSyncService>(sp =>
-    {
-        var logger = sp.GetRequiredService<ILoggerFactory>()
-            .CreateLogger<AgentHostUserTokenSyncService>();
-        var ns = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
-
-        // Build an in-cluster client the same way KubernetesSandboxExecutor does. If init fails the
-        // service is constructed with a null client and degrades to logging a warning per sign-in.
-        IKubernetes? k8sClient = null;
-        try
-        {
-            k8sClient = new Kubernetes(KubernetesClientConfiguration.InClusterConfig());
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex,
-                "AgentHostUserTokenSyncService: in-cluster Kubernetes client init failed; " +
-                "user-token SPC sync will be disabled.");
-        }
-
-        return new AgentHostUserTokenSyncService(k8sClient, logger, ns);
-    });
-}
 
 // Port-forward service (017-preview): manages kubectl port-forward sessions per run.
 builder.Services.AddSingleton<PortForwardService>();

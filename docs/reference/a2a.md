@@ -136,7 +136,8 @@ A `kube-exec-stdio` channel exists for its own per-command purposes and remains 
 | `Sandbox:AgentHost:Port` | `8088` *(default)* | Pod A2A listener port. |
 | `Sandbox:AgentHost:A2APath` | `/a2a/agent` *(default)* | Base A2A path; routes are `{path}/v1/message:stream` and `{path}/v1/card`. Must match the pod's `AgentHost:A2APath`. |
 | `AgentHost:CardBearerToken` | token / empty | Bearer required on `…/v1/card` (H3); empty disables the gate (dev/test only). |
-| `AgentHost:UseSharedTokenStore` | `true` / `false` *(default)* | Pod reads the user's GitHub token from the shared RWX `/workspace` home store instead of an injected installation token. |
+| `AgentHost:KvTokenMountPath` | path / empty | When set (for example `/mnt/user-tokens`), pod reads the run owner's per-user GitHub OAuth token from the run-scoped Key Vault CSI projection. |
+| `AgentHost:UseSharedTokenStore` | `true` / `false` *(default)* | Legacy/local compatibility only. Production AKS stores per-user GitHub tokens in Key Vault and does not mirror them to the shared workspace PVC. |
 
 ### Pod-per-run lifecycle
 

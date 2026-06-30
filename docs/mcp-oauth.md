@@ -139,6 +139,7 @@ Signed JWT (RS256). Claims:
 | `Auth:OAuth:Audience` | Optional audience override. Defaults to `{issuer}/mcp`. |
 | `Auth:GitHub:ClientId` / `ClientSecret` / `CallbackUrl` / `Scopes` | Existing confidential GitHub OAuth app (reused for the broker leg). |
 | `Auth:GitHub:AllowedOrg` | Organization enforced at token issuance (`microsoft`). |
+| `Auth:GitHub:ScopeProvider` | Defaults to `caller` for per-user token isolation. Set to `installation` only to revert to the old shared installation scope for single-user local dev. |
 
 If `Auth:OAuth:SigningKey` is not set, the service generates an **ephemeral** RSA key at startup for
 local development only (a warning is logged). Ephemeral keys do not survive a restart and must not be

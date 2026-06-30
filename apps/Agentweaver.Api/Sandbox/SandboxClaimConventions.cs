@@ -41,6 +41,20 @@ public static class SandboxClaimConventions
         return $"{AgentHostClaimPrefix}{claimBase}";
     }
 
+    public static string DeriveAgentHostSecretProviderClassName(string claimName) =>
+        $"agentweaver-user-token-{AgentHostRunNameSuffix(claimName)}";
+
+    public static string DeriveAgentHostSandboxTemplateName(string claimName) =>
+        $"{claimName}-template";
+
+    public static string DeriveAgentHostSandboxWarmPoolName(string claimName) =>
+        $"{claimName}-pool";
+
+    private static string AgentHostRunNameSuffix(string claimName) =>
+        claimName.StartsWith(AgentHostClaimPrefix, StringComparison.Ordinal)
+            ? claimName[AgentHostClaimPrefix.Length..]
+            : claimName;
+
     /// <summary>
     /// Extracts the bound pod name from a SandboxClaim object's <c>status</c>: returns the pod
     /// name only when the claim is ready and a pod name is present at <c>status.sandbox.name</c>;

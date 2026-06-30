@@ -269,7 +269,7 @@ When the executor launches a pod-per-run agent-host, it injects per-run configur
 | `AgentHost__Port` | A2A listener port (default 8088). |
 | `AgentHost__UserId` | **The run's submitting user.** Scopes the pod's GitHub Copilot auth to that user's signed-in token. |
 
-`AgentHost__UserId` is critical for GitHub Copilot auth. On the shared-token path (`AgentHost__UseSharedTokenStore=true`), the pod's `SharedUserScopeProvider` uses this id to resolve the per-user token scope (`user:<id>` → `user_<id>.json` on the shared auth volume) — the user's signed-in, **Copilot-entitled** token. If the id is **absent**, the in-pod `CopilotAIAgent` logs "No submitting user was available" and falls back to the installation token, which carries no Copilot entitlement; the first model turn then fails inside the Copilot SDK ("Session was not created with authentication info or custom provider"). The executor therefore resolves the run's `SubmittingUser` (via `IRunSubmittingUserResolver` over `IRunStore`) and injects `AgentHost__UserId` at claim time. When no Copilot-capable identity is available the run now fails with a clear, actionable error ("run X has no Copilot-entitled credentials") instead of the opaque SDK message.
+`AgentHost__UserId` is critical for GitHub Copilot auth. On the CSI path, the executor creates `agentweaver-user-token-{runId}` with only that user's Key Vault-backed token (`ghtok-user--{base32(userId)}` projected as `user_{userId}.json`). The pod's scope provider then resolves `GitHubTokenScope.ForUser(id)` and reads only that file from `/mnt/user-tokens/`. The executor resolves the run's `SubmittingUser` (via `IRunSubmittingUserResolver` over `IRunStore`) and injects `AgentHost__UserId` at claim time; if no user can be resolved, it fails before pod creation because it cannot create a run-owner-scoped token mount. If AgentHost still starts without a resolvable user id, `SharedUserScopeProvider` logs a warning and falls back to installation scope instead of enumerating token directories or adopting another user's identity.
 
 Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs`, `apps/Agentweaver.AgentHost/Program.cs`, `apps/Agentweaver.AgentHost/SharedUserScopeProvider.cs`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
 
@@ -350,3 +350,4 @@ If rebuilding this subsystem from scratch, implement it in this order:
 ## See also
 
 - [Sandbox browser preview](./sandbox-browser-preview.md) - exposing a server running inside a run's sandbox pod to the user over a public HTTPS reverse proxy (per-preview HTTPRoute -> per-run ClusterIP Service -> pod).
+

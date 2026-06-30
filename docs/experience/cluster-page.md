@@ -62,7 +62,7 @@ Six checks run concurrently each time the page loads:
 | Check | What it tests | Typical failure cause |
 |---|---|---|
 | **Postgres** | Connectivity to the Postgres database | Network policy, password rotation |
-| **GitHub installation token** | GitHub App installation token validity | Token expiry, GitHub API outage |
+| **GitHub token store** | Configured GitHub token store validity for the current scope | Token expiry, missing per-user token, GitHub API outage |
 | **Azure Key Vault** | Key Vault reachability | Managed identity misconfiguration, network policy |
 | **Namespace quota** | CPU headroom ≥ 2 cores | Too many active pods, under-provisioned node pool |
 | **Warm pool** | Warm-pool agent-sandbox availability | Warm-pool replica count zero, SandboxTemplate CRD issue |

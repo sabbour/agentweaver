@@ -39,14 +39,13 @@ The API reads settings from `appsettings.json` plus the environment-specific fil
 $env:ASPNETCORE_ENVIRONMENT = "Local"
 ```
 
-Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your GitHub OAuth App and model provider:
+Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your non-secret GitHub OAuth App settings and model provider:
 
 ```json
 {
   "Auth": {
     "GitHub": {
       "ClientId": "<your-oauth-app-client-id>",
-      "ClientSecret": "<your-oauth-app-client-secret>",
       "CallbackUrl": "http://localhost:5000/auth/github/callback",
       "FrontendUrl": "http://localhost:8080"
     }
@@ -59,7 +58,12 @@ Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your GitHub OAuth
 }
 ```
 
-The `ClientId` and `ClientSecret` come from your GitHub OAuth App settings page. `CallbackUrl` must match the **Authorization callback URL** registered in the app exactly.
+The `ClientId` and `ClientSecret` come from your GitHub OAuth App settings page. `CallbackUrl` must match the **Authorization callback URL** registered in the app exactly. Store the client secret with .NET user-secrets, not in `appsettings*.json`:
+
+```powershell
+cd apps/Agentweaver.Api
+dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
+```
 
 ## 2. Start the API
 

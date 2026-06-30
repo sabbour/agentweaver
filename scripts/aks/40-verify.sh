@@ -77,7 +77,7 @@ fi
 
 echo ""
 echo "--- SecretProviderClass sync ---"
-for spc in agentweaver-secrets; do
+for spc in agentweaver-secrets agentweaver-user-tokens; do
   if kubectl get secretproviderclass "${spc}" -n "${NAMESPACE}" >/dev/null 2>&1; then
     ok "SecretProviderClass ${spc} exists"
   else
@@ -86,6 +86,7 @@ for spc in agentweaver-secrets; do
 done
 spc_status_count=$(kubectl get secretproviderclasspodstatus -n "${NAMESPACE}" --no-headers 2>/dev/null | wc -l | tr -d ' ' || echo "0")
 [[ "${spc_status_count}" -ge 1 ]] && ok "SecretProviderClassPodStatus objects present (${spc_status_count})" || fail "No SecretProviderClassPodStatus objects found"
+info "agentweaver-user-tokens is installation-only; run-scoped agentweaver-user-token-* SPCs appear only while AgentHost pods are running"
 
 echo ""
 echo "--- API RBAC ---"
@@ -95,10 +96,13 @@ else
   fail "API sandbox Role/RoleBinding missing"
 fi
 if kubectl auth can-i create sandboxclaims.extensions.agents.x-k8s.io --as="system:serviceaccount:${NAMESPACE}:agentweaver-api" -n "${NAMESPACE}" >/dev/null 2>&1 && \
+   kubectl auth can-i create sandboxtemplates.extensions.agents.x-k8s.io --as="system:serviceaccount:${NAMESPACE}:agentweaver-api" -n "${NAMESPACE}" >/dev/null 2>&1 && \
+   kubectl auth can-i create sandboxwarmpools.extensions.agents.x-k8s.io --as="system:serviceaccount:${NAMESPACE}:agentweaver-api" -n "${NAMESPACE}" >/dev/null 2>&1 && \
+   kubectl auth can-i create secretproviderclasses.secrets-store.csi.x-k8s.io --as="system:serviceaccount:${NAMESPACE}:agentweaver-api" -n "${NAMESPACE}" >/dev/null 2>&1 && \
    kubectl auth can-i create pods/exec --as="system:serviceaccount:${NAMESPACE}:agentweaver-api" -n "${NAMESPACE}" >/dev/null 2>&1; then
-  ok "API ServiceAccount can create SandboxClaims and pods/exec"
+  ok "API ServiceAccount can create SandboxClaims, run-scoped templates/pools/SPCs, and pods/exec"
 else
-  fail "API ServiceAccount lacks required sandbox permissions"
+  fail "API ServiceAccount lacks required sandbox or run-scoped SPC permissions"
 fi
 
 echo ""

@@ -121,6 +121,7 @@ kubectl wait \
   --namespace "${NAMESPACE}" \
   --timeout=60s
 apply_rendered secret-provider-class.yaml
+echo "  [note] secret-provider-class.yaml is static only: agentweaver-user-tokens contains ghtok-installation; per-run user-token SPCs are created/deleted by the API at AgentHost launch/release."
 apply_rendered rbac-api.yaml
 apply_rendered quota.yaml
 apply_rendered storageclass-workspace.yaml

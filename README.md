@@ -84,6 +84,13 @@ npm --prefix apps/web run dev
 
 > **Windows shortcut:** `.\start-dev.ps1` launches all three automatically.
 
+Configure the GitHub OAuth client secret for local dev with .NET user-secrets (do not put it in `appsettings*.json`):
+
+```powershell
+cd apps/Agentweaver.Api
+dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
+```
+
 ### Deploy / redeploy to AKS
 
 **First deploy:**

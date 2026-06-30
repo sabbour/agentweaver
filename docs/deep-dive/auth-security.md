@@ -512,10 +512,10 @@ GitHub tokens are the credentials Agentweaver uses to act on behalf of a signed-
 
 Token scopes separate storage domains:
 
-- **installation scope** for the default web sign-in storage model;
-- **per-user scope** for hosted/multi-user flows and brokered MCP refresh-time org checks.
+- **per-user scope** for the default web sign-in, hosted/multi-user flows, and brokered MCP refresh-time org checks;
+- **installation scope** only when `Auth:GitHub:ScopeProvider` is explicitly set to `installation`, or for background/system work with no caller.
 
-On Windows, tokens are stored in Windows Credential Manager, protected by OS facilities. On non-Windows, Agentweaver falls back to per-scope JSON files under its data directory with owner-only permissions where supported. A signed-out tombstone is stored to distinguish "user explicitly signed out" from "never signed in".
+In AKS, each authenticated user's GitHub token is stored in Azure Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never written to shared storage. The Key Vault token store no longer mirrors tokens to the workspace PVC. Local development may use Windows Credential Manager or per-scope JSON files under the developer data directory, depending on platform. A signed-out tombstone is stored to distinguish "user explicitly signed out" from "never signed in".
 
 A refresh helper centralizes token retrieval. It returns still-valid tokens directly, serializes refreshes per scope to avoid refresh races, signs out when refresh is impossible, and avoids logging raw token values.
 
@@ -602,14 +602,15 @@ Where this lives:
 - `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
 - `apps/Agentweaver.Mcp/Program.cs`
 
-## Agent-host token delivery (Option B)
+## Agent-host token delivery
 
-Agent-host pods need a valid GitHub token for the signed-in user so they can call GitHub APIs, clone repositories, and act on behalf of that user. Agentweaver supports two delivery modes:
+Agent-host pods need a valid GitHub token for the signed-in user so they can call GitHub APIs, clone repositories, and act on behalf of that user. The AKS delivery model is per-user Key Vault storage plus run-scoped CSI projection:
 
-- **Option A — shared RWX filesystem (`UseSharedTokenStore=true`).** The token is written to a PVC-backed volume mounted by both the API pod and the agent-host pod. This is the legacy path and still supported when `AgentHostOptions.KvTokenMountPath` is not configured.
-- **Option B — CSI secrets-store from Azure Key Vault.** The token is stored in Key Vault and projected into the agent-host pod's filesystem by the CSI secrets-store driver. This is the preferred path for AKS deployments.
+- **Per-user source of truth.** OAuth callbacks store only the authenticated caller's token in `GitHubTokenScope.ForUser(login)`, backed by a Key Vault secret named `ghtok-user--{base32(userId)}`.
+- **No shared storage mirror.** GitHub tokens are not written to the workspace PVC or any shared filesystem.
+- **CSI secrets-store delivery.** The run owner's token is projected into the agent-host pod's filesystem by the CSI secrets-store driver.
 
-### Option B end-to-end flow
+### End-to-end flow
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -617,20 +618,20 @@ sequenceDiagram
     participant User as User (browser)
     participant API as Agentweaver API
     participant KV as Azure Key Vault
-    participant SPC as SecretProviderClass<br/>(agentweaver-user-tokens)
+    participant SPC as SecretProviderClass<br/>(per-run user token SPC)
     participant CSI as CSI driver
     participant Pod as AgentHost pod
 
     User->>API: sign in (GitHub OAuth)
-    API->>KV: store token as secret<br/>user_{userId}
-    API->>SPC: patch: add secretObject reference<br/>(EnsureUserTokenInSpcAsync)
+    API->>KV: store token as secret<br/>ghtok-user--{base32(userId)}
+    API->>SPC: create run-scoped SPC<br/>for only this user token
     loop every 2 minutes
-        CSI->>KV: rotate K8s Secret from KV
+        CSI->>KV: rotate projected file from KV
     end
     Pod->>Pod: read /mnt/user-tokens/user_{userId}.json<br/>(CsiMountedGitHubTokenStore)
 ```
 
-On user sign-in, `AgentHostUserTokenSyncService.EnsureUserTokenInSpcAsync` patches the `agentweaver-user-tokens` `SecretProviderClass` to add a reference to the user's Key Vault secret (`user_{userId}`). The CSI driver syncs the updated manifest and rotates the resulting Kubernetes Secret from Key Vault every **2 minutes**. The agent-host pod mounts the CSI volume at `/mnt/user-tokens/`, so each user's token is visible at `/mnt/user-tokens/user_{userId}.json`.
+On AgentHost launch, `KubernetesSandboxExecutor` creates a per-run `SecretProviderClass` named `agentweaver-user-token-{runId}` that references only the run owner's Key Vault secret (`ghtok-user--{base32(userId)}`) and aliases it to `user_{userId}.json`. It then clones the base AgentHost `SandboxTemplate` and points that pod's CSI volume at the run-scoped SPC, so the mounted `/mnt/user-tokens/` directory contains only that run owner's token. `AgentHostUserTokenSyncService` has been removed; no sign-in path patches a shared SPC.
 
 The in-pod `CsiMountedGitHubTokenStore` reads from that path. Because the file may not be present immediately on pod cold-start (the CSI volume needs a moment to project the first sync), the store performs a **cold-start retry** of up to 6 attempts with 5-second intervals before failing.
 
@@ -638,15 +639,15 @@ The agent-host pod uses the dedicated workload-identity service account `agentwe
 
 ### Configuration
 
-`AgentHostOptions.KvTokenMountPath` controls which delivery mode is active:
+`AgentHostOptions.KvTokenMountPath` controls CSI delivery:
 
 | `KvTokenMountPath` | `UseSharedTokenStore` | Active mode |
 |---|---|---|
-| set (e.g. `/mnt/user-tokens`) | *(any)* | **Option B — CSI** |
-| unset | `true` | Option A — shared RWX filesystem |
+| set (e.g. `/mnt/user-tokens`) | *(any)* | **Key Vault CSI projection** |
+| unset | `true` | Legacy/local shared-store compatibility only; not the AKS token-storage model |
 | unset | `false` | no GitHub token delivery |
 
-When `KvTokenMountPath` is set it takes precedence over `UseSharedTokenStore`.
+When `KvTokenMountPath` is set it takes precedence over `UseSharedTokenStore`. In production AKS, the API Key Vault token store uses `diskMirror: null`, so `UseSharedTokenStore` does not receive OAuth token writes from the API.
 
 ### Security properties
 
@@ -654,12 +655,13 @@ When `KvTokenMountPath` is set it takes precedence over `UseSharedTokenStore`.
 - The CSI-mounted secret is read-only from the pod's perspective.
 - The 2-minute rotation window limits the exposure window if a pod is compromised.
 - The workload-identity SA is scoped to Key Vault get/list only — no write access to KV.
+- Each authenticated user's GitHub token is stored in Azure Key Vault under a per-user key and is never written to shared storage.
 
-> **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) explains both delivery modes, the cold-start retry, the workload-identity SA, and when to use each approach.
+> **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) explains the CSI delivery model, the cold-start retry, and the workload-identity service account.
 
 Where this lives:
 
-- `apps/Agentweaver.Api/Auth/AgentHostUserTokenSyncService.cs`
+- `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`
 - `apps/Agentweaver.AgentHost/CsiMountedGitHubTokenStore.cs`
 - `apps/Agentweaver.AgentHost/AgentHostOptions.cs`
 - `k8s/serviceaccount-agenthost.yaml`

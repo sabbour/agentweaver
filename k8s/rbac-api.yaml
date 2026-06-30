@@ -10,6 +10,8 @@ rules:
       - extensions.agents.x-k8s.io
     resources:
       - sandboxclaims
+      - sandboxtemplates
+      - sandboxwarmpools
     verbs:
       - get
       - list
@@ -54,16 +56,17 @@ rules:
       - delete
       - patch
       - update
-  # SecretProviderClass CRDs — the API patches agentweaver-user-tokens on user sign-in
-  # to add/remove per-user GitHub token objects mounted into agent-host pods via CSI.
+  # SecretProviderClass CRDs — the API creates/deletes per-run user-token SPCs mounted
+  # into agent-host pods via CSI.
   - apiGroups:
       - secrets-store.csi.x-k8s.io
     resources:
       - secretproviderclasses
     verbs:
       - get
-      - patch
-      - update
+      - list
+      - create
+      - delete
   # ResourceQuota — read by DiagnosticsService.CheckAgentPodQuotaDetailedAsync for the
   # Cluster health page (agent_pod_quota check).
   - apiGroups:

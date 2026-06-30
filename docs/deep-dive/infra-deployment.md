@@ -204,13 +204,15 @@ flowchart LR
 
 The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
-The API reads GitHub OAuth client settings and the OAuth signing key. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). Both the `agentweaver-api` and `agentweaver-agent-host` service accounts use the same managed identity (`agentweaver-api-identity`), each with its own federated credential (`agentweaver-api-fedcred` and `agentweaver-agenthost-fedcred` respectively). The single `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
+The API reads GitHub OAuth client settings and the OAuth signing key. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). Both the `agentweaver-api` and `agentweaver-agent-host` service accounts use the same managed identity (`agentweaver-api-identity`), each with its own federated credential (`agentweaver-api-fedcred` and `agentweaver-agenthost-fedcred` respectively). The static `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
+
+AgentHost user tokens are mounted through per-run SecretProviderClasses. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never mirrored to the shared workspace PVC. The committed `agentweaver-user-tokens` SPC is safe to re-apply because it no longer accumulates users. At pod launch the API creates `agentweaver-user-token-{runId}` with only the run owner's per-user secret aliased to `user_{userId}.json`, clones the AgentHost SandboxTemplate to use it, and deletes those run-scoped resources on release or reaper cleanup.
 
 Rotation constraint: the CSI driver can refresh mounted files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
 OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens.
 
-Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-oauth-signing-key.sh`, `k8s/serviceaccount-api.yaml`, `k8s/secret-provider-class.yaml`.
+Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-oauth-signing-key.sh`, `k8s/serviceaccount-api.yaml`, `k8s/serviceaccount-agenthost.yaml`, `k8s/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
 
 ## Storage and persistence
 
@@ -310,18 +312,18 @@ Apply order matters:
 
 1. Namespace first.
 2. Default-domain certificate and host derivation.
-3. Service account, workload identity annotation, SecretProviderClasses, RBAC, quotas, and PVCs.
+3. Service account, workload identity annotation, static SecretProviderClasses, RBAC, quotas, and PVCs.
 4. Network policies and egress allowlists.
 5. Services, Gateway, HTTPRoutes, and backup job.
 6. Sandbox template/warm pool if the CRDs exist.
 7. Deployments last.
 8. Rollout waits and post-deploy verification.
 
-This order prevents common race conditions: pods should not start before secrets can mount, before volumes exist, before identity is annotated, or before the Gateway host is known.
+This order prevents common race conditions: pods should not start before secrets can mount, before volumes exist, before identity is annotated, or before the Gateway host is known. Re-applying the static SecretProviderClasses is safe because dynamic user-token SPCs are created separately per AgentHost run.
 
 ### Rollout and verification
 
-Rollout waits confirm that Kubernetes accepted and started the API, frontend, and MCP deployments. Verification should then check route readiness, HTTP health, SecretProviderClass status, RBAC assumptions, and sandbox CRD/resources where applicable.
+Rollout waits confirm that Kubernetes accepted and started the API, frontend, and MCP deployments. Verification should then check route readiness, HTTP health, static SecretProviderClass status, RBAC assumptions, and sandbox CRD/resources where applicable.
 
 The important distinction: rollout success means pods became ready; it does not prove all external protocol flows work. OAuth discovery, MCP metadata, JWKS validation, and docs routing each deserve smoke tests because they cross multiple components.
 

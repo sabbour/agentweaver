@@ -4,7 +4,7 @@ This page collects the API and web configuration in one place.
 
 ## API configuration
 
-The API reads standard ASP.NET Core configuration sources. In local development, you can use `appsettings.Development.json`, `appsettings.Local.json` with `ASPNETCORE_ENVIRONMENT=Local`, environment variables, or user secrets.
+The API reads standard ASP.NET Core configuration sources. In local development, keep secrets out of JSON files: use .NET user-secrets or environment variables for secret values, and use `appsettings.Development.json` / `appsettings.Local.json` only for non-secret settings.
 
 ### Storage and git settings
 
@@ -34,6 +34,14 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:GitHub:CallbackUrl` | none | OAuth callback URL registered in the GitHub App (must match exactly) |
 | `Auth:GitHub:FrontendUrl` | none | URL the API redirects to after a successful sign-in |
 | `Auth:GitHub:AllowedOrg` | none | When set, users must belong to this GitHub org to access the API |
+| `Auth:GitHub:ScopeProvider` | `caller` | Token scope selection. `caller` isolates credentials per signed-in user; set to `installation` only to revert to the old shared installation scope for single-user local dev. |
+
+Set the OAuth client secret locally with user-secrets:
+
+```powershell
+cd apps/Agentweaver.Api
+dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
+```
 
 ### CORS settings
 

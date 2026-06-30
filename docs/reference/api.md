@@ -231,7 +231,7 @@ Six component health checks run **concurrently** with a 5-second individual time
 | Check name | What it tests |
 | --- | --- |
 | `postgres` | Postgres connectivity |
-| `github_installation_token` | GitHub installation token validity |
+| `github_installation_token` | GitHub token-store validity for the configured scope |
 | `azure_key_vault` | Azure Key Vault reachability |
 | `namespace_quota` | CPU headroom ≥ 2 CPU in the sandbox namespace |
 | `warm_pool` | Warm-pool agent-sandbox availability |

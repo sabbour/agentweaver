@@ -45,7 +45,7 @@ if (!requireMtls && !kestrelEndpointsConfigured)
 // Three paths, selected in priority order:
 //
 //  (A) CSI-mounted Key Vault token files (Option B, KvTokenMountPath set):
-//      The SPC agentweaver-user-tokens mounts per-user token files from Key Vault at
+//      A per-run SecretProviderClass mounts only the run owner's token file from Key Vault at
 //      /mnt/user-tokens/user_{userId}.json — same StoredCredential JSON as the shared store.
 //      CsiMountedGitHubTokenStore adds cold-start retry (6×5s) in case the CSI driver hasn't
 //      written the file yet at pod startup. Takes precedence over UseSharedTokenStore.
@@ -69,8 +69,11 @@ if (!string.IsNullOrWhiteSpace(kvMountPath))
     var configuredUserId = builder.Configuration["AgentHost:UserId"];
     builder.Services.AddSingleton<IGitHubTokenStore>(
         new CsiMountedGitHubTokenStore(kvMountPath));
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(
-        new SharedUserScopeProvider(kvMountPath, configuredUserId));
+    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(sp =>
+        new SharedUserScopeProvider(
+            kvMountPath,
+            configuredUserId,
+            sp.GetRequiredService<ILogger<SharedUserScopeProvider>>()));
 }
 else if (builder.Configuration.GetValue("AgentHost:UseSharedTokenStore", false))
 {
@@ -78,8 +81,11 @@ else if (builder.Configuration.GetValue("AgentHost:UseSharedTokenStore", false))
         builder.Configuration["AgentHost:SharedTokenStorePath"]);
     var configuredUserId = builder.Configuration["AgentHost:UserId"];
     builder.Services.AddSingleton<IGitHubTokenStore>(new SharedHomeGitHubTokenStore(authDir));
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(
-        new SharedUserScopeProvider(authDir, configuredUserId));
+    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(sp =>
+        new SharedUserScopeProvider(
+            authDir,
+            configuredUserId,
+            sp.GetRequiredService<ILogger<SharedUserScopeProvider>>()));
 }
 else
 {

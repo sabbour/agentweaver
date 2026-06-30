@@ -35,7 +35,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, handler);
 
     private static KubernetesSandboxExecutor NewExecutor(FakeKubeHandler handler) =>
-        new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance, podRegistry: null);
+        NewExecutor(handler, new StubSubmittingUserResolver("sabbour"));
 
     private static KubernetesSandboxExecutor NewExecutor(
         FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver) =>
@@ -56,6 +56,20 @@ public sealed class KubernetesSandboxExecutorClaimTests
         return doc.RootElement.GetProperty("spec").Clone();
     }
 
+    private static void StubAgentHostBaseResources(FakeKubeHandler handler)
+    {
+        handler.OnGet(
+            "/apis/secrets-store.csi.x-k8s.io/v1/namespaces/agentweaver/secretproviderclasses/agentweaver-user-tokens",
+            """
+            {"apiVersion":"secrets-store.csi.x-k8s.io/v1","kind":"SecretProviderClass","metadata":{"name":"agentweaver-user-tokens"},"spec":{"provider":"azure","parameters":{"usePodIdentity":"false","useVMManagedIdentity":"false","clientID":"cid","keyvaultName":"kv","tenantId":"tid","objects":"array:\n  - |\n    objectName: ghtok-installation\n    objectType: secret\n"}}}
+            """);
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxtemplates/agentweaver-agent-host",
+            """
+            {"apiVersion":"extensions.agents.x-k8s.io/v1beta1","kind":"SandboxTemplate","metadata":{"name":"agentweaver-agent-host","namespace":"agentweaver","resourceVersion":"1"},"spec":{"podTemplate":{"spec":{"volumes":[{"name":"csi-user-tokens","csi":{"volumeAttributes":{"secretProviderClass":"agentweaver-user-tokens"}}}]}}}}
+            """);
+    }
+
     [Fact]
     public async Task LaunchAgentHostPod_posts_v1beta1_claim_with_warmPoolRef_and_no_templateRef()
     {
@@ -70,6 +84,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         // GET pod -> has an IP so GetPodIpAsync returns.
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
             """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+        StubAgentHostBaseResources(handler);
         // POST claim is left to the default echo so we can read the body back.
 
         var executor = NewExecutor(handler);
@@ -90,7 +105,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         var spec = root.GetProperty("spec");
         spec.GetProperty("warmPoolRef").GetProperty("name").GetString()
-            .Should().Be("agentweaver-agent-host", "agent-host claims bind to the agent-host warm pool");
+            .Should().Be($"{claimName}-pool", "agent-host claims bind to a run-scoped warm pool");
         spec.GetProperty("lifecycle").GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
         spec.GetProperty("lifecycle").GetProperty("shutdownPolicy").GetString().Should().Be("Delete");
         spec.TryGetProperty("templateRef", out _).Should().BeFalse("the deprecated templateRef key must be gone");
@@ -99,6 +114,12 @@ public sealed class KubernetesSandboxExecutorClaimTests
         // Per-run env must still be injected.
         spec.GetProperty("env").EnumerateArray()
             .Should().Contain(e => e.GetProperty("name").GetString() == "AgentHost__RunId");
+
+        var spcPost = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path.EndsWith("/secretproviderclasses")).Subject;
+        spcPost.Body.Should().Contain("ghtok-user--").And.Contain("objectAlias").And.Contain("user_sabbour.json");
+        spcPost.Body.Should().NotContain("ghtok-user--mjqxe",
+            "a run-scoped SPC must contain only the resolved run owner's token");
     }
 
     [Fact]
@@ -137,6 +158,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
             """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
             """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+        StubAgentHostBaseResources(handler);
 
         var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"));
 
@@ -153,29 +175,20 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
-    public async Task LaunchAgentHostPod_omits_AgentHost__UserId_when_no_submitting_user()
+    public async Task LaunchAgentHostPod_fails_when_no_submitting_user()
     {
         const string runId = "run-claim-nouser";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
-        handler.OnGet(
-            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
-            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
-        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
-            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            podRegistry: null, readinessProbe: null, submittingUserResolver: new StubSubmittingUserResolver(null));
 
-        // No resolver configured at all → no AgentHost__UserId.
-        var executor = NewExecutor(handler);
-
-        await executor.LaunchAgentHostPodAsync(runId);
-
-        var post = handler.Requests.Should().ContainSingle(r =>
-            r.Method == "POST" && r.Path.EndsWith("/sandboxclaims")).Subject;
-
-        var env = SpecOf(post.Body!).GetProperty("env");
-        env.EnumerateArray().Should().NotContain(e =>
-            e.GetProperty("name").GetString() == "AgentHost__UserId",
-            "without a resolved submitting user, AgentHost__UserId must be omitted (not blank)");
+        await executor.Invoking(e => e.LaunchAgentHostPodAsync(runId))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*without a submitting user*");
+        handler.Requests.Should().NotContain(r => r.Method == "POST" && r.Path.EndsWith("/sandboxclaims"),
+            "no pod should be created without a run-owner-scoped token SPC");
     }
 }

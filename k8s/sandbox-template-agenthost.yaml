@@ -14,10 +14,12 @@
 #     PRODUCTION must restore readOnlyRootFilesystem: true + a writable $HOME emptyDir.
 #   - GitHub token (Option B / workload identity): the pod runs as the dedicated
 #     agentweaver-agent-host ServiceAccount (workload identity) and the CSI secrets-store
-#     driver mounts user GitHub tokens from Key Vault (SecretProviderClass
-#     agentweaver-user-tokens) read-only at /mnt/user-tokens. AgentHost reads
-#     /mnt/user-tokens/user_<id>.json (AgentHost__KvTokenMountPath) — NO shared RWX token
-#     store. HOME points at a writable emptyDir (/home/appuser) for CopilotClient/git.
+#     driver mounts user GitHub tokens from Key Vault read-only at /mnt/user-tokens.
+#     KubernetesSandboxExecutor clones this base template per run and replaces the
+#     SecretProviderClass with a run-scoped SPC containing only the run owner's token.
+#     AgentHost reads /mnt/user-tokens/user_<id>.json (AgentHost__KvTokenMountPath) —
+#     NO shared RWX token store. HOME points at a writable emptyDir (/home/appuser)
+#     for CopilotClient/git.
 #
 # Pod label `app: agentweaver-sandbox` is intentional: it makes ALL existing sandbox
 # NetworkPolicies apply unchanged (ingress 8088 from worker+api, DNS egress, Cilium FQDN
@@ -132,7 +134,8 @@ spec:
             # Writable HOME (CopilotClient / git config + caches).
             - name: home
               mountPath: /home/appuser
-            # User GitHub tokens from Key Vault via CSI secrets-store (read-only).
+            # User GitHub tokens from Key Vault via CSI secrets-store (read-only). This base
+            # value is replaced by a per-run SandboxTemplate before claim creation.
             - name: csi-user-tokens
               mountPath: /mnt/user-tokens
               readOnly: true
