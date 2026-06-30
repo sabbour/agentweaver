@@ -9,13 +9,13 @@ namespace Agentweaver.Tests;
 
 /// <summary>
 /// Verifies <see cref="KubernetesSandboxExecutor"/> emits SandboxClaim bodies that match the
-/// installed agent-sandbox <b>v1beta1</b> CRD schema (confirmed via
-/// <c>kubectl explain sandboxclaims.spec --api-version=extensions.agents.x-k8s.io/v1beta1</c>):
+/// installed agent-sandbox <b>v0.5.0 v1beta1</b> CRD schema:
 ///   • <c>apiVersion: extensions.agents.x-k8s.io/v1beta1</c>;
 ///   • <c>spec.warmPoolRef.name</c> (the claim binds to a SandboxWarmPool);
 ///   • <c>spec.lifecycle.ttlSecondsAfterFinished</c> (integer);
-///   • NO <c>spec.templateRef</c> and NO <c>spec.ttl</c> (both were pruned by the API server in the
-///     old v1alpha1 <c>templateRef</c>/<c>ttl</c> body, leaving an empty spec → 422 / no Sandbox).
+///   • NO <c>spec.sandboxTemplateRef</c> and NO <c>spec.warmpool</c> (the v0.4.x/v1alpha1
+///     deprecated fields — pruned by the v1beta1 API server, which would leave spec without the
+///     required warmPoolRef → 422 "spec.warmPoolRef: Required value").
 /// </summary>
 public sealed class KubernetesSandboxExecutorClaimTests
 {
@@ -118,18 +118,16 @@ public sealed class KubernetesSandboxExecutorClaimTests
         root.GetProperty("apiVersion").GetString().Should().Be("extensions.agents.x-k8s.io/v1beta1");
 
         var spec = root.GetProperty("spec");
-        spec.GetProperty("sandboxTemplateRef").GetProperty("name").GetString()
+        spec.GetProperty("warmPoolRef").GetProperty("name").GetString()
             .Should().Be("agentweaver-agent-host",
-                "agent-host claims must include sandboxTemplateRef (required in v1beta1)");
-        spec.GetProperty("warmpool").GetString()
-            .Should().Be("agentweaver-agent-host",
-                "agent-host claims bind to the SHARED pre-warmed warm pool via the warmpool string field");
-        spec.TryGetProperty("warmPoolRef", out _).Should().BeFalse("warmPoolRef was the old wrong field — must be gone");
+                "agent-host claims bind to the SHARED pre-warmed SandboxWarmPool via spec.warmPoolRef.name (v0.5.0 v1beta1)");
         spec.GetProperty("lifecycle").GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
         spec.GetProperty("lifecycle").GetProperty("shutdownPolicy").GetString().Should().Be("Delete");
+        spec.TryGetProperty("sandboxTemplateRef", out _).Should()
+            .BeFalse("sandboxTemplateRef is a deprecated v0.4.x/v1alpha1 field — must be gone");
+        spec.TryGetProperty("warmpool", out _).Should()
+            .BeFalse("warmpool is a deprecated v0.4.x/v1alpha1 field — must be gone");
         spec.TryGetProperty("templateRef", out _).Should().BeFalse("the deprecated templateRef key must be gone");
-        spec.TryGetProperty("warmPoolRef", out _).Should().BeFalse("warmPoolRef was the old wrong field — must be gone");
-        spec.GetProperty("sandboxTemplateRef").GetProperty("name").GetString().Should().Be("agentweaver-agent-host");
 
         // Per-run context is delivered via POST /configure — NOT baked into the claim env.
         var envNames = spec.GetProperty("env").EnumerateArray()
@@ -147,7 +145,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
-    public async Task CreateClaim_generic_posts_v1beta1_sandboxTemplateRef_and_warmpool_body()
+    public async Task CreateClaim_generic_posts_v1beta1_warmPoolRef_body()
     {
         // Drive the private generic claim path directly (the public ExecuteAsync path also needs a
         // websocket exec, out of scope here). Asserts the same v1beta1 contract.
@@ -163,13 +161,16 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         post.Path.Should().Contain("/v1beta1/");
         var spec = SpecOf(post.Body!);
-        spec.GetProperty("sandboxTemplateRef").GetProperty("name").GetString().Should().Be("agentweaver-sandbox");
-        spec.GetProperty("warmpool").GetString().Should().Be("agentweaver-sandbox");
-        spec.TryGetProperty("warmPoolRef", out _).Should().BeFalse("warmPoolRef was the old wrong field — must be gone");
+        spec.GetProperty("warmPoolRef").GetProperty("name").GetString().Should().Be("agentweaver-sandbox");
+        spec.TryGetProperty("sandboxTemplateRef", out _).Should()
+            .BeFalse("sandboxTemplateRef is a deprecated v0.4.x/v1alpha1 field — must be gone");
+        spec.TryGetProperty("warmpool", out _).Should()
+            .BeFalse("warmpool is a deprecated v0.4.x/v1alpha1 field — must be gone");
         spec.GetProperty("lifecycle").GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
         spec.GetProperty("lifecycle").GetProperty("shutdownPolicy").GetString().Should().Be("Delete");
         spec.TryGetProperty("templateRef", out _).Should().BeFalse();
-        spec.TryGetProperty("ttl", out _).Should().BeFalse();    }
+        spec.TryGetProperty("ttl", out _).Should().BeFalse();
+    }
 
     [Fact]
     public async Task LaunchAgentHostPod_configures_warm_pod_with_run_owner_kv_secret()

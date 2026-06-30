@@ -36,16 +36,8 @@ public sealed class KubernetesSandboxOptions
     // ── Pod-per-run AgentHost lifecycle options (spec §9 / Q3 hybrid) ─────────
 
     /// <summary>
-    /// SandboxClaim template that provisions an AgentHost pod (runs
-    /// <c>Agentweaver.AgentHost</c> with the A2A listener). Separate from
-    /// <see cref="TemplateRef"/> (which is the plain Ubuntu command-exec sandbox).
-    /// Default: <c>agentweaver-agent-host</c>.
-    /// </summary>
-    public string AgentHostTemplateRef { get; init; } = "agentweaver-agent-host";
-
-    /// <summary>
-    /// SandboxWarmPool the AgentHost (pod-per-run) claim binds to in the v1beta1 CRD
-    /// (<c>spec.warmPoolRef.name</c>). The pool references <see cref="AgentHostTemplateRef"/>.
+    /// SandboxWarmPool the AgentHost (pod-per-run) claim binds to in the v0.5.0 v1beta1 CRD
+    /// (<c>spec.warmPoolRef.name</c>). The pool itself references the AgentHost SandboxTemplate.
     /// Default: <c>agentweaver-agent-host</c>.
     /// </summary>
     public string AgentHostWarmPoolRef { get; init; } = "agentweaver-agent-host";
@@ -477,12 +469,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                // v1beta1 SandboxClaimSpec requires sandboxTemplateRef (template to use for cold
-                // fallback / pool replenishment) and warmpool (string WarmPoolPolicy: "none",
-                // "default", or a named pool). warmPoolRef was the wrong/old field name — the
-                // controller ignored it and fell back to cold pod creation every time.
-                sandboxTemplateRef = new { name = _options.AgentHostTemplateRef },
-                warmpool = warmPoolName,
+                // v0.5.0 v1beta1 SandboxClaimSpec: spec.warmPoolRef.name references the
+                // SandboxWarmPool to bind from. sandboxTemplateRef+warmpool were the
+                // v0.4.x/v1alpha1 deprecated fields.
+                warmPoolRef = new { name = warmPoolName },
                 lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
                 // Static config only — the per-run context arrives via POST /configure after bind.
                 env = env.ToArray(),
@@ -676,9 +666,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                // v1beta1: sandboxTemplateRef (required) + warmpool (string WarmPoolPolicy).
-                sandboxTemplateRef = new { name = _options.TemplateRef },
-                warmpool = _options.WarmPoolRef,
+                // v0.5.0 v1beta1 SandboxClaimSpec: spec.warmPoolRef.name references the
+                // SandboxWarmPool to bind from. sandboxTemplateRef+warmpool were the
+                // v0.4.x/v1alpha1 deprecated fields.
+                warmPoolRef = new { name = _options.WarmPoolRef },
                 lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
             },
         };
