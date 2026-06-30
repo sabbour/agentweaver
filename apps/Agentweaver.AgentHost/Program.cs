@@ -70,14 +70,18 @@ if (!requireMtls && !kestrelEndpointsConfigured)
 // holds a freshly-issued user token).
 var kvUri = builder.Configuration["AgentHost:KeyVaultUri"];
 var kvMountPath = builder.Configuration["AgentHost:KvTokenMountPath"];
-if (!string.IsNullOrWhiteSpace(kvUri))
+// Guard: reject empty, whitespace, or unsubstituted envsubst placeholders (e.g. "${AGENTHOST_KEYVAULT_URI}")
+var kvUriValid = !string.IsNullOrWhiteSpace(kvUri)
+    && Uri.TryCreate(kvUri, UriKind.Absolute, out var kvUriParsed)
+    && (kvUriParsed!.Scheme == "https" || kvUriParsed.Scheme == "http");
+if (kvUriValid)
 {
     // Option C (warm pool): fetch the run owner's token from Key Vault at /configure-time via the
     // pod's workload identity (DefaultAzureCredential). No CSI volume, no per-run SPC — the secret
     // name (ghtok-user--{base32(userId)}) arrives in the /configure call and lands on
     // AgentHostRuntimeState.KvUserSecretName. KeyVaultUserTokenProvider fetches ONLY that one secret
     // and caches it for the pod lifetime. Takes precedence over the file-mount paths.
-    builder.Services.AddSingleton(new SecretClient(new Uri(kvUri), new DefaultAzureCredential()));
+    builder.Services.AddSingleton(new SecretClient(kvUriParsed!, new DefaultAzureCredential()));
     builder.Services.AddSingleton<KeyVaultUserTokenProvider>();
     builder.Services.AddSingleton<IGitHubTokenStore>(sp =>
         new KeyVaultGitHubTokenStore(sp.GetRequiredService<KeyVaultUserTokenProvider>()));

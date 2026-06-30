@@ -39,6 +39,10 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   exit 1
 fi
 
+# Derive compound variables from primitives so templates can reference them directly.
+AGENTHOST_KEYVAULT_URI="${AGENTHOST_KEYVAULT_URI:-https://${KEYVAULT_NAME}.vault.azure.net/}"
+export AGENTHOST_KEYVAULT_URI
+
 echo "Applying namespace..."
 kubectl apply -f "${REPO_ROOT}/k8s/namespace.yaml"
 
@@ -106,7 +110,7 @@ echo ""
 echo "Rendering manifests..."
 for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
   fname="$(basename "${yaml_file}")"
-  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${AGENTHOST_IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX}' \
+  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${AGENTHOST_IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${AGENTHOST_KEYVAULT_URI} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX}' \
     < "${yaml_file}" > "${RENDERED_DIR}/${fname}"
   echo "  rendered: ${fname}"
 done
