@@ -734,6 +734,31 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("WorkPlans");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Runs.CoordinatorDeferredDecisionRecord", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DecisionJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId")
+                        .IsUnique();
+
+                    b.ToTable("DeferredDecisions");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Runs.PendingRequestRecord", b =>
                 {
                     b.Property<int>("Id")

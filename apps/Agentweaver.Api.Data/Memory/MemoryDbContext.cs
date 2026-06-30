@@ -28,6 +28,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
     public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
     public DbSet<HeartbeatStatusRecord> HeartbeatStatuses => Set<HeartbeatStatusRecord>();
+    public DbSet<CoordinatorDeferredDecisionRecord> DeferredDecisions => Set<CoordinatorDeferredDecisionRecord>();
 
     // Shared, concurrency-safe MAF workflow checkpoints (replaces the per-pod file store on Postgres).
     // Postgres-only: local/dev (sqlite) still uses the file-based checkpoint store.
@@ -116,6 +117,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<PendingRequestRecord>().HasIndex(p => p.RunId).IsUnique();
         model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);
         model.Entity<HeartbeatStatusRecord>().HasKey(h => h.PodName);
+        model.Entity<CoordinatorDeferredDecisionRecord>().HasIndex(d => d.RunId).IsUnique();
 
         // ── agentweaver.db entities (spec-018 P2) ──────────────────────────────────
         // These entities only exist in the Postgres schema (InitialPostgres migration).

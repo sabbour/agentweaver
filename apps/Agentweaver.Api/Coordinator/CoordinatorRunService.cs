@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -5,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -361,7 +363,25 @@ public sealed class CoordinatorRunService
             // Not in local registry — coordinator may be on another replica.
             // Checkpoints are on the shared RWX PVC; resume here so any replica
             // can handle confirm/revise without sticky routing.
-            streamingRun = await TryResumeOnDemandAsync(runId, ct).ConfigureAwait(false);
+            try
+            {
+                streamingRun = await TryResumeOnDemandAsync(runId, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // MAF SDK $type-ordering bug: JsonMarshaller fails to deserialize the checkpoint
+                // on a secondary replica. Defer the decision to the shared DB so the primary
+                // replica's watch loop can apply it without cross-replica checkpoint restore.
+                _logger.LogWarning(ex,
+                    "On-demand checkpoint restore failed for coordinator run {RunId}; deferring decision to DB",
+                    runId);
+
+                if (await TryDeferDecisionAsync(runId, decision, ct).ConfigureAwait(false))
+                    return CoordinatorGateOutcome.Accepted;
+
+                return CoordinatorGateOutcome.RunNotActive;
+            }
+
             if (streamingRun is null)
                 return CoordinatorGateOutcome.RunNotActive;
         }
@@ -400,6 +420,143 @@ public sealed class CoordinatorRunService
         }
 
         return CoordinatorGateOutcome.Accepted;
+    }
+
+    /// <summary>
+    /// Defers a confirm/revise decision to the shared DB when the local replica cannot restore the
+    /// MAF checkpoint (MAF SDK <c>$type</c>-ordering bug). Only defers when the gate is confirmed
+    /// to be armed in <see cref="PendingRequestStore"/> (i.e., the run is genuinely suspended at the
+    /// confirmation gate), so we don't accept stale or spurious decisions.
+    /// </summary>
+    private async Task<bool> TryDeferDecisionAsync(
+        string runId, CoordinatorOutcomeSpecDecision decision, CancellationToken ct)
+    {
+        // Confirm the gate is still armed — don't accept a decision for a run that isn't waiting.
+        var pending = await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (pending is null)
+            return false;
+
+        var json = JsonSerializer.Serialize(decision, JsonDefaults.Options);
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var existing = await db.DeferredDecisions
+            .FirstOrDefaultAsync(d => d.RunId == runId, ct)
+            .ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+            {
+                RunId = runId,
+                DecisionJson = json,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+        else
+        {
+            existing.DecisionJson = json;
+            existing.CreatedAt = DateTimeOffset.UtcNow;
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Coordinator decision for run {RunId} deferred to DB for primary replica pickup", runId);
+        return true;
+    }
+
+    /// <summary>
+    /// Polls the <c>DeferredDecisions</c> table for decisions submitted by secondary replicas that
+    /// failed to restore the MAF checkpoint. Called fire-and-forget from <see cref="WatchAsync"/>
+    /// after the confirmation gate is armed; exits when a decision is found and applied, the run is
+    /// no longer registered, or the cancellation token fires.
+    /// </summary>
+    private async Task PollDeferredDecisionsAsync(
+        string runId, StreamingRun streamingRun, ExternalRequest request, string ownerUser, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            // Stop if the run has left the registry (completed or failed on the primary).
+            if (_registry.Get(runId) is null)
+                return;
+
+            CoordinatorOutcomeSpecDecision? decision;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+                var row = await db.DeferredDecisions
+                    .FirstOrDefaultAsync(d => d.RunId == runId, ct)
+                    .ConfigureAwait(false);
+
+                if (row is null)
+                    continue;
+
+                decision = JsonSerializer.Deserialize<CoordinatorOutcomeSpecDecision>(
+                    row.DecisionJson, JsonDefaults.Options);
+
+                // Atomically delete — at-most-once; if another replica somehow also picked it up,
+                // one of the two deletes will affect 0 rows and that caller skips submission.
+                var deleted = await db.DeferredDecisions
+                    .Where(d => d.RunId == runId)
+                    .ExecuteDeleteAsync(ct)
+                    .ConfigureAwait(false);
+
+                if (deleted == 0 || decision is null)
+                    continue;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error polling deferred decisions for run {RunId}", runId);
+                continue;
+            }
+
+            // Atomically consume the pending gate (mirrors normal SubmitDecisionAsync path).
+            var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
+            if (pending is null)
+            {
+                _logger.LogWarning(
+                    "Deferred decision for run {RunId}: pending gate already consumed; skipping", runId);
+                return;
+            }
+
+            if (decision.Revise)
+            {
+                var entry = _streamStore.Get(runId);
+                entry?.ClearAwaitingReview();
+                entry?.RecordNext(EventTypes.RevisionStarted, new { });
+            }
+
+            try
+            {
+                var response = pending.Request.CreateResponse(decision);
+                await streamingRun.SendResponseAsync(response).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Coordinator deferred decision for run {RunId} applied on primary replica", runId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Coordinator deferred SendResponseAsync failed for run {RunId}", runId);
+            }
+
+            return;
+        }
     }
 
     /// <summary>
@@ -483,6 +640,9 @@ public sealed class CoordinatorRunService
                     if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is not null)
                         break;
                     await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
+                    // Start polling for decisions deferred by secondary replicas that failed to
+                    // restore the MAF checkpoint. Fire-and-forget — cancels when the run CT cancels.
+                    _ = PollDeferredDecisionsAsync(runId, streamingRun, rie.Request, ownerUser, ct);
                     break;
 
                 case WorkflowOutputEvent woe:
