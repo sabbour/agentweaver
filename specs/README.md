@@ -66,3 +66,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 ## Deployment & platform
 
 - [Self-host Agentweaver locally or on AKS](./deployment-platform/self-host-agentweaver.md) — [#37](https://github.com/sabbour/agentweaver/issues/37)
+
+## Personas & self-improvement testing
+
+User personas and goal-directed scenarios that drive persona-based self-improvement testing (Playwright). See [personas/](./personas/README.md) — [#1](https://github.com/sabbour/agentweaver/issues/1)
