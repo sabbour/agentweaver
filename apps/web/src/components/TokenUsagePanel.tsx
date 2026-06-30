@@ -12,6 +12,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import type { TokenUsageSummary } from '../api/types';
+import { formatAic } from './CostChip';
 
 export interface TokenUsagePanelProps {
   usage: TokenUsageSummary;
@@ -55,27 +56,33 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground2,
   },
+  modelCell: {
+    width: '40%',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   numericCell: {
+    width: '20%',
     textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
   },
   tableWrapper: {
     overflowX: 'auto',
   },
   table: {
-    minWidth: '480px',
+    minWidth: '560px',
+    tableLayout: 'fixed',
   },
 });
-
-function formatAic(nanoAiu: number): string {
-  return (nanoAiu / 1_000_000_000).toFixed(4);
-}
 
 export function TokenUsagePanel({ usage, title = 'Token usage' }: TokenUsagePanelProps) {
   const styles = useStyles();
 
   return (
     <div className={styles.root}>
-      <Title3>{title}</Title3>
+      {title && <Title3>{title}</Title3>}
       <div className={styles.panel}>
         <div className={styles.summaryRow}>
           <div className={styles.statBlock}>
@@ -101,7 +108,7 @@ export function TokenUsagePanel({ usage, title = 'Token usage' }: TokenUsagePane
             <Table aria-label="Per-model token usage" size="small" className={styles.table}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell className={styles.headerCell}>Model</TableHeaderCell>
+                  <TableHeaderCell className={mergeClasses(styles.headerCell, styles.modelCell)}>Model</TableHeaderCell>
                   <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Input tokens</TableHeaderCell>
                   <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Output tokens</TableHeaderCell>
                   <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>AICs</TableHeaderCell>
@@ -110,7 +117,7 @@ export function TokenUsagePanel({ usage, title = 'Token usage' }: TokenUsagePane
               <TableBody>
                 {usage.by_model.map((row) => (
                   <TableRow key={row.model_id}>
-                    <TableCell>{row.model_id}</TableCell>
+                    <TableCell className={styles.modelCell} title={row.model_id}>{row.model_id}</TableCell>
                     <TableCell className={styles.numericCell}>{row.input_tokens.toLocaleString()}</TableCell>
                     <TableCell className={styles.numericCell}>{row.output_tokens.toLocaleString()}</TableCell>
                     <TableCell className={styles.numericCell}>{formatAic(row.total_nano_aiu)}</TableCell>

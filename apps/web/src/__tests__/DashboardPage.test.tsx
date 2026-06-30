@@ -7,6 +7,9 @@ import type { ProjectDashboardDto } from '../api/types';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getProjectDashboard: vi.fn(),
+    getProjectUsage: vi.fn(),
+    getProjectRuns: vi.fn(),
+    getRunUsage: vi.fn(),
   },
 }));
 
@@ -54,7 +57,24 @@ function renderPage() {
   );
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(apiClient.getProjectUsage).mockResolvedValue({
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    total_nano_aiu: 0,
+    by_model: [],
+  });
+  vi.mocked(apiClient.getProjectRuns).mockResolvedValue([]);
+  vi.mocked(apiClient.getRunUsage).mockResolvedValue({
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    total_nano_aiu: 0,
+    by_model: [],
+  });
+});
 afterEach(() => cleanup());
 
 describe('DashboardPage', () => {
@@ -77,7 +97,7 @@ describe('DashboardPage', () => {
 
     const table = screen.getByRole('table', { name: 'Agent leaderboard' });
     const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
-    expect(headers).toEqual(['Agent', 'Role', 'Runs this week', 'Runs total', 'Success rate', 'Avg duration']);
+    expect(headers).toEqual(['Agent', 'Role', 'Runs this week', 'Runs total', 'Success rate', 'Avg duration', 'Cost']);
   });
 
   it('renders a role fallback when the dashboard payload omits role', async () => {
@@ -99,7 +119,7 @@ describe('DashboardPage', () => {
     renderPage();
 
     const table = await screen.findByRole('table', { name: 'Agent leaderboard' });
-    expect(within(table).getByText('—')).toBeDefined();
+    expect(within(table).getAllByText('—').length).toBeGreaterThan(0);
   });
 
   it('renders zero-terminal success rate as unknown with count basis', async () => {

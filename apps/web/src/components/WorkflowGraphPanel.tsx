@@ -51,9 +51,10 @@ import {
 import { apiClient } from '../api/apiClient';
 import { AgentAvatar } from './AgentAvatar';
 import { PodIndicator } from './PodIndicator';
+import { CostChip } from './CostChip';
 import { useRuntimeInfo } from '../hooks/useRuntimeInfo';
 import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
-import { NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H, layoutDag } from '../utils/dagLayout';
+import { DAG_NODE_SEP, NODE_W, NODE_H, NODE_TYPE_W, layoutDag, workflowNodeSizeHint } from '../utils/dagLayout';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -104,6 +105,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   dir?: 'LR' | 'TB';
   /** When true and the node is running, an orange tool-approval badge is shown. */
   hasPendingApproval?: boolean;
+  totalNanoAiu?: number | null;
+  totalTokens?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +256,8 @@ export const useNodeStyles = makeStyles({
     display: 'flex',
     justifyContent: 'flex-end',
     alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
   },
   // Orange tool-approval badge overlay in the top-right corner of a running node.
   approvalBadge: {
@@ -510,6 +515,8 @@ export function WorkflowNode({ data }: NodeProps) {
     runOutcome,
     runDegraded,
     hasPendingApproval,
+    totalNanoAiu,
+    totalTokens,
     executionPodName: nodeExecutionPodName,
   } = data as WorkflowNodeData;
   const { podName: globalPodName } = useRuntimeInfo();
@@ -585,6 +592,7 @@ export function WorkflowNode({ data }: NodeProps) {
       )}
 
       <div className={s.cardHeader}>
+        <CostChip totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
         <StatusBadge
           status={effectiveStatus}
           isAwaiting={isHumanWaiting}
@@ -926,10 +934,7 @@ export function WorkflowDefinitionInlinePanel({
     const hints: Record<string, { width: number; height: number }> = {};
     const raw: Node[] = graph.nodes.map((n) => {
       const nt = n.node_type;
-      hints[n.id] = {
-        width:  NODE_TYPE_W[nt ?? ''] ?? NODE_W,
-        height: NODE_TYPE_H[nt ?? ''] ?? NODE_H,
-      };
+      hints[n.id] = workflowNodeSizeHint(nt);
       return {
         id: n.id,
         type: 'workflow',
@@ -947,7 +952,7 @@ export function WorkflowDefinitionInlinePanel({
         } as WorkflowNodeData,
       };
     });
-    return layoutDag(raw, forwardOnly, { rankdir: 'LR', rankSep: 60, nodeSep: 20 }, hints);
+    return layoutDag(raw, forwardOnly, { rankdir: 'LR', rankSep: 60, nodeSep: DAG_NODE_SEP }, hints);
   }, [graph, rfEdges]);
 
   if (loading) {

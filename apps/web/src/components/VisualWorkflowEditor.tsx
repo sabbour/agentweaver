@@ -40,13 +40,7 @@ import '@xyflow/react/dist/style.css';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
-import {
-  NODE_H,
-  NODE_TYPE_H,
-  NODE_TYPE_W,
-  NODE_W,
-  layoutDag,
-} from '../utils/dagLayout';
+import { DAG_NODE_SEP, layoutDag, workflowNodeSizeHint } from '../utils/dagLayout';
 import {
   NODE_TYPE_LABELS,
   WORKFLOW_NODE_TYPES,
@@ -243,7 +237,7 @@ function buildGraph(
   const raw: Node[] = model.nodes.map((n) => {
     const role = TYPE_ROLE[n.type] ?? 'agent';
     const gnt = TYPE_GRAPHNODE[n.type] ?? 'action';
-    hints[n.id] = { width: NODE_TYPE_W[gnt] ?? NODE_W, height: NODE_TYPE_H[gnt] ?? NODE_H };
+    hints[n.id] = workflowNodeSizeHint(gnt);
     return {
       id: n.id,
       type: 'workflow',
@@ -262,7 +256,7 @@ function buildGraph(
     };
   });
 
-  const laid = layoutDag(raw, forwardOnly, { rankdir: 'LR', rankSep: 80, nodeSep: 30 }, hints);
+  const laid = layoutDag(raw, forwardOnly, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, hints);
   const rfNodes = laid.map((n) => {
     const p = positions.get(n.id);
     return p ? { ...n, position: p } : n;

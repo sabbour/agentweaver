@@ -3,6 +3,7 @@ import type { Edge, Node } from '@xyflow/react';
 
 export const NODE_W = 200;
 export const NODE_H = 145;
+export const DAG_NODE_SEP = 96;
 
 // Per-node-type layout dimensions. Keep in sync with WorkflowGraphPanel card widths.
 export const NODE_TYPE_W: Record<string, number> = {
@@ -20,6 +21,19 @@ export const NODE_TYPE_H: Record<string, number> = {
   terminal: 110,
 };
 
+// Conservative rendered-card height hints for dagre. These include headers, metadata,
+// timers/cost chips, and one or more action buttons so tall cards don't overlap.
+export const RENDERED_NODE_TYPE_H: Record<string, number> = {
+  agent:    240,
+  subtask:  244,
+  gate:     190,
+  action:   210,
+  terminal: 150,
+};
+
+export const RENDERED_DEFAULT_NODE_H = 220;
+export const RENDERED_TOPOLOGY_NODE_H = 260;
+
 export interface LayoutOpts {
   rankdir?: 'LR' | 'TB';
   rankSep?: number;
@@ -29,6 +43,14 @@ export interface LayoutOpts {
 export interface NodeSizeHint {
   width: number;
   height: number;
+}
+
+export function workflowNodeSizeHint(nodeType?: string | null): NodeSizeHint {
+  const key = nodeType ?? '';
+  return {
+    width: NODE_TYPE_W[key] ?? NODE_W,
+    height: RENDERED_NODE_TYPE_H[key] ?? RENDERED_DEFAULT_NODE_H,
+  };
 }
 
 /**

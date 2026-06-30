@@ -35,8 +35,8 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent, type EventType } from '../api/sse';
 import { apiClient } from '../api/apiClient';
-import type { TeamDto, GraphDescriptor, PortForwardSessionDto } from '../api/types';
-import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
+import type { TeamDto, GraphDescriptor, PortForwardSessionDto, TokenUsageSummary } from '../api/types';
+import { DAG_NODE_SEP, layoutDag, NODE_W, workflowNodeSizeHint } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
@@ -260,6 +260,7 @@ export function WorkflowRunPage() {
   // Per-run auto-approve-tools option (seeded from the run detail; toggled live).
   const [autoApprove,    setAutoApprove]    = useState(false);
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
+  const [runUsage,       setRunUsage]       = useState<TokenUsageSummary | null>(null);
 
   // Sandbox preview port-forward state.
   const [sandboxBackend,      setSandboxBackend]      = useState<string | undefined>(undefined);
@@ -368,6 +369,15 @@ export function WorkflowRunPage() {
   }, [executionId, runStatus]);
 
   // Fetch the graph descriptor for this execution; 404 → null → hardcoded fallback.
+  useEffect(() => {
+    if (!executionId) { setRunUsage(null); return; }
+    let cancelled = false;
+    apiClient.getRunUsage(executionId)
+      .then((usage) => { if (!cancelled) setRunUsage(usage); })
+      .catch(() => { if (!cancelled) setRunUsage(null); });
+    return () => { cancelled = true; };
+  }, [executionId]);
+
   useEffect(() => {
     if (!executionId) return;
     let cancelled = false;
@@ -687,21 +697,17 @@ export function WorkflowRunPage() {
             runDegraded:    node.id === 'agent' ? runDegraded : undefined,
             hasPendingApproval: node.id === 'agent' ? hasPendingApproval : undefined,
             executionPodName: planned ? undefined : (executorStates[node.id]?.executionPodName ?? null),
+            totalNanoAiu:    node.id === 'agent' ? runUsage?.total_nano_aiu : undefined,
+            totalTokens:     node.id === 'agent' ? runUsage?.total_tokens : undefined,
           } as WorkflowNodeData,
           position: { x: 0, y: 0 },
         };
       });
       const nodeSizeHints = Object.fromEntries(
-        effectiveDescriptor.nodes.map(n => {
-          const nt = n.node_type;
-          return [
-            n.id,
-            { width: NODE_TYPE_W[nt ?? ''] ?? NODE_W, height: NODE_TYPE_H[nt ?? ''] ?? NODE_H },
-          ];
-        })
+        effectiveDescriptor.nodes.map((n) => [n.id, workflowNodeSizeHint(n.node_type)]),
       );
       return {
-        rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 60, nodeSep: 30 }, nodeSizeHints),
+        rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 60, nodeSep: DAG_NODE_SEP }, nodeSizeHints),
         displayEdges: allEdges,
       };
     }
@@ -727,14 +733,22 @@ export function WorkflowRunPage() {
         runDegraded:    def.key === 'agent' ? runDegraded : undefined,
         hasPendingApproval: def.key === 'agent' ? hasPendingApproval : undefined,
         executionPodName: executorStates[def.key]?.executionPodName ?? null,
+        totalNanoAiu:    def.key === 'agent' ? runUsage?.total_nano_aiu : undefined,
+        totalTokens:     def.key === 'agent' ? runUsage?.total_tokens : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
+    const fallbackNodeSizeHints = Object.fromEntries(
+      fallbackDefs.map((def) => [
+        def.key,
+        { width: NODE_W, height: def.key === 'scribe' ? 260 : def.key === 'agent' ? 240 : 220 },
+      ]),
+    );
     return {
-      rfNodes:      layoutDag(raw, fallbackFwd, { rankdir: 'LR', rankSep: 60, nodeSep: 30 }),
+      rfNodes:      layoutDag(raw, fallbackFwd, { rankdir: 'LR', rankSep: 60, nodeSep: DAG_NODE_SEP }, fallbackNodeSizeHints),
       displayEdges: fallbackEdges,
     };
-  }, [effectiveDescriptor, isChild, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded, hasPendingApproval]);
+  }, [effectiveDescriptor, isChild, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded, hasPendingApproval, runUsage]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;

@@ -26,6 +26,7 @@ import { ApiError } from '../api/client';
 import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ThroughputPointDto, TokenUsageSummary } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { TokenUsagePanel } from '../components/TokenUsagePanel';
+import { formatAic } from '../components/CostChip';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Dashboard — the project HOME (/projects/:projectId). Consumes the live
@@ -37,6 +38,8 @@ import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 const REFRESH_MS = 30000;
 
 type TimeRange = '7d' | '30d' | '90d';
+
+type AgentCost = { totalNanoAiu: number; totalTokens: number };
 
 function timeRangeDates(range: TimeRange): { from: string; to: string } {
   const to = new Date();
@@ -130,8 +133,20 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     overflowX: 'auto',
   },
+  sharedMetricsHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  filterGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
   leaderboardTable: {
-    minWidth: '760px',
+    minWidth: '860px',
   },
   headerCell: {
     fontWeight: tokens.fontWeightSemibold,
@@ -235,6 +250,7 @@ export function DashboardPage() {
   const [usageRange, setUsageRange] = useState<TimeRange>('30d');
   const [filteredUsage, setFilteredUsage] = useState<TokenUsageSummary | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  const [agentCosts, setAgentCosts] = useState<Record<string, AgentCost>>({});
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -277,9 +293,34 @@ export function DashboardPage() {
       const { from, to } = timeRangeDates(range);
       const usage = await apiClient.getProjectUsage(projectId, from, to);
       setFilteredUsage(usage);
+
+      const fromMs = new Date(from).getTime();
+      const toMs = new Date(to).getTime();
+      const runs = await apiClient.getProjectRuns(projectId, { includeChildren: true, limit: 500 });
+      const scopedRuns = runs.filter((run) => {
+        const started = new Date(run.started_at).getTime();
+        return run.agent_name && !Number.isNaN(started) && started >= fromMs && started <= toMs;
+      });
+      const usageRows = await Promise.all(scopedRuns.map(async (run) => {
+        try {
+          return { agent: run.agent_name!, usage: await apiClient.getRunUsage(run.execution_id) };
+        } catch {
+          return null;
+        }
+      }));
+      const nextCosts: Record<string, AgentCost> = {};
+      for (const row of usageRows) {
+        if (!row) continue;
+        const prev = nextCosts[row.agent] ?? { totalNanoAiu: 0, totalTokens: 0 };
+        prev.totalNanoAiu += row.usage.total_nano_aiu;
+        prev.totalTokens += row.usage.total_tokens;
+        nextCosts[row.agent] = prev;
+      }
+      setAgentCosts(nextCosts);
     } catch {
       // Usage section is supplementary — degrade gracefully.
       setFilteredUsage(null);
+      setAgentCosts({});
     } finally {
       setUsageLoading(false);
     }
@@ -381,6 +422,24 @@ export function DashboardPage() {
             </div>
           </div>
 
+          <div className={styles.sharedMetricsHeader}>
+            <Title3>Agent and usage metrics</Title3>
+            <div className={styles.filterGroup}>
+              <Text className={styles.metricNote}>Range</Text>
+              <Select
+                value={usageRange}
+                onChange={(_e, d) => setUsageRange(d.value as TimeRange)}
+                aria-label="Time range"
+                size="small"
+                style={{ width: '120px' }}
+              >
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+                <option value="90d">Last 90 days</option>
+              </Select>
+            </div>
+          </div>
+
           <div className={styles.section}>
             <Title3>Agent leaderboard</Title3>
             <Text className={styles.metricNote}>
@@ -399,6 +458,7 @@ export function DashboardPage() {
                       <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Runs total</TableHeaderCell>
                       <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Success rate</TableHeaderCell>
                       <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Avg duration</TableHeaderCell>
+                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Cost</TableHeaderCell>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -431,6 +491,7 @@ export function DashboardPage() {
                           </div>
                         </TableCell>
                         <TableCell className={styles.numericCell}>{formatDuration(row.avg_duration_ms)}</TableCell>
+                        <TableCell className={styles.numericCell}>{agentCosts[row.agent]?.totalNanoAiu ? `${formatAic(agentCosts[row.agent].totalNanoAiu)} AIC` : '—'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -440,20 +501,7 @@ export function DashboardPage() {
           </div>
 
           <div className={styles.section}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM }}>
-              <Title3>Token and AIC usage</Title3>
-              <Select
-                value={usageRange}
-                onChange={(_e, d) => setUsageRange(d.value as TimeRange)}
-                aria-label="Time range"
-                size="small"
-                style={{ width: '100px' }}
-              >
-                <option value="7d">Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-                <option value="90d">Last 90 days</option>
-              </Select>
-            </div>
+            <Title3>Token and AIC usage</Title3>
             {usageLoading && <Spinner size="tiny" label="Loading usage" />}
             {!usageLoading && (filteredUsage ?? data.token_usage) && (
               <TokenUsagePanel usage={(filteredUsage ?? data.token_usage)!} title="" />

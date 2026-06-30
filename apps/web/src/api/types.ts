@@ -252,6 +252,8 @@ export interface WorkflowRunDto {
   started_at: string;
   ended_at?: string;
   model_id?: string;
+  total_tokens?: number | null;
+  total_nano_aiu?: number | null;
   // Feature 008 Phase 3 — orchestration lifecycle for a coordinator run. Optional;
   // present only once the backend adds it, so render the bare status as a fallback.
   coordinator_status?: string;
@@ -778,6 +780,8 @@ export interface RunCardDto {
   ended_at?: string | null;
   archived_at?: string | null;
   has_pending_approval?: boolean;
+  total_tokens?: number | null;
+  total_nano_aiu?: number | null;
 }
 
 export type BoardCardDto = TaskCardDto | RunCardDto;
@@ -1166,6 +1170,8 @@ export interface AgentLeaderboardEntryDto {
   successful_runs: number;
   terminal_runs: number;
   avg_duration_ms: number | null;
+  total_tokens?: number | null;
+  total_nano_aiu?: number | null;
 }
 
 // ── Feature 019 — AI token and credit usage ──────────────────────────────────

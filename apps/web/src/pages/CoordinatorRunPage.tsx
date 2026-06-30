@@ -47,11 +47,12 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse } from '../api/types';
+import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, TokenUsageSummary } from '../api/types';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
+import { CostChip } from '../components/CostChip';
 import { AgentRail } from '../components/AgentRail';
 import { SteerPanel } from '../components/SteerPanel';
 import { AutomationToggle } from '../components/AutomationToggle';
@@ -458,6 +459,8 @@ interface SubtaskNodeData extends Record<string, unknown> {
   projectId: string;
   startedAt?: number;
   completedAt?: number;
+  totalNanoAiu?: number | null;
+  totalTokens?: number | null;
   /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
   dir?: 'LR' | 'TB';
 }
@@ -634,6 +637,7 @@ function SubtaskNode({ id, data }: NodeProps) {
       <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
 
       <div className={s.cardHeader}>
+        <CostChip totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
         <StatusBadge status={stepStatus} label={statusLabel} />
       </div>
 
@@ -1056,6 +1060,7 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [runId]);
 
+
   // Fetch the project team once to resolve each assigned agent's role title for the subtask cards.
   useEffect(() => {
     if (!projectId) return;
@@ -1092,6 +1097,35 @@ export function CoordinatorRunPage() {
   // Per-run work-plan + children snapshot — used to drive the AgentRail.
   const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
   const [childrenData, setChildrenData] = useState<CoordinatorChildResponse[]>([]);
+  const [coordUsage, setCoordUsage] = useState<TokenUsageSummary | null>(null);
+  const [childUsageByRun, setChildUsageByRun] = useState<Record<string, TokenUsageSummary>>({});
+
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    apiClient.getRunUsage(runId)
+      .then((usage) => { if (!cancelled) setCoordUsage(usage); })
+      .catch(() => { if (!cancelled) setCoordUsage(null); });
+    return () => { cancelled = true; };
+  }, [runId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const childIds = childrenData.map((c) => c.childRunId).filter(Boolean);
+    if (childIds.length === 0) { setChildUsageByRun({}); return; }
+    void Promise.all(childIds.map(async (id) => {
+      try {
+        const usage = await apiClient.getRunUsage(id);
+        return [id, usage] as const;
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setChildUsageByRun(Object.fromEntries(entries.filter((x): x is readonly [string, TokenUsageSummary] => x !== null)));
+    });
+    return () => { cancelled = true; };
+  }, [childrenData]);
   // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
   // Used to render a graceful empty state and to back off the lifecycle poll so the page
   // doesn't hammer the 404 endpoint on a tight loop.
@@ -1490,6 +1524,8 @@ export function CoordinatorRunPage() {
             projectId:     projectId ?? '',
             startedAt:     timing?.startedAt,
             completedAt:   timing?.completedAt,
+            totalNanoAiu:  childRunId ? childUsageByRun[childRunId]?.total_nano_aiu : undefined,
+            totalTokens:   childRunId ? childUsageByRun[childRunId]?.total_tokens : undefined,
             dir:           'LR',
           } as SubtaskNodeData,
           position: { x: 0, y: 0 },
@@ -1565,6 +1601,8 @@ export function CoordinatorRunPage() {
           executionId: runId    ?? '',
           projectId:   projectId ?? '',
           dir:         'LR',
+          totalNanoAiu: node.id === 'coordinator' ? coordUsage?.total_nano_aiu : undefined,
+          totalTokens:  node.id === 'coordinator' ? coordUsage?.total_tokens : undefined,
         } as WorkflowNodeData,
         position: { x: 0, y: 0 },
       };
@@ -1574,7 +1612,7 @@ export function CoordinatorRunPage() {
       rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: COORDINATOR_GRAPH_NODE_SEP }, nodeSizeHints),
       displayEdges: allEdges,
     };
-  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
+  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, childUsageByRun, coordUsage]);
 
   // While the Coordinator is still drafting the outcome spec (inSpecAuthoring), the assembly
   // stages (RAI / Human Review / Merge / Scribe) are not yet committed work — no spec confirmed,

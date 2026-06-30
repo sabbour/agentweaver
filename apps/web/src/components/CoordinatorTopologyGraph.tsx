@@ -56,7 +56,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { SteerKind, TopologyEdge } from '../api/types';
 import type { TopologyNodeState } from '../state/topologyReducer';
-import { layoutDag, NODE_W } from '../utils/dagLayout';
+import { DAG_NODE_SEP, layoutDag, NODE_W, RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
 import { PodIndicator } from './PodIndicator';
 import { useRuntimeInfo } from '../hooks/useRuntimeInfo';
@@ -519,7 +519,10 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
       data: { node, projectId } as TopologyNodeData,
       position: { x: 0, y: 0 },
     }));
-    return layoutDag(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: 30 });
+    const nodeSizeHints = Object.fromEntries(
+      nodes.map((node) => [node.id, { width: NODE_W, height: node.kind === 'coordinator' ? 220 : RENDERED_TOPOLOGY_NODE_H }]),
+    );
+    return layoutDag(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
   }, [nodes, projectId, rfEdges]);
 
   const needsInstruction = steerReq?.kind === 'redirect' || steerReq?.kind === 'amend';
