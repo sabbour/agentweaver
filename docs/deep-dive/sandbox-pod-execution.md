@@ -258,8 +258,8 @@ sequenceDiagram
         Exec->>Exec: Generate 256-bit turn bearer token
         Exec->>Reg: RegisterTurnToken(runId, token)
         Exec->>Pod: GetPodIpAsync → status.podIP
-        Exec->>Pod: POST /configure(runId, userId, token, kvUserSecretName)
-        Pod->>Pod: TryConfigure once + SetupAsync
+        Exec->>Pod: POST /configure(runId, userId, token, kvUserSecretName, workingDirectory)
+        Pod->>Pod: TryConfigure once + SetupAsync in workingDirectory
         loop poll /healthz until 200 (≤90s)
             Exec->>Pod: GET http[s]://podIP:8088/healthz
         end
@@ -284,9 +284,16 @@ they are waiting for `/configure`. This lets
 and Copilot SDK host are already warm, but no run context is required until a claim binds. With the
 Worker now in `pod-per-run`, those two standby pods are the hot path for coordinator child turns.
 
-At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, and `kvUserSecretName`. `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
+At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, resolves the run's shared orchestration worktree path, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, and `workingDirectory`. The `workingDirectory` value is `Run.WorktreePath` (for example `/workspace/{worktree}`); coordinator sub-run ids such as `-coordinator-decompose` resolve back to the parent run so child stages inherit the same shared worktree. `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
 
-After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync`; only then does `/healthz` return `200` and the executor registers the A2A endpoint. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
+After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync` with that per-run working directory overriding the static `AgentHost__WorkingDirectory` env default; only then does `/healthz` return `200` and the executor registers the A2A endpoint. This establishes the invariant `SetupAsync` working directory == `Run.WorktreePath` == the path named in the run's system prompt, so files written by one sibling agent are visible to later synthesis or assembly stages. If working-directory resolution fails, launch continues and the pod falls back to the env default. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
+
+| Source | Role |
+| --- | --- |
+| `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs` | Resolves the run's `WorktreePath` and strips coordinator suffixes so child stages inherit the parent worktree. |
+| `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` | Resolves `workingDirectory` without making lookup failures fatal and includes it in the `/configure` JSON body. |
+| `apps/Agentweaver.AgentHost/Program.cs` | Accepts `workingDirectory` on `ConfigureRequest` and passes it into AgentHost startup. |
+| `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` | Uses the per-run working directory for `SetupAsync` and file-tool root when warm-pool configuration supplies it. |
 
 ### Node topology: the dedicated kata user pool
 

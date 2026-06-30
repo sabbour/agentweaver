@@ -644,7 +644,7 @@ sequenceDiagram
     API->>KV: store token as secret ghtok-user--{base32(userId)}
     API->>Claim: bind shared agentweaver-agent-host warm pool
     Claim-->>API: pod IP
-    API->>Pod: POST /configure(runId, userId, turnBearerToken, kvUserSecretName)
+    API->>Pod: POST /configure(runId, userId, turnBearerToken, kvUserSecretName, workingDirectory)
     Pod->>Pod: AgentHostRuntimeState.TryConfigure once
     Pod->>Agent: SetupAsync after configure
     Agent->>KV: KeyVaultUserTokenProvider fetches kvUserSecretName
@@ -654,7 +654,7 @@ sequenceDiagram
 
 `AgentHostRuntimeState` is the mutable singleton that bridges warm-pool startup and per-run configuration. If a pod starts without `RunId`, `AgentHostStartupService` enters standby and logs that it is waiting for `/configure`. If a pod is launched with env vars for backward compatibility, `InitializeFromOptions` seeds the same runtime state and SetupAsync runs immediately.
 
-`POST /configure` accepts `{ runId, userId, turnBearerToken, kvUserSecretName? }`. It returns `400` when `runId` is missing and `409` when the pod was already configured. It is excluded from the readiness gate so standby pods can receive configuration before they are A2A-ready.
+`POST /configure` accepts `{ runId, userId, turnBearerToken, kvUserSecretName?, workingDirectory? }`. `workingDirectory` is the run's `WorktreePath`; when present, AgentHost passes it to `SetupAsync` so file tools use the same shared worktree named by the run's system prompt. The endpoint returns `400` when `runId` is missing and `409` when the pod was already configured. It is excluded from the readiness gate so standby pods can receive configuration before they are A2A-ready.
 
 ### Security model
 
@@ -673,6 +673,7 @@ sequenceDiagram
 Where this lives:
 
 - `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`
+- `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs`
 - `apps/Agentweaver.AgentHost/Program.cs`
 - `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs`
 - `apps/Agentweaver.AgentHost/AgentHostStartupService.cs`

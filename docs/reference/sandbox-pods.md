@@ -46,7 +46,7 @@ turns) rather than only ad-hoc shell commands.
 | Identity | Dedicated sandbox service account; **workload identity** (federated OIDC) is the preferred path for the model credential, projecting **only** the narrowly-scoped workload-identity token volume — not the full Kubernetes API service-account token. |
 | Cluster API access | None. The pod does not automatically receive Kubernetes API credentials; the sandbox stays tokenless for the cluster API even when workload identity is enabled for the model endpoint. |
 | Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is bound to a concrete pod. Generic command sandboxes use `agentweaver-sandbox` (`replicas: 3`). AgentHost uses the shared `agentweaver-agent-host` pool (`replicas: 2`), then receives per-run context through `POST /configure` before `/healthz` is expected to become ready. |
-| AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
+| AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context plus `workingDirectory`, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
 | A2A turn authentication | Run launch generates a 256-bit random turn bearer token, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {token}` on `message:stream`; each pod accepts only its configured run token. |
 | Per-pod resources | Sized for a real agent runtime (a live session + model I/O), not a `sleep infinity` placeholder — materially larger CPU/memory requests than the shell-only baseline. Exact numbers are a capacity decision. |
 | Quota | Namespace `ResourceQuota` caps pod count, CPU/memory requests, and sandbox-claim count. Heavier per-pod requests plus multiple web/worker replicas require these caps to be **raised deliberately** via a reviewed manifest change, never a live patch. |
@@ -68,11 +68,26 @@ A pod-per-run sandbox acts **as the run's signed-in user** and needs a GitHub cr
 
 1. The shared AgentHost warm pool (`agentweaver-agent-host`, `replicas: 2`) keeps pods in standby with no `RunId`.
 2. The `SandboxClaim` binds one warm pod. Static config such as `AgentHost__KeyVaultUri` is already present because the pod needs the vault URI before configuration.
-3. `KubernetesSandboxExecutor` calls `POST /configure` with `runId`, `userId`, `turnBearerToken`, and `kvUserSecretName`.
+3. `KubernetesSandboxExecutor` calls `POST /configure` with `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, and `workingDirectory`.
 4. `AgentHostRuntimeState.TryConfigure(...)` stores those values once.
 5. `KeyVaultUserTokenProvider` uses `SecretClient` + `DefaultAzureCredential` to fetch only `kvUserSecretName`; `KeyVaultGitHubTokenStore` serves the deserialized token to the runtime and caches it in memory for the pod lifetime.
 
 No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volume, or per-run warm pool is created. The JSON secret value matches the old file-mounted format, so downstream consumers still see the same token-store contract.
+
+### `/configure` request body
+
+`POST /configure` is the one-time warm-pool configuration call from `KubernetesSandboxExecutor` to the bound AgentHost pod.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `runId` | Yes | The Agentweaver run this pod executes. Missing or blank values return `400`. |
+| `userId` | No | Submitting user id for run-scoped GitHub token lookup. |
+| `turnBearerToken` | No | Per-run bearer token required by `POST /a2a/agent/v1/message:stream`. |
+| `kvUserSecretName` | No | Key Vault secret name for the submitting user's GitHub token. |
+| `gitHubAccessToken` | No | API-pre-resolved GitHub access token; when present, the pod skips the Key Vault fetch. |
+| `workingDirectory` | No | The run's `WorktreePath` (for example `/workspace/{worktree}`), used as the AgentHost `SetupAsync` working directory and file-tool root. |
+
+`IRunSubmittingUserResolver.GetWorkingDirectoryAsync(runId)` resolves `workingDirectory` from the run row and strips coordinator suffixes such as `-coordinator-decompose`, so sibling child stages share the parent's worktree. If the resolver fails or no worktree exists yet, the executor omits the field and AgentHost falls back to `AgentHost__WorkingDirectory`.
 
 ### Lifetime and cleanup
 
@@ -93,7 +108,7 @@ sequenceDiagram
     participant KV as Azure Key Vault
     Worker->>Claim: bind agentweaver-agent-host warm pool
     Claim-->>Worker: pod IP
-    Worker->>Host: POST /configure(runId, userId, token, kvSecret)
+    Worker->>Host: POST /configure(runId, userId, token, kvSecret, workingDirectory)
     Host->>State: TryConfigure once
     Host->>KV: GetSecret(kvSecret) via workload identity
     Host-->>Worker: /healthz ready

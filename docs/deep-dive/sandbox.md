@@ -233,7 +233,7 @@ Agentweaver installs the controller and its three CRDs (API group `extensions.ag
 
 - **`SandboxTemplate`** (`k8s/sandbox-template.yaml`, `agentweaver-sandbox`) defines the pod shape and hardening: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, read-only root filesystem, the `/workspace` PVC, and the A2A listener port `8088`.
 - **`SandboxWarmPool`** keeps pre-built warm pods from a template so claims bind without a cold pod start. Two pools ship: the generic `agentweaver-sandbox` (`k8s/sandbox-warmpool.yaml`, `replicas: 3`) and the pod-per-run `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`) backed by the AgentHost template. AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env.
-- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (the pool the claim binds to — `agentweaver-sandbox` for generic claims, `agentweaver-agent-host` for AgentHost claims), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and `spec.env[]` for static values. On the AgentHost path, per-run `RunId`, `UserId`, `TurnBearerToken`, and `KvUserSecretName` arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
+- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (the pool the claim binds to — `agentweaver-sandbox` for generic claims, `agentweaver-agent-host` for AgentHost claims), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and `spec.env[]` for static values. On the AgentHost path, per-run `RunId`, `UserId`, `TurnBearerToken`, `KvUserSecretName`, and `WorkingDirectory` (`Run.WorktreePath`) arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
 
 The executor's provisioning loop is the concrete contract with the controller:
 
@@ -268,12 +268,23 @@ Per-run values are delivered by `POST /configure` after the claim binds:
 | `userId` | The submitting user; drives `RuntimeUserScopeProvider`. |
 | `turnBearerToken` | 256-bit per-run bearer token required on `POST /a2a/agent/v1/message:stream`. |
 | `kvUserSecretName` | Key Vault secret name for the run owner's GitHub token (`ghtok-user--{base32(userId)}`). |
+| `workingDirectory` | The run's shared orchestration worktree path (`Run.WorktreePath`, for example `/workspace/{worktree}`), used as the pod's `SetupAsync` working directory and file-tool root. |
 
-`AgentHostRuntimeState.TryConfigure(...)` stores these values exactly once with `Interlocked.CompareExchange`; a second configure attempt returns `409`. `/configure` cannot be protected by the turn token because it delivers that token, so the guard is the NetworkPolicy that restricts AgentHost port `8088` to API/worker pods. The turn endpoint itself still requires `Authorization: Bearer ...` and reads the expected token from runtime state.
+`AgentHostRuntimeState.TryConfigure(...)` stores the runtime values exactly once with `Interlocked.CompareExchange`; a second configure attempt returns `409`. `AgentHostStartupService.ConfigureAsync` uses `workingDirectory` to override the static `AgentHost__WorkingDirectory` env default before it calls `SetupAsync`. That keeps the pod's current file-tool root identical to `Run.WorktreePath`, which is the path the run's system prompt names, so sibling agents can hand files across decomposition, synthesis, and assembly stages without writing to divergent directories. `/configure` cannot be protected by the turn token because it delivers that token, so the guard is the NetworkPolicy that restricts AgentHost port `8088` to API/worker pods. The turn endpoint itself still requires `Authorization: Bearer ...` and reads the expected token from runtime state.
 
 The previous run-scoped CSI path is gone: the executor no longer creates per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. Instead `KeyVaultUserTokenProvider` fetches only the configured user's Key Vault secret via workload identity and caches it for the pod lifetime.
 
-Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs`, `apps/Agentweaver.AgentHost/Program.cs`, `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs`, `apps/Agentweaver.AgentHost/AgentHostStartupService.cs`, `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs`, `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+Where this lives:
+
+| Source | Role |
+| --- | --- |
+| `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs` | Resolves the submitting user and the run's `WorktreePath`, stripping coordinator sub-run suffixes so child stages inherit the parent's shared worktree. |
+| `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` | Resolves `workingDirectory` without failing launch on lookup errors and includes it in the one-time `/configure` body. |
+| `apps/Agentweaver.AgentHost/Program.cs` | Defines the `/configure` request body, including `workingDirectory`, and passes it to AgentHost startup. |
+| `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs` | Stores the one-time run/user/token configuration. |
+| `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` | Runs `SetupAsync` after `/configure`, using the per-run working directory when present and preserving env-var launch behavior otherwise. |
+| `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs` | Fetches only the configured user's Key Vault token. |
+| `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs` | Receives the configured working directory as the agent setup/file-tool root. |
 
 ## Production pod isolation and hardening
 

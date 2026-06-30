@@ -99,7 +99,7 @@ in-process on the Worker:
 - **Generic sandbox pool** — `agentweaver-sandbox`, `k8s/sandbox-warmpool.yaml`, `replicas: 3`, used for the worker/API ad-hoc command-exec path.
 - **AgentHost pool** — `agentweaver-agent-host`, `k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed for live agent turns.
 
-Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with `{ runId, userId, turnBearerToken, kvUserSecretName }`, then waits for `/healthz` to become ready before sending the first `message:stream` turn. The pod lifecycle is:
+Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with `{ runId, userId, turnBearerToken, kvUserSecretName, workingDirectory }`, then waits for `/healthz` to become ready before sending the first `message:stream` turn. `workingDirectory` is the run's `WorktreePath`, so pod setup and file tools share the worktree path named by the system prompt. The pod lifecycle is:
 
 ```mermaid
 stateDiagram-v2

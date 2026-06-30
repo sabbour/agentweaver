@@ -40,7 +40,7 @@ sequenceDiagram
     API->>KV: store secret ghtok-user--{base32(userId)}
     API->>Claim: bind shared agentweaver-agent-host warm pool
     Claim-->>API: Ready with pod IP
-    API->>Pod: POST /configure(runId, userId, token, kvUserSecretName)
+    API->>Pod: POST /configure(runId, userId, token, kvUserSecretName, workingDirectory)
     Pod->>State: TryConfigure(...) one time
     Pod->>Agent: SetupAsync after configure
     Agent->>KV: fetch configured user's secret via workload identity
@@ -52,7 +52,7 @@ sequenceDiagram
 
 - **`AgentHostRuntimeState`** — mutable singleton populated by `/configure` or by the backward-compatible env launch path. `TryConfigure(...)` uses `Interlocked.CompareExchange` so only the first configuration wins.
 - **`AgentHostStartupService`** — enters standby when no `RunId` is present at startup, logs that it is waiting for `/configure`, and runs `SetupAsync` only after `ConfigureAsync(...)` is called. Env-launched pods with `RunId` still initialize immediately.
-- **`POST /configure`** — accepts `runId`, `userId`, `turnBearerToken`, and optional `kvUserSecretName`; returns `400` for missing `runId`, `409` if already configured, and is excluded from the readiness gate.
+- **`POST /configure`** — accepts `runId`, `userId`, `turnBearerToken`, optional `kvUserSecretName`, and optional `workingDirectory`; returns `400` for missing `runId`, `409` if already configured, and is excluded from the readiness gate. `workingDirectory` is `Run.WorktreePath`, so setup and file tools root at the same shared worktree named by the system prompt.
 - **`KeyVaultUserTokenProvider` / `KeyVaultGitHubTokenStore` / `RuntimeUserScopeProvider`** — fetch and serve the configured user's token from Key Vault using workload identity.
 
 ## Security trade-off

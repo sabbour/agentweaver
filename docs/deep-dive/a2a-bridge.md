@@ -83,7 +83,7 @@ The bridge exists to close two gaps a direct `CopilotAIAgent` registration would
 - **Inbound:** it decodes the inbound message's first `AgentSetupParams` `DataPart` and forwards its `IsRevision` flag into `CopilotAIAgent.RunTurnAsync`, so a revision turn resumes the session instead of starting fresh.
 - **Outbound:** it installs a per-turn channel as the runner's stream writer and re-emits each pod-side `RunEvent` back over A2A as a `DataContent` part, interleaved with the assistant text.
 
-The **run-scoped** setup is now deferred until a warm pod is claimed. AgentHost starts without a `RunId`, enters standby, and accepts `POST /configure` while still excluded from the readiness gate. The executor binds a pod from the shared `agentweaver-agent-host` warm pool, then posts `runId`, `userId`, `turnBearerToken`, and `kvUserSecretName`. `AgentHostRuntimeState.TryConfigure(...)` stores those values once, `AgentHostStartupService.ConfigureAsync(...)` runs `CopilotAIAgent.SetupAsync`, and only then `/healthz` returns ready. Backward-compatible env-launched pods still initialize from `AgentHostOptions` at startup.
+The **run-scoped** setup is now deferred until a warm pod is claimed. AgentHost starts without a `RunId`, enters standby, and accepts `POST /configure` while still excluded from the readiness gate. The executor binds a pod from the shared `agentweaver-agent-host` warm pool, then posts `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, and `workingDirectory`. `workingDirectory` is the run's `WorktreePath`; `AgentHostStartupService.ConfigureAsync(...)` passes it into `CopilotAIAgent.SetupAsync` so the pod's file-tool root is the same path the run's system prompt references. `AgentHostRuntimeState.TryConfigure(...)` stores the runtime values once, and only after setup does `/healthz` return ready. Backward-compatible env-launched pods still initialize from `AgentHostOptions` at startup.
 
 The security property remains per-run: each AgentHost pod accepts only the token configured for that run on `message:stream`. A stolen token from one run cannot be replayed against another run's pod because the other pod has a different runtime token, and NetworkPolicy/mTLS still constrain which callers can reach port `8088`. `/configure` itself is not protected by that token (it delivers it); the NetworkPolicy restricting AgentHost ingress to API/worker pods is the guard.
 
@@ -115,8 +115,8 @@ sequenceDiagram
     participant Stream as RunStreamStore → SSE
 
     Boot-->>Exec: warm pod waiting for /configure
-    Exec->>Boot: POST /configure(runId, userId, token, kvSecret)
-    Boot->>Agent: SetupAsync after configure, gate readiness
+    Exec->>Boot: POST /configure(runId, userId, token, kvSecret, workingDirectory)
+    Boot->>Agent: SetupAsync in workingDirectory, gate readiness
     Graph->>Proxy: SetupAsync(worktree, repo, runId, model, prompt)
     Proxy->>Proxy: resolve pod endpoint, create A2A session (contextId = runId)
     Graph->>Proxy: RunTurnAsync(task, isRevision)
