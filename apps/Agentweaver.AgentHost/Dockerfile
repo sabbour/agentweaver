@@ -17,7 +17,8 @@ COPY Directory.Build.props .
 COPY apps/Agentweaver.AgentHost/ apps/Agentweaver.AgentHost/
 COPY packages/ packages/
 
-RUN dotnet restore "apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj"
+RUN dotnet restore "apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj" \
+    --runtime linux-x64
 RUN dotnet publish "apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj" \
     --configuration Release \
     --no-restore \
