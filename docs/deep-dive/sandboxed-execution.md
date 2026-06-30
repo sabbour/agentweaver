@@ -95,22 +95,11 @@ Both agent runners (GitHub Copilot and Microsoft Foundry) register the same set 
 | `edit` | Overwrite or insert in an existing file | No |
 | `report_intent` | Emit an `agent.intent` event for UI display | No |
 
-### AvailableTools allowlist
+### Permission-gated native tools
 
-The Copilot SDK's `SessionConfig` accepts an `AvailableTools` list. This is the primary server-side enforcement of which tools the model may invoke. `NativeToolExclusion.AvailableToolNames(includeShell)` returns the 9 names (or 8 without `run_command`) to populate this list.
+The Copilot runner intentionally does not set the SDK `AvailableTools` allowlist: the SDK's native file tool names differ from Agentweaver's logical tool names, and setting the logical allowlist would hide usable file tools from the model. Instead, the deny-by-default `OnPermissionRequest` handler is the authoritative gate for every native file, shell, MCP, or other tool request.
 
-When `includeShell` is false, `run_command` is absent from the allowlist and the model cannot request it.
-
-### ExcludedTools blocklist
-
-`ExcludedTools` blocks native Copilot bundle tools from executing. It is defense-in-depth: `AvailableTools` is the primary gate.
-
-The blocklist includes:
-- `shell`, `bash` — native shell tools, always denied regardless of isolation state
-- Native equivalents of the custom tools (`view`, `glob`, `ls`, `grep`, `read`, `write`) — blocked because they bypass sandbox containment and use absolute paths the model controls
-- `store_memory`, `vote_memory`, `update_todo`, `task`, `notebook` — scoped out
-- `semantic_search` — no local embeddings API available
-- Network tools (`webfetch`, `web_fetch`, `websearch`, `web_search`) — always denied
+When shell access is not allowed, the permission handler denies shell-like requests before execution.
 
 ### Why native shell is always denied
 

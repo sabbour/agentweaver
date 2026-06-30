@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Memory;
-using Microsoft.IdentityModel.Tokens;
 
 namespace Agentweaver.Api.Auth.OAuth;
 
@@ -179,7 +178,7 @@ public sealed class McpRefreshTokenStore
 
     /// <summary>256-bit URL-safe random opaque token.</summary>
     public static string GenerateOpaqueToken() =>
-        Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        McpOAuthBrokerService.GenerateOpaqueToken();
 
     private static string Hash(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));

@@ -365,7 +365,6 @@ Where this lives:
 - `packages/Agentweaver.AgentRuntime/SandboxGovernance.cs`
 - `packages/Agentweaver.SandboxExec`
 - `packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs`
-- `packages/Agentweaver.AgentRuntime/NativeToolExclusion.cs`
 
 ## Event emission
 
