@@ -1,11 +1,17 @@
 # Work Routing
 
-Routing rules derived from `specs/001-single-agent-run/spec.md`.
+How the Coordinator picks **who** handles a work request. Routing signals are
+**derived from each member's charter** (`## Capabilities` + `## Responsibilities`)
+— the charter is the single source of truth. This file only adds the
+disambiguation and priority layer on top; it does not restate every keyword.
+
+> When a charter's capabilities change, routing changes with it — do **not**
+> maintain a parallel keyword list here that can drift out of sync.
 
 ## Role to Cast Name
 
-Routing targets below use role IDs from `squad.config.ts`. Resolve to the cast
-member when dispatching (see `.squad/casting/registry.json`):
+Routing targets use role IDs. Resolve to the cast member when dispatching
+(see `.squad/casting/registry.json` / `.squad/team.md`):
 
 | Role ID | Cast Name |
 |---------|-----------|
@@ -16,36 +22,51 @@ member when dispatching (see `.squad/casting/registry.json`):
 | platform-engineer | Link |
 | security-reviewer | Seraph |
 
-## Keyword and Pattern Routing
+## Domain Ownership (charter-derived)
 
-- `/\bapi|endpoint|route|sse|stream\b/i` -> `backend-engineer`
-- `/\breact|fluent|component|web|frontend|ui\b/i` -> `frontend-engineer`
-- `/\bink|cli|terminal|tui\b/i` -> `frontend-engineer`
-- `/\bagent framework|loop|orchestr|tool call|sandbox|worktree\b/i` -> `runtime-engineer`
-- `/\bpath traversal|symlink|artifact directory\b/i` -> `runtime-engineer`
-- `/\bsecurity|red.?team|prompt inject|jailbreak|threat model|pii|secret|credential|sandbox breach|privilege|content.?safety|governance bypass\b/i` -> `security-reviewer`
-- `/\btest|vitest|playwright|coverage|contract|qa\b/i` -> `qa-engineer`
-- `/\bci|cd|workflow|pipeline|container|platform\b/i` -> `platform-engineer`
-- `/\bdocument|decision|changelog|history\b/i` -> `scribe`
-- `/\bmemory|context|recall|previous session\b/i` -> `ralph`
+Match the request against the owning member's **charter capabilities**. The
+representative capabilities below are a pointer into each charter, not a
+duplicate authority — read the charter for the full, current list.
 
-## Priority Rules
+| Role | Owns (from charter capabilities) | Charter |
+|------|----------------------------------|---------|
+| backend-engineer | backend-api, sse-streaming, openapi-contracts, sqlite-persistence, git-worktree-lifecycle, dotnet10-platform | `.squad/agents/tank/charter.md` |
+| runtime-engineer | microsoft-agent-framework, tool-loop-orchestration, sandbox-path-security, provider-adapters, run-state-machine, governance-policy-enforcement | `.squad/agents/morpheus/charter.md` |
+| frontend-engineer | react-19-fluent2, ink-cli-ui, api-client-integration, live-step-rendering, ux-flow-implementation | `.squad/agents/trinity/charter.md` |
+| qa-engineer | vitest, playwright, contract-testing, regression-design, edge-case-validation | `.squad/agents/smith/charter.md` |
+| platform-engineer | monorepo-tooling, github-actions, cross-platform, release-workflow, dotnet10-build, developer-experience | `.squad/agents/link/charter.md` |
+| security-reviewer | prompt-injection/jailbreak review, sandbox boundary enforcement, LLM-output trust, agentic-loop security, secret/PII hygiene, model-source validation, threat modeling | `.squad/agents/seraph/charter.md` |
 
-1. Security, sandbox-path issues, and threat modeling route to `security-reviewer` first; implementation fixes then go to the owning agent.
-2. API contract mismatches route to `backend-engineer`, with `qa-engineer` for validation.
-3. Client parity issues across Web/CLI route to `frontend-engineer`, with backend collaboration when server contracts change.
-4. Test failures without clear ownership route to `qa-engineer` for triage.
+## Priority & Disambiguation Rules
 
-## Inferred Patterns (from 001-single-agent-run task routing)
+These resolve overlaps where more than one charter could match:
 
-- Git worktree/merge work under `apps/api/**` routes to `backend-engineer`
-  (owns `apps/api/src/git`, has `git-worktree-lifecycle` capability), even though
-  the bare `worktree` keyword maps to `runtime-engineer`. Sandbox path security
-  inside `packages/sandbox-fs` and the agent loop stays with `runtime-engineer`.
-- Monorepo setup, toolchain, dependency pinning, lint/format, and CI runner
-  wiring route to `platform-engineer`.
-- Test-runner *configuration* (Vitest/Playwright/contract harness) routes to
-  `qa-engineer`, consistent with the `test|vitest|playwright` keyword rule.
-- Documentation-only tasks (`docs/**`, README, decisions) route to `scribe`.
-  When `scribe` is not an active agent, documentation tasks fall back to
-  `platform-engineer` (owns `developer-experience` / onboarding / reproducible-commands).
+1. **Security first.** Security, sandbox-path/traversal, prompt-injection, and
+   threat-modeling concerns route to `security-reviewer` for review; the
+   implementation fix then goes to the owning charter.
+2. **Git worktree/merge under `apps/api/**`** routes to `backend-engineer`
+   (owns the worktree lifecycle there) even though the bare `worktree` signal
+   also appears in the runtime charter. Sandbox path security inside the agent
+   loop stays with `runtime-engineer`.
+3. **API contract mismatches** route to `backend-engineer`, with `qa-engineer`
+   for contract/parity validation.
+4. **Client parity issues** across Web/CLI route to `frontend-engineer`, with
+   backend collaboration when server contracts change.
+5. **Test failures without clear ownership** route to `qa-engineer` for triage.
+6. **Monorepo setup, toolchain, dependency pinning, lint/format, CI runner
+   wiring** route to `platform-engineer`.
+
+## Built-in Agents (not work-assignment targets)
+
+These members are **not** routed work by domain/keyword — they activate by
+lifecycle or explicit trigger. Do not list them in Domain Ownership above.
+
+| Agent | Activation | Role |
+|-------|-----------|------|
+| Scribe | Background, after every work batch; owns memory, decisions merge, session/orchestration logs | `.squad/agents/scribe/charter.md` |
+| Ralph | Work monitor — runs the scan->act->rescan queue loop on "Ralph, go" / keep-working | `.squad/agents/ralph/charter.md` |
+| Rai | RAI reviewer — background by default; blocking only on a critical (red) finding; auto pre-ship / pre-merge | `.squad/agents/Rai/charter.md` |
+
+> Memory, context recall, and "what happened last session" are **Scribe's**
+> domain (session logs + decisions), surfaced by the Coordinator's catch-up —
+> they are not a Ralph work-routing signal.
