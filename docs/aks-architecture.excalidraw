@@ -31,7 +31,6 @@
       "textAlign": "center",
       "verticalAlign": "top"
     },
-
     {
       "type": "rectangle",
       "id": "aks-cluster",
@@ -43,7 +42,9 @@
       "backgroundColor": "transparent",
       "fillStyle": "solid",
       "strokeWidth": 3,
-      "roundness": { "type": 3 }
+      "roundness": {
+        "type": 3
+      }
     },
     {
       "type": "text",
@@ -59,7 +60,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "rectangle",
       "id": "ns-agentweaver",
@@ -72,7 +72,9 @@
       "fillStyle": "solid",
       "strokeWidth": 1,
       "strokeStyle": "dashed",
-      "roundness": { "type": 3 }
+      "roundness": {
+        "type": 3
+      }
     },
     {
       "type": "text",
@@ -88,7 +90,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "rectangle",
       "id": "gateway",
@@ -100,8 +101,15 @@
       "backgroundColor": "#CFE4FA",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "gateway-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "gateway-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -118,7 +126,6 @@
       "verticalAlign": "middle",
       "containerId": "gateway"
     },
-
     {
       "type": "rectangle",
       "id": "frontend-pod",
@@ -130,8 +137,15 @@
       "backgroundColor": "#E8DAEF",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "frontend-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "frontend-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -148,7 +162,6 @@
       "verticalAlign": "middle",
       "containerId": "frontend-pod"
     },
-
     {
       "type": "rectangle",
       "id": "api-pod",
@@ -160,8 +173,15 @@
       "backgroundColor": "#DFF6DD",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "api-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "api-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -178,7 +198,6 @@
       "verticalAlign": "middle",
       "containerId": "api-pod"
     },
-
     {
       "type": "rectangle",
       "id": "mcp-pod",
@@ -190,8 +209,15 @@
       "backgroundColor": "#FFF4CE",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "mcp-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "mcp-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -208,7 +234,6 @@
       "verticalAlign": "middle",
       "containerId": "mcp-pod"
     },
-
     {
       "type": "rectangle",
       "id": "sandbox-ctrl",
@@ -220,8 +245,15 @@
       "backgroundColor": "#FDE7E9",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "sandbox-ctrl-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "sandbox-ctrl-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -238,7 +270,6 @@
       "verticalAlign": "middle",
       "containerId": "sandbox-ctrl"
     },
-
     {
       "type": "rectangle",
       "id": "warmpool",
@@ -250,8 +281,15 @@
       "backgroundColor": "#FDE7E9",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "warmpool-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "warmpool-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -260,7 +298,7 @@
       "y": 490,
       "width": 190,
       "height": 50,
-      "text": "WarmPools\ngeneric ×3\nAgentHost ×2 standby",
+      "text": "SandboxWarmPool CRD\ngeneric x3\nAgentHost x2 standby",
       "fontSize": 12,
       "fontFamily": 3,
       "strokeColor": "#000000",
@@ -268,7 +306,6 @@
       "verticalAlign": "middle",
       "containerId": "warmpool"
     },
-
     {
       "type": "rectangle",
       "id": "secrets-store",
@@ -280,8 +317,15 @@
       "backgroundColor": "#dee2e6",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "secrets-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "secrets-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -298,7 +342,6 @@
       "verticalAlign": "middle",
       "containerId": "secrets-store"
     },
-
     {
       "type": "rectangle",
       "id": "netpol",
@@ -310,8 +353,15 @@
       "backgroundColor": "#dee2e6",
       "fillStyle": "hachure",
       "strokeWidth": 1,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "netpol-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "netpol-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -328,7 +378,6 @@
       "verticalAlign": "middle",
       "containerId": "netpol"
     },
-
     {
       "type": "rectangle",
       "id": "keyvault",
@@ -340,8 +389,15 @@
       "backgroundColor": "#CFE4FA",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "kv-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "kv-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -358,7 +414,6 @@
       "verticalAlign": "middle",
       "containerId": "keyvault"
     },
-
     {
       "type": "rectangle",
       "id": "acr",
@@ -370,8 +425,15 @@
       "backgroundColor": "#CFE4FA",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "acr-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "acr-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -388,7 +450,6 @@
       "verticalAlign": "middle",
       "containerId": "acr"
     },
-
     {
       "type": "rectangle",
       "id": "managed-id",
@@ -400,8 +461,15 @@
       "backgroundColor": "#DFF6DD",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "mid-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "mid-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -418,7 +486,6 @@
       "verticalAlign": "middle",
       "containerId": "managed-id"
     },
-
     {
       "type": "rectangle",
       "id": "github-oauth",
@@ -430,8 +497,15 @@
       "backgroundColor": "#F3F2F1",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "roundness": { "type": 3 },
-      "boundElements": [{"type": "text", "id": "github-text"}]
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "github-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -448,7 +522,6 @@
       "verticalAlign": "middle",
       "containerId": "github-oauth"
     },
-
     {
       "type": "ellipse",
       "id": "user",
@@ -460,7 +533,12 @@
       "backgroundColor": "#F3F2F1",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "boundElements": [{"type": "text", "id": "user-text"}]
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "user-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -477,7 +555,6 @@
       "verticalAlign": "middle",
       "containerId": "user"
     },
-
     {
       "type": "ellipse",
       "id": "copilot-cli",
@@ -489,7 +566,12 @@
       "backgroundColor": "#F3F2F1",
       "fillStyle": "hachure",
       "strokeWidth": 2,
-      "boundElements": [{"type": "text", "id": "cli-text"}]
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "cli-text"
+        }
+      ]
     },
     {
       "type": "text",
@@ -506,7 +588,6 @@
       "verticalAlign": "middle",
       "containerId": "copilot-cli"
     },
-
     {
       "type": "arrow",
       "id": "user-to-gw",
@@ -516,9 +597,26 @@
       "height": 55,
       "strokeColor": "#0078D4",
       "strokeWidth": 2,
-      "points": [[0, 0], [0, 55]],
-      "startBinding": {"elementId": "user", "focus": 0, "gap": 1},
-      "endBinding": {"elementId": "gateway", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          55
+        ]
+      ],
+      "startBinding": {
+        "elementId": "user",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "gateway",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -534,7 +632,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "gw-to-frontend",
@@ -544,9 +641,26 @@
       "height": 55,
       "strokeColor": "#5C2D91",
       "strokeWidth": 2,
-      "points": [[0, 0], [-180, 55]],
-      "startBinding": {"elementId": "gateway", "focus": 0, "gap": 1},
-      "endBinding": {"elementId": "frontend-pod", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -180,
+          55
+        ]
+      ],
+      "startBinding": {
+        "elementId": "gateway",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "frontend-pod",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -562,7 +676,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "gw-to-api",
@@ -572,9 +685,26 @@
       "height": 55,
       "strokeColor": "#107C10",
       "strokeWidth": 2,
-      "points": [[0, 0], [0, 55]],
-      "startBinding": {"elementId": "gateway", "focus": 0, "gap": 1},
-      "endBinding": {"elementId": "api-pod", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          55
+        ]
+      ],
+      "startBinding": {
+        "elementId": "gateway",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "api-pod",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -590,7 +720,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "gw-to-mcp",
@@ -600,9 +729,26 @@
       "height": 55,
       "strokeColor": "#F7630C",
       "strokeWidth": 2,
-      "points": [[0, 0], [180, 55]],
-      "startBinding": {"elementId": "gateway", "focus": 0, "gap": 1},
-      "endBinding": {"elementId": "mcp-pod", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          180,
+          55
+        ]
+      ],
+      "startBinding": {
+        "elementId": "gateway",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "mcp-pod",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -618,7 +764,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "cli-to-mcp",
@@ -628,9 +773,26 @@
       "height": 0,
       "strokeColor": "#F7630C",
       "strokeWidth": 2,
-      "points": [[0, 0], [650, 0]],
-      "startBinding": {"elementId": "copilot-cli", "focus": 0, "gap": 1},
-      "endBinding": {"elementId": "mcp-pod", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          650,
+          0
+        ]
+      ],
+      "startBinding": {
+        "elementId": "copilot-cli",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "mcp-pod",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -646,7 +808,6 @@
       "textAlign": "center",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "mcp-to-api",
@@ -657,9 +818,26 @@
       "strokeColor": "#107C10",
       "strokeWidth": 2,
       "strokeStyle": "dashed",
-      "points": [[0, 0], [-150, 20]],
-      "startBinding": {"elementId": "mcp-pod", "focus": 0, "gap": 1},
-      "endBinding": {"elementId": "api-pod", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -150,
+          20
+        ]
+      ],
+      "startBinding": {
+        "elementId": "mcp-pod",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "api-pod",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -675,7 +853,6 @@
       "textAlign": "center",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "api-to-kv",
@@ -686,7 +863,16 @@
       "strokeColor": "#0078D4",
       "strokeWidth": 1,
       "strokeStyle": "dashed",
-      "points": [[0, 0], [400, 0]]
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          400,
+          0
+        ]
+      ]
     },
     {
       "type": "text",
@@ -702,7 +888,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "api-to-github",
@@ -713,7 +898,16 @@
       "strokeColor": "#1e1e1e",
       "strokeWidth": 1,
       "strokeStyle": "dashed",
-      "points": [[0, 0], [400, -130]]
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          400,
+          -130
+        ]
+      ]
     },
     {
       "type": "text",
@@ -729,7 +923,6 @@
       "textAlign": "center",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "api-to-sandbox",
@@ -740,8 +933,21 @@
       "strokeColor": "#D13438",
       "strokeWidth": 1,
       "strokeStyle": "dashed",
-      "points": [[0, 0], [-100, 55]],
-      "startBinding": {"elementId": "api-pod", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -100,
+          55
+        ]
+      ],
+      "startBinding": {
+        "elementId": "api-pod",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -757,7 +963,6 @@
       "textAlign": "center",
       "verticalAlign": "top"
     },
-
     {
       "type": "arrow",
       "id": "mid-to-kv",
@@ -768,9 +973,26 @@
       "strokeColor": "#107C10",
       "strokeWidth": 1,
       "strokeStyle": "dashed",
-      "points": [[0, 0], [0, -80]],
-      "startBinding": {"elementId": "managed-id", "focus": 0, "gap": 1},
-      "endBinding": {"elementId": "keyvault", "focus": 0, "gap": 1}
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          -80
+        ]
+      ],
+      "startBinding": {
+        "elementId": "managed-id",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "keyvault",
+        "focus": 0,
+        "gap": 1
+      }
     },
     {
       "type": "text",
@@ -786,7 +1008,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "rectangle",
       "id": "auth-flow-box",
@@ -799,7 +1020,9 @@
       "fillStyle": "solid",
       "strokeWidth": 1,
       "strokeStyle": "dashed",
-      "roundness": { "type": 3 }
+      "roundness": {
+        "type": 3
+      }
     },
     {
       "type": "text",
@@ -829,7 +1052,6 @@
       "textAlign": "left",
       "verticalAlign": "top"
     },
-
     {
       "type": "rectangle",
       "id": "infra-box",
@@ -842,7 +1064,9 @@
       "fillStyle": "solid",
       "strokeWidth": 1,
       "strokeStyle": "dashed",
-      "roundness": { "type": 3 }
+      "roundness": {
+        "type": 3
+      }
     },
     {
       "type": "text",
@@ -873,5 +1097,7 @@
       "verticalAlign": "top"
     }
   ],
-  "appState": {"viewBackgroundColor": "#ffffff"}
+  "appState": {
+    "viewBackgroundColor": "#ffffff"
+  }
 }

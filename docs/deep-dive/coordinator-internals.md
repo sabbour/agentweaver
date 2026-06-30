@@ -197,7 +197,7 @@ Important details:
 
 Interactive runs suspend at the confirmation gate until a human confirms, revises, or declines.
 
-Backlog pickup runs also go through the same gate, but a bounded unattended confirmation loop confirms the reversible plan on behalf of the accountable human captured on the backlog item. This is not Autopilot bypassing safety. Autopilot answers child clarifying questions only; it does not grant tool approvals, skip confirmation for interactive runs, or skip collective human review.
+Backlog pickup runs also go through the same gate. When autopilot is on (`PickupAutopilot: true`, the project default), a bounded `ScheduleUnattendedConfirm` loop fires once the spec reaches `awaiting_confirmation` and confirms it on behalf of the accountable human captured on the backlog item. When autopilot is off, no loop fires — the run stays at `awaiting_confirmation` until the human confirms via the UI. This is not Autopilot bypassing safety: the confirmation is still attributed to the named accountable human, the gate is still enforced, and turning off autopilot simply makes that confirmation explicit instead of automatic. Autopilot also auto-answers child clarifying questions; it does not grant tool approvals, skip the gate for interactive runs, or skip collective human review.
 
 There is a small ordering race between "the spec was persisted and emitted" and "the framework request port is armed." The resume seam handles this by waiting briefly for the pending gate while the spec remains `awaiting_confirmation`, preserving double-submit protection without rejecting a fast confirm.
 

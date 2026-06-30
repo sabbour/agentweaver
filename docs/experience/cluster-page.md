@@ -30,6 +30,7 @@ The four KPI cards at the top of the page give a quick cluster-health summary:
 | **Orphaned pods** | Pods running with no matching active run. These are candidates for the next reaper sweep (roughly every 2 minutes). A non-zero count here is a leading indicator of quota pressure. |
 | **CPU used / total** | Current CPU consumption vs. the namespace limit, in cores. |
 | **Pending runs** | Subtasks that are waiting for CPU headroom to become available. Each one retries every 60 seconds for up to 10 attempts before failing with `capacity_unavailable`. |
+| **Warm pool** | Ready vs. desired warm sandbox replicas across all SandboxWarmPool objects, shown as N/M. A count below M means run starts lose the fast path of a pre-warmed sandbox. |
 
 ## Quota bars
 
@@ -111,6 +112,47 @@ Lists coordinator subtasks currently in `PendingCapacity` status:
 | **Retry count** | How many dispatch attempts have been made (max 10) |
 
 Each subtask retries every 60 seconds. After 10 retries, the subtask fails with detail code `capacity_unavailable` and the OutcomeSpec panel shows a human-readable explanation.
+
+## Warm pools table
+
+Lists every SandboxWarmPool CRD object in the namespace. Each row represents one pool:
+
+| Column | Meaning |
+|---|---|
+| **Name** | Kubernetes name of the SandboxWarmPool object |
+| **Desired** | Target number of pre-warmed sandboxes declared in the pool spec |
+| **Ready** | Sandboxes currently ready to accept a claim |
+| **Available** | Sandboxes that are ready and not yet claimed by a run |
+| **Status** | `healthy` when ready equals desired; `warning` when below desired; `critical` when none are ready |
+
+A pool in `warning` or `critical` means new run dispatches fall back to creating an ad-hoc sandbox, which adds latency to run startup.
+
+## Sandbox objects table
+
+Lists all Sandbox CRD objects in the namespace, both warm-pool-managed and ad-hoc per-run sandboxes:
+
+| Column | Meaning |
+|---|---|
+| **Name** | Kubernetes name of the Sandbox object |
+| **Phase** | `standby` (warm, waiting for a claim), `running`, `pending`, or `unknown` |
+| **Ready** | Whether the sandbox pod is ready |
+| **Pod** | Underlying pod name, if scheduled |
+| **Warm pool** | The SandboxWarmPool that owns this sandbox; blank for ad-hoc sandboxes |
+| **Age** | How long the object has existed |
+
+## Sandbox claims table
+
+Lists all SandboxClaim CRD objects in the namespace:
+
+| Column | Meaning |
+|---|---|
+| **Name** | Kubernetes name of the SandboxClaim object |
+| **Phase** | `bound` (assigned to a sandbox), `pending` (waiting for one), or `unknown` |
+| **Ready** | Whether the claimed sandbox is ready |
+| **Run** | The run ID that created this claim, linking to the run page when present |
+| **Bound sandbox** | The Sandbox object this claim is bound to; blank when still pending |
+| **Warm pool** | The pool the bound sandbox came from; blank for ad-hoc claims |
+| **Age** | How long the claim has existed |
 
 ## 404 fallback
 

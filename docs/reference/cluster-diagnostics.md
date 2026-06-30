@@ -78,6 +78,38 @@ Standard bearer-token authentication is required. See [API reference → Authent
       "pending_since": "2026-06-27T17:58:30Z",
       "retry_count": 3
     }
+  ],
+  "warm_pools": [
+    {
+      "name": "agentweaver-sandbox",
+      "desired_replicas": 3,
+      "ready_replicas": 3,
+      "available_replicas": 3,
+      "status": "healthy",
+      "age_seconds": 86400
+    }
+  ],
+  "sandbox_objects": [
+    {
+      "name": "sandbox-abc123",
+      "phase": "standby",
+      "ready": true,
+      "pod_name": "sandbox-abc123-pod",
+      "template_ref": "agentweaver-sandbox-template",
+      "warm_pool": "agentweaver-sandbox",
+      "age_seconds": 3600
+    }
+  ],
+  "sandbox_claims": [
+    {
+      "name": "sandboxclaim-xyz789",
+      "phase": "bound",
+      "ready": true,
+      "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6",
+      "bound_sandbox": "sandbox-abc123",
+      "warm_pool": "agentweaver-sandbox",
+      "age_seconds": 120
+    }
   ]
 }
 ```
@@ -95,6 +127,9 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `active_agent_pods` | `AgentPodInfoDto[]` | Agent-host pods with a matching active run record. |
 | `orphaned_agent_pods` | `AgentPodInfoDto[]` | Agent-host pods with no matching active run (candidates for next reaper sweep). |
 | `pending_capacity_runs` | `PendingCapacityRunDto[]` | Coordinator subtasks currently in `PendingCapacity` status. |
+| `warm_pools` | `WarmPoolStatusDto[]` | All SandboxWarmPool CRD objects in the namespace. Empty when the cluster has no warm pools configured. |
+| `sandbox_objects` | `SandboxObjectDto[]` | All Sandbox objects in the namespace, both warm-pool-managed and per-run ad-hoc sandboxes. |
+| `sandbox_claims` | `SandboxClaimObjectDto[]` | All SandboxClaim objects in the namespace. |
 
 ### ComponentHealthDto
 
@@ -144,6 +179,48 @@ Appears in both `active_agent_pods` and `orphaned_agent_pods`.
 | `subtask_id` | number | The subtask identifier within the work plan. |
 | `pending_since` | string (ISO 8601) | When the subtask first entered `PendingCapacity` status. |
 | `retry_count` | number | How many dispatch retries have been attempted. Max is 10; the subtask fails with `capacity_unavailable` after 10 retries. |
+
+### WarmPoolStatusDto
+
+One entry per SandboxWarmPool CRD object in the namespace.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Kubernetes name of the SandboxWarmPool object. |
+| `desired_replicas` | number | Target number of pre-warmed sandbox pods declared in the CRD spec. |
+| `ready_replicas` | number | Sandbox pods that are ready to accept a claim. |
+| `available_replicas` | number | Sandbox pods that are available (ready and not currently claimed). |
+| `status` | string | `"healthy"` when `ready_replicas == desired_replicas`; `"warning"` when some replicas are ready but below desired; `"critical"` when no replicas are ready. |
+| `age_seconds` | number\|null | Age of the CRD object in seconds. Omitted if unavailable. |
+
+### SandboxObjectDto
+
+One entry per Sandbox object in the namespace. Covers both warm-pool-managed sandboxes and ad-hoc per-run sandboxes.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Kubernetes name of the Sandbox object. |
+| `phase` | string | `"running"`, `"pending"`, `"standby"`, or `"unknown"`. Standby means the sandbox is pre-warmed and waiting for a claim. |
+| `ready` | boolean | Whether the sandbox pod is ready. |
+| `pod_name` | string\|null | Name of the underlying pod. Omitted if not yet scheduled. |
+| `template_ref` | string\|null | Name of the SandboxTemplate used to create this sandbox. Omitted if not available. |
+| `warm_pool` | string\|null | Name of the SandboxWarmPool that owns this sandbox. `null` for ad-hoc per-run sandboxes. |
+| `age_seconds` | number\|null | Age of the Sandbox object in seconds. Omitted if unavailable. |
+
+### SandboxClaimObjectDto
+
+One entry per SandboxClaim object in the namespace.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Kubernetes name of the SandboxClaim object. |
+| `phase` | string | `"bound"` when assigned to a sandbox, `"pending"` when waiting for a matching sandbox, or `"unknown"`. |
+| `ready` | boolean | Whether the claimed sandbox is ready. |
+| `run_id` | string\|null | The run that created this claim. Omitted if not traceable. |
+| `bound_sandbox` | string\|null | Name of the Sandbox object this claim is bound to. `null` when still pending. |
+| `sandbox_template_ref` | string\|null | SandboxTemplate requested by this claim. Omitted if not specified. |
+| `warm_pool` | string\|null | Name of the SandboxWarmPool the bound sandbox belongs to. `null` for ad-hoc claims. |
+| `age_seconds` | number\|null | Age of the SandboxClaim object in seconds. Omitted if unavailable. |
 
 ## Status codes
 

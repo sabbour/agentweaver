@@ -122,6 +122,10 @@ data: {}
 
 ```
 
+The `done` frame closes the current SSE connection. For most runs this is permanent — it signals the run has reached a true terminal state (`run.completed`, `run.failed`, `run.cancelled`). However, for coordinator runs, `done` can also close the stream at an intermediate gate. When the coordinator pauses at the outcome-spec `awaiting_confirmation` gate (autopilot off, or before the unattended confirm fires), the server closes the SSE connection with `done`. After the user confirms the spec, the frontend calls `onReconnect()` to reopen the stream from the last received sequence, and the run continues. The `done` frame at a spec gate is therefore not a permanent terminal — the stream can be reconnected.
+
+True permanent terminals are the run-level events `run.completed`, `run.failed`, and `run.cancelled`. Once any of these is replayed, `SubscribeAsync` completes and further reconnects return only the history.
+
 Reconnects send `Last-Event-ID: <Sequence>`, which maps to
 `SubscribeAsync(runId, fromSequence: <Sequence>)`. The frame layout, the
 `Last-Event-ID` semantics, and the `[DONE]` terminator are unchanged; the

@@ -238,6 +238,8 @@ Emitted when an interrupted coordinator run is resumed after an API process rest
 
 Emitted when the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate (`coordinator-confirmation-gate`). The OutcomeSpec is persisted to the memory store with status `awaiting_confirmation` before this event fires. `specId` is the persisted row id; `status` is `awaiting_confirmation`. `desiredOutcome`, `scope`, and `assumptions` are the drafted strings; `clarifyingQuestions` is an optional array. No decomposition or child dispatch occurs before a human confirms — the run blocks here until the confirm or revise seam is called.
 
+When autopilot is off on a pickup run (or on any interactive run), the SSE stream closes with a `done` frame after this event. This `done` is not a permanent terminal — the run remains `in_progress` at the confirmation gate. After the user confirms the spec, the frontend reopens the stream from the last received sequence and the run continues. When autopilot is on for a pickup run, `ScheduleUnattendedConfirm` fires automatically so the stream typically stays live without a manual reconnect.
+
 ### `coordinator.outcome_spec.confirmed`
 
 Emitted when a human confirms the drafted OutcomeSpec through the confirm seam. The persisted OutcomeSpec advances to status `confirmed`. `specId` is the confirmed row id; `confirmedBy` is the confirming user. In Phase 1 the coordinator run terminates after confirmation (decomposition and child dispatch are Phase 2); a `run.completed` event follows.

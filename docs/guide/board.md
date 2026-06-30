@@ -60,6 +60,18 @@ A **heartbeat** runs automatically on a configurable schedule. Each time it fire
 
 You can view and configure the heartbeat from the **Heartbeat** page in the project sidebar. You can also trigger a heartbeat manually.
 
+### Pickup settings
+
+Each project has three pickup-level settings, visible in the **Pickup settings** dialog on the board toolbar:
+
+| Setting | What it controls |
+|---|---|
+| **Max Ready items per heartbeat** | How many Ready tasks the coordinator claims per tick (1–20, default 3) |
+| **Autopilot** | For automatically picked-up runs: auto-answers the coordinator's clarifying questions using the coordinator model, and auto-confirms the outcome spec so the run proceeds without waiting for manual confirmation. Tool and permission approvals are still required, and every auto-answer is logged in the timeline. Defaults to on. |
+| **Auto-approve tools** | Automatically approves tool calls for picked-up runs, except tools blocked by sandbox policy |
+
+When **Autopilot** is off, a pickup run pauses at the outcome-spec confirmation gate and waits for a human to confirm before any work begins. When it is on, the spec is confirmed automatically on behalf of the accountable human captured on the backlog item. This setting does not apply to runs you start manually — those always pause at the confirmation gate regardless.
+
 ::: warning Concurrency limit
 The heartbeat will not start more than the configured maximum of concurrent active runs. Tasks stay in Ready until a slot opens. Increase the limit in Heartbeat settings if your team handles higher throughput.
 :::

@@ -100,6 +100,8 @@ Over MCP, `coordinator_outcome_spec_confirm` performs the same action. It confir
 
 Confirmation is not just an acknowledgement. It is the user's approval that the coordinator's interpretation is the execution contract for the rest of the orchestration.
 
+After the user clicks **Confirm**, the web UI automatically reconnects the live stream. The coordinator stream closed at the `awaiting_confirmation` gate; confirmation resumes the run and reopens the stream so the topology, subtask graph, and coordinator session update in real time without a manual page refresh. The **View session** link in the spec authoring state also works correctly: it expands the coordinator session column if it was collapsed before scrolling to the session content.
+
 ### Requesting a revision
 
 If the spec is close but not right, the user chooses **Clarify and request changes**. The dialog asks the user to describe what should change. If the coordinator included clarifying questions, the dialog shows those questions as answer fields and includes an **Additional feedback** field. The dialog explains the loop clearly: after sending feedback, the coordinator re-drafts and re-presents the spec for confirmation; no subagent work is dispatched until the user confirms.

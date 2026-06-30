@@ -400,6 +400,10 @@ sequenceDiagram
 
 The hook keeps a bounded event buffer so a runaway stream does not grow the DOM forever. It recognizes terminal events so completed streams stop reconnecting. It uses reconnect backoff so transient network issues do not immediately fail the page.
 
+### Reconnect after coordinator confirmation
+
+Coordinator runs pause the stream at the confirmation gate: when the run enters `awaiting_confirmation`, the backend closes the stream with a `done` event. At that point `OutcomeSpecPanel` fetches the latest spec directly from the REST API (`fetchSpec()`) so the panel always shows the persisted, authoritative spec rather than reconstructed stream state. The internal `terminalRef` is reset and `reconnectKey` is incremented, which causes `useRunStream` to re-open a fresh stream against the same run ID. When the user clicks **Confirm**, the frontend calls `onReconnect()`, which triggers the same `reconnectKey` increment and stream re-open. New coordinator events — work-plan creation, subtask dispatch, child run starts — start flowing immediately after confirmation without a manual page refresh.
+
 The timeline reducer is pure: given prior timeline state and the next event, it returns the next display state. It groups messages into turns, pairs tool calls with results, surfaces approvals, tracks outcomes, and bounds large text fields. Because it is pure, the same event sequence should produce the same timeline whether it came live from SSE or from a persisted event log.
 
 This is the key mental model: **SSE events are not rendered directly. They are normalized into durable UI concepts.**
