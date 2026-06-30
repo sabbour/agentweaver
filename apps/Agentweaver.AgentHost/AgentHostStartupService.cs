@@ -73,6 +73,7 @@ internal sealed class AgentHostStartupService : IHostedService
         string userId,
         string turnBearerToken,
         string? kvUserSecretName,
+        string? gitHubAccessToken,
         CancellationToken ct)
     {
         _standby = false;

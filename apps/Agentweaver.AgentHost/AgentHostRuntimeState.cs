@@ -39,6 +39,13 @@ internal sealed class AgentHostRuntimeState
     public string? KvUserSecretName { get; private set; }
 
     /// <summary>
+    /// Pre-resolved GitHub OAuth access token supplied by the API in the /configure body.
+    /// When set, <see cref="KeyVaultUserTokenProvider"/> uses this directly and skips the KV call,
+    /// allowing the pod to work without outbound access to Azure AD or Key Vault.
+    /// </summary>
+    public string? GitHubAccessToken { get; private set; }
+
+    /// <summary>
     /// Seeds the runtime state from env-injected options (non-warm pod launched with a RunId).
     /// Marks the state configured so a later /configure is rejected (409 "Already configured via env").
     /// </summary>
@@ -49,13 +56,14 @@ internal sealed class AgentHostRuntimeState
         UserId = options.UserId ?? string.Empty;
         TurnBearerToken = options.TurnBearerToken ?? string.Empty;
         KvUserSecretName = options.KvUserSecretName;
+        GitHubAccessToken = null; // not available on env-var launch path
     }
 
     /// <summary>
     /// Atomically transitions the pod from standby to configured. Returns <see langword="false"/>
     /// when the pod was already configured (one-time semantics → caller returns 409).
     /// </summary>
-    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName)
+    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken)
     {
         if (Interlocked.CompareExchange(ref _configured, 1, 0) != 0)
             return false;
@@ -64,6 +72,7 @@ internal sealed class AgentHostRuntimeState
         UserId = userId ?? string.Empty;
         TurnBearerToken = turnBearerToken ?? string.Empty;
         KvUserSecretName = string.IsNullOrWhiteSpace(kvUserSecretName) ? null : kvUserSecretName;
+        GitHubAccessToken = string.IsNullOrWhiteSpace(gitHubAccessToken) ? null : gitHubAccessToken;
         return true;
     }
 }

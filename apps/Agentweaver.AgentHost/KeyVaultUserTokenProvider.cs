@@ -57,6 +57,18 @@ internal sealed class KeyVaultUserTokenProvider
             if (_fetched)
                 return _cached;
 
+            // Fast path: the API pre-resolved the token and passed it in /configure.
+            // Skip the KV call entirely — the pod has no outbound access to Azure AD or KV.
+            var preResolved = _runtimeState.GitHubAccessToken;
+            if (!string.IsNullOrWhiteSpace(preResolved))
+            {
+                _logger?.LogInformation(
+                    "KeyVaultUserTokenProvider: using pre-resolved GitHubAccessToken from /configure; skipping Key Vault fetch.");
+                _cached = new StoredCredential { Status = "signed-in", AccessToken = preResolved };
+                _fetched = true;
+                return _cached;
+            }
+
             var secretName = _runtimeState.KvUserSecretName;
             if (string.IsNullOrWhiteSpace(secretName))
             {

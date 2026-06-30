@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Domain;
 using k8s;
 using Agentweaver.SandboxExec;
 using Microsoft.Extensions.Logging;
@@ -164,6 +165,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Used to POST /configure to the warm pod after bind (warm-pool deferred-config path). Null in
     // unit tests → the /configure call is skipped (same null-skip convention as the readiness probe).
     private readonly IHttpClientFactory? _httpClientFactory;
+    // Resolves the run owner's GitHub token so the API can pass it in /configure, avoiding the need
+    // for the kata VM pod to call Azure AD or Key Vault (blocked by Cilium FQDN policies).
+    private readonly IGitHubTokenStore? _tokenStore;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -180,7 +184,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         IAgentHostReadinessProbe? readinessProbe = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
-        IHttpClientFactory? httpClientFactory = null)
+        IHttpClientFactory? httpClientFactory = null,
+        IGitHubTokenStore? tokenStore = null)
     {
         _client = client;
         _options = options;
@@ -190,6 +195,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _readinessProbe = readinessProbe;
         _submittingUserResolver = submittingUserResolver;
         _httpClientFactory = httpClientFactory;
+        _tokenStore = tokenStore;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -376,7 +382,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Warm-pool deferred /configure: inject the per-run RunId/UserId/TurnBearerToken and the
             // KV secret name into the already-warm pod, which then runs SetupAsync and becomes ready.
             await CallAgentHostConfigureAsync(
-                podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName, ct)
+                podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
+                await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false), ct)
                 .ConfigureAwait(false);
 
             _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
@@ -471,6 +478,35 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
+    /// Resolves the run owner's GitHub access token from the API-side token store so it can be
+    /// forwarded in the /configure body. The kata VM pod cannot reach Azure AD or Key Vault
+    /// (Cilium FQDN policies use eBPF interception that doesn't cross the guest kernel boundary).
+    /// Never throws — a lookup failure degrades gracefully: the pod will attempt the KV fetch itself
+    /// (which may fail) rather than causing a hard launch failure here.
+    /// </summary>
+    private async Task<string?> ResolveGitHubAccessTokenAsync(string userId, CancellationToken ct)
+    {
+        if (_tokenStore is null)
+            return null;
+
+        try
+        {
+            var entry = await _tokenStore.GetAsync(
+                GitHubTokenScope.ForUser(userId), ct).ConfigureAwait(false);
+            if (entry.Status == GitHubTokenStatus.SignedIn && !string.IsNullOrEmpty(entry.AccessToken))
+                return entry.AccessToken;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to pre-resolve GitHub token for {UserId} — pod will fall back to KV.",
+                userId);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Injects the per-run context into an already-warm AgentHost pod via its one-time
     /// <c>POST /configure</c> endpoint. The pod then fetches ONLY <paramref name="kvUserSecretName"/>
     /// from Key Vault (its configured user's token) and runs SetupAsync. The endpoint is guarded by
@@ -480,7 +516,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
-        string kvUserSecretName, CancellationToken ct)
+        string kvUserSecretName, string? gitHubAccessToken, CancellationToken ct)
     {
         if (_httpClientFactory is null)
         {
@@ -500,6 +536,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             userId,
             turnBearerToken,
             kvUserSecretName,
+            gitHubAccessToken,
         };
 
         _logger.LogInformation(

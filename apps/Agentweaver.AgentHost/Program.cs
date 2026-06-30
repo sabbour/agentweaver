@@ -209,12 +209,13 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     // Interlocked one-time gate (inside TryConfigure): first caller wins, the rest get 409.
     if (!runtimeState.TryConfigure(
-            body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty, body.KvUserSecretName))
+            body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
+            body.KvUserSecretName, body.GitHubAccessToken))
         return Results.Conflict("Already configured");
 
     await startup.ConfigureAsync(
         body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-        body.KvUserSecretName, ctx.RequestAborted).ConfigureAwait(false);
+        body.KvUserSecretName, body.GitHubAccessToken, ctx.RequestAborted).ConfigureAwait(false);
 
     return Results.Ok(new { configured = true, runId = body.RunId });
 });
@@ -286,4 +287,10 @@ internal sealed record ConfigureRequest
     public string? UserId { get; init; }
     public string? TurnBearerToken { get; init; }
     public string? KvUserSecretName { get; init; }
+
+    /// <summary>
+    /// GitHub OAuth access token pre-resolved by the API (which has KV access).
+    /// When present, the pod skips the Key Vault fetch entirely — no OIDC or KV egress needed.
+    /// </summary>
+    public string? GitHubAccessToken { get; init; }
 }

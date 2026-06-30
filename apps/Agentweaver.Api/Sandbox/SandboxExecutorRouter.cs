@@ -1,6 +1,7 @@
 using k8s;
 using Agentweaver.SandboxExec;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Domain;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -22,11 +23,13 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IAgentHostTurnTokenRegistry? _turnTokenRegistry;
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly IRunSubmittingUserResolver? _submittingUserResolver;
+    private readonly IGitHubTokenStore? _tokenStore;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
-        IAgentHostTurnTokenRegistry? turnTokenRegistry = null)
+        IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
+        IGitHubTokenStore? tokenStore = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -34,6 +37,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _turnTokenRegistry = turnTokenRegistry;
         _httpClientFactory = httpClientFactory;
         _submittingUserResolver = submittingUserResolver;
+        _tokenStore = tokenStore;
     }
 
     public ISandboxExecutor Resolve()
@@ -118,7 +122,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
             return new KubernetesSandboxExecutor(
                 k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
-                _submittingUserResolver, _httpClientFactory);
+                _submittingUserResolver, _httpClientFactory, _tokenStore);
         }
         catch (Exception ex)
         {
