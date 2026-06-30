@@ -263,8 +263,12 @@ app.Use(async (ctx, next) =>
 });
 
 // ── Liveness probe ─────────────────────────────────────────────────────────────
+// Always 200 once Kestrel is up — signals "pod is reachable, safe to POST /configure".
+// "standby" = warm pool pod waiting for /configure; "ready" = SetupAsync complete.
+// The API executor must NOT wait for "ready" before calling /configure (that is a deadlock:
+// IsReady is only set after /configure → SetupAsync, but /configure is gated on healthz 200).
 app.MapGet("/healthz", (AgentHostStartupService startup) =>
-    startup.IsReady ? Results.Ok("ready") : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
+    Results.Ok(startup.IsReady ? "ready" : "standby"));
 
 // ── A2A endpoints ──────────────────────────────────────────────────────────────
 // Mounts:
