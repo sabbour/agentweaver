@@ -73,6 +73,10 @@ spec:
   policyTypes:
     - Egress
   egress:
+    # DNS resolution (kube-dns). Selector-based; explicit ClusterIP added for kata-VM
+    # robustness (kata pods enforce egress at the virtual NIC, identity selectors still
+    # resolve but the explicit /32 guarantees DNS is never black-holed by the operator
+    # policy, which excludes 10.0.0.0/8 and would otherwise block kube-dns at 10.0.0.10).
     - to:
         - namespaceSelector:
             matchLabels:
@@ -80,15 +84,34 @@ spec:
           podSelector:
             matchLabels:
               k8s-app: kube-dns
+        - ipBlock:
+            cidr: 10.0.0.10/32
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
-    # GitHub API public range. Service/pod CIDRs are not included in this allowlist.
+    # Public HTTPS egress (everything except RFC1918 private ranges).
+    #
+    # The Copilot CLI's SDK-token validation and session.create calls reach BOTH GitHub's
+    # public range (140.82.112.0/20) AND Azure CDN-fronted endpoints such as
+    # copilot-proxy.githubusercontent.com (e.g. 138.91.182.224), whose IPs are dynamic and
+    # fall OUTSIDE the GitHub range. A static GitHub-only ipBlock black-holes session.create
+    # ("Authentication failed: Failed to validate SDK token: TypeError: fetch failed").
+    #
+    # Cilium toFQDNs allowlists CANNOT be used here: these pods run as kata VMs (Pod
+    # Sandboxing). Cilium intercepts DNS for FQDN policy on the HOST kernel via eBPF; the
+    # kata guest kernel's DNS queries never traverse those host hooks, so the FQDN->IP map
+    # never builds and listed hostnames are still blocked. Only IP-based rules are enforced
+    # for kata pods (at the virtual NIC). Hence: allow all public HTTPS, deny RFC1918 so the
+    # sandbox still cannot pivot into cluster/pod/service CIDRs or the private VNet.
     - to:
         - ipBlock:
-            cidr: 140.82.112.0/20
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
       ports:
         - protocol: TCP
           port: 443
