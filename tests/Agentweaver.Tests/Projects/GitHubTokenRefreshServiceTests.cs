@@ -148,6 +148,31 @@ public sealed class GitHubTokenRefreshServiceTests
             "every concurrent caller must observe the same fresh access token");
     }
 
+    [Fact]
+    public async Task ConcurrentReplicaCallers_SharedSecretLease_RefreshExactlyOnce_SameFreshToken()
+    {
+        var secrets = new InMemorySecretStore();
+        var scope = GitHubTokenScope.Installation;
+        var seedStore = new KeyVaultGitHubTokenStore(secrets);
+        await seedStore.SetAsync(scope, new GitHubToken(
+            "ghu_old", "ghr_old_refresh", DateTimeOffset.UtcNow.AddSeconds(-10), "user", null, ["repo"]));
+
+        var replica1Store = new CachingGitHubTokenStore(new KeyVaultGitHubTokenStore(secrets));
+        var replica2Store = new CachingGitHubTokenStore(new KeyVaultGitHubTokenStore(secrets));
+        var handler = new CountingHttpMessageHandler(RefreshSuccessJson, delayMs: 150);
+        var svc1 = BuildService(replica1Store, handler);
+        var svc2 = BuildService(replica2Store, handler);
+
+        var results = await Task.WhenAll(
+            svc1.GetValidAccessTokenAsync(scope),
+            svc2.GetValidAccessTokenAsync(scope));
+
+        handler.CallCount.Should().Be(1,
+            "the shared refresh lease must collapse refreshes across API replicas");
+        results.Should().OnlyContain(t => t == "ghu_new_access",
+            "the replica that lost the lease must re-read the winner's rotated token");
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -156,6 +181,13 @@ public sealed class GitHubTokenRefreshServiceTests
         IGitHubTokenStore store, string? refreshResponseJson = null, int delayMs = 0)
     {
         var handler = new CountingHttpMessageHandler(refreshResponseJson, delayMs);
+        return (BuildService(store, handler), handler);
+    }
+
+    private static GitHubTokenRefreshService BuildService(
+        IGitHubTokenStore store,
+        CountingHttpMessageHandler handler)
+    {
         var factory = new SingleClientHttpClientFactory(handler);
 
         var config = new ConfigurationBuilder()
@@ -170,7 +202,7 @@ public sealed class GitHubTokenRefreshServiceTests
         var service = new GitHubTokenRefreshService(
             config, store, factory, NullLogger<GitHubTokenRefreshService>.Instance);
 
-        return (service, handler);
+        return service;
     }
 
     /// <summary>HTTP handler that counts calls and returns a fixed JSON body (or 500 if none).</summary>
