@@ -30,6 +30,10 @@ if [[ -z "${IMAGE_TAG:-}" ]]; then
     return 1 2>/dev/null || exit 1
   fi
 fi
+if [[ "${IMAGE_TAG}" == "latest" || "${AGENTHOST_IMAGE_TAG:-}" == "latest" ]]; then
+  echo "ERROR: IMAGE_TAG/AGENTHOST_IMAGE_TAG must be immutable; do not use 'latest'." >&2
+  return 1 2>/dev/null || exit 1
+fi
 ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
 
 # AgentHost (pod-per-run) image tag. Defaults to the unified IMAGE_TAG so the
@@ -63,6 +67,7 @@ echo "  Namespace:       ${NAMESPACE}"
 echo "  Kata pool:       ${KATA_POOL_NAME}"
 echo "  App pool:        ${APP_POOL_NAME}"
 echo "  Image tag:       ${IMAGE_TAG}"
+echo "  AgentHost tag:   ${AGENTHOST_IMAGE_TAG}"
 echo "  Key Vault:       ${KEYVAULT_NAME}"
 echo "  AgentHost KV:    ${AGENTHOST_KEYVAULT_URI}"
 echo "  Tenant ID:       ${TENANT_ID:-<not set>}"

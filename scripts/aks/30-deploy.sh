@@ -139,6 +139,8 @@ apply_rendered networkpolicy-mcp.yaml
 apply_rendered networkpolicy-sandbox.yaml
 # H2 (spec-018): A2A ingress — worker→agenthost on port 8088 only; no egress change.
 apply_rendered networkpolicy-agenthost.yaml
+apply_rendered networkpolicy-agenthost-api-egress.yaml
+apply_rendered networkpolicy-agenthost-egress.yaml
 apply_rendered cilium-network-policy-sandbox.yaml
 apply_rendered serviceentry-telemetry.yaml
 # spec-018 P2: Allow API pods to reach PostgreSQL Flexible Server on port 5432.
@@ -147,7 +149,7 @@ apply_rendered networkpolicy-postgres-egress.yaml
 apply_rendered networkpolicy-worker.yaml
 
 echo ""
-echo "Applying services, gateway, routes, and backup jobs..."
+echo "Applying services, gateway, and routes..."
 # H1 (spec-018): generate A2A mTLS certs (idempotent — skips if secrets exist).
 echo "Ensuring A2A mTLS certificates are present (H1)..."
 bash "${SCRIPT_DIR}/gen-a2a-mtls-certs.sh"

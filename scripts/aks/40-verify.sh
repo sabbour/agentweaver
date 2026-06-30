@@ -25,23 +25,28 @@ echo ""
 api_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-api --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
 fe_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-frontend --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
 mcp_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-mcp --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
+worker_running=$(kubectl get pods -n "${NAMESPACE}" -l app=agentweaver-worker --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
 agenthost_warm_running=$(kubectl get pods -n "${NAMESPACE}" -l app.kubernetes.io/component=agent-host --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
 
 [[ "${api_running}" -ge 1 ]] && ok "API pod(s) running (${api_running})" || fail "No API pods in Running state"
 [[ "${fe_running}" -ge 1 ]] && ok "Frontend pod(s) running (${fe_running})" || fail "No Frontend pods in Running state"
 [[ "${mcp_running}" -ge 1 ]] && ok "MCP pod(s) running (${mcp_running})" || fail "No MCP pods in Running state"
+[[ "${worker_running}" -ge 1 ]] && ok "Worker pod(s) running (${worker_running})" || fail "No Worker pods in Running state"
 [[ "${agenthost_warm_running}" -ge 1 ]] && ok "AgentHost warm-pool pod(s) running (${agenthost_warm_running})" || fail "No AgentHost warm-pool pods in Running state"
 
 echo ""
 echo "--- Gateway status ---"
 kubectl get gateway agentweaver-gateway -n "${NAMESPACE}" -o wide 2>/dev/null || true
+kubectl get gateway agentweaver-preview-gateway -n "${NAMESPACE}" -o wide 2>/dev/null || true
 echo ""
 
 programmed=$(kubectl get gateway agentweaver-gateway -n "${NAMESPACE}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "")
 gateway_ip=$(kubectl get gateway agentweaver-gateway -n "${NAMESPACE}" -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "")
+preview_programmed=$(kubectl get gateway agentweaver-preview-gateway -n "${NAMESPACE}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "")
 
 [[ "${programmed}" == "True" ]] && ok "Gateway Programmed=True" || fail "Gateway not yet Programmed (status=${programmed})"
 [[ -n "${gateway_ip}" ]] && ok "Gateway address: ${gateway_ip}" || fail "Gateway has no address yet"
+[[ "${preview_programmed}" == "True" ]] && ok "Preview Gateway Programmed=True" || fail "Preview Gateway not yet Programmed (status=${preview_programmed})"
 
 echo ""
 echo "--- HTTPRoute status ---"
@@ -110,6 +115,17 @@ echo "--- Sandbox CRDs/resources ---"
 if kubectl get runtimeclass kata-vm-isolation &>/dev/null; then ok "kata-vm-isolation RuntimeClass present"; else fail "kata-vm-isolation RuntimeClass missing"; fi
 if kubectl get sandboxtemplate agentweaver-agent-host -n "${NAMESPACE}" >/dev/null 2>&1; then ok "SandboxTemplate agentweaver-agent-host exists"; else fail "SandboxTemplate agentweaver-agent-host missing"; fi
 if kubectl get sandboxwarmpool agentweaver-agent-host -n "${NAMESPACE}" >/dev/null 2>&1; then ok "SandboxWarmPool agentweaver-agent-host exists"; else fail "SandboxWarmPool agentweaver-agent-host missing"; fi
+if kubectl get sandboxtemplate agentweaver-sandbox -n "${NAMESPACE}" >/dev/null 2>&1 || \
+   kubectl get sandboxwarmpool agentweaver-sandbox -n "${NAMESPACE}" >/dev/null 2>&1; then
+  fail "Legacy agentweaver-sandbox template/warm pool still exists; remove it before verifying"
+else
+  ok "Legacy agentweaver-sandbox template/warm pool absent"
+fi
+
+echo ""
+echo "--- Storage ---"
+if kubectl get storageclass azurefile-csi-premium-uid1000 >/dev/null 2>&1; then ok "Workspace StorageClass exists"; else fail "Workspace StorageClass missing"; fi
+if kubectl get pvc agentweaver-workspace -n "${NAMESPACE}" >/dev/null 2>&1; then ok "Workspace PVC exists"; else fail "Workspace PVC missing"; fi
 
 echo ""
 echo "==================================================="

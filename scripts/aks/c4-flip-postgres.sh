@@ -1,15 +1,52 @@
 #!/usr/bin/env bash
-# c4-flip-postgres.sh - Flip API to Postgres provider + restore replicas:1
+# c4-flip-postgres.sh -- Re-apply the current API deployment after maintenance.
+#
+# The live AKS manifest is already Postgres-backed. This helper keeps the old
+# operator checkpoint name but no longer hardcodes a registry, image tag, host,
+# tenant, or checkout path.
+
 set -euo pipefail
-export ACR_LOGIN_SERVER="agentweaverregistry.azurecr.io"
-export IMAGE_TAG="92e4d74c-fix2"
-export NAMESPACE="agentweaver"
-export IDENTITY_CLIENT_ID="31d79e6e-647f-4402-b953-60d598ca9054"
-export KEYVAULT_NAME="agentweaver-kv"
-export TENANT_ID="72f988bf-86f1-41af-91ab-2d7cd011db47"
-export HOST="agentweaver.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io"
-K8S_DIR="/mnt/c/Users/asabbour/Git/agentweaver-spec018/k8s"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+source "${SCRIPT_DIR}/00-variables.sh"
+
+missing=()
+[[ -z "${IDENTITY_CLIENT_ID:-}" ]] && missing+=("IDENTITY_CLIENT_ID")
+[[ -z "${KEYVAULT_NAME:-}" ]] && missing+=("KEYVAULT_NAME")
+[[ -z "${TENANT_ID:-}" ]] && missing+=("TENANT_ID")
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "ERROR: The following required variables are not set:" >&2
+  for v in "${missing[@]}"; do echo "  ${v}" >&2; done
+  exit 1
+fi
+
+if [[ -z "${HOST:-}" ]]; then
+  DOMAIN=$(kubectl get defaultdomaincertificate cert \
+    --namespace "${NAMESPACE}" \
+    --output jsonpath='{.status.domain}' 2>/dev/null || true)
+  if [[ -z "${DOMAIN}" ]]; then
+    echo "ERROR: HOST is not set and DefaultDomainCertificate status.domain is unavailable." >&2
+    exit 1
+  fi
+  export HOST="agentweaver.${DOMAIN#\*.}"
+fi
+
+export ACR_LOGIN_SERVER IMAGE_TAG IDENTITY_CLIENT_ID KEYVAULT_NAME TENANT_ID HOST
+
+echo ""
+echo "=== Re-apply Agentweaver API deployment ==="
+echo "  Namespace: ${NAMESPACE}"
+echo "  Image:     ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}"
+echo "  Host:      ${HOST}"
+echo ""
 
 envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${TENANT_ID}' \
-  < "${K8S_DIR}/api-deployment.yaml" | kubectl apply -f -
-echo "[C4] api-deployment.yaml applied with Database__Provider=Postgres, replicas:1"
+  < "${REPO_ROOT}/k8s/api-deployment.yaml" | kubectl apply -f -
+
+kubectl rollout status deployment/agentweaver-api \
+  --namespace "${NAMESPACE}" \
+  --timeout=180s
+
+echo ""
+echo "[OK] api-deployment.yaml applied with the current Postgres-backed manifest."

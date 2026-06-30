@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # install.sh — Agentweaver one-liner installer
 #
 # Usage (local dev, default):
@@ -28,6 +28,7 @@ warn()    { echo -e "${YELLOW}[warn]${RESET}  $*"; }
 die()     { echo -e "${RED}[error]${RESET} $*" >&2; exit 1; }
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
+ORIGINAL_ARGS=("$@")
 MODE="local"
 SKIP_POSTGRES=false
 SKIP_OAUTH_KEY=false
@@ -39,7 +40,9 @@ while [[ $# -gt 0 ]]; do
     --aks)            MODE="aks"; shift ;;
     --skip-postgres)  SKIP_POSTGRES=true; shift ;;
     --skip-oauth-key) SKIP_OAUTH_KEY=true; shift ;;
-    --image-tag)      IMAGE_TAG_OVERRIDE="${2:-}"; shift 2 ;;
+    --image-tag)
+      [[ -n "${2:-}" ]] || die "--image-tag requires a value"
+      IMAGE_TAG_OVERRIDE="${2}"; shift 2 ;;
     --image-tag=*)    IMAGE_TAG_OVERRIDE="${1#*=}"; shift ;;
     -h|--help)
       echo "Usage: install.sh [--local|--aks] [--skip-postgres] [--skip-oauth-key] [--image-tag <tag>]"
@@ -76,7 +79,7 @@ if [[ ! -f "${INSTALL_DIR}/agentweaver.sln" && ! -f "${INSTALL_DIR}/global.json"
     info "No checkout found. Cloning ${AGENTWEAVER_REPO_URL} → ${CLONE_DIR}"
     git clone --depth 1 "${AGENTWEAVER_REPO_URL}" "${CLONE_DIR}"
   fi
-  exec bash "${CLONE_DIR}/install.sh" "$@"
+  exec bash "${CLONE_DIR}/install.sh" "${ORIGINAL_ARGS[@]}"
 fi
 REPO_ROOT="${INSTALL_DIR}"
 AKS_DIR="${REPO_ROOT}/scripts/aks"
@@ -176,6 +179,13 @@ install_aks() {
   require_cmd envsubst   "Install gettext: apt install gettext  or  brew install gettext"
   require_cmd openssl    "Install openssl: apt install openssl  or  brew install openssl"
 
+  missing_aks_env=()
+  [[ -z "${GITHUB_CLIENT_ID:-}" ]] && missing_aks_env+=("GITHUB_CLIENT_ID")
+  [[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && missing_aks_env+=("GITHUB_CLIENT_SECRET")
+  if [[ ${#missing_aks_env[@]} -gt 0 ]]; then
+    die "Set required GitHub OAuth environment variables before AKS install: ${missing_aks_env[*]}"
+  fi
+
   # Verify az login
   if ! az account show &>/dev/null; then
     die "Azure CLI is not logged in. Run: az login"
@@ -199,6 +209,11 @@ install_aks() {
   fi
   # shellcheck source=scripts/aks/00-variables.sh
   source "${AKS_DIR}/00-variables.sh"
+  if [[ -z "${TENANT_ID:-}" ]]; then
+    export TENANT_ID
+    TENANT_ID="$(az account show --query tenantId -o tsv)"
+    info "Detected Azure tenant: ${TENANT_ID}"
+  fi
 
   run_step() {
     local label="$1"; local script="$2"; shift 2
@@ -210,6 +225,13 @@ install_aks() {
 
   run_step "10 — Create cluster (ACR + AKS)"  "10-create-cluster.sh"
   run_step "15 — Set up identity"              "15-setup-identity.sh"
+  export IDENTITY_CLIENT_ID
+  IDENTITY_CLIENT_ID="$(az identity show \
+    --name agentweaver-api-identity \
+    --resource-group "${RESOURCE_GROUP}" \
+    --query clientId -o tsv)"
+  export AGENTHOST_KEYVAULT_URI="https://${KEYVAULT_NAME}.vault.azure.net/"
+  success "Captured workload identity client ID for deploy: ${IDENTITY_CLIENT_ID}"
 
   if [[ "${SKIP_OAUTH_KEY}" == "false" ]]; then
     run_step "16 — Provision OAuth signing key" "16-provision-oauth-signing-key.sh"

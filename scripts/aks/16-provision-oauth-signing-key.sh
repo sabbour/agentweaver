@@ -22,8 +22,9 @@
 #   bash scripts/aks/16-provision-oauth-signing-key.sh
 #
 # Optional overrides (all have defaults from 00-variables.sh):
-#   KEYVAULT_NAME   Key Vault name (default: agentweaver-kv)
-#   RESOURCE_GROUP  Resource group   (default: agentweaver-rg)
+#   KEYVAULT_NAME        Key Vault name (default: agentweaver-kv)
+#   RESOURCE_GROUP       Resource group   (default: agentweaver-rg)
+#   AGENTWEAVER_TMP_DIR  Scratch directory for transient key material
 
 set -euo pipefail
 
@@ -53,9 +54,13 @@ fi
 
 echo "  Generating RSA-2048 private key..."
 
-# Generate a PKCS#8 PEM-encoded RSA-2048 private key in a temp file that
-# lives only in memory (tmpfs via /dev/shm when available, otherwise /tmp).
-TMP_KEY_FILE="$(mktemp)"
+# Generate a PKCS#8 PEM-encoded RSA-2048 private key in a repo-local scratch
+# file. The file is deleted on exit and never echoed.
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCRATCH_DIR="${AGENTWEAVER_TMP_DIR:-${REPO_ROOT}/.agentweaver/tmp}"
+mkdir -p "${SCRATCH_DIR}"
+chmod 700 "${SCRATCH_DIR}" 2>/dev/null || true
+TMP_KEY_FILE="${SCRATCH_DIR}/mcp-oauth-signing-key-${$}.pem"
 trap 'rm -f "${TMP_KEY_FILE}"' EXIT
 
 openssl genpkey \

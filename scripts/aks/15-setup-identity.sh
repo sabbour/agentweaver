@@ -6,6 +6,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/00-variables.sh"
 
+if [[ -z "${TENANT_ID:-}" ]]; then
+  TENANT_ID="$(az account show --query tenantId --output tsv)"
+  export TENANT_ID
+fi
+
 missing=()
 [[ -z "${GITHUB_CLIENT_ID:-}" ]] && missing+=("GITHUB_CLIENT_ID")
 [[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && missing+=("GITHUB_CLIENT_SECRET")

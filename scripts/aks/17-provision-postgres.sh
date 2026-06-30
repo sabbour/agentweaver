@@ -35,8 +35,8 @@
 #   PG_DNS_ZONE            Private DNS zone name (default: privatelink.postgres.database.azure.com)
 #   PG_DNS_LINK_NAME       VNet link name        (default: agentweaver-pg-dns-link)
 #   NAMESPACE              K8s namespace         (default: agentweaver)
-#   AKS_VNET_NAME          AKS VNet name         (default: aks-vnet-88700483)
-#   AKS_MC_RG              Node resource group   (default: MC_agentweaver-rg_agentweaver-aks-2_westus2)
+#   AKS_VNET_NAME          AKS VNet name         (auto-detected from AKS node RG if unset)
+#   AKS_MC_RG              Node resource group   (auto-detected from AKS if unset)
 
 set -euo pipefail
 
@@ -60,8 +60,17 @@ PG_SUBNET_PREFIX="${PG_SUBNET_PREFIX:-10.225.0.0/28}"
 PG_DNS_ZONE="${PG_DNS_ZONE:-privatelink.postgres.database.azure.com}"
 PG_DNS_LINK_NAME="${PG_DNS_LINK_NAME:-agentweaver-pg-dns-link}"
 
-AKS_VNET_NAME="${AKS_VNET_NAME:-aks-vnet-88700483}"
-AKS_MC_RG="${AKS_MC_RG:-MC_agentweaver-rg_agentweaver-aks-2_westus2}"
+AKS_MC_RG="${AKS_MC_RG:-$(az aks show --resource-group "${RESOURCE_GROUP}" --name "${CLUSTER_NAME}" --query nodeResourceGroup --output tsv 2>/dev/null || true)}"
+if [[ -z "${AKS_MC_RG}" ]]; then
+  echo "ERROR: AKS_MC_RG is not set and could not be detected from cluster '${CLUSTER_NAME}'." >&2
+  exit 1
+fi
+
+AKS_VNET_NAME="${AKS_VNET_NAME:-$(az network vnet list --resource-group "${AKS_MC_RG}" --query "[0].name" --output tsv 2>/dev/null || true)}"
+if [[ -z "${AKS_VNET_NAME}" ]]; then
+  echo "ERROR: AKS_VNET_NAME is not set and no VNet was found in node resource group '${AKS_MC_RG}'." >&2
+  exit 1
+fi
 
 SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 AKS_VNET_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${AKS_MC_RG}/providers/Microsoft.Network/virtualNetworks/${AKS_VNET_NAME}"
@@ -84,6 +93,10 @@ echo "  Subnet:          ${PG_SUBNET_NAME} (${PG_SUBNET_PREFIX})"
 echo "  DNS zone:        ${PG_DNS_ZONE}"
 echo "  AKS VNet:        ${AKS_VNET_NAME} in ${AKS_MC_RG}"
 echo "  K8s namespace:   ${NAMESPACE}"
+echo ""
+
+echo "Ensuring Kubernetes namespace '${NAMESPACE}' exists for the Postgres secret..."
+kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -260,7 +273,7 @@ fi
 # 6. Add private DNS A record for the server
 # ---------------------------------------------------------------------------
 echo ""
-echo "Step 6: Ensuring private DNS A record for '${PG_SERVER_NAME}'..."
+echo "Step 6: Verifying private DNS A record for '${PG_SERVER_NAME}'..."
 
 # Get the server's private IP from the delegated subnet
 PRIVATE_IP=$(az postgres flexible-server show \
@@ -295,7 +308,8 @@ else
       --output none
     echo "  [OK] A record added: ${PG_SERVER_NAME}.${PG_DNS_ZONE} → ${PRIVATE_IP}"
   else
-    echo "  WARNING: Could not determine private IP. Add A record manually once server is Ready."
+    echo "  WARNING: Could not determine private IP. Azure normally creates this record when"
+    echo "           --private-dns-zone is set; verify ${PG_SERVER_NAME}.${PG_DNS_ZONE} manually."
   fi
 fi
 
@@ -353,11 +367,12 @@ echo "  Database:        ${PG_DB_NAME}"
 echo "  SKU:             ${PG_SKU} (GeneralPurpose)"
 echo "  HA:              ${PG_HA_MODE}"
 echo "  Networking:      Private (VNet integration, no public endpoint)"
+echo "  App FQDN:        ${PG_FQDN} (private resolution is via ${PG_DNS_ZONE})"
 echo "  Subnet:          ${PG_SUBNET_NAME} (${PG_SUBNET_PREFIX}) in ${AKS_VNET_NAME}"
 echo "  DNS zone:        ${PG_DNS_ZONE} → linked to ${AKS_VNET_NAME}"
 echo ""
 echo "  K8s secret:      secret/agentweaver-postgres (namespace: ${NAMESPACE})"
-echo "  Connection key:  ConnectionStrings:MemoryDb (current code) / ConnectionStrings:Postgres (Tank's rename)"
+echo "  Connection key:  connectionstring (used by ConnectionStrings:MemoryDb and ConnectionStrings:Postgres)"
 echo ""
 echo "  Next steps:"
 echo "    1. Run scripts/aks/30-deploy.sh to apply the NetworkPolicy egress allowance."

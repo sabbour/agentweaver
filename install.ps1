@@ -184,6 +184,13 @@ function Install-Local {
 # AKS DEPLOY MODE  (delegates to install.sh via WSL2)
 # ══════════════════════════════════════════════════════════════════════════════
 function Install-Aks {
+    $missingAksEnv = @()
+    if (-not $env:GITHUB_CLIENT_ID) { $missingAksEnv += "GITHUB_CLIENT_ID" }
+    if (-not $env:GITHUB_CLIENT_SECRET) { $missingAksEnv += "GITHUB_CLIENT_SECRET" }
+    if ($missingAksEnv.Count -gt 0) {
+        Fail "Set required GitHub OAuth environment variables before AKS install: $($missingAksEnv -join ', ')"
+    }
+
     # Verify WSL2 / bash is available
     if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
         Fail "WSL2 is required for AKS deployment. Enable WSL2 and install a Linux distro first."
@@ -201,14 +208,22 @@ function Install-Aks {
     if ($ImageTag)      { $bashArgs += "--image-tag"; $bashArgs += $ImageTag }
     $bashArgsStr = $bashArgs -join " "
 
-    # Convert Windows path to WSL path
-    $wslRepoRoot = ($RepoRoot -replace '^([A-Za-z]):\\', {
-        "/mnt/$($_.Groups[1].Value.ToLower())/"
-    }) -replace '\\', '/'
+    # Convert Windows path to WSL path.
+    if ($RepoRoot -match '^([A-Za-z]):\\(.*)$') {
+        $drive = $Matches[1].ToLowerInvariant()
+        $rest = $Matches[2] -replace '\\', '/'
+        $wslRepoRoot = "/mnt/$drive/$rest"
+    } else {
+        Fail "Cannot convert repo path '$RepoRoot' to a WSL path. Use a drive-letter path such as C:\path\agentweaver."
+    }
 
     Write-Info "Delegating AKS deployment to install.sh via WSL2..."
     Write-Info "  WSL repo root: $wslRepoRoot"
     Write-Host ""
+
+    $wslEnvNames = @("GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "AGENTWEAVER_REPO_URL")
+    $existingWslEnv = if ($env:WSLENV) { $env:WSLENV.Split(':') } else { @() }
+    $env:WSLENV = ($existingWslEnv + $wslEnvNames | Select-Object -Unique) -join ':'
 
     wsl --exec bash -c "cd '$wslRepoRoot' && bash install.sh $bashArgsStr"
     if ($LASTEXITCODE -ne 0) { Fail "AKS installation failed. See output above." }

@@ -32,17 +32,24 @@
 #   bash scripts/aks/gen-a2a-mtls-certs.sh --force
 #
 # Requirements: openssl, kubectl (with an active cluster context).
+# Optional: AGENTWEAVER_TMP_DIR for repo-local scratch files.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/00-variables.sh"
 
 FORCE=false
 for arg in "$@"; do [[ "$arg" == "--force" ]] && FORCE=true; done
 
 NAMESPACE="${NAMESPACE:-agentweaver}"
-WORKDIR="$(mktemp -d)"
+SCRATCH_ROOT="${AGENTWEAVER_TMP_DIR:-${REPO_ROOT}/.agentweaver/tmp}"
+mkdir -p "${SCRATCH_ROOT}"
+chmod 700 "${SCRATCH_ROOT}" 2>/dev/null || true
+WORKDIR="${SCRATCH_ROOT}/a2a-mtls-${$}"
+rm -rf "${WORKDIR}"
+mkdir -p "${WORKDIR}"
 trap 'rm -rf "${WORKDIR}"' EXIT
 
 echo ""
@@ -119,7 +126,7 @@ subjectAltName = @alt_names
 
 [alt_names]
 DNS.1 = agentweaver-agenthost
-DNS.2 = agentweaver-sandbox.agentweaver.svc.cluster.local
+DNS.2 = agentweaver-agent-host.agentweaver.svc.cluster.local
 EOF
 
 openssl x509 -req \
