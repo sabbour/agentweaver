@@ -5,6 +5,7 @@ import {
   Button,
   MessageBar,
   MessageBarBody,
+  Select,
   Spinner,
   Table,
   TableBody,
@@ -22,8 +23,9 @@ import {
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ThroughputPointDto } from '../api/types';
+import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ThroughputPointDto, TokenUsageSummary } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { TokenUsagePanel } from '../components/TokenUsagePanel';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Dashboard — the project HOME (/projects/:projectId). Consumes the live
@@ -33,6 +35,17 @@ import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 // run row carries no workflow-definition reference (see MetricsDtos.cs).
 
 const REFRESH_MS = 30000;
+
+type TimeRange = '7d' | '30d' | '90d';
+
+function timeRangeDates(range: TimeRange): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date(to);
+  if (range === '7d') from.setDate(from.getDate() - 7);
+  else if (range === '30d') from.setDate(from.getDate() - 30);
+  else from.setDate(from.getDate() - 90);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
 
 const useStyles = makeStyles({
   root: {
@@ -219,6 +232,10 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [usageRange, setUsageRange] = useState<TimeRange>('30d');
+  const [filteredUsage, setFilteredUsage] = useState<TokenUsageSummary | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+
   const formatError = (err: unknown): string =>
     err instanceof ApiError
       ? `API error ${err.status}: ${err.body}`
@@ -252,6 +269,25 @@ export function DashboardPage() {
       clearInterval(iv);
     };
   }, [projectId, load]);
+
+  const loadProjectUsage = useCallback(async (range: TimeRange) => {
+    if (!projectId) return;
+    setUsageLoading(true);
+    try {
+      const { from, to } = timeRangeDates(range);
+      const usage = await apiClient.getProjectUsage(projectId, from, to);
+      setFilteredUsage(usage);
+    } catch {
+      // Usage section is supplementary — degrade gracefully.
+      setFilteredUsage(null);
+    } finally {
+      setUsageLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadProjectUsage(usageRange);
+  }, [usageRange, loadProjectUsage]);
 
   const cards = useMemo(() => {
     if (!data) return [];
@@ -400,6 +436,30 @@ export function DashboardPage() {
                   </TableBody>
                 </Table>
               </div>
+            )}
+          </div>
+
+          <div className={styles.section}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM }}>
+              <Title3>Token and AIC usage</Title3>
+              <Select
+                value={usageRange}
+                onChange={(_e, d) => setUsageRange(d.value as TimeRange)}
+                aria-label="Time range"
+                size="small"
+                style={{ width: '100px' }}
+              >
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+                <option value="90d">Last 90 days</option>
+              </Select>
+            </div>
+            {usageLoading && <Spinner size="tiny" label="Loading usage" />}
+            {!usageLoading && (filteredUsage ?? data.token_usage) && (
+              <TokenUsagePanel usage={(filteredUsage ?? data.token_usage)!} title="" />
+            )}
+            {!usageLoading && !(filteredUsage ?? data.token_usage) && (
+              <Text>No usage data available for this period.</Text>
             )}
           </div>
         </>

@@ -7,7 +7,6 @@ import { RunHeader } from './RunHeader';
 import { RunLayout } from './RunLayout';
 import { Timeline } from './Timeline';
 import { useTimelineItems } from '../timeline/useTimelineItems';
-
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   centerContent: {
@@ -36,13 +35,24 @@ function resolvedBadgeColor(
   return 'danger';
 }
 
-interface RunWatcherProps { runId: string; style?: React.CSSProperties; onReviewAction?: () => void; }
+interface RunWatcherProps { runId: string; style?: React.CSSProperties; onReviewAction?: () => void; onTurnUsageEvent?: () => void; }
 
-export function RunWatcher({ runId, style, onReviewAction }: RunWatcherProps) {
+export function RunWatcher({ runId, style, onReviewAction, onTurnUsageEvent }: RunWatcherProps) {
   const styles = useStyles();
   const { events, droppedEventCount, status, error, reconnect } = useRunStream(runId);
   const { items, runOutcome } = useTimelineItems(events, runId);
   const isLiveRun = status === 'connecting' || status === 'streaming';
+
+  // Notify the parent when new agent.turn.usage events arrive so it can refresh
+  // the usage summary without needing access to the SSE stream directly.
+  const prevEventCountRef = useRef(0);
+  useEffect(() => {
+    const newEvents = events.slice(prevEventCountRef.current);
+    prevEventCountRef.current = events.length;
+    if (onTurnUsageEvent && newEvents.some((e) => e.type === 'agent.turn.usage')) {
+      onTurnUsageEvent();
+    }
+  }, [events, onTurnUsageEvent]);
 
   const commitMessage = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i--) {

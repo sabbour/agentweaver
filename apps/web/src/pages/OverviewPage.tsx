@@ -20,8 +20,9 @@ import {
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { OverviewDto } from '../api/types';
+import type { AppUsage, OverviewDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { TokenUsagePanel } from '../components/TokenUsagePanel';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Overview ("Now") — the global, cross-project live view at /overview (also the
@@ -120,6 +121,7 @@ const useStyles = makeStyles({
   muted: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
   projectLink: { color: tokens.colorBrandForeground1, textDecoration: 'none' },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  numericCell: { textAlign: 'right' as const },
 });
 
 // Relative "time ago" for data timestamps (last activity, activity rows). This is
@@ -160,6 +162,7 @@ export function OverviewPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [appUsage, setAppUsage] = useState<AppUsage | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -174,6 +177,8 @@ export function OverviewPage() {
       const dto = await apiClient.getOverview();
       if (!signal.cancelled) {
         setData(dto);
+        // Use token_usage embedded in the overview response when present.
+        if (dto.token_usage) setAppUsage(dto.token_usage);
         setLastUpdated(new Date().toISOString());
         setError(null);
       }
@@ -183,6 +188,17 @@ export function OverviewPage() {
       if (!signal.cancelled) {
         setLoading(false);
         setRefreshing(false);
+      }
+    }
+
+    // Separately fetch app-level usage from the dedicated endpoint.
+    // This endpoint is admin-only; a 403 means the section is hidden (no error shown).
+    try {
+      const usage = await apiClient.getAppUsage();
+      if (!signal.cancelled) setAppUsage(usage);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        // Admin-only — degrade gracefully.
       }
     }
   }, []);
@@ -366,6 +382,48 @@ export function OverviewPage() {
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+        </>
+      )}
+
+      {appUsage && (
+        <>
+          <div className={styles.section}>
+            <TokenUsagePanel usage={{
+              input_tokens: appUsage.by_model.reduce((s, m) => s + m.input_tokens, 0),
+              output_tokens: appUsage.by_model.reduce((s, m) => s + m.output_tokens, 0),
+              total_tokens: appUsage.total_tokens,
+              total_nano_aiu: appUsage.total_nano_aiu,
+              by_model: appUsage.by_model,
+            }} title="App-level token usage" />
+
+            {appUsage.by_project.length > 0 && (
+              <>
+                <Title3>Usage by project</Title3>
+                <Table aria-label="Usage by project" size="small">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Project</TableHeaderCell>
+                      <TableHeaderCell className={styles.numericCell}>Total tokens</TableHeaderCell>
+                      <TableHeaderCell className={styles.numericCell}>AICs</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {appUsage.by_project.map((p) => (
+                      <TableRow key={p.project_id}>
+                        <TableCell>
+                          <Link to={`/projects/${p.project_id}`} className={styles.projectLink}>
+                            {p.project_name}
+                          </Link>
+                        </TableCell>
+                        <TableCell className={styles.numericCell}>{p.total_tokens.toLocaleString()}</TableCell>
+                        <TableCell className={styles.numericCell}>{(p.total_nano_aiu / 1_000_000_000).toFixed(4)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
             )}
           </div>
         </>

@@ -1135,6 +1135,44 @@ export interface AgentLeaderboardEntryDto {
   avg_duration_ms: number | null;
 }
 
+// ── Feature 019 — AI token and credit usage ──────────────────────────────────
+// Per-model breakdown row returned by the usage endpoints.
+export interface TokenUsageByModel {
+  model_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_nano_aiu: number;
+}
+
+// Aggregate token usage summary for a single run or project window.
+export interface TokenUsageSummary {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  total_nano_aiu: number;
+  by_model: TokenUsageByModel[];
+}
+
+// Per-project rollup inside an app-level usage snapshot.
+export interface ProjectUsage {
+  project_id: string;
+  project_name: string;
+  total_tokens: number;
+  total_nano_aiu: number;
+  by_model: TokenUsageByModel[];
+}
+
+// App-level usage snapshot (admin only — GET /api/usage).
+export interface AppUsage {
+  generated_utc: string;
+  from_utc: string;
+  to_utc: string;
+  total_tokens: number;
+  total_nano_aiu: number;
+  by_project: ProjectUsage[];
+  by_model: TokenUsageByModel[];
+}
+
 // Response body for GET /api/projects/{id}/dashboard.
 export interface ProjectDashboardDto {
   project_id: string;
@@ -1143,6 +1181,7 @@ export interface ProjectDashboardDto {
   summary: DashboardSummaryDto;
   throughput: ThroughputPointDto[];
   agent_leaderboard: AgentLeaderboardEntryDto[];
+  token_usage?: TokenUsageSummary;
 }
 
 // Global overview "at a glance" counters.
@@ -1199,6 +1238,7 @@ export interface OverviewDto {
   active_workflow_runs: ActiveWorkflowRunDto[];
   active_projects: ActiveProjectDto[];
   recent_activity: RecentActivityDto[];
+  token_usage?: AppUsage;
 }
 
 // ── Feature 014 — Spec-to-Backlog decomposition ───────────────────────────────
