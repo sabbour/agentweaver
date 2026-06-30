@@ -214,7 +214,8 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
                 agentName: CoordinatorAgentName,
                 apiBaseUrl: null,
                 apiKey: null,
-                ct).ConfigureAwait(false);
+                ct,
+                userId: coordinatorRun.SubmittingUser).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
             var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);

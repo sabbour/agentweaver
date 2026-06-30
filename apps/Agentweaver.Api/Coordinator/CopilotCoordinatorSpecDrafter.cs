@@ -147,7 +147,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 agentName: CoordinatorAgentName,
                 apiBaseUrl: _apiBaseUrl,
                 apiKey: _apiKey,
-                ct).ConfigureAwait(false);
+                ct,
+                userId: input.SubmittingUser).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
             var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);

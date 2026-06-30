@@ -478,7 +478,8 @@ public sealed class CoordinatorOrchestratorExecutor
                 agentName: CoordinatorAgentName,
                 apiBaseUrl: _apiBaseUrl,
                 apiKey: _apiKey,
-                ct).ConfigureAwait(false);
+                ct,
+                userId: input.SubmittingUser).ConfigureAwait(false);
 
             var response = await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
 
