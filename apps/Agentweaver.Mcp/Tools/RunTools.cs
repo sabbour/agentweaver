@@ -186,4 +186,18 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
+
+    [McpServerTool(Name = "get_run_usage"), Description("Get token and AI Credit usage for a specific run.")]
+    public async Task<string> GetRunUsageAsync(
+        [Description("Run ID")] string run_id,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.GetAsync<JsonElement>($"/api/runs/{run_id}/usage", ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
 }

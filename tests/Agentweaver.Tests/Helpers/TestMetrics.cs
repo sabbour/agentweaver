@@ -20,5 +20,6 @@ public static class TestMetrics
         SqliteDb db, IProjectStore projectStore, HeartbeatStatusStore heartbeat) =>
         new(db, projectStore, heartbeat,
             new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
+            new SqliteTokenUsageStore(db),
             new ConfigurationBuilder().Build());
 }
