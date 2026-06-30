@@ -1,0 +1,39 @@
+name: Epic
+description: Track a larger outcome spanning multiple issues.
+title: "epic(<area>): "
+labels:
+  - type:epic
+  - release:backlog
+body:
+  - type: textarea
+    id: goal-outcome
+    attributes:
+      label: Goal / outcome
+      description: What big-picture outcome should this epic achieve?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Why does this outcome matter?
+    validations:
+      required: true
+  - type: textarea
+    id: sub-issues
+    attributes:
+      label: Sub-issues
+      description: List child issues as `- [ ] #123` task-list checkboxes so GitHub tracks progress.
+      placeholder: "- [ ] #123"
+    validations:
+      required: true
+  - type: textarea
+    id: success-criteria
+    attributes:
+      label: Success criteria
+      description: Observable conditions that mean the epic is complete.
+  - type: textarea
+    id: affected-areas
+    attributes:
+      label: Affected areas
+      description: Product areas, systems, or teams involved.

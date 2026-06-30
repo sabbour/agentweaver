@@ -1,0 +1,58 @@
+name: Bug report
+description: Report something broken or inconsistent.
+title: "bug(<area>): "
+labels:
+  - type:bug
+  - release:backlog
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What should happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current behavior
+      description: What is the bug?
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce / trigger
+      description: How can someone trigger or observe the issue?
+  - type: dropdown
+    id: impact-severity
+    attributes:
+      label: Impact / severity
+      description: Choose the severity or describe who is affected in the notes.
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+        - low
+        - medium
+        - high
+    validations:
+      required: true
+  - type: textarea
+    id: affected-area
+    attributes:
+      label: Affected area
+      description: Code file:line refs, replicas, components, or deployment mode.
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Optional image tag, AKS/local mode, or other environment details.

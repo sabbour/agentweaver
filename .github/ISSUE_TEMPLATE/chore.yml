@@ -1,0 +1,32 @@
+name: Chore / maintenance
+description: Track maintenance, cleanup, or operational upkeep.
+title: "chore(<area>): "
+labels:
+  - type:chore
+  - release:backlog
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+      description: What maintenance or cleanup needs doing?
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why does this matter now?
+    validations:
+      required: true
+  - type: textarea
+    id: affected-area
+    attributes:
+      label: Affected area
+      description: Files, directories, components, or operational areas.
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: Optional checklist; use `- [ ]` items.
+      placeholder: "- [ ] ..."

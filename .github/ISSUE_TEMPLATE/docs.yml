@@ -1,0 +1,33 @@
+name: Documentation
+description: Request a documentation change or addition.
+title: "docs(<area>): "
+labels:
+  - type:docs
+  - release:backlog
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: What documentation should change or be added?
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: Page, path, or section, such as docs/..., README, or an architecture diagram.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What reader need does this serve?
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Optional context, links, or constraints.

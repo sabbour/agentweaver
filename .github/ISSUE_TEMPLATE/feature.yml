@@ -1,0 +1,42 @@
+name: Feature / user story
+description: Describe a desired product outcome.
+title: "feat(<area>): "
+labels:
+  - type:feature
+  - release:backlog
+body:
+  - type: markdown
+    attributes:
+      value: "Describe the desired outcome, not how to build it."
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What should the user or system be able to achieve?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Why does this outcome matter?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Use `- [ ]` checkboxes for observable outcomes.
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: textarea
+    id: affected-area
+    attributes:
+      label: Affected area
+      description: Product area, user journey, or docs/spec area.
+  - type: input
+    id: spec-link
+    attributes:
+      label: Spec link
+      description: Optional link to the related spec.
