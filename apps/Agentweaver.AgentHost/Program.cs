@@ -71,9 +71,10 @@ if (!requireMtls && !kestrelEndpointsConfigured)
 var kvUri = builder.Configuration["AgentHost:KeyVaultUri"];
 var kvMountPath = builder.Configuration["AgentHost:KvTokenMountPath"];
 // Guard: reject empty, whitespace, or unsubstituted envsubst placeholders (e.g. "${AGENTHOST_KEYVAULT_URI}")
+Uri? kvUriParsed = null;
 var kvUriValid = !string.IsNullOrWhiteSpace(kvUri)
-    && Uri.TryCreate(kvUri, UriKind.Absolute, out var kvUriParsed)
-    && (kvUriParsed!.Scheme == "https" || kvUriParsed.Scheme == "http");
+    && Uri.TryCreate(kvUri, UriKind.Absolute, out kvUriParsed)
+    && (kvUriParsed.Scheme == "https" || kvUriParsed.Scheme == "http");
 if (kvUriValid)
 {
     // Option C (warm pool): fetch the run owner's token from Key Vault at /configure-time via the
