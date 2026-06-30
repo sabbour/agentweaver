@@ -473,6 +473,11 @@ const INLINE_CHILD_FALLBACK: ExecutorDef[] = [
 // so dagre spaces sibling subtasks apart instead of letting the expansion overlap neighbours.
 const EXPANDED_PIPELINE_RESERVE = 188;
 
+// Dagre's nodesep is the vertical gap between sibling nodes in LR layout. Subtask cards can be
+// taller than the generic hints because their titles/metadata wrap, so keep a generous separation
+// for fan-out columns.
+const COORDINATOR_GRAPH_NODE_SEP = 96;
+
 // Refits the graph to the viewport AFTER React Flow has measured the node DOM. The bare `fitView`
 // prop only fits once at mount using estimated sizes, so on the initial pre-spec load the wide
 // linear chain (Coordinator → RAI → Review → Merge → Scribe) was fitted before measurement and the
@@ -1566,7 +1571,7 @@ export function CoordinatorRunPage() {
     });
 
     return {
-      rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: 40 }, nodeSizeHints),
+      rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: COORDINATOR_GRAPH_NODE_SEP }, nodeSizeHints),
       displayEdges: allEdges,
     };
   }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
