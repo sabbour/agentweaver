@@ -31,7 +31,7 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
         _defaultModel = configuration["Providers:GitHubCopilot:Model"];
     }
 
-    public async Task<string> GenerateRawAsync(string description, CancellationToken ct)
+    public async Task<string> GenerateRawAsync(string description, CancellationToken ct, string? userId = null)
     {
         if (string.IsNullOrWhiteSpace(description))
             throw new ArgumentException("A description is required to generate a blueprint.", nameof(description));
@@ -140,7 +140,8 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
                 runId: runId,
                 modelId: _defaultModel,
                 stream: null,
-                ct: ct).ConfigureAwait(false);
+                ct: ct,
+                userId: userId).ConfigureAwait(false);
         }
         finally
         {

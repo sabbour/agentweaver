@@ -78,7 +78,8 @@ public sealed class FoundryAgentRunner : IAgentRunner
         string? modelId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct,
-        string? systemPromptContext = null)
+        string? systemPromptContext = null,
+        string? userId = null)
     {
         var seq = new[] { 0 };
         void Emit(string type, object payload)

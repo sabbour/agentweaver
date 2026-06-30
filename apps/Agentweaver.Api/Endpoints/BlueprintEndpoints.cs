@@ -1,4 +1,5 @@
 using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Security;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -22,6 +23,7 @@ public static class BlueprintEndpoints
 
         // POST /api/blueprints/generate — generate a single blueprint from a description.
         app.MapPost("/api/blueprints/generate", async (
+            HttpContext httpContext,
             GenerateBlueprintRequest request,
             BlueprintService blueprints,
             CancellationToken ct) =>
@@ -29,7 +31,8 @@ public static class BlueprintEndpoints
             if (string.IsNullOrWhiteSpace(request.Description))
                 return Results.BadRequest(new { error = "description is required." });
 
-            var result = await blueprints.GenerateAsync(request.Description!, ct);
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var result = await blueprints.GenerateAsync(request.Description!, ct, caller.User);
             if (!result.Succeeded)
                 return Results.UnprocessableEntity(new
                 {

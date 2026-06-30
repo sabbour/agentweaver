@@ -26,7 +26,7 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
     /// Sends a single prompt and returns the plain-text response.
     /// Use for fire-and-forget calls (casting proposals, etc.).
     /// </summary>
-    public async Task<string> RunAsync(string prompt, CancellationToken ct = default)
+    public async Task<string> RunAsync(string prompt, CancellationToken ct = default, string? userId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var runId = Guid.NewGuid().ToString("N");
@@ -38,7 +38,8 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
             runId: runId,
             modelId: _modelId,
             stream: null,
-            ct: ct).ConfigureAwait(false);
+            ct: ct,
+            userId: userId).ConfigureAwait(false);
     }
 
     /// <summary>

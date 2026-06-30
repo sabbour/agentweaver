@@ -130,5 +130,5 @@ public sealed class StubBlueprintGenerator : IBlueprintGenerator
 {
     public string Response { get; set; } = "{}";
 
-    public Task<string> GenerateRawAsync(string description, CancellationToken ct) => Task.FromResult(Response);
+    public Task<string> GenerateRawAsync(string description, CancellationToken ct, string? userId = null) => Task.FromResult(Response);
 }

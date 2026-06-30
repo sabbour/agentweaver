@@ -75,8 +75,24 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _runOptions = runOptions;
     }
 
-    public async Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct, string? systemPromptContext = null)
+    public async Task<string> ExecuteAsync(
+        string task,
+        string workingDirectory,
+        string repositoryPath,
+        ModelSource modelSource,
+        string runId,
+        string? modelId,
+        ChannelWriter<RunEvent>? stream,
+        CancellationToken ct,
+        string? systemPromptContext = null,
+        string? userId = null)
     {
+        if (string.IsNullOrWhiteSpace(userId))
+            throw new InvalidOperationException(
+                $"Run {runId} cannot use the GitHub Copilot model without a submitting user identity. " +
+                "Pass the authenticated caller's user ID so the correct Copilot-entitled token is used. " +
+                "Using the installation token is not permitted.");
+
         _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, runId={RunId}, streamIsNull={StreamIsNull}",
             workingDirectory, task.Length, runId, stream is null);
         _logger.LogDebug("Task content preview: {TaskPreview}", task.Length > 100 ? task[..100] : task);
@@ -88,7 +104,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             : _executor;
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = _scopeProvider.Resolve(userId: null);
+        var scope = _scopeProvider.Resolve(userId);
         await using var client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
         await client.StartAsync(ct);
 

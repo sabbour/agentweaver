@@ -502,7 +502,7 @@ public sealed class CastingService
         await using var runtime = new AgentweaverAgentRuntime(_agentRunner, project.WorkingDirectory, modelId);
         try
         {
-            result = await runtime.RunAsync(prompt, ct).ConfigureAwait(false);
+            result = await runtime.RunAsync(prompt, ct, userId: owner).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

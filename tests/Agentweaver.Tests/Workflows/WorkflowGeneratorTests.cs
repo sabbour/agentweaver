@@ -231,7 +231,7 @@ public sealed class WorkflowGeneratorTests
         public Task<string> ExecuteAsync(
             string task, string workingDirectory, string repositoryPath, ModelSource modelSource,
             string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct,
-            string? systemPromptContext = null)
+            string? systemPromptContext = null, string? userId = null)
         {
             CallCount++;
             var next = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;

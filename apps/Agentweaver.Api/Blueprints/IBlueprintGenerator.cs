@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Blueprints;
 /// </summary>
 public interface IBlueprintGenerator
 {
-    Task<string> GenerateRawAsync(string description, CancellationToken ct);
+    Task<string> GenerateRawAsync(string description, CancellationToken ct, string? userId = null);
 }
 
 /// <summary>The outcome of parsing a model-produced blueprint response.</summary>

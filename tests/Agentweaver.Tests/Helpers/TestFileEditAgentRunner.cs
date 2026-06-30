@@ -50,7 +50,8 @@ public sealed class TestFileEditAgentRunner : IAgentRunner
         string? modelId,
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct,
-        string? systemPromptContext = null)
+        string? systemPromptContext = null,
+        string? userId = null)
     {
         _ = repositoryPath;
         LastTask = task;

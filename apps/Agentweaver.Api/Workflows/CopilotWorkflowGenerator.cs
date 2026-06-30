@@ -48,7 +48,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         var basePrompt = BuildPrompt(request);
 
         // First pass.
-        var rawFirst = await RunModelAsync(basePrompt, ct).ConfigureAwait(false);
+        var rawFirst = await RunModelAsync(basePrompt, ct, request.UserId).ConfigureAwait(false);
         var (yamlFirst, defFirst, errorFirst) = ParseCandidate(rawFirst, request.Description);
         if (defFirst is not null)
             return new WorkflowGenerationResult(defFirst, yamlFirst, WasCorrected: false);
@@ -59,7 +59,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         // Correction pass (FR-060): exactly one retry with the failed YAML + error appended.
         var correctionPrompt = BuildCorrectionPrompt(basePrompt, yamlFirst, errorFirst!);
-        var rawSecond = await RunModelAsync(correctionPrompt, ct).ConfigureAwait(false);
+        var rawSecond = await RunModelAsync(correctionPrompt, ct, request.UserId).ConfigureAwait(false);
         var (yamlSecond, defSecond, errorSecond) = ParseCandidate(rawSecond, request.Description);
         if (defSecond is not null)
             return new WorkflowGenerationResult(defSecond, yamlSecond, WasCorrected: true);
@@ -225,7 +225,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         return sb.ToString().TrimEnd();
     }
 
-    private async Task<string> RunModelAsync(string prompt, CancellationToken ct)
+    private async Task<string> RunModelAsync(string prompt, CancellationToken ct, string? userId = null)
     {
         var scratch = Path.Combine(AppPaths.DataDirectory, "workflow-scratch", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
@@ -240,7 +240,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 runId: runId,
                 modelId: _defaultModel,
                 stream: null,
-                ct: ct).ConfigureAwait(false);
+                ct: ct,
+                userId: userId).ConfigureAwait(false);
         }
         finally
         {

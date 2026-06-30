@@ -395,12 +395,12 @@ public sealed class BlueprintService
         }
     }
 
-    public async Task<BlueprintGenerationResult> GenerateAsync(string description, CancellationToken ct)
+    public async Task<BlueprintGenerationResult> GenerateAsync(string description, CancellationToken ct, string? userId = null)
     {
         string raw;
         try
         {
-            raw = await _generator.GenerateRawAsync(description, ct).ConfigureAwait(false);
+            raw = await _generator.GenerateRawAsync(description, ct, userId).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -470,7 +470,8 @@ public sealed class BlueprintService
             {
                 var wfRequest = new WorkflowGenerationRequest(
                     Description: description,
-                    TeamRoles: blueprint.Roster.Count > 0 ? blueprint.Roster.ToList() : null);
+                    TeamRoles: blueprint.Roster.Count > 0 ? blueprint.Roster.ToList() : null,
+                    UserId: userId);
                 var wfResult = await _workflowGenerator.GenerateAsync(wfRequest, ct).ConfigureAwait(false);
                 generatedWorkflow = wfResult.Workflow;
                 generatedWorkflowYaml = wfResult.GeneratedYaml;

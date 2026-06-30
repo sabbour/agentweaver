@@ -389,13 +389,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private GitHubTokenScope ResolveTokenScope(string? userId)
     {
         if (string.IsNullOrWhiteSpace(userId))
-        {
-            _logger.LogWarning(
-                "No submitting user was available for run {RunId}; falling back to non-Copilot installation " +
-                "GitHub credentials. If this run needs Copilot, ensure AgentHost__UserId is injected.",
-                _runId);
-            return _scopeProvider.Resolve(userId: null);
-        }
+            throw new InvalidOperationException(
+                $"Run {_runId} cannot start: no submitting user identity is available. " +
+                "Pass the authenticated user's ID to SetupAsync so the correct Copilot-entitled " +
+                "token is resolved. Using the installation token is not permitted.");
 
         return _scopeProvider.Resolve(userId);
     }

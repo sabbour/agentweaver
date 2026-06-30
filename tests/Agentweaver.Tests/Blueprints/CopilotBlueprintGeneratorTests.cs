@@ -48,7 +48,8 @@ public sealed class CopilotBlueprintGeneratorTests
             string? modelId,
             ChannelWriter<RunEvent>? stream,
             CancellationToken ct,
-            string? systemPromptContext = null)
+            string? systemPromptContext = null,
+            string? userId = null)
         {
             LastTask = task;
             return Task.FromResult(

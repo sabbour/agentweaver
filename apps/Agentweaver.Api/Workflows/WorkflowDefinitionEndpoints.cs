@@ -327,11 +327,12 @@ public static class WorkflowDefinitionEndpoints
             // FR-061: constrain generated nodes to the project's actual cast roles so the workflow is
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
             var teamRoles = TryReadTeamRoles(project!);
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
             try
             {
                 var result = await generator.GenerateAsync(
-                    new WorkflowGenerationRequest(request.Description, project!.Id.ToString(), teamRoles), ct);
+                    new WorkflowGenerationRequest(request.Description, project!.Id.ToString(), teamRoles, UserId: caller.User), ct);
 
                 return Results.Ok(new GenerateWorkflowResponse
                 {
