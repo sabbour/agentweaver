@@ -14,6 +14,12 @@ COPY ["apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj", "apps/Agentweav
 COPY ["packages/", "packages/"]
 COPY Directory.Build.props .
 
+ARG COPILOT_CLI_VERSION=1.0.57
+RUN mkdir -p /copilot-bin && \
+    curl -fsSL "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" | \
+    tar -xz --strip-components=1 -C /copilot-bin && \
+    chmod +x /copilot-bin/copilot
+
 COPY apps/Agentweaver.AgentHost/ apps/Agentweaver.AgentHost/
 COPY packages/ packages/
 
@@ -25,6 +31,9 @@ RUN dotnet publish "apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj" \
     --runtime linux-x64 \
     --self-contained false \
     --output /app/publish
+
+RUN mkdir -p /app/publish/runtimes/linux-x64/native && \
+    cp /copilot-bin/copilot /app/publish/runtimes/linux-x64/native/copilot
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
