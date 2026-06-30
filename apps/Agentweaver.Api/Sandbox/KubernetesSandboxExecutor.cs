@@ -477,7 +477,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                warmPoolRef = new { name = warmPoolName },
+                // v1beta1 SandboxClaimSpec requires sandboxTemplateRef (template to use for cold
+                // fallback / pool replenishment) and warmpool (string WarmPoolPolicy: "none",
+                // "default", or a named pool). warmPoolRef was the wrong/old field name — the
+                // controller ignored it and fell back to cold pod creation every time.
+                sandboxTemplateRef = new { name = _options.AgentHostTemplateRef },
+                warmpool = warmPoolName,
                 lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
                 // Static config only — the per-run context arrives via POST /configure after bind.
                 env = env.ToArray(),
@@ -671,7 +676,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             metadata = new { name = claimName, @namespace = _options.Namespace },
             spec = new
             {
-                warmPoolRef = new { name = _options.WarmPoolRef },
+                // v1beta1: sandboxTemplateRef (required) + warmpool (string WarmPoolPolicy).
+                sandboxTemplateRef = new { name = _options.TemplateRef },
+                warmpool = _options.WarmPoolRef,
                 lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
             },
         };
