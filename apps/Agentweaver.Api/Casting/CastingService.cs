@@ -1226,12 +1226,17 @@ public sealed class CastingService
         sb.Append("| Signal | Agent |\n");
         sb.Append("|--------|-------|\n");
 
-        // Emit one row per active non-builtin member with a signal derived from their specific role title.
-        // Use the role title directly — it is already unique per agent and specific enough for routing.
+        // Emit one row per active non-builtin member with a signal derived from the role definition.
+        // Signal derivation order: Responsibilities (first 2 items) → Summary → Title.
         var builtins = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai", "Coordinator" };
         foreach (var member in team.Members.Where(m => m.Status == CastMemberStatus.Active && !builtins.Contains(m.Name)))
         {
-            sb.Append($"| {member.Role.Title} | {member.Name} |\n");
+            var signal = member.Role.Responsibilities.Count > 0
+                ? string.Join(", ", member.Role.Responsibilities.Take(2))
+                : !string.IsNullOrWhiteSpace(member.Role.Summary)
+                    ? member.Role.Summary
+                    : member.Role.Title;
+            sb.Append($"| {signal} | {member.Name} |\n");
         }
 
         sb.Append("\n## Built-in Agents\n\n");
