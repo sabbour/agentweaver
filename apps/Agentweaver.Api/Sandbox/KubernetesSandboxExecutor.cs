@@ -339,6 +339,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
 
+            // Register also persists sandbox.execution_pod.bound into the shared RunEvents store so
+            // graph snapshots/deltas on any API replica can resolve the execution pod.
             _podRegistry?.Register(runId, podName);
             _turnTokenRegistry?.RegisterTurnToken(runId, turnToken);
 

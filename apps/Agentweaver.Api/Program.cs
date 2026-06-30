@@ -284,6 +284,7 @@ builder.Services.AddAgentRuntime();
 
 // ISandboxExecutorRouter (017-US2): explicit router replaces fragile last-registration-wins pattern.
 // Overrides the ISandboxExecutor registered by AddAgentRuntime() — last registration wins.
+builder.Services.AddSingleton<IExecutionPodNameStore, RunEventExecutionPodNameStore>();
 builder.Services.AddSingleton<IPodNameRegistry, PodNameRegistry>();
 builder.Services.AddSingleton<IAgentHostTurnTokenRegistry>(sp =>
     (PodNameRegistry)sp.GetRequiredService<IPodNameRegistry>());

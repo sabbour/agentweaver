@@ -238,7 +238,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 && !string.IsNullOrEmpty(s.ChildRunId))
             .ToList();
         foreach (var s in reArmed)
-            inFlight[s.Id] = ObserveChildAsync(context.CoordinatorRunId, s.Id, s.ChildRunId!, ct);
+            inFlight[s.Id] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, s.Id, s.ChildRunId!, seq, ct);
 
         // Recovery: a prior process may have parked subtasks in PendingCapacity. Treat them as
         // pending in this fresh loop so the frontier re-attempts them (the retry budget restarts
@@ -293,7 +293,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (dispatched is { } childRunId)
                 {
                     capacityRetry.Remove(subtaskId);
-                    inFlight[subtaskId] = ObserveChildAsync(context.CoordinatorRunId, subtaskId, childRunId, ct);
+                    inFlight[subtaskId] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, subtaskId, childRunId, seq, ct);
                 }
             }
 
@@ -345,7 +345,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false))
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, result.SubtaskId, result.ChildRunId, ct);
+                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, result.SubtaskId, result.ChildRunId, seq, ct);
                     continue;
                 }
             }
@@ -360,7 +360,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false))
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, result.SubtaskId, result.ChildRunId, ct);
+                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, result.SubtaskId, result.ChildRunId, seq, ct);
                     continue;
                 }
             }
@@ -983,7 +983,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// <see cref="IRunEventStream"/>), falls back to the legacy <see cref="RunStreamStore"/>
     /// snapshot poll so existing tests continue to pass unmodified.</para>
     /// </summary>
-    private async Task<ChildResult> ObserveChildAsync(string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
+    private async Task<ChildResult> ObserveChildAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        int subtaskId,
+        string childRunId,
+        SeqCounter topologySeq,
+        CancellationToken ct)
     {
         // Fast path: child already reached a terminal state before observation begins.
         if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } alreadyDone)
@@ -993,7 +999,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // legacy RunStreamStore snapshot+poll path so existing tests that do not inject the stream
         // continue to work without modification.
         if (_eventStream is not null)
-            return await ObserveViaEventStreamAsync(coordinatorRunId, subtaskId, childRunId, ct)
+            return await ObserveViaEventStreamAsync(coordinatorRunId, workPlanId, subtaskId, childRunId, topologySeq, ct)
                 .ConfigureAwait(false);
 
         return await ObserveViaStreamStoreAsync(coordinatorRunId, subtaskId, childRunId, ct)
@@ -1006,7 +1012,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// the last received event, not time since subscription start.
     /// </summary>
     private async Task<ChildResult> ObserveViaEventStreamAsync(
-        string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
+        string coordinatorRunId,
+        int workPlanId,
+        int subtaskId,
+        string childRunId,
+        SeqCounter topologySeq,
+        CancellationToken ct)
     {
         var lastSeq = 0;
         object? lastPartialOutput = null;
@@ -1031,6 +1042,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     lastSeq = evt.Sequence;
                     receivedEvent = true;
 
+                    await ReEmitPodBindingDeltaAsync(
+                        coordinatorRunId, workPlanId, subtaskId, evt, topologySeq, ct).ConfigureAwait(false);
                     BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
                     if (IsPartialOutputEvent(evt))
                         lastPartialOutput = evt.Payload;
@@ -1256,6 +1269,44 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 message = ReadString(evt.Payload, "message"),
             });
         }
+    }
+
+    private async Task ReEmitPodBindingDeltaAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        int subtaskId,
+        RunEvent evt,
+        SeqCounter topologySeq,
+        CancellationToken ct)
+    {
+        if (evt.Type != RunEventExecutionPodNameStore.EventType
+            || RunEventExecutionPodNameStore.ReadPodName(evt.Payload) is null)
+            return;
+
+        var entry = _streamStore.Get(coordinatorRunId);
+        if (entry is null)
+            return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => new { w.Status })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        var subtask = await db.Subtasks.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == subtaskId, ct)
+            .ConfigureAwait(false);
+
+        if (subtask is null)
+            return;
+
+        entry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildDelta(
+            coordinatorRunId,
+            workPlanId,
+            plan?.Status ?? WorkPlanStatus.Dispatching,
+            [CoordinatorTopology.SubtaskNode(subtask, _podRegistry)],
+            topologySeq.Next()));
     }
 
     /// <summary>
