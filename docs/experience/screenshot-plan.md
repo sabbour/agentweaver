@@ -69,6 +69,9 @@ rg "📸 \*\*Screenshot" docs/experience
 | 36 | `cluster-page-quota-warning.png` | `cluster-page.md` | `/projects/:projectId/cluster` | **Cluster** → observe a red CPU bar | Cluster page with the CPU quota bar in red near-limit state and at least one entry in the Pending-capacity runs table. |
 | 37 | `heartbeat-automation-column.png` | `operations.md` | `/projects/:projectId/heartbeat` | **Heartbeat** in left rail | Heartbeat page **Recent Activity** table showing the **Automation** column as the first column, with values such as `Coordinator Heartbeat` and `Checkpoint GC` alongside When, Acted, Errors, Duration. |
 | 38 | `run-pending-capacity.png` | `operations.md` | `/projects/:projectId/runs/:runId/workflow` | Open an active coordinator run with at least one subtask in `PendingCapacity` | Coordinator topology graph with one or more subtask nodes showing the amber **⏳ Waiting for capacity** badge. |
+| 39 | `watch-token-counter.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/runs/:runId/execution/:executionId` | Run in progress | Shows live token counter below the watch timeline |
+| 40 | `dashboard-token-usage.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/dashboard` | Default view | Shows token/AIC section with time-range filter and per-model breakdown |
+| 41 | `overview-token-usage.png` | `experience/token-usage-monitoring.md` | `/overview` | Admin user | Shows app-level usage section with per-project breakdown |
 
 ## Count per page
 
@@ -84,4 +87,5 @@ rg "📸 \*\*Screenshot" docs/experience
 | `operations.md` | 6 |
 | `scaling-operations.md` | 2 |
 | `cluster-page.md` | 2 |
-| **Total** | **38** |
+| `token-usage-monitoring.md` | 3 |
+| **Total** | **41** |

@@ -87,6 +87,7 @@ Conceptually, event types fall into families:
 | --- | --- | --- |
 | Run lifecycle | Whether execution started, completed, failed, degraded, cancelled, or became assemble-ready | `run.started`, `run.completed`, `run.failed`, `run.degraded`, `run.assemble_ready` |
 | Agent conversation | Agent turns, messages, deltas, intent, and outcome reporting | `agent.message`, `agent.message.delta`, `agent.intent`, `run.outcome` |
+| Agent usage | GitHub Copilot token consumption and AIC cost per agent turn | `agent.turn.usage` — payload: `inputTokens`, `outputTokens`, `totalTokens`, `totalNanoAiu`, `modelId` |
 | Tooling and gates | Tool calls, tool results, tool errors, approval requests, auto-approval, and questions | `tool.call`, `tool.result`, `tool.error`, `tool.approval_required`, `tool.auto_approved`, `agent.question_asked` |
 | Review and merge | Human review gates and repository integration | `review.requested`, `review.approved`, `review.declined`, `merge.started`, `merge.completed`, `merge.failed` |
 | Workflow graph | Server-authored graph descriptors and step transitions | `run.workflow_graph`, `workflow.step` |
@@ -479,3 +480,7 @@ If rebuilding Agentweaver's events and observability model from scratch, impleme
 - Do not equate pod OTEL configuration with custom application metric instruments unless the code actually emits them.
 - Keep terminal event handling aligned between backend stream completion and frontend reconnect logic.
 - Keep event payloads safe to display as data, not executable content.
+
+## See also
+
+- [Token usage monitoring — Deep Dive](./token-usage-monitoring.md) — how `agent.turn.usage` events are emitted, projected, and aggregated across four hierarchy levels.

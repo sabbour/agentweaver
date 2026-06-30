@@ -34,6 +34,10 @@ features:
     details: Agents build on prior work through four memory layers — decisions, core context, learnings, and open session. A Scribe records what the team learned after every run.
   - title: Sandbox browser preview
     details: When an agent starts a dev server inside its isolated Kubernetes sandbox pod, open a live browser preview of it from the run view — a port-forward tunnel scoped to that one run's pod, with no egress widening. <a href="/docs/experience/sandbox-browser-preview">See it in action →</a>
+  - title: "AI credit and token usage monitoring"
+    details: "Track GitHub Copilot token consumption and AI Credits at every level — individual runs, workflow orchestrations, projects, and the entire app. Live counters during execution, dashboards for analysis."
+    link: /experience/token-usage-monitoring
+    linkText: "See it in action"
   - title: Works the way you do
     details: Self-hosted. Runs with GitHub Copilot or Microsoft Foundry. Drive it from the web UI or any MCP-compatible client, including Copilot CLI.
   - title: A Copilot agent in every project
