@@ -21,6 +21,8 @@ RUN dotnet restore "apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj"
 RUN dotnet publish "apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj" \
     --configuration Release \
     --no-restore \
+    --runtime linux-x64 \
+    --self-contained false \
     --output /app/publish
 
 # Runtime stage
