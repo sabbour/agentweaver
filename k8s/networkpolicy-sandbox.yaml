@@ -91,20 +91,23 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Public HTTPS egress (everything except RFC1918 private ranges).
+    # Unrestricted public egress (all domains, all ports).
     #
-    # The Copilot CLI's SDK-token validation and session.create calls reach BOTH GitHub's
-    # public range (140.82.112.0/20) AND Azure CDN-fronted endpoints such as
-    # copilot-proxy.githubusercontent.com (e.g. 138.91.182.224), whose IPs are dynamic and
-    # fall OUTSIDE the GitHub range. A static GitHub-only ipBlock black-holes session.create
-    # ("Authentication failed: Failed to validate SDK token: TypeError: fetch failed").
+    # Research/coding agents running in the sandbox need arbitrary outbound network access
+    # (package registries, APIs, git over various ports, etc.), so this is intentionally an
+    # allow-all-public-destinations rule rather than a domain/IP allowlist.
     #
-    # Cilium toFQDNs allowlists CANNOT be used here: these pods run as kata VMs (Pod
-    # Sandboxing). Cilium intercepts DNS for FQDN policy on the HOST kernel via eBPF; the
-    # kata guest kernel's DNS queries never traverse those host hooks, so the FQDN->IP map
-    # never builds and listed hostnames are still blocked. Only IP-based rules are enforced
-    # for kata pods (at the virtual NIC). Hence: allow all public HTTPS, deny RFC1918 so the
-    # sandbox still cannot pivot into cluster/pod/service CIDRs or the private VNet.
+    # Why not Cilium toFQDNs: these pods run as kata VMs (Pod Sandboxing). Cilium intercepts
+    # DNS for FQDN policy on the HOST kernel via eBPF; the kata guest kernel's DNS queries
+    # never traverse those host hooks, so the FQDN->IP map never builds and listed hostnames
+    # are still blocked. Only IP-based rules are enforced for kata pods (at the virtual NIC).
+    #
+    # Two ranges remain blocked — these are NOT public "domains", they are security boundaries:
+    #   - RFC1918 (10/8, 172.16/12, 192.168/16): no pivot into cluster pod/service CIDRs or
+    #     the private VNet / internal services.
+    #   - 169.254.0.0/16 (link-local): blocks the cloud-metadata/IMDS endpoint
+    #     (169.254.169.254), preventing SSRF theft of the node's managed-identity token.
+    # kube-dns is re-allowed explicitly in the DNS rule above despite the 10/8 block.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -112,6 +115,4 @@ spec:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
-      ports:
-        - protocol: TCP
-          port: 443
+              - 169.254.0.0/16
