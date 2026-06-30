@@ -465,10 +465,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             new { name = "AgentHost__Port", value = _options.AgentHostPort.ToString(System.Globalization.CultureInfo.InvariantCulture) },
         };
 
-        // Option C: tell the pod which Key Vault to fetch the run owner's token from at /configure
-        // time (via workload identity). The secret NAME is delivered later in the /configure body.
-        if (!string.IsNullOrWhiteSpace(_options.KvUri))
-            env.Add(new { name = "AgentHost__KeyVaultUri", value = _options.KvUri });
+        // AgentHost__KeyVaultUri is baked into the SandboxTemplate pod spec and must NOT be
+        // re-injected via the SandboxClaim: the AKS sandbox controller blocks overriding env vars
+        // that are already defined in the template (even when envVarsInjectionPolicy=Allowed).
+        // The KV URI is static for all runs; the per-run secret NAME arrives via POST /configure.
 
         var manifest = new
         {
