@@ -61,6 +61,12 @@ public static class EventTypes
     /// </summary>
     public const string AgentQuestionAnswered = "agent.question_answered";
 
+    /// <summary>
+    /// Emitted once per ExecuteStreamingLoopAsync call with the token and AIC consumption for
+    /// that turn. Payload: { inputTokens, outputTokens, totalTokens, totalNanoAiu, modelId }.
+    /// </summary>
+    public const string AgentTurnUsage = "agent.turn.usage";
+
     public const string ReviewChangesRequested = "review.changes_requested";
     public const string RevisionStarted        = "revision.started";
     public const string RunCancelled           = "run.cancelled";
