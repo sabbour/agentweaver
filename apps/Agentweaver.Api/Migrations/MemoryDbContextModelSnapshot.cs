@@ -692,6 +692,9 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset?>("AssemblyStartedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CoordinatorPodId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("CoordinatorRunId")
                         .IsRequired()
                         .HasColumnType("TEXT");

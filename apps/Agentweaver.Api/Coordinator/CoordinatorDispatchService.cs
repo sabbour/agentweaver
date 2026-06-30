@@ -100,6 +100,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
+    /// <summary>Pod name / hostname used as the distributed lease owner identity.</summary>
+    private readonly string _myPodId;
+
     public CoordinatorDispatchService(
         IRunStore runStore,
         RunStreamStore streamStore,
@@ -136,6 +139,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 5.0) ?? 5.0;
         _stallTimeout = TimeSpan.FromMinutes(Math.Max(0, stallMinutes));
+
+        _myPodId = configuration?.GetValue<string>("App:PodId")
+                   ?? Environment.GetEnvironmentVariable("HOSTNAME")
+                   ?? Environment.MachineName;
     }
 
     /// <summary>
@@ -197,7 +204,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         // Advance the plan to dispatching and publish the FULL topology snapshot (reflecting the new
         // status) so the client can render the graph thin before any child has been launched.
-        await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct).ConfigureAwait(false);
+        await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
         var snapshotSubtasks = await ReloadSubtasksAsync(workPlanId.Value, ct).ConfigureAwait(false);
         entry?.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
             context.CoordinatorRunId, workPlanId.Value, WorkPlanStatus.Dispatching, snapshotSubtasks, edges, seq.Current, _podRegistry));
@@ -1442,7 +1449,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         return row;
     }
 
-    private async Task SetWorkPlanStatusAsync(int workPlanId, string status, CancellationToken ct)
+    private async Task SetWorkPlanStatusAsync(int workPlanId, string status, CancellationToken ct, string? coordinatorPodId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -1450,6 +1457,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (plan is null) return;
         plan.Status = status;
         plan.UpdatedAt = DateTimeOffset.UtcNow;
+        if (coordinatorPodId is not null)
+            plan.CoordinatorPodId = coordinatorPodId;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
     }
 

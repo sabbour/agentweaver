@@ -30,6 +30,14 @@ public sealed class WorkPlan
     /// exactly-once CAS claim). Null until assembly is claimed.</summary>
     public DateTimeOffset? AssemblyStartedAt { get; set; }
 
+    /// <summary>
+    /// The Kubernetes pod (hostname) that currently owns the coordinator dispatch loop for this plan.
+    /// Set atomically when a pod starts or re-arms dispatch; used by <c>CoordinatorReconciler</c> as a
+    /// distributed lease so only one replica drives a given run even when <c>IsDispatchActive</c> is
+    /// pod-local. Null until first dispatch, cleared on terminal status transitions.
+    /// </summary>
+    public string? CoordinatorPodId { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

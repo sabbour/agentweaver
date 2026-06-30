@@ -1,0 +1,46 @@
+{
+  "agents": {
+    "backend-engineer": {
+      "persistent_name": "Tank",
+      "universe": "The Matrix",
+      "created_at": "2026-06-07T04:10:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "runtime-engineer": {
+      "persistent_name": "Morpheus",
+      "universe": "The Matrix",
+      "created_at": "2026-06-07T04:10:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "frontend-engineer": {
+      "persistent_name": "Trinity",
+      "universe": "The Matrix",
+      "created_at": "2026-06-07T04:10:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "qa-engineer": {
+      "persistent_name": "Smith",
+      "universe": "The Matrix",
+      "created_at": "2026-06-07T04:10:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "platform-engineer": {
+      "persistent_name": "Link",
+      "universe": "The Matrix",
+      "created_at": "2026-06-07T04:10:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "security-reviewer": {
+      "persistent_name": "Seraph",
+      "universe": "The Matrix",
+      "created_at": "2026-06-07T19:48:00Z",
+      "legacy_named": false,
+      "status": "active"
+    }
+  }
+}

@@ -136,10 +136,10 @@ spec:
             # Sandbox dispatch (KubernetesSandboxExecutor path — kube-exec-stdio).
             - name: Sandbox__Backend
               value: kubernetes
-            # spec-018 P1.5: Keep in-api mode until pod-per-run gaps resolved.
-            # Override explicitly to prevent any future default change from activating pod-per-run.
+            # spec-018 P1.5 resolved: switch to pod-per-run so agent subtasks execute in dedicated
+            # AgentHost pods via warm pool + /configure, not in-process on the Worker pod.
             - name: Sandbox__AgentExecutionMode
-              value: in-api
+              value: pod-per-run
             - name: Sandbox__Kubernetes__Namespace
               value: agentweaver
             - name: Sandbox__Kubernetes__TemplateRef

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Infrastructure;
@@ -37,12 +38,23 @@ public sealed class CoordinatorReconciler
     private readonly ICoordinatorAssembly? _assembly;
     private readonly ILogger<CoordinatorReconciler> _logger;
 
+    /// <summary>Pod name used as distributed lease owner identity (matches WorkPlan.CoordinatorPodId).</summary>
+    private readonly string _myPodId;
+
+    /// <summary>
+    /// How long a pod's coordinator lease is considered fresh. Another pod's claim is only stolen
+    /// after the owning pod has not updated the WorkPlan row for longer than this window.
+    /// Configurable via <c>Coordinator:PodLeaseStaleTtlSeconds</c> (default 60 s).
+    /// </summary>
+    private readonly TimeSpan _staleLeaseTtl;
+
     public CoordinatorReconciler(
         IServiceScopeFactory scopeFactory,
         IRunStore runStore,
         RunStreamStore streamStore,
         ICoordinatorDispatch dispatch,
         ILogger<CoordinatorReconciler> logger,
+        IConfiguration? configuration = null,
         ICoordinatorAssembly? assembly = null)
     {
         _scopeFactory = scopeFactory;
@@ -51,6 +63,13 @@ public sealed class CoordinatorReconciler
         _dispatch = dispatch;
         _assembly = assembly;
         _logger = logger;
+
+        _myPodId = configuration?.GetValue<string>("App:PodId")
+                   ?? Environment.GetEnvironmentVariable("HOSTNAME")
+                   ?? Environment.MachineName;
+
+        var staleSecs = configuration?.GetValue("Coordinator:PodLeaseStaleTtlSeconds", 60) ?? 60;
+        _staleLeaseTtl = TimeSpan.FromSeconds(Math.Max(10, staleSecs));
     }
 
     /// <summary>
@@ -69,7 +88,7 @@ public sealed class CoordinatorReconciler
                 .Where(w => w.Status == WorkPlanStatus.Dispatching
                          || w.Status == WorkPlanStatus.AwaitingAssembly
                          || w.Status == WorkPlanStatus.Assembling)
-                .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status))
+                .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status, w.CoordinatorPodId, w.UpdatedAt))
                 .ToListAsync(ct).ConfigureAwait(false);
         }
 
@@ -85,6 +104,14 @@ public sealed class CoordinatorReconciler
                     case WorkPlanStatus.Dispatching:
                         if (!string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
                             && _dispatch.IsDispatchActive(plan.CoordinatorRunId))
+                            continue;
+                        // Distributed lease guard: skip if another pod freshly owns this plan.
+                        if (plan.CoordinatorPodId is not null
+                            && plan.CoordinatorPodId != _myPodId
+                            && (DateTimeOffset.UtcNow - plan.UpdatedAt) < _staleLeaseTtl)
+                            continue;
+                        // Atomically claim ownership before re-arming (prevents multi-pod race).
+                        if (!await TryClaimCoordinatorPodAsync(plan.WorkPlanId, ct).ConfigureAwait(false))
                             continue;
                         if (await TryReArmDispatchAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
@@ -226,5 +253,32 @@ public sealed class CoordinatorReconciler
             .ConfigureAwait(false);
     }
 
-    private sealed record PlanCandidate(int WorkPlanId, string? CoordinatorRunId, string Status);
+    /// <summary>
+    /// Atomically claims this pod as the coordinator owner for <paramref name="planId"/> by writing
+    /// <c>CoordinatorPodId = _myPodId</c> only when no other fresh pod holds the lease. Uses an EF
+    /// <c>ExecuteUpdateAsync</c> conditional UPDATE so only the winning replica proceeds to re-arm;
+    /// any concurrent replica that also tries to claim simply gets 0 rows back and skips.
+    /// </summary>
+    private async Task<bool> TryClaimCoordinatorPodAsync(int planId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var staleThreshold = DateTimeOffset.UtcNow - _staleLeaseTtl;
+        var now = DateTimeOffset.UtcNow;
+
+        int rows = await db.WorkPlans
+            .Where(w => w.Id == planId
+                     && w.Status == WorkPlanStatus.Dispatching
+                     && (w.CoordinatorPodId == null
+                         || w.CoordinatorPodId == _myPodId
+                         || w.UpdatedAt < staleThreshold))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.CoordinatorPodId, _myPodId)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+
+        return rows == 1;
+    }
+
+    private sealed record PlanCandidate(int WorkPlanId, string? CoordinatorRunId, string Status, string? CoordinatorPodId, DateTimeOffset UpdatedAt);
 }
