@@ -27,9 +27,11 @@ node_modules
 **/TestResults
 tests
 
-# Scripts and specs (not needed in runtime images)
+# Scripts, specs, and docs (not needed in runtime images; docs/.vitepress/dist
+# is generated build output that can race az acr build's context tar)
 scripts
 specs
+docs
 /*.md
 
 # Large non-runtime directories

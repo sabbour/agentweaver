@@ -57,8 +57,8 @@ The pill is **Kubernetes-only and quiet by design**:
 
 Where the value comes from: each agent node carries an `executionPodName` (its own pod), and the app
 falls back to a global pod name from the runtime probe when a node has no per-node value. As the
-pod-per-run rollout proceeds, nodes start carrying their true per-pod names automatically, so the same
-pill that once showed the single API pod begins showing distinct per-run pods with no UI change. The
+pod-per-run rollout proceeds, nodes carry their true per-pod names automatically. The binding is persisted
+in the shared run-event log, so the pill stays accurate after refresh and when served by another API replica. The
 data behind it is in the [reference](../reference/sandbox-pods.md#pod-naming-and-the-executing-pod-surface).
 
 ## What happens during a run
