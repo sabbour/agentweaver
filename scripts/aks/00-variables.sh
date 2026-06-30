@@ -9,6 +9,7 @@ LOCATION="${LOCATION:-westus2}"
 
 # -- Key Vault + workload identity parameters ---------------------------------
 KEYVAULT_NAME="${KEYVAULT_NAME:-agentweaver-kv}"
+AGENTHOST_KEYVAULT_URI="${AGENTHOST_KEYVAULT_URI:-https://${KEYVAULT_NAME}.vault.azure.net/}"
 TENANT_ID="${TENANT_ID:-}"
 IDENTITY_CLIENT_ID="${IDENTITY_CLIENT_ID:-}"
 
@@ -48,6 +49,7 @@ export IMAGE_TAG
 export AGENTHOST_IMAGE_TAG
 export ACR_LOGIN_SERVER
 export KEYVAULT_NAME
+export AGENTHOST_KEYVAULT_URI
 export TENANT_ID
 export IDENTITY_CLIENT_ID
 
@@ -62,5 +64,6 @@ echo "  Kata pool:       ${KATA_POOL_NAME}"
 echo "  App pool:        ${APP_POOL_NAME}"
 echo "  Image tag:       ${IMAGE_TAG}"
 echo "  Key Vault:       ${KEYVAULT_NAME}"
+echo "  AgentHost KV:    ${AGENTHOST_KEYVAULT_URI}"
 echo "  Tenant ID:       ${TENANT_ID:-<not set>}"
 echo "  Identity client: ${IDENTITY_CLIENT_ID:-<not set>}"
