@@ -235,12 +235,18 @@ public sealed class DiagnosticsService
 
         var podsTask = GetAgentPodInventoryAsync(ct);
         var pendingTask = GetPendingCapacityRunsAsync(ct);
+        var warmPoolsTask = GetWarmPoolInventoryAsync(ct);
+        var sandboxesTask = GetSandboxInventoryAsync(ct);
+        var claimsTask = GetSandboxClaimInventoryAsync(ct);
 
-        await Task.WhenAll(checksTask, podsTask, pendingTask).ConfigureAwait(false);
+        await Task.WhenAll(checksTask, podsTask, pendingTask, warmPoolsTask, sandboxesTask, claimsTask).ConfigureAwait(false);
 
         var checks = await checksTask.ConfigureAwait(false);
         var (active, orphaned) = await podsTask.ConfigureAwait(false);
         var pending = await pendingTask.ConfigureAwait(false);
+        var warmPools = await warmPoolsTask.ConfigureAwait(false);
+        var sandboxes = await sandboxesTask.ConfigureAwait(false);
+        var claims = await claimsTask.ConfigureAwait(false);
 
         overallSw.Stop();
 
@@ -252,6 +258,9 @@ public sealed class DiagnosticsService
             ActiveAgentPods     = active,
             OrphanedAgentPods   = orphaned,
             PendingCapacityRuns = pending,
+            WarmPools           = warmPools,
+            SandboxObjects      = sandboxes,
+            SandboxClaims       = claims,
         };
     }
 
@@ -549,8 +558,8 @@ public sealed class DiagnosticsService
         }
     }
 
-    /// <summary>Warm-pool readiness: counts ready <c>agentweaver-sandbox-*</c> pods.
-    /// healthy &gt;= 2 ready, warning == 1, critical == 0.</summary>
+    /// <summary>Warm-pool readiness: reads the <c>agentweaver-agent-host</c> SandboxWarmPool CRD.
+    /// healthy = ready &gt;= desired, warning = ready &gt; 0 but below desired, critical = 0 ready.</summary>
     private async Task<DetailedHealthCheckDto> CheckWarmPoolAsync(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -561,17 +570,35 @@ public sealed class DiagnosticsService
         }
 
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        var warmPoolName = _configuration["Sandbox:Kubernetes:AgentHostWarmPoolRef"] ?? "agentweaver-agent-host";
         try
         {
-            var pods = await _k8s.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct).ConfigureAwait(false);
-            var ready = pods.Items.Count(p =>
-                (p.Metadata?.Name?.StartsWith(WarmPoolPodPrefix, StringComparison.Ordinal) ?? false)
-                && IsPodReady(p));
+            var obj = await _k8s.CustomObjects.GetNamespacedCustomObjectAsync(
+                SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
+                ns, "sandboxwarmpools", warmPoolName, cancellationToken: ct).ConfigureAwait(false);
+
             sw.Stop();
             var ms = sw.Elapsed.TotalMilliseconds;
-            var status = ready >= 2 ? "healthy" : ready == 1 ? "warning" : "critical";
-            return Detailed("warm_pool", status, $"{ready} warm-pool pod(s) ready", ms)
-                with { Used = ready, Unit = "ready pods" };
+
+            var json = System.Text.Json.JsonSerializer.Serialize(obj);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var desired = root.TryGetProperty("spec", out var spec) && spec.TryGetProperty("replicas", out var r) ? r.GetInt32() : 0;
+            var ready = root.TryGetProperty("status", out var status) && status.TryGetProperty("readyReplicas", out var rr) ? rr.GetInt32() : 0;
+
+            var checkStatus = ready >= desired && desired > 0 ? "healthy"
+                : ready > 0 ? "warning"
+                : "critical";
+            return Detailed("warm_pool", checkStatus, $"{warmPoolName}: {ready}/{desired} replicas ready", ms)
+                with { Used = ready, Limit = desired, Unit = "replicas" };
+        }
+        catch (k8s.Autorest.HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            sw.Stop();
+            return Detailed("warm_pool", "critical",
+                $"SandboxWarmPool '{warmPoolName}' not found — warm pool is not provisioned",
+                sw.Elapsed.TotalMilliseconds);
         }
         catch (OperationCanceledException)
         {
@@ -580,20 +607,226 @@ public sealed class DiagnosticsService
         catch (Exception ex)
         {
             sw.Stop();
-            return Detailed("warm_pool", "unknown", $"pod list failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
+            return Detailed("warm_pool", "unknown", $"warm pool check failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
         }
     }
 
-    private static bool IsPodReady(k8s.Models.V1Pod pod)
+    /// <summary>
+    /// Lists all SandboxWarmPool CRD objects in the namespace. Best-effort: returns empty on any failure.
+    /// </summary>
+    private async Task<IReadOnlyList<WarmPoolStatusDto>> GetWarmPoolInventoryAsync(CancellationToken ct)
     {
-        var conditions = pod.Status?.Conditions;
-        if (conditions is null) return false;
-        foreach (var c in conditions)
+        if (_k8s is null) return Array.Empty<WarmPoolStatusDto>();
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        try
         {
-            if (string.Equals(c.Type, "Ready", StringComparison.Ordinal))
-                return string.Equals(c.Status, "True", StringComparison.Ordinal);
+            var list = await _k8s.CustomObjects.ListNamespacedCustomObjectAsync(
+                SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
+                ns, "sandboxwarmpools", cancellationToken: ct).ConfigureAwait(false);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(list);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var now = DateTimeOffset.UtcNow;
+            var result = new List<WarmPoolStatusDto>();
+
+            if (!doc.RootElement.TryGetProperty("items", out var items)) return result;
+            foreach (var item in items.EnumerateArray())
+            {
+                var name = item.TryGetProperty("metadata", out var meta) && meta.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                var desired = item.TryGetProperty("spec", out var sp) && sp.TryGetProperty("replicas", out var r) ? r.GetInt32() : 0;
+                var ready = item.TryGetProperty("status", out var st) && st.TryGetProperty("readyReplicas", out var rr) ? rr.GetInt32() : 0;
+                var available = st.ValueKind != System.Text.Json.JsonValueKind.Undefined && st.TryGetProperty("availableReplicas", out var ar) ? ar.GetInt32() : ready;
+
+                double? age = null;
+                if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    meta.TryGetProperty("creationTimestamp", out var ts) &&
+                    DateTimeOffset.TryParse(ts.GetString(), out var created))
+                    age = (now - created).TotalSeconds;
+
+                var poolStatus = ready >= desired && desired > 0 ? "healthy"
+                    : ready > 0 ? "warning"
+                    : "critical";
+
+                result.Add(new WarmPoolStatusDto
+                {
+                    Name              = name,
+                    DesiredReplicas   = desired,
+                    ReadyReplicas     = ready,
+                    AvailableReplicas = available,
+                    Status            = poolStatus,
+                    AgeSeconds        = age,
+                });
+            }
+            return result;
         }
-        return false;
+        catch (OperationCanceledException) { throw; }
+        catch { return Array.Empty<WarmPoolStatusDto>(); }
+    }
+
+    /// <summary>
+    /// Lists all Sandbox CRD objects in the namespace. Best-effort: returns empty on any failure.
+    /// </summary>
+    private async Task<IReadOnlyList<SandboxObjectDto>> GetSandboxInventoryAsync(CancellationToken ct)
+    {
+        if (_k8s is null) return Array.Empty<SandboxObjectDto>();
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        try
+        {
+            var list = await _k8s.CustomObjects.ListNamespacedCustomObjectAsync(
+                SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
+                ns, "sandboxes", cancellationToken: ct).ConfigureAwait(false);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(list);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var now = DateTimeOffset.UtcNow;
+            var result = new List<SandboxObjectDto>();
+
+            if (!doc.RootElement.TryGetProperty("items", out var items)) return result;
+            foreach (var item in items.EnumerateArray())
+            {
+                var meta = item.TryGetProperty("metadata", out var m) ? m : default;
+                var name = meta.ValueKind != System.Text.Json.JsonValueKind.Undefined && meta.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (name is null) continue;
+
+                // Phase from status.phase (if present) or Ready condition
+                var st = item.TryGetProperty("status", out var s) ? s : default;
+                var phase = "unknown";
+                var ready = false;
+                if (st.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                {
+                    if (st.TryGetProperty("phase", out var ph)) phase = ph.GetString() ?? "unknown";
+                    if (st.TryGetProperty("conditions", out var conds) && conds.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        foreach (var cond in conds.EnumerateArray())
+                        {
+                            if (cond.TryGetProperty("type", out var ct2) && ct2.GetString() == "Ready" &&
+                                cond.TryGetProperty("status", out var cs) && cs.GetString() == "True")
+                            { ready = true; if (phase == "unknown") phase = "running"; break; }
+                        }
+                    }
+                }
+
+                string? podName = null;
+                if (st.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    st.TryGetProperty("podName", out var pn)) podName = pn.GetString();
+
+                string? templateRef = null;
+                if (item.TryGetProperty("spec", out var sp) && sp.TryGetProperty("sandboxTemplateRef", out var tr) &&
+                    tr.TryGetProperty("name", out var trn)) templateRef = trn.GetString();
+
+                string? warmPool = null;
+                if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    meta.TryGetProperty("labels", out var labels) &&
+                    labels.TryGetProperty("sandbox.x-k8s.io/warm-pool", out var wpl))
+                    warmPool = wpl.GetString();
+
+                double? age = null;
+                if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    meta.TryGetProperty("creationTimestamp", out var ts) &&
+                    DateTimeOffset.TryParse(ts.GetString(), out var created))
+                    age = (now - created).TotalSeconds;
+
+                result.Add(new SandboxObjectDto
+                {
+                    Name        = name,
+                    Phase       = phase,
+                    Ready       = ready,
+                    PodName     = podName,
+                    TemplateRef = templateRef,
+                    WarmPool    = warmPool,
+                    AgeSeconds  = age,
+                });
+            }
+            return result;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return Array.Empty<SandboxObjectDto>(); }
+    }
+
+    /// <summary>
+    /// Lists all SandboxClaim CRD objects in the namespace. Best-effort: returns empty on any failure.
+    /// </summary>
+    private async Task<IReadOnlyList<SandboxClaimObjectDto>> GetSandboxClaimInventoryAsync(CancellationToken ct)
+    {
+        if (_k8s is null) return Array.Empty<SandboxClaimObjectDto>();
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        try
+        {
+            var list = await _k8s.CustomObjects.ListNamespacedCustomObjectAsync(
+                SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
+                ns, SandboxClaimConventions.ClaimPlural, cancellationToken: ct).ConfigureAwait(false);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(list);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var now = DateTimeOffset.UtcNow;
+            var result = new List<SandboxClaimObjectDto>();
+
+            if (!doc.RootElement.TryGetProperty("items", out var items)) return result;
+            foreach (var item in items.EnumerateArray())
+            {
+                var meta = item.TryGetProperty("metadata", out var m) ? m : default;
+                var name = meta.ValueKind != System.Text.Json.JsonValueKind.Undefined && meta.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (name is null) continue;
+
+                // Infer run ID from claim name (agent-{first12hex})
+                string? runId = name.StartsWith(SandboxClaimConventions.AgentHostClaimPrefix, StringComparison.Ordinal)
+                    ? name[SandboxClaimConventions.AgentHostClaimPrefix.Length..] : null;
+
+                var st = item.TryGetProperty("status", out var s) ? s : default;
+                var ready = false;
+                if (st.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    st.TryGetProperty("conditions", out var conds) && conds.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var cond in conds.EnumerateArray())
+                    {
+                        if (cond.TryGetProperty("type", out var ct2) && ct2.GetString() == "Ready" &&
+                            cond.TryGetProperty("status", out var cs) && cs.GetString() == "True")
+                        { ready = true; break; }
+                    }
+                }
+
+                var phase = ready ? "bound" : "pending";
+
+                // Bound sandbox name from status.sandbox.name
+                string? boundSandbox = null;
+                if (st.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    st.TryGetProperty("sandbox", out var sb) && sb.TryGetProperty("name", out var sbn))
+                    boundSandbox = sbn.GetString();
+
+                string? templateRef = null;
+                string? warmPool = null;
+                if (item.TryGetProperty("spec", out var sp))
+                {
+                    if (sp.TryGetProperty("sandboxTemplateRef", out var tr) && tr.TryGetProperty("name", out var trn))
+                        templateRef = trn.GetString();
+                    if (sp.TryGetProperty("warmpool", out var wp)) warmPool = wp.GetString();
+                }
+
+                double? age = null;
+                if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    meta.TryGetProperty("creationTimestamp", out var ts) &&
+                    DateTimeOffset.TryParse(ts.GetString(), out var created))
+                    age = (now - created).TotalSeconds;
+
+                result.Add(new SandboxClaimObjectDto
+                {
+                    Name               = name,
+                    Phase              = phase,
+                    Ready              = ready,
+                    RunId              = runId,
+                    BoundSandbox       = string.IsNullOrEmpty(boundSandbox) ? null : boundSandbox,
+                    SandboxTemplateRef = string.IsNullOrEmpty(templateRef) ? null : templateRef,
+                    WarmPool           = string.IsNullOrEmpty(warmPool) ? null : warmPool,
+                    AgeSeconds         = age,
+                });
+            }
+            return result;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return Array.Empty<SandboxClaimObjectDto>(); }
     }
 
     /// <summary>Kubernetes API reachability: lists pods (capped) with the per-check timeout.

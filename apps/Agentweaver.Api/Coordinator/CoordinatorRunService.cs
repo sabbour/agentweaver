@@ -194,8 +194,10 @@ public sealed class CoordinatorRunService
         await ActivateAsync(run, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
             .ConfigureAwait(false);
 
-        // Unattended confirm on behalf of the accountable human, mirroring the heartbeat pickup path.
-        ScheduleUnattendedConfirm(runId.ToString(), source.SubmittingUser);
+        // Unattended confirm on behalf of the accountable human — only when Autopilot is on,
+        // mirroring the heartbeat pickup path.
+        if (autopilot)
+            ScheduleUnattendedConfirm(runId.ToString(), source.SubmittingUser);
 
         return runId;
     }
@@ -214,12 +216,13 @@ public sealed class CoordinatorRunService
         await ActivateAsync(reservedRun, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
             .ConfigureAwait(false);
 
-        // Fire-and-forget bounded loop: confirm the spec once it arms. Autopilot only auto-answers
-        // child clarifying questions and does NOT bypass this confirmation gate, so the pickup path
-        // must confirm the reversible PLAN on behalf of the accountable human (Principle IX). The
-        // destructive/irreversible tool gates, child-run permission approvals and the Phase-3
-        // assembly human-review gate remain enforced by the safety floor (Principle X).
-        ScheduleUnattendedConfirm(reservedRun.Id.ToString(), confirmedBy);
+        // Fire-and-forget bounded loop: confirm the spec once it arms — but ONLY when Autopilot is
+        // on. When Autopilot is off the user has opted out of unattended operation and must confirm
+        // the spec manually via the UI (the run stays at awaiting_confirmation until they do).
+        // Autopilot also auto-answers child clarifying questions; the destructive/irreversible tool
+        // gates and the Phase-3 assembly human-review gate remain enforced regardless.
+        if (autopilot)
+            ScheduleUnattendedConfirm(reservedRun.Id.ToString(), confirmedBy);
     }
 
     /// <summary>

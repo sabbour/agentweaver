@@ -178,9 +178,10 @@ interface OutcomeSpecPanelProps {
   events: RunStreamEvent[];
   streamStatus: StreamStatus;
   onCollapse?: () => void;
+  onReconnect?: () => void;
 }
 
-export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCollapse }: OutcomeSpecPanelProps) {
+export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCollapse, onReconnect }: OutcomeSpecPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -224,6 +225,15 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchSpec();
   }, [runId, fetchSpec]);
+
+  // When the SSE stream closes (server ends it at review gate), refresh the spec from the
+  // REST API so the confirmed/awaiting-confirmation state is always current — even when
+  // events were missed due to a different API replica serving the stream.
+  useEffect(() => {
+    if (streamStatus === 'done') {
+      void fetchSpec();
+    }
+  }, [streamStatus, fetchSpec]);
 
   // Derive the live spec: the event stream (ordered/deduped by sequence) is the
   // authoritative live source; the GET snapshot seeds fields an event may omit
@@ -279,6 +289,9 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
           const updated = await apiClient.confirmOutcomeSpec(runId);
           if (updated) setSpecFromApi(updated);
           else await fetchSpec();
+          // Reconnect the SSE stream so post-confirmation events (outcome_spec.confirmed,
+          // coordinator work plan, subtask events) arrive without a manual page refresh.
+          onReconnect?.();
           return;
         } catch (err) {
           const isGateArming =

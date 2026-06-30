@@ -15,7 +15,7 @@ export const AUTOMATION_HELP = {
   autoApproveOrchestration: `${AUTO_APPROVE_BASE} Applies to this orchestration and its child runs.`,
 
   // Project pickup defaults (apply to auto-picked-up runs).
-  autopilotPickup: `${AUTOPILOT_BASE} Applies to runs this project picks up automatically (and their child runs).`,
+  autopilotPickup: `${AUTOPILOT_BASE} Also auto-confirms the outcome spec so pickup runs proceed without waiting for manual confirmation. Applies to runs this project picks up automatically (and their child runs).`,
   autoApprovePickup: `${AUTO_APPROVE_BASE} Applies to runs this project picks up automatically (and their child runs).`,
 
   // Single-agent run header (auto-approve only).

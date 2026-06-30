@@ -188,6 +188,11 @@ export function useRunStream(runId: string, baseUrl: string = API_URL, maxEvents
       setDroppedEventCount(0);
     }
 
+    // Always reset terminal state when the effect re-runs (e.g. explicit reconnect call or
+    // runId change). This allows the stream to re-open after the server closes it for a
+    // review gate (awaiting_confirmation) and the user has acted (confirmed / declined).
+    terminalRef.current = false;
+
     if (!runId) return;
 
     setStatus('connecting'); // eslint-disable-line react-hooks/set-state-in-effect

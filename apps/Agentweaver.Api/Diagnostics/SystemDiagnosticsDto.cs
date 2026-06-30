@@ -115,6 +115,64 @@ public sealed record ClusterDiagnosticsDto
 
     /// <summary>Subtasks parked in PendingCapacity waiting for an agent pod slot to free up.</summary>
     [JsonPropertyName("pending_capacity_runs")] public required IReadOnlyList<PendingCapacityRunDto> PendingCapacityRuns { get; init; }
+
+    /// <summary>All SandboxWarmPool objects in the namespace.</summary>
+    [JsonPropertyName("warm_pools")]         public required IReadOnlyList<WarmPoolStatusDto>     WarmPools          { get; init; }
+
+    /// <summary>All Sandbox objects in the namespace (both warm-pool and per-run).</summary>
+    [JsonPropertyName("sandbox_objects")]    public required IReadOnlyList<SandboxObjectDto>      SandboxObjects     { get; init; }
+
+    /// <summary>All SandboxClaim objects in the namespace.</summary>
+    [JsonPropertyName("sandbox_claims")]     public required IReadOnlyList<SandboxClaimObjectDto> SandboxClaims      { get; init; }
+}
+
+/// <summary>Status snapshot for one SandboxWarmPool.</summary>
+public sealed record WarmPoolStatusDto
+{
+    [JsonPropertyName("name")]            public required string Name           { get; init; }
+    [JsonPropertyName("desired_replicas")] public required int   DesiredReplicas { get; init; }
+    [JsonPropertyName("ready_replicas")]   public required int   ReadyReplicas   { get; init; }
+    [JsonPropertyName("available_replicas")] public required int AvailableReplicas { get; init; }
+    /// <summary><c>"healthy"</c>, <c>"warning"</c>, or <c>"critical"</c>.</summary>
+    [JsonPropertyName("status")]          public required string Status          { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("age_seconds")]     public double?         AgeSeconds      { get; init; }
+}
+
+/// <summary>Status snapshot for one Sandbox object (the actual sandbox pod container).</summary>
+public sealed record SandboxObjectDto
+{
+    [JsonPropertyName("name")]        public required string Name      { get; init; }
+    /// <summary><c>"running"</c>, <c>"pending"</c>, <c>"standby"</c>, or <c>"unknown"</c>.</summary>
+    [JsonPropertyName("phase")]       public required string Phase     { get; init; }
+    [JsonPropertyName("ready")]       public required bool   Ready     { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("pod_name")]    public string?         PodName   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("template_ref")] public string?        TemplateRef { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("warm_pool")]   public string?         WarmPool  { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("age_seconds")] public double?         AgeSeconds { get; init; }
+}
+
+/// <summary>Status snapshot for one SandboxClaim object.</summary>
+public sealed record SandboxClaimObjectDto
+{
+    [JsonPropertyName("name")]             public required string Name           { get; init; }
+    /// <summary><c>"bound"</c>, <c>"pending"</c>, or <c>"unknown"</c>.</summary>
+    [JsonPropertyName("phase")]            public required string Phase          { get; init; }
+    [JsonPropertyName("ready")]            public required bool   Ready          { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_id")]           public string?         RunId          { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("bound_sandbox")]    public string?         BoundSandbox   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("sandbox_template_ref")] public string?     SandboxTemplateRef { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("warm_pool")]        public string?         WarmPool       { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("age_seconds")]      public double?         AgeSeconds     { get; init; }
 }
 
 /// <summary>A single agent-host pod / SandboxClaim in the cluster inventory.</summary>

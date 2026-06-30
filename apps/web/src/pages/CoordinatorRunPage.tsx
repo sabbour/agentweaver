@@ -1010,7 +1010,7 @@ export function CoordinatorRunPage() {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
 
-  const { events, status: streamStatus } = useRunStream(runId ?? '');
+  const { events, status: streamStatus, reconnect: reconnectStream } = useRunStream(runId ?? '');
 
   // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
   const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
@@ -1643,7 +1643,12 @@ export function CoordinatorRunPage() {
   // Session panel anchor — the coordinator node's "View session" scrolls here.
   const sessionRef = useRef<HTMLDivElement>(null);
   const scrollToSession = useCallback(() => {
-    sessionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // If the session column is collapsed, expand it first so the ref is in the DOM.
+    setSessionCollapseOverride(false);
+    // Defer scroll by one animation frame so React re-renders the ref'd element before scrolling.
+    requestAnimationFrame(() => {
+      sessionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }, []);
 
   // Review/Changes panel anchor — the Human Review gate's "Review now" scrolls here.
@@ -2042,7 +2047,7 @@ export function CoordinatorRunPage() {
           </div>
         ) : (
           <div className={styles.leftCol}>
-            <OutcomeSpecPanel runId={runId} projectId={projectId ?? undefined} events={events} streamStatus={streamStatus} onCollapse={() => setOutcomeCollapsed(true)} />
+            <OutcomeSpecPanel runId={runId} projectId={projectId ?? undefined} events={events} streamStatus={streamStatus} onCollapse={() => setOutcomeCollapsed(true)} onReconnect={reconnectStream} />
           </div>
         )}
 

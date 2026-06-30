@@ -25,6 +25,9 @@ import type {
   ClusterDiagnosticsDto,
   DetailedHealthCheckDto,
   PendingCapacityRunDto,
+  WarmPoolStatusDto,
+  SandboxObjectDto,
+  SandboxClaimObjectDto,
 } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
@@ -206,6 +209,101 @@ function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
   );
 }
 
+function WarmPoolsTable({ rows }: { rows: WarmPoolStatusDto[] }) {
+  const styles = useStyles();
+  if (rows.length === 0) return <Text className={styles.emptyState}>No SandboxWarmPool objects found.</Text>;
+  return (
+    <Table aria-label="Warm pools" size="small">
+      <TableHeader>
+        <TableRow>
+          <TableHeaderCell>Name</TableHeaderCell>
+          <TableHeaderCell>Status</TableHeaderCell>
+          <TableHeaderCell>Replicas (ready/desired)</TableHeaderCell>
+          <TableHeaderCell>Age</TableHeaderCell>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((p) => (
+          <TableRow key={p.name}>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.name}</TableCell>
+            <TableCell>
+              <Badge appearance="tint" color={healthBadgeColor(p.status)}>{p.status}</Badge>
+            </TableCell>
+            <TableCell>{p.ready_replicas} / {p.desired_replicas}</TableCell>
+            <TableCell>{formatAge(p.age_seconds)}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+function SandboxObjectsTable({ rows }: { rows: SandboxObjectDto[] }) {
+  const styles = useStyles();
+  if (rows.length === 0) return <Text className={styles.emptyState}>No Sandbox objects found.</Text>;
+  return (
+    <Table aria-label="Sandbox objects" size="small">
+      <TableHeader>
+        <TableRow>
+          <TableHeaderCell>Name</TableHeaderCell>
+          <TableHeaderCell>Phase</TableHeaderCell>
+          <TableHeaderCell>Ready</TableHeaderCell>
+          <TableHeaderCell>Warm pool</TableHeaderCell>
+          <TableHeaderCell>Age</TableHeaderCell>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((s) => (
+          <TableRow key={s.name}>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{s.name}</TableCell>
+            <TableCell>
+              <Badge appearance="tint" color={s.phase === 'running' ? 'success' : s.phase === 'pending' ? 'warning' : 'subtle'}>{s.phase}</Badge>
+            </TableCell>
+            <TableCell>
+              <Badge appearance="tint" color={s.ready ? 'success' : 'warning'}>{s.ready ? 'yes' : 'no'}</Badge>
+            </TableCell>
+            <TableCell style={{ fontSize: tokens.fontSizeBase200 }}>{s.warm_pool ?? '—'}</TableCell>
+            <TableCell>{formatAge(s.age_seconds)}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+function SandboxClaimsTable({ rows }: { rows: SandboxClaimObjectDto[] }) {
+  const styles = useStyles();
+  if (rows.length === 0) return <Text className={styles.emptyState}>No SandboxClaim objects.</Text>;
+  return (
+    <Table aria-label="Sandbox claims" size="small">
+      <TableHeader>
+        <TableRow>
+          <TableHeaderCell>Claim name</TableHeaderCell>
+          <TableHeaderCell>Phase</TableHeaderCell>
+          <TableHeaderCell>Bound sandbox</TableHeaderCell>
+          <TableHeaderCell>Warm pool used</TableHeaderCell>
+          <TableHeaderCell>Run ID (prefix)</TableHeaderCell>
+          <TableHeaderCell>Age</TableHeaderCell>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((c) => (
+          <TableRow key={c.name}>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.name}</TableCell>
+            <TableCell>
+              <Badge appearance="tint" color={c.phase === 'bound' ? 'success' : 'warning'}>{c.phase}</Badge>
+            </TableCell>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.bound_sandbox ?? '—'}</TableCell>
+            <TableCell style={{ fontSize: tokens.fontSizeBase200 }}>{c.warm_pool ?? '—'}</TableCell>
+            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.run_id ?? '—'}</TableCell>
+            <TableCell>{formatAge(c.age_seconds)}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 export function ClusterPage() {
   const styles = useStyles();
   const [data, setData] = useState<ClusterDiagnosticsDto | null>(null);
@@ -307,6 +405,12 @@ export function ClusterPage() {
               label="Checks OK"
               value={`${data.checks.filter(c => c.status === 'healthy').length} / ${data.checks.length}`}
             />
+            {(data.warm_pools?.length ?? 0) > 0 && (
+              <KpiCard
+                label="Warm pool"
+                value={`${data.warm_pools!.reduce((s, p) => s + p.ready_replicas, 0)} / ${data.warm_pools!.reduce((s, p) => s + p.desired_replicas, 0)} ready`}
+              />
+            )}
           </div>
 
           {/* Health checks */}
@@ -333,6 +437,24 @@ export function ClusterPage() {
           <div className={styles.section}>
             <Title3>Pending capacity ({data.pending_capacity_runs.length})</Title3>
             <PendingCapacityTable rows={data.pending_capacity_runs} />
+          </div>
+
+          {/* Warm pools */}
+          <div className={styles.section}>
+            <Title3>Warm pools ({data.warm_pools?.length ?? 0})</Title3>
+            <WarmPoolsTable rows={data.warm_pools ?? []} />
+          </div>
+
+          {/* Sandbox objects */}
+          <div className={styles.section}>
+            <Title3>Sandbox objects ({data.sandbox_objects?.length ?? 0})</Title3>
+            <SandboxObjectsTable rows={data.sandbox_objects ?? []} />
+          </div>
+
+          {/* Sandbox claims */}
+          <div className={styles.section}>
+            <Title3>Sandbox claims ({data.sandbox_claims?.length ?? 0})</Title3>
+            <SandboxClaimsTable rows={data.sandbox_claims ?? []} />
           </div>
 
           <Text className={styles.generated}>Generated {data.generated_utc} · {data.total_duration_ms.toFixed(0)} ms</Text>
