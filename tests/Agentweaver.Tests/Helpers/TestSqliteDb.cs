@@ -13,6 +13,9 @@ public sealed class TestSqliteDb : IAsyncDisposable
 
     public SqliteDb Db { get; }
 
+    /// <summary>Absolute path of the SQLite file, suitable for building <c>Database:Path</c> config.</summary>
+    public string FilePath => _filePath;
+
     private TestSqliteDb(string filePath, SqliteDb db)
     {
         _filePath = filePath;

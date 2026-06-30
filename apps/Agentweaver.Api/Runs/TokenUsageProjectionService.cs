@@ -120,7 +120,7 @@ public sealed class TokenUsageProjectionService : BackgroundService
         }
     }
 
-    private async Task ProcessUsageEventAsync(string runId, RunEvent evt, CancellationToken ct)
+    internal async Task ProcessUsageEventAsync(string runId, RunEvent evt, CancellationToken ct)
     {
         if (evt.Payload is not JsonElement json)
         {
