@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Agentweaver.Api;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Microsoft.Extensions.Logging;
@@ -27,14 +28,17 @@ public sealed record ProjectWorkflowSet
 /// Discovers, validates, and caches the workflows available to each project (Feature 010,
 /// FR-001/002/003/006/007). Includes the built-in default, all catalog library workflows (Feature
 /// 015 US3), and any project-authored <c>.agentweaver/workflows/</c> files. Definitions are loaded
-/// once per project on first access and cached; <see cref="Sync"/> is the ONLY refresh path. All
-/// discovery, validation, and resolution is server-side (Principles III, IV).
+/// cached per project, and invalidated when the project workflow directory or allowed workflow
+/// set changes so every API replica observes the same shared project files. All discovery,
+/// validation, and resolution is server-side (Principles III, IV).
 /// </summary>
 public sealed class WorkflowRegistry
 {
     public const string WorkflowsRelativePath = ".agentweaver/workflows";
 
-    private readonly ConcurrentDictionary<ProjectId, ProjectWorkflowSet> _cache = new();
+    private sealed record CachedSet(string Signature, ProjectWorkflowSet Set);
+
+    private readonly ConcurrentDictionary<ProjectId, CachedSet> _cache = new();
     private readonly CatalogReader? _catalog;
     private readonly ILogger<WorkflowRegistry>? _logger;
 
@@ -48,24 +52,33 @@ public sealed class WorkflowRegistry
         _logger = logger;
     }
 
-    /// <summary>Returns the cached set for the project, loading it once on first access (FR-006).</summary>
-    public ProjectWorkflowSet GetOrLoad(Project project) =>
-        _cache.GetOrAdd(project.Id, _ => Build(project));
+    /// <summary>Returns the cached set for the project, reloading when shared project files changed.</summary>
+    public ProjectWorkflowSet GetOrLoad(Project project)
+    {
+        var signature = GetSignature(project);
+        var cached = _cache.GetOrAdd(project.Id, _ => new CachedSet(signature, Build(project)));
+        if (cached.Signature == signature)
+            return cached.Set;
+
+        var refreshed = new CachedSet(signature, Build(project));
+        _cache[project.Id] = refreshed;
+        return refreshed.Set;
+    }
 
     /// <summary>Re-reads <c>.agentweaver/workflows/</c> from disk and replaces the cached set
     /// (FR-006 explicit Sync). Returns the refreshed set.</summary>
     public ProjectWorkflowSet Sync(Project project)
     {
+        var signature = GetSignature(project);
         var set = Build(project);
         if (set.Results.Any(r => !r.IsValid))
         {
             _logger?.LogError(
-                "Workflow sync for project {ProjectId} found validation errors; keeping previous registry cache.",
+                "Workflow sync for project {ProjectId} found validation errors; caching validation results for replica coherence.",
                 project.Id);
-            return set;
         }
 
-        _cache[project.Id] = set;
+        _cache[project.Id] = new CachedSet(signature, set);
         return set;
     }
 
@@ -157,6 +170,14 @@ public sealed class WorkflowRegistry
         }
 
         return new ProjectWorkflowSet { Results = FilterByAllowedSet(results, project) };
+    }
+
+    private static string GetSignature(Project project)
+    {
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows");
+        var allowed = project.AllowedWorkflowIds?.OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            ?? Enumerable.Empty<string>();
+        return DefinitionRegistryCacheSignature.ForDirectory(dir, allowed);
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Agentweaver.Api;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.ReviewPolicies;
@@ -23,9 +24,9 @@ public sealed record ProjectReviewPolicySet
 
 /// <summary>
 /// Discovers, validates, and caches the review policies available to each project (Feature 010,
-/// FR-025/026/033). Policies are loaded once per project on first access and cached; <see cref="Sync"/>
-/// is the ONLY refresh path (no file-watch, no per-heartbeat reload). All discovery, validation, and
-/// resolution is server-side (Principles III, IV). Reads only from the project's own
+/// FR-025/026/033). Policies are cached per project and invalidated when the shared project
+/// policy directory changes so every API replica observes the same definitions. All discovery,
+/// validation, and resolution is server-side (Principles III, IV). Reads only from the project's own
 /// <c>.agentweaver/review-policies/</c> directory and never follows references that escape the project
 /// sandbox (FR-034, Principle X).
 ///
@@ -40,18 +41,30 @@ public sealed class ReviewPolicyRegistry
 {
     public const string ReviewPoliciesRelativePath = ".agentweaver/review-policies";
 
-    private readonly ConcurrentDictionary<ProjectId, ProjectReviewPolicySet> _cache = new();
+    private sealed record CachedSet(string Signature, ProjectReviewPolicySet Set);
 
-    /// <summary>Returns the cached set for the project, loading it once on first access.</summary>
-    public ProjectReviewPolicySet GetOrLoad(Project project) =>
-        _cache.GetOrAdd(project.Id, _ => Build(project));
+    private readonly ConcurrentDictionary<ProjectId, CachedSet> _cache = new();
+
+    /// <summary>Returns the cached set for the project, reloading when shared project files changed.</summary>
+    public ProjectReviewPolicySet GetOrLoad(Project project)
+    {
+        var signature = GetSignature(project);
+        var cached = _cache.GetOrAdd(project.Id, _ => new CachedSet(signature, Build(project)));
+        if (cached.Signature == signature)
+            return cached.Set;
+
+        var refreshed = new CachedSet(signature, Build(project));
+        _cache[project.Id] = refreshed;
+        return refreshed.Set;
+    }
 
     /// <summary>Re-reads <c>.agentweaver/review-policies/</c> from disk and replaces the cached set
     /// (explicit Sync). Returns the refreshed set.</summary>
     public ProjectReviewPolicySet Sync(Project project)
     {
+        var signature = GetSignature(project);
         var set = Build(project);
-        _cache[project.Id] = set;
+        _cache[project.Id] = new CachedSet(signature, set);
         return set;
     }
 
@@ -140,6 +153,12 @@ public sealed class ReviewPolicyRegistry
         }
 
         return new ProjectReviewPolicySet { Results = results };
+    }
+
+    private static string GetSignature(Project project)
+    {
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "review-policies");
+        return DefinitionRegistryCacheSignature.ForDirectory(dir);
     }
 
     /// <summary>
