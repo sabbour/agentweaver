@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Net.Http.Headers;
 using System.Threading.Channels;
 using A2A;
 using Microsoft.Agents.AI.A2A;
@@ -45,6 +46,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
     private const string A2AAgentDescription = "Worker-side A2A proxy for sandbox pod CopilotAIAgent (spec-018 P1)";
 
     private readonly ISandboxAgentEndpointResolver _endpointResolver;
+    private readonly IAgentHostTurnTokenRegistry? _turnTokenRegistry;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RemoteAgentProxy> _logger;
@@ -70,11 +72,13 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
     public RemoteAgentProxy(
         ISandboxAgentEndpointResolver endpointResolver,
         IHttpClientFactory httpClientFactory,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IAgentHostTurnTokenRegistry? turnTokenRegistry = null)
     {
         _endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _turnTokenRegistry = turnTokenRegistry;
         _logger = loggerFactory.CreateLogger<RemoteAgentProxy>();
     }
 
@@ -122,6 +126,10 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         // HttpClient named "a2a-sandbox-pod" — configured in Program.cs with appropriate
         // TLS/cert settings per H1 (mTLS or bearer). Client lifetime is per-run.
         _httpClient = _httpClientFactory.CreateClient("a2a-sandbox-pod");
+        var turnToken = _turnTokenRegistry?.TryGetTurnToken(runId);
+        if (!string.IsNullOrEmpty(turnToken))
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", turnToken);
 
         // The pod hosts its A2A endpoints via MapA2AHttpJson (HTTP+JSON transport):
         //   POST {podEndpointUri}/message:stream  and  GET {podEndpointUri}/card.

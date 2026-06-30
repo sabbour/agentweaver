@@ -40,6 +40,13 @@ public sealed class AgentHostOptions
     /// </summary>
     public string CardBearerToken { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Bearer token required to submit A2A turns to <c>{A2APath}/v1/message:stream</c>.
+    /// Callers must supply <c>Authorization: Bearer {TurnBearerToken}</c>. If empty,
+    /// the turn endpoint is accessible without authentication (local/test only).
+    /// </summary>
+    public string TurnBearerToken { get; init; } = string.Empty;
+
     // ── Per-run agent context (injected at pod-launch time) ───────────────────
 
     /// <summary>Agentweaver run ID this pod is executing. Injected via env var.</summary>
@@ -100,4 +107,16 @@ public sealed class AgentHostOptions
     /// When set, takes precedence over <see cref="UseSharedTokenStore"/>.
     /// </summary>
     public string? KvTokenMountPath { get; init; }
+
+    /// <summary>Azure Key Vault URI for runtime token fetch (Option C warm-pool path).
+    /// When set, overrides KvTokenMountPath — token is fetched via workload identity at configure-time.
+    /// Config key: AgentHost:KeyVaultUri
+    /// </summary>
+    public string? KeyVaultUri { get; init; }
+
+    /// <summary>Key Vault secret name for the run owner's GitHub token.
+    /// Passed in the /configure call. Format: ghtok-user--{base32(userId)}.
+    /// Config key: AgentHost:KvUserSecretName
+    /// </summary>
+    public string? KvUserSecretName { get; init; }
 }

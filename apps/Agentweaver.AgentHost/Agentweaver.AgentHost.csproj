@@ -20,6 +20,17 @@
     <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.9.0-preview.260603.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      Option C warm-pool path: fetch the run owner's GitHub token from Key Vault at /configure-time
+      via workload identity (DefaultAzureCredential), replacing the per-run CSI secret mount.
+      Not transitive via AgentRuntime (which only pulls Azure.AI.OpenAI), so referenced explicitly.
+      Versions match Agentweaver.Api.
+    -->
+    <PackageReference Include="Azure.Security.KeyVault.Secrets" Version="4.7.0" />
+    <PackageReference Include="Azure.Identity" Version="1.13.2" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>

@@ -1,8 +1,10 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
+using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Agentweaver.Api.Auth;
+using Agentweaver.AgentRuntime.Workflow;
 using k8s;
 using Agentweaver.SandboxExec;
 using Microsoft.Extensions.Logging;
@@ -89,6 +91,14 @@ public sealed class KubernetesSandboxOptions
 
     /// <summary>Interval between AgentHost readiness probe attempts. Default: 1000ms.</summary>
     public int AgentHostReadyPollIntervalMs { get; init; } = 1000;
+
+    /// <summary>
+    /// Azure Key Vault URI injected into AgentHost pods as <c>AgentHost__KeyVaultUri</c> so the
+    /// warm pod can fetch the run owner's GitHub token via workload identity at /configure-time
+    /// (Option C). Sourced from the API's own KV config (<c>Auth:TokenStore:KeyVaultUri</c>). When
+    /// null/empty the env var is omitted and the pod falls back to the CSI file-mount path.
+    /// </summary>
+    public string? KvUri { get; init; }
 }
 
 /// <summary>
@@ -138,12 +148,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private const string ApiGroup = SandboxClaimConventions.ApiGroup;
     private const string ApiVersion = SandboxClaimConventions.ApiVersion;
     private const string ClaimPlural = SandboxClaimConventions.ClaimPlural;
-    private const string SandboxTemplatePlural = "sandboxtemplates";
-    private const string SandboxWarmPoolPlural = "sandboxwarmpools";
-    private const string SpcGroup = "secrets-store.csi.x-k8s.io";
-    private const string SpcVersion = "v1";
-    private const string SpcPlural = "secretproviderclasses";
-    private const string BaseUserTokensSpcName = "agentweaver-user-tokens";
     private const string ContainerName = "agentweaver-sandbox";
 
     /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
@@ -156,14 +160,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private readonly KubernetesSandboxOptions _options;
     private readonly ILogger<KubernetesSandboxExecutor> _logger;
     private readonly IPodNameRegistry? _podRegistry;
+    private readonly IAgentHostTurnTokenRegistry? _turnTokenRegistry;
     // Polls the AgentHost /healthz after bind and before returning the endpoint, closing the
     // A2A cold-start race (pod Running ~20-30s before Kestrel binds :8088). Null in unit tests
     // that only assert the claim body → readiness gate is skipped.
     private readonly IAgentHostReadinessProbe? _readinessProbe;
-    // Resolves the run's submitting user so AgentHost__UserId can be injected into the pod, letting
-    // the in-pod CopilotAIAgent load the user's Copilot-entitled token instead of falling back to the
-    // installation token (no Copilot). Null when the run→user lookup is unavailable.
+    // Resolves the run's submitting user so the pod can be scoped (via /configure) to the run owner's
+    // Copilot-entitled token instead of the installation token. Null when the run→user lookup is
+    // unavailable.
     private readonly IRunSubmittingUserResolver? _submittingUserResolver;
+    // Used to POST /configure to the warm pod after bind (warm-pool deferred-config path). Null in
+    // unit tests → the /configure call is skipped (same null-skip convention as the readiness probe).
+    private readonly IHttpClientFactory? _httpClientFactory;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -177,15 +185,19 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         KubernetesSandboxOptions options,
         ILogger<KubernetesSandboxExecutor> logger,
         IPodNameRegistry? podRegistry = null,
+        IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         IAgentHostReadinessProbe? readinessProbe = null,
-        IRunSubmittingUserResolver? submittingUserResolver = null)
+        IRunSubmittingUserResolver? submittingUserResolver = null,
+        IHttpClientFactory? httpClientFactory = null)
     {
         _client = client;
         _options = options;
         _logger = logger;
         _podRegistry = podRegistry;
+        _turnTokenRegistry = turnTokenRegistry;
         _readinessProbe = readinessProbe;
         _submittingUserResolver = submittingUserResolver;
+        _httpClientFactory = httpClientFactory;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -287,9 +299,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     public async Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-        var runSpcName = SandboxClaimConventions.DeriveAgentHostSecretProviderClassName(claimName);
-        var runTemplateName = SandboxClaimConventions.DeriveAgentHostSandboxTemplateName(claimName);
-        var runWarmPoolName = SandboxClaimConventions.DeriveAgentHostSandboxWarmPoolName(claimName);
 
         // Fail fast before creating the claim if the namespace quota cannot admit another agent pod
         // (2 CPU). Without this the claim is accepted but the controller's pod reconcile is rejected
@@ -302,35 +311,30 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             runId, claimName);
 
         // Resolve the run's submitting user so the pod can scope GitHub Copilot auth to that user's
-        // signed-in token. A null result degrades to the installation token in-pod (no Copilot) — we
-        // log it loudly so the cause of an auth failure is visible.
+        // signed-in token. The user's Key Vault secret name (Option C warm-pool path) is derived here
+        // and delivered to the pod via /configure — never another user's secret.
         var submittingUser = await ResolveSubmittingUserAsync(runId, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(submittingUser))
         {
             throw new InvalidOperationException(
                 $"Cannot launch AgentHost pod for run '{runId}' without a submitting user; " +
-                "a run-scoped SecretProviderClass must be limited to the run owner's token.");
-        }
-        else
-        {
-            _logger.LogInformation(
-                "KubernetesSandboxExecutor: injecting AgentHost__UserId for run {RunId}.", runId);
+                "the /configure call must scope the pod to the run owner's Key Vault token.");
         }
 
-        var spcCreated = false;
-        var templateCreated = false;
-        var warmPoolCreated = false;
+        _logger.LogInformation(
+            "KubernetesSandboxExecutor: resolved submitting user for run {RunId}; will configure pod via /configure.",
+            runId);
+
+        // ghtok-user--{base32(userId)} — the SAME mapping the API uses when persisting the token to KV.
+        var kvUserSecretName = KeyVaultSecretStore.SanitizeKey("user:" + submittingUser);
+        var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
         try
         {
-            await CreateRunSecretProviderClassAsync(runSpcName, runId, submittingUser, ct).ConfigureAwait(false);
-            spcCreated = true;
-            await CreateRunAgentHostSandboxTemplateAsync(runTemplateName, runSpcName, runId, ct).ConfigureAwait(false);
-            templateCreated = true;
-            await CreateRunAgentHostWarmPoolAsync(runWarmPoolName, runTemplateName, runId, ct).ConfigureAwait(false);
-            warmPoolCreated = true;
-
-            await CreateAgentHostClaimAsync(claimName, runId, submittingUser, runWarmPoolName, ct).ConfigureAwait(false);
+            // Bind to the SHARED, pre-warmed AgentHost warm pool (replicas: 2). No per-run SPC,
+            // SandboxTemplate, or warm pool — the pod is already warm and gets its per-run context
+            // via the /configure POST below.
+            await CreateAgentHostClaimAsync(claimName, _options.AgentHostWarmPoolRef, ct).ConfigureAwait(false);
             claimCreated = true;
 
             var podName = await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
@@ -338,6 +342,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
 
             _podRegistry?.Register(runId, podName);
+            _turnTokenRegistry?.RegisterTurnToken(runId, turnToken);
 
             var podIp = await GetPodIpAsync(podName, ct).ConfigureAwait(false);
 
@@ -348,6 +353,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // listener takes ~20-30s more to bind :8088. Without this wait the worker's first A2A POST
             // hits a closed port → "Connection refused" → the run fails mid-turn. Poll /healthz until the
             // app is actually serving so a not-yet-ready pod is a deterministic LAUNCH failure instead.
+            // NOTE: a warm/standby pod serves /healthz BEFORE /configure (the readiness gate exempts
+            // /configure), so this confirms reachability prior to injecting the run context.
             if (_readinessProbe is not null)
             {
                 var scheme = AgentHostEndpoint.Scheme(_options.RequireMtls);
@@ -374,6 +381,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 }
             }
 
+            // Warm-pool deferred /configure: inject the per-run RunId/UserId/TurnBearerToken and the
+            // KV secret name into the already-warm pod, which then runs SetupAsync and becomes ready.
+            await CallAgentHostConfigureAsync(
+                podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName, ct)
+                .ConfigureAwait(false);
+
             _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
 
             _logger.LogInformation(
@@ -386,13 +399,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             if (claimCreated)
                 await DeleteClaimAsync(claimName).ConfigureAwait(false);
-            if (warmPoolCreated)
-                await DeleteCustomObjectAsync(ApiGroup, ApiVersion, SandboxWarmPoolPlural, runWarmPoolName, "SandboxWarmPool").ConfigureAwait(false);
-            if (templateCreated)
-                await DeleteCustomObjectAsync(ApiGroup, ApiVersion, SandboxTemplatePlural, runTemplateName, "SandboxTemplate").ConfigureAwait(false);
-            if (spcCreated)
-                await DeleteCustomObjectAsync(SpcGroup, SpcVersion, SpcPlural, runSpcName, "SecretProviderClass").ConfigureAwait(false);
             _podRegistry?.Unregister(runId);
+            _turnTokenRegistry?.UnregisterTurnToken(runId);
             throw;
         }
     }
@@ -407,11 +415,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             runId, claimName);
 
         await DeleteClaimAsync(claimName).ConfigureAwait(false);
-        await DeleteAgentHostRunResourcesAsync(
-            SandboxClaimConventions.DeriveAgentHostSandboxWarmPoolName(claimName),
-            SandboxClaimConventions.DeriveAgentHostSandboxTemplateName(claimName),
-            SandboxClaimConventions.DeriveAgentHostSecretProviderClassName(claimName)).ConfigureAwait(false);
         _podRegistry?.Unregister(runId);
+        _turnTokenRegistry?.UnregisterTurnToken(runId);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: AgentHost pod released for run {RunId}", runId);
@@ -442,18 +447,17 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
-    /// Creates a <c>SandboxClaim</c> that provisions an AgentHost pod by binding to the
-    /// <c>AgentHostWarmPoolRef</c> warm pool (which references the AgentHost template).
-    /// Injects per-run env vars into the spec so the pod's <c>AgentHost</c> process can read
-    /// its <c>AgentHost:RunId</c>, etc. When <paramref name="submittingUser"/> is non-empty, also
-    /// injects <c>AgentHost__UserId</c> so the pod scopes GitHub Copilot auth to that user's token.
+    /// Creates a <c>SandboxClaim</c> that binds to the SHARED, pre-warmed AgentHost warm pool
+    /// (<c>AgentHostWarmPoolRef</c>, replicas: 2). Only STATIC config is injected via the claim
+    /// env — the per-run context (RunId / UserId / TurnBearerToken / KV secret name) is delivered
+    /// after bind via the <c>POST /configure</c> call (<see cref="CallAgentHostConfigureAsync"/>),
+    /// so a warm pod never needs a RunId at startup.
     /// </summary>
     private Task CreateAgentHostClaimAsync(
-        string claimName, string runId, string submittingUser, string warmPoolName, CancellationToken ct)
+        string claimName, string warmPoolName, CancellationToken ct)
     {
         var env = new List<object>
         {
-            new { name = "AgentHost__RunId", value = runId },
             new { name = "AgentHost__WorkingDirectory", value = _options.WorkspaceMountPath },
             new { name = "AgentHost__RepositoryPath", value = _options.WorkspaceMountPath },
             new { name = "AgentHost__A2APath", value = _options.AgentHostA2APath },
@@ -461,7 +465,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             new { name = "AgentHost__Port", value = _options.AgentHostPort.ToString(System.Globalization.CultureInfo.InvariantCulture) },
         };
 
-        env.Add(new { name = "AgentHost__UserId", value = submittingUser });
+        // Option C: tell the pod which Key Vault to fetch the run owner's token from at /configure
+        // time (via workload identity). The secret NAME is delivered later in the /configure body.
+        if (!string.IsNullOrWhiteSpace(_options.KvUri))
+            env.Add(new { name = "AgentHost__KeyVaultUri", value = _options.KvUri });
 
         var manifest = new
         {
@@ -472,10 +479,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             {
                 warmPoolRef = new { name = warmPoolName },
                 lifecycle = new { ttlSecondsAfterFinished = _options.TimeoutSeconds, shutdownPolicy = "Delete" },
-                // Per-run env vars for Agentweaver.AgentHost (injected into the pod spec
-                // by the sandbox controller if it supports the `env` field; otherwise the
-                // template or a mounted ConfigMap carries the static config and the runId
-                // is derived from the claim name by convention).
+                // Static config only — the per-run context arrives via POST /configure after bind.
                 env = env.ToArray(),
             },
         };
@@ -485,178 +489,52 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             cancellationToken: ct);
     }
 
-    private async Task CreateRunSecretProviderClassAsync(
-        string spcName, string runId, string submittingUser, CancellationToken ct)
+    /// <summary>
+    /// Injects the per-run context into an already-warm AgentHost pod via its one-time
+    /// <c>POST /configure</c> endpoint. The pod then fetches ONLY <paramref name="kvUserSecretName"/>
+    /// from Key Vault (its configured user's token) and runs SetupAsync. The endpoint is guarded by
+    /// NetworkPolicy (ingress to AgentHost pods restricted to API/worker), not the TurnBearerToken
+    /// (which is itself delivered here). Idempotency: a second call returns 409 and is treated as a
+    /// hard launch failure.
+    /// </summary>
+    private async Task CallAgentHostConfigureAsync(
+        string podIp, int port, string runId, string userId, string turnBearerToken,
+        string kvUserSecretName, CancellationToken ct)
     {
-        var raw = await _client.CustomObjects
-            .GetNamespacedCustomObjectAsync(
-                SpcGroup, SpcVersion, _options.Namespace, SpcPlural, BaseUserTokensSpcName,
-                cancellationToken: ct)
-            .ConfigureAwait(false);
-
-        var json = JsonSerializer.Serialize(raw);
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        var spec = root.GetProperty("spec");
-        var parameters = spec.GetProperty("parameters");
-
-        var copiedParameters = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var property in parameters.EnumerateObject())
+        if (_httpClientFactory is null)
         {
-            if (property.Value.ValueKind == JsonValueKind.String && property.Name != "objects")
-                copiedParameters[property.Name] = property.Value.GetString() ?? string.Empty;
+            // No HttpClient available (unit tests). Mirrors the readiness-probe null-skip; in-cluster
+            // the factory is always present, so this never short-circuits a real launch.
+            _logger.LogWarning(
+                "KubernetesSandboxExecutor: no IHttpClientFactory — skipping /configure for run {RunId}.",
+                runId);
+            return;
         }
 
-        var kvSecretName = KeyVaultSecretStore.SanitizeKey("user:" + submittingUser);
-        var userJsonKey = SanitizeScopeKey("user:" + submittingUser) + ".json";
-        copiedParameters["objects"] =
-            $"array:\n" +
-            $"  - |\n" +
-            $"    objectName: {kvSecretName}\n" +
-            $"    objectAlias: {userJsonKey}\n" +
-            $"    objectType: secret\n";
-
-        var provider = spec.TryGetProperty("provider", out var providerElement)
-            ? providerElement.GetString() ?? "azure"
-            : "azure";
-
-        var manifest = new
+        var scheme = AgentHostEndpoint.Scheme(_options.RequireMtls);
+        var configureUrl = $"{scheme}://{podIp}:{port}/configure";
+        var body = new
         {
-            apiVersion = $"{SpcGroup}/{SpcVersion}",
-            kind = "SecretProviderClass",
-            metadata = new
-            {
-                name = spcName,
-                @namespace = _options.Namespace,
-                labels = new Dictionary<string, string>
-                {
-                    ["app.kubernetes.io/part-of"] = "agentweaver",
-                    ["app.kubernetes.io/component"] = "agent-host",
-                    ["agentweaver.io/run-id"] = runId,
-                },
-                annotations = new Dictionary<string, string>
-                {
-                    ["secrets-store.csi.k8s.io/rotation-poll-interval"] = "2m",
-                },
-            },
-            spec = new
-            {
-                provider,
-                parameters = copiedParameters,
-            },
+            runId,
+            userId,
+            turnBearerToken,
+            kvUserSecretName,
         };
 
-        await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-                manifest, SpcGroup, SpcVersion, _options.Namespace, SpcPlural, cancellationToken: ct)
-            .ConfigureAwait(false);
-
         _logger.LogInformation(
-            "KubernetesSandboxExecutor: created run-scoped SecretProviderClass {Spc} for run {RunId}",
-            spcName, runId);
-    }
+            "KubernetesSandboxExecutor: configuring AgentHost pod for run {RunId} at {Url}",
+            runId, configureUrl);
 
-    private async Task CreateRunAgentHostSandboxTemplateAsync(
-        string templateName, string spcName, string runId, CancellationToken ct)
-    {
-        var raw = await _client.CustomObjects
-            .GetNamespacedCustomObjectAsync(
-                ApiGroup, ApiVersion, _options.Namespace, SandboxTemplatePlural, _options.AgentHostTemplateRef,
-                cancellationToken: ct)
+        using var client = _httpClientFactory.CreateClient(HttpAgentHostReadinessProbe.HttpClientName);
+        using var response = await client
+            .PostAsJsonAsync(configureUrl, body, ct)
             .ConfigureAwait(false);
 
-        var root = JsonNode.Parse(JsonSerializer.Serialize(raw))?.AsObject()
-            ?? throw new InvalidOperationException(
-                $"SandboxTemplate '{_options.AgentHostTemplateRef}' returned no parseable body.");
-
-        root.Remove("status");
-        root["apiVersion"] = $"{ApiGroup}/{ApiVersion}";
-        root["kind"] = "SandboxTemplate";
-
-        var metadata = root["metadata"] as JsonObject ?? new JsonObject();
-        root["metadata"] = metadata;
-        metadata["name"] = templateName;
-        metadata["namespace"] = _options.Namespace;
-        foreach (var key in new[] { "uid", "resourceVersion", "generation", "creationTimestamp", "managedFields", "ownerReferences" })
-            metadata.Remove(key);
-
-        var labels = metadata["labels"] as JsonObject ?? new JsonObject();
-        metadata["labels"] = labels;
-        labels["app.kubernetes.io/part-of"] = "agentweaver";
-        labels["app.kubernetes.io/component"] = "agent-host";
-        labels["agentweaver.io/run-id"] = runId;
-
-        var replacements = ReplaceSecretProviderClass(root, spcName);
-        if (replacements == 0)
+        if (!response.IsSuccessStatusCode)
         {
+            var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new InvalidOperationException(
-                $"SandboxTemplate '{_options.AgentHostTemplateRef}' does not contain a CSI secretProviderClass volume to scope.");
-        }
-
-        await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-                ToPlainObject(root), ApiGroup, ApiVersion, _options.Namespace, SandboxTemplatePlural,
-                cancellationToken: ct)
-            .ConfigureAwait(false);
-
-        _logger.LogInformation(
-            "KubernetesSandboxExecutor: created run-scoped SandboxTemplate {Template} using SPC {Spc} for run {RunId}",
-            templateName, spcName, runId);
-    }
-
-    private async Task CreateRunAgentHostWarmPoolAsync(
-        string warmPoolName, string templateName, string runId, CancellationToken ct)
-    {
-        var manifest = new
-        {
-            apiVersion = $"{ApiGroup}/{ApiVersion}",
-            kind = "SandboxWarmPool",
-            metadata = new
-            {
-                name = warmPoolName,
-                @namespace = _options.Namespace,
-                labels = new Dictionary<string, string>
-                {
-                    ["app.kubernetes.io/part-of"] = "agentweaver",
-                    ["app.kubernetes.io/component"] = "agent-host",
-                    ["agentweaver.io/run-id"] = runId,
-                },
-            },
-            spec = new
-            {
-                sandboxTemplateRef = new { name = templateName },
-                replicas = 0,
-            },
-        };
-
-        await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-                manifest, ApiGroup, ApiVersion, _options.Namespace, SandboxWarmPoolPlural, cancellationToken: ct)
-            .ConfigureAwait(false);
-    }
-
-    private async Task DeleteAgentHostRunResourcesAsync(string warmPoolName, string templateName, string spcName)
-    {
-        await DeleteCustomObjectAsync(ApiGroup, ApiVersion, SandboxWarmPoolPlural, warmPoolName, "SandboxWarmPool")
-            .ConfigureAwait(false);
-        await DeleteCustomObjectAsync(ApiGroup, ApiVersion, SandboxTemplatePlural, templateName, "SandboxTemplate")
-            .ConfigureAwait(false);
-        await DeleteCustomObjectAsync(SpcGroup, SpcVersion, SpcPlural, spcName, "SecretProviderClass")
-            .ConfigureAwait(false);
-    }
-
-    private async Task DeleteCustomObjectAsync(
-        string group, string version, string plural, string name, string kind)
-    {
-        try
-        {
-            await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
-                    group, version, _options.Namespace, plural, name)
-                .ConfigureAwait(false);
-            _logger.LogInformation(
-                "KubernetesSandboxExecutor: deleted {Kind} {Name}", kind, name);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "KubernetesSandboxExecutor: could not delete {Kind} {Name} (best-effort)", kind, name);
+                $"AgentHost /configure for run '{runId}' failed: HTTP {(int)response.StatusCode} {detail}");
         }
     }
 
@@ -1010,54 +888,4 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
     private static string ShellSingleQuote(string s) =>
         "'" + s.Replace("'", "'\\''") + "'";
-
-    // Sanitizes a token scope key to the same filename shape AgentHost's
-    // SharedTokenStorePaths.SanitizeKey uses.
-    private static string SanitizeScopeKey(string key) =>
-        string.Concat(key.Select(c =>
-            char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '_'));
-
-    private static int ReplaceSecretProviderClass(JsonNode? node, string spcName)
-    {
-        switch (node)
-        {
-            case JsonObject obj:
-                var replacements = 0;
-                if (obj.ContainsKey("secretProviderClass"))
-                {
-                    obj["secretProviderClass"] = spcName;
-                    replacements++;
-                }
-
-                foreach (var child in obj.Select(kvp => kvp.Value).ToArray())
-                    replacements += ReplaceSecretProviderClass(child, spcName);
-                return replacements;
-
-            case JsonArray array:
-                return array.Sum(child => ReplaceSecretProviderClass(child, spcName));
-
-            default:
-                return 0;
-        }
-    }
-
-    private static object? ToPlainObject(JsonNode? node) =>
-        node switch
-        {
-            null => null,
-            JsonObject obj => obj.ToDictionary(kvp => kvp.Key, kvp => ToPlainObject(kvp.Value)),
-            JsonArray array => array.Select(ToPlainObject).ToList(),
-            JsonValue value => ToPlainValue(value),
-            _ => null,
-        };
-
-    private static object? ToPlainValue(JsonValue value)
-    {
-        if (value.TryGetValue<string>(out var s)) return s;
-        if (value.TryGetValue<bool>(out var b)) return b;
-        if (value.TryGetValue<int>(out var i)) return i;
-        if (value.TryGetValue<long>(out var l)) return l;
-        if (value.TryGetValue<double>(out var d)) return d;
-        return JsonSerializer.Deserialize<object>(value.ToJsonString());
-    }
 }

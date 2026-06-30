@@ -297,6 +297,7 @@ public sealed class Spec018FactorySelectionTests
         services.AddLogging();
         services.AddHttpClient();
         services.AddSingleton<ISandboxAgentEndpointResolver>(new NoOpSandboxAgentEndpointResolver());
+        services.AddSingleton<IAgentHostTurnTokenRegistry, Spec018TurnTokenRegistry>();
 
         // Simulate AddAgentRuntime() base registration (a placeholder factory for the test)
         services.AddSingleton<IWorkflowAgentFactory, Spec018StubFactory>();
@@ -348,6 +349,7 @@ public sealed class Spec018FactorySelectionTests
         services.AddLogging();
         services.AddHttpClient();
         services.AddSingleton<ISandboxAgentEndpointResolver>(new NoOpSandboxAgentEndpointResolver());
+        services.AddSingleton<IAgentHostTurnTokenRegistry, Spec018TurnTokenRegistry>();
         services.AddSingleton<RemoteWorkflowAgentFactory>();
 
         var sp = services.BuildServiceProvider();
@@ -367,6 +369,13 @@ public sealed class Spec018FactorySelectionTests
         public IWorkflowTurnAgent CreateRaiAgent()         => throw new NotImplementedException();
         public IWorkflowTurnAgent CreateRubberduckAgent() => throw new NotImplementedException();
         public IWorkflowTurnAgent CreateScribeAgent()     => throw new NotImplementedException();
+    }
+
+    private sealed class Spec018TurnTokenRegistry : IAgentHostTurnTokenRegistry
+    {
+        public void RegisterTurnToken(string runId, string token) { }
+        public void UnregisterTurnToken(string runId) { }
+        public string? TryGetTurnToken(string runId) => null;
     }
 }
 
@@ -614,16 +623,16 @@ public sealed class Spec018RemoteAgentProxyInvariantTests
     }
 
     [Fact]
-    public void RemoteAgentProxy_Constructor_AcceptsExactlyThreeParameters()
+    public void RemoteAgentProxy_Constructor_AcceptsExpectedParameters()
     {
-        // Constructor: ISandboxAgentEndpointResolver, IHttpClientFactory, ILoggerFactory
+        // Constructor: ISandboxAgentEndpointResolver, IHttpClientFactory, ILoggerFactory, IAgentHostTurnTokenRegistry?
         var ctor = typeof(RemoteAgentProxy)
             .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
             .Single();
 
-        ctor.GetParameters().Should().HaveCount(3,
-            "the proxy's sole public constructor must accept exactly 3 DI dependencies " +
-            "(ISandboxAgentEndpointResolver, IHttpClientFactory, ILoggerFactory)");
+        ctor.GetParameters().Should().HaveCount(4,
+            "the proxy must accept the endpoint resolver, HttpClient factory, logger factory, " +
+            "and optional per-run turn-token registry");
     }
 
     [Fact]
@@ -638,5 +647,6 @@ public sealed class Spec018RemoteAgentProxyInvariantTests
         paramTypes.Should().Contain(typeof(ISandboxAgentEndpointResolver));
         paramTypes.Should().Contain(typeof(IHttpClientFactory));
         paramTypes.Should().Contain(typeof(ILoggerFactory));
+        paramTypes.Should().Contain(typeof(IAgentHostTurnTokenRegistry));
     }
 }

@@ -7,10 +7,12 @@
 # provisioned. The pool references the agentweaver-agent-host SandboxTemplate
 # (k8s/sandbox-template-agenthost.yaml), which carries the real AgentHost pod spec.
 #
-# replicas: 0 — agent-host claims always inject spec.env (incl. AgentHost__RunId), which
-# forces a COLD START, so a warm SPARE (bare template, no RunId) would CrashLoop uselessly.
-# Each claim cold-starts its own pod with RunId and boots fine; this pool exists purely as
-# the template reference. Cluster autoscaling/NAP handles burst capacity.
+# replicas: 2 — warm-pool pre-warming is ENABLED. RunId/UserId/TurnBearerToken are NO LONGER
+# baked into the claim env; instead the executor POSTs /configure to the already-warm pod at
+# run-launch time (see KubernetesSandboxExecutor.CallAgentHostConfigureAsync). A spare pod therefore
+# starts cleanly in standby (no RunId) and waits for /configure — no CrashLoop. Pre-warming the
+# .NET runtime + Copilot SDK init shaves cold-start latency off the run-launch critical path.
+# Cluster autoscaling/NAP still handles burst capacity beyond the 2 warm spares.
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
@@ -22,4 +24,4 @@ metadata:
 spec:
   sandboxTemplateRef:
     name: agentweaver-agent-host
-  replicas: 0
+  replicas: 2

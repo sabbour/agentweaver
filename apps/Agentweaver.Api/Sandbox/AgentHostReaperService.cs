@@ -30,12 +30,6 @@ namespace Agentweaver.Api.Sandbox;
 /// </summary>
 public sealed class AgentHostReaperService : IAgentHostReaper
 {
-    private const string SandboxTemplatePlural = "sandboxtemplates";
-    private const string SandboxWarmPoolPlural = "sandboxwarmpools";
-    private const string SpcGroup = "secrets-store.csi.x-k8s.io";
-    private const string SpcVersion = "v1";
-    private const string SpcPlural = "secretproviderclasses";
-
     private readonly IKubernetes _client;
     private readonly IRunStore _runStore;
     private readonly KubernetesSandboxOptions _options;
@@ -70,7 +64,6 @@ public sealed class AgentHostReaperService : IAgentHostReaper
 
             if (await TryDeleteClaimAsync(claim.ClaimName, ct).ConfigureAwait(false))
             {
-                await DeleteRunScopedResourcesAsync(claim.ClaimName, ct).ConfigureAwait(false);
                 reaped++;
             }
         }
@@ -194,53 +187,6 @@ public sealed class AgentHostReaperService : IAgentHostReaper
             _logger.LogWarning(ex,
                 "AgentHostReaper: failed to delete orphaned claim {Claim} (best-effort)", claimName);
             return false;
-        }
-    }
-
-    private async Task DeleteRunScopedResourcesAsync(string claimName, CancellationToken ct)
-    {
-        await DeleteCustomObjectAsync(
-                SandboxClaimConventions.ApiGroup,
-                SandboxClaimConventions.ApiVersion,
-                SandboxWarmPoolPlural,
-                SandboxClaimConventions.DeriveAgentHostSandboxWarmPoolName(claimName),
-                "SandboxWarmPool",
-                ct)
-            .ConfigureAwait(false);
-        await DeleteCustomObjectAsync(
-                SandboxClaimConventions.ApiGroup,
-                SandboxClaimConventions.ApiVersion,
-                SandboxTemplatePlural,
-                SandboxClaimConventions.DeriveAgentHostSandboxTemplateName(claimName),
-                "SandboxTemplate",
-                ct)
-            .ConfigureAwait(false);
-        await DeleteCustomObjectAsync(
-                SpcGroup,
-                SpcVersion,
-                SpcPlural,
-                SandboxClaimConventions.DeriveAgentHostSecretProviderClassName(claimName),
-                "SecretProviderClass",
-                ct)
-            .ConfigureAwait(false);
-    }
-
-    private async Task DeleteCustomObjectAsync(
-        string group, string version, string plural, string name, string kind, CancellationToken ct)
-    {
-        try
-        {
-            await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
-                    group, version, _options.Namespace, plural, name, cancellationToken: ct)
-                .ConfigureAwait(false);
-
-            _logger.LogInformation(
-                "AgentHostReaper: deleted orphaned {Kind} {Name}", kind, name);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "AgentHostReaper: failed to delete orphaned {Kind} {Name} (best-effort)", kind, name);
         }
     }
 }

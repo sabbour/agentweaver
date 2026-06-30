@@ -12,22 +12,22 @@
 #   - PoC: RequireMtls=false comes from the mounted configmap-agenthost (plain http :8088).
 #   - PoC: readOnlyRootFilesystem relaxed to false (CopilotClient / git write to $HOME).
 #     PRODUCTION must restore readOnlyRootFilesystem: true + a writable $HOME emptyDir.
-#   - GitHub token (Option B / workload identity): the pod runs as the dedicated
-#     agentweaver-agent-host ServiceAccount (workload identity) and the CSI secrets-store
-#     driver mounts user GitHub tokens from Key Vault read-only at /mnt/user-tokens.
-#     KubernetesSandboxExecutor clones this base template per run and replaces the
-#     SecretProviderClass with a run-scoped SPC containing only the run owner's token.
-#     AgentHost reads /mnt/user-tokens/user_<id>.json (AgentHost__KvTokenMountPath) —
-#     NO shared RWX token store. HOME points at a writable emptyDir (/home/appuser)
-#     for CopilotClient/git.
+#   - GitHub token (Option C / warm pool, workload identity): the pod runs as the dedicated
+#     agentweaver-agent-host ServiceAccount (workload identity / Managed Identity). At run-launch
+#     the executor POSTs /configure to the already-warm pod with the run owner's KV secret NAME;
+#     the pod fetches ONLY that secret from Key Vault via DefaultAzureCredential and caches it for
+#     the pod lifetime. NO CSI volume, NO per-run SecretProviderClass, NO shared RWX token store.
+#     HOME points at a writable emptyDir (/home/appuser) for CopilotClient/git.
 #
 # Pod label `app: agentweaver-sandbox` is intentional: it makes ALL existing sandbox
 # NetworkPolicies apply unchanged (ingress 8088 from worker+api, DNS egress, Cilium FQDN
 # egress allowlist) — no policy edits, --enable-acns/Cilium policies untouched. The extra
-# component label distinguishes agent-host pods for observability.
+# component label distinguishes agent-host pods for observability. The same NetworkPolicy that
+# restricts ingress to worker+api is what guards the unauthenticated /configure endpoint.
 #
 # Apply (envsubst):
 #   ACR_LOGIN_SERVER=agentweaverregistry.azurecr.io AGENTHOST_IMAGE_TAG=be1e28fa \
+#     AGENTHOST_KEYVAULT_URI=https://agentweaver-kv.vault.azure.net/ \
 #     envsubst < k8s/sandbox-template-agenthost.yaml | kubectl apply -f -
 ---
 apiVersion: extensions.agents.x-k8s.io/v1alpha1
@@ -39,10 +39,10 @@ metadata:
     app.kubernetes.io/part-of: agentweaver
     app.kubernetes.io/component: agent-host
 spec:
-  # The executor injects AgentHost__RunId / AgentHost__WorkingDirectory / etc. into the
-  # SandboxClaim spec.env at launch — the controller may only honor these when injection
-  # is allowed. (If the CRD rejects "Allowed", the pod still functions: RequireMtls/Port/
-  # A2APath come from the mounted configmap; only the per-run RunId correlation is lost.)
+  # The executor injects only STATIC config (AgentHost__WorkingDirectory / RepositoryPath /
+  # A2APath / RequireMtls / Port / KeyVaultUri) into the SandboxClaim spec.env at launch. The
+  # per-run context (RunId / UserId / TurnBearerToken / KV secret name) is delivered AFTER bind
+  # via POST /configure, so a pre-warmed spare needs no per-run env to boot.
   envVarsInjectionPolicy: Allowed
   podTemplate:
     metadata:
@@ -108,17 +108,20 @@ spec:
               protocol: TCP
           env:
             # ASP.NET reads config from env + the mounted appsettings.k8s.json (added AFTER
-            # env in Program.cs, so the configmap wins for shared keys). RunId is injected
-            # per-run by the executor; the rest come from the configmap.
+            # env in Program.cs, so the configmap wins for shared keys). Per-run context
+            # (RunId/UserId/TurnBearerToken) is delivered via POST /configure; the rest come
+            # from the configmap.
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
             # Writable HOME on an emptyDir so CopilotClient/git can write (no shared RWX store).
             - name: HOME
               value: "/home/appuser"
-            # Option B (workload identity): the CSI driver mounts user GitHub tokens from Key Vault
-            # read-only here. AgentHost reads /mnt/user-tokens/user_<id>.json with retry.
-            - name: AgentHost__KvTokenMountPath
-              value: "/mnt/user-tokens"
+            # Option C (warm pool, workload identity): the pod fetches the run owner's GitHub token
+            # from Key Vault at /configure-time via DefaultAzureCredential (Managed Identity) — NO CSI
+            # volume mount. The KV URI is also injected at claim time; the per-user secret NAME arrives
+            # in the /configure POST. ${AGENTHOST_KEYVAULT_URI} is substituted at apply time.
+            - name: AgentHost__KeyVaultUri
+              value: "${AGENTHOST_KEYVAULT_URI}"
           resources:
             requests:
               memory: "1Gi"
@@ -134,11 +137,6 @@ spec:
             # Writable HOME (CopilotClient / git config + caches).
             - name: home
               mountPath: /home/appuser
-            # User GitHub tokens from Key Vault via CSI secrets-store (read-only). This base
-            # value is replaced by a per-run SandboxTemplate before claim creation.
-            - name: csi-user-tokens
-              mountPath: /mnt/user-tokens
-              readOnly: true
             # Optional in PoC (RequireMtls=false): server TLS cert. Required in production.
             - name: a2a-tls
               mountPath: /mnt/a2a-tls
@@ -155,12 +153,6 @@ spec:
           emptyDir: {}
         - name: home
           emptyDir: {}
-        - name: csi-user-tokens
-          csi:
-            driver: secrets-store.csi.k8s.io
-            readOnly: true
-            volumeAttributes:
-              secretProviderClass: agentweaver-user-tokens
         - name: a2a-tls
           secret:
             secretName: agentweaver-a2a-server-tls
