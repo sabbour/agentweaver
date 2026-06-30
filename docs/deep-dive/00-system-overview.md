@@ -68,20 +68,22 @@ The trade-off is operational complexity. Worktrees, locks, sandboxes, cleanup, a
 
 A run is both a state machine and a story. Operators need the live story while it is happening, and recovery needs the durable story after restarts. Agentweaver therefore treats events as write-through: first persist the event, then fan it out to live subscribers.
 
-The invariant is that the durable event log is the source of truth. The in-memory stream is an optimization for low-latency UI and MCP updates. If a client reconnects with a last-seen event id, the system can resume from memory when possible or fall back to persisted events.
+The invariant is that the durable event log is the source of truth. The in-memory stream is a same-replica optimization; cross-replica watchers read from the shared `RunEvents` table by `Last-Event-ID` cursor. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant Step as Workflow step
-    participant Store as Durable event store
-    participant Live as Live stream fan-out
+    participant Store as Shared RunEvents table
+    participant Web as Any web replica
     participant UI as UI / MCP client
 
-    Step->>Store: append event with ordered id
+    Step->>Store: append event with ordered sequence
     Store-->>Step: persisted
-    Step->>Live: publish same event
-    Live-->>UI: stream event
-    UI-->>Store: reconnect / replay if needed
+    UI->>Web: SSE with Last-Event-ID cursor
+    Web->>Store: read Sequence > cursor
+    Store-->>Web: ordered events
+    Web-->>UI: SSE frames
 ```
 
 ### Human gates protect irreversible actions

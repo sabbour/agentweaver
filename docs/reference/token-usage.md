@@ -99,6 +99,18 @@ GET /api/usage?from=2026-05-01T00:00:00Z&to=2026-06-01T00:00:00Z
 - When omitted, the server defaults to the **last 30 days** ending at the time of the request.
 - The run and workflow-run endpoints do not accept time range parameters — they return all usage for that specific run scope.
 
+
+## UI data feeds
+
+| UI surface | Data source | Notes |
+|---|---|---|
+| Board run card cost chip | `RunCardDto.total_nano_aiu` / `total_tokens`, with supplementary `GET /api/runs/{id}/usage` when missing | `apps/web/src/api/types.ts:767`, `apps/web/src/api/types.ts:783`, `apps/web/src/components/board/RunCard.tsx:90`, `apps/web/src/components/board/RunCard.tsx:160` |
+| Workflow run DAG agent node | `GET /api/runs/{id}/usage` through `runUsage` | `apps/web/src/api/client.ts:758`, `apps/web/src/pages/WorkflowRunPage.tsx:700` |
+| Coordinator DAG coordinator/subtask nodes | Coordinator run usage plus child `GET /api/runs/{childId}/usage` summaries | `apps/web/src/pages/CoordinatorRunPage.tsx:1527`, `apps/web/src/pages/CoordinatorRunPage.tsx:1604` |
+| Project dashboard usage panel | `GET /api/projects/{id}/usage?from=...&to=...` | `apps/web/src/api/client.ts:766`, `apps/web/src/pages/DashboardPage.tsx:289`, `apps/web/src/pages/DashboardPage.tsx:504` |
+| Project dashboard leaderboard Cost column | Scoped run usage aggregated by agent over the same dashboard range selector | `apps/web/src/pages/DashboardPage.tsx:299`, `apps/web/src/pages/DashboardPage.tsx:304`, `apps/web/src/pages/DashboardPage.tsx:461`, `apps/web/src/pages/DashboardPage.tsx:494` |
+| Overview Cost overview and top-project bars | `GET /api/usage` or embedded `OverviewDto.token_usage` | `apps/web/src/api/client.ts:774`, `apps/web/src/api/types.ts:1280`, `apps/web/src/pages/OverviewPage.tsx:225`, `apps/web/src/pages/OverviewPage.tsx:439` |
+
 ## MCP tools
 
 ### `get_run_usage`

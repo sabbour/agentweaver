@@ -12,7 +12,7 @@ This page explains how the proxy is wired and torn down. For the API surface see
 
 The feature is **enabled by default** in AKS deployments (`Sandbox__Preview__Enabled=true`, gateway
 `agentweaver-preview-gateway`, zone `6a41f26c75d5cf00019ef7d7.westus2.staging.aksapp.io`). In local-dev
-environments where `Sandbox:Preview:Enabled` is `false`, the Gateway path is a no-op and the legacy
+environments where `Sandbox:Preview:Enabled` is `false`, the Gateway path is a no-op and the
 `kubectl port-forward` fallback is used instead ([`SandboxPreviewOptions.cs:21`](#source)).
 
 ## End-to-end flow
@@ -192,7 +192,7 @@ sequenceDiagram
    flag exists so an automated demo can run unattended.
 5. **On approval** the endpoint runs the **same** `StartPreviewForRunAsync` path
    ([`SandboxEndpoints.cs:217`](#source)) as the operator route — Gateway-direct preview when enabled,
-   legacy `kubectl` fallback otherwise — and returns `preview_url`.
+   `kubectl` fallback otherwise — and returns `preview_url`.
 
 > **Design note.** The agent tool is a synchronous HTTP callback that must return a URL, so it uses the
 > per-tool `IToolApprovalGate` (which resolves in-process and returns a bool) rather than the MAF

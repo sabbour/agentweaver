@@ -107,7 +107,7 @@ When signed in, it shows the GitHub username and a **Sign out** button.
 
 ### Submit a run
 
-The legacy `HomePage` submit form collects the repository path, originating branch, task description, and model source. Submit stays disabled until the path, branch, and task are filled in. On success the app navigates to the watch screen for the new run. The current routed project flow starts runs from the board page's start-run dialog.
+The `HomePage` submit form collects the repository path, originating branch, task description, and model source. Submit stays disabled until the path, branch, and task are filled in. On success the app navigates to the watch screen for the new run. The current routed project flow starts runs from the board page's start-run dialog.
 
 ### Start an orchestration
 
@@ -527,8 +527,8 @@ src/
     WatchPage.tsx
     WorkflowRunPage.tsx     live workflow graph (descriptor-driven or fallback hardcoded)
     CoordinatorRunPage.tsx  coordinator run page: outcome-spec gate + unified graph + steering
-    SettingsPage.tsx        legacy sandbox-policy settings component (not currently routed)
-    HomePage.tsx            legacy submit form (not currently routed)
+    SettingsPage.tsx        sandbox-policy settings component (not currently routed)
+    HomePage.tsx            submit form (not currently routed)
   App.tsx               Fluent provider and routing
   main.tsx              entry point
   config.ts             reads VITE_API_URL and VITE_API_KEY

@@ -75,8 +75,8 @@ Compensating controls:
 | Config key | Default | Notes |
 |---|---|---|
 | `AgentHost:KeyVaultUri` | *(unset)* | Enables runtime Key Vault token fetch for warm AgentHost pods. Injected before `/configure` because the pod needs the vault URI at startup. |
-| `AgentHost:KvTokenMountPath` | *(unset)* | Legacy CSI-mounted file path. Superseded in AKS by `AgentHost:KeyVaultUri`. |
-| `AgentHost:UseSharedTokenStore` | `false` | Legacy/local compatibility only; production AKS does not mirror user tokens to shared storage. |
+| `AgentHost:KvTokenMountPath` | *(unset)* | Local compatibility file path. Superseded in AKS by `AgentHost:KeyVaultUri`. |
+| `AgentHost:UseSharedTokenStore` | `false` | Local compatibility only; production AKS does not mirror user tokens to shared storage. |
 
 ## Source
 

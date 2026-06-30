@@ -126,7 +126,7 @@ This split keeps MCP protocol concerns out of the frontend and avoids making the
 
 ### Sandbox workload
 
-Sandbox pods are not normal always-on services. They are ephemeral execution environments created from templates and kept warm by two pools: the generic sandbox pool (`replicas: 3`) for command execution and the AgentHost pool (`replicas: 2`) for pod-per-run turns. AgentHost warm pods start in standby and are configured by `/configure` after a claim binds. The generic sandboxes disable service account token mounting; AgentHost uses a dedicated workload-identity service account so it can fetch the configured user token from Key Vault.
+Sandbox pods are not normal always-on services. The live pod-per-run path claims pre-warmed AgentHost pods (`agentweaver-agent-host`, `replicas: 2`), then configures the bound pod with `/configure` before the first A2A turn. AgentHost uses a dedicated workload-identity service account so it can fetch the configured user token from Key Vault.
 
 The API has narrow RBAC for creating and interacting with these sandbox resources. That is intentional: the API needs to create sandbox claims/pods and exec into them, but it should not be a broad cluster administrator.
 

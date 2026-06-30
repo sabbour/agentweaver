@@ -6,14 +6,14 @@
 
 > ⚠️ **Alpha software.** Agentweaver is under active development. Expect breaking changes, incomplete features, and rough edges. Not intended for production use.
 
-Agentweaver runs an AI agent on a task inside a sandboxed git worktree, streams every step live, and waits for human review before anything merges.
+Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events into a shared store so any replica can stream them live, and waits for human review before anything merges.
 
 📖 **[Read the docs at sabbour.me/agentweaver](https://sabbour.me/agentweaver/)** — or browse the source in [docs/index.md](docs/index.md)
 
 ## Features
 
 - **Sandboxed execution** — every agent run lives in an isolated git worktree with Kata VM isolation on AKS
-- **Live streaming** — watch every agent step, tool call, and file change in real time
+- **Live streaming** — watch every agent step, tool call, and file change in real time from any replica
 - **Human-in-the-loop review** — nothing merges until you approve the assembled diff
 - **Sandbox browser preview** — open a live in-browser preview of the app running inside a run's sandbox (port-forward)
 - **MCP server** — expose Agentweaver runs and outcomes as MCP tools for Claude Desktop and compatible clients
@@ -111,42 +111,41 @@ bash install.sh --aks --image-tag <git-sha>
 ## AKS architecture
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, sans-serif','fontSize':'14px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TB
-    client(["🌐 Browser / AI client\nHTTPS :443"])
+    client(["🌐 Browser / AI client<br/>HTTPS :443"])
 
     subgraph aks["AKS Cluster — namespace: agentweaver"]
-        gw{{"Gateway\napproutinging-istio · TLS :443"}}
+        gw{{"Gateway<br/>approuting-istio · TLS :443"}}
 
         subgraph core["Core services"]
-            fe(["Frontend ×2\nReact SPA"])
-            api(["API ×2\npod-per-run mode"])
-            worker(["Worker ×1+HPA\npod-per-run mode"])
-            mcp(["MCP ×1\nOAuth · MCP protocol"])
+            fe(["Frontend ×2<br/>React SPA"])
+            api(["API ×2<br/>REST · auth · SSE"])
+            worker(["Worker ×1+HPA<br/>pod-per-run mode"])
+            mcp(["MCP ×1<br/>OAuth · MCP protocol"])
         end
 
         subgraph exec["Kata VM sandbox execution"]
-            ahpool(["AgentHost Warm Pool ×2\nstandby → /configure → active\nA2A :8088"])
-            sbpool(["Generic Sandbox Pool ×3\ncommand-exec · :8088"])
+            ahpool(["AgentHost Warm Pool ×2<br/>agentweaver-agent-host<br/>standby → /configure → active<br/>A2A :8088"])
         end
 
-        ws[("Workspace PVC\nAzure Files RWX")]
+        ws[("Workspace PVC<br/>Azure Files RWX")]
     end
 
-    kv(["Azure Key Vault\nuser tokens · app secrets"])
-    pg(["Azure PostgreSQL\nruns · events · memory"])
-    gh(["GitHub\nOAuth · api.github.com"])
+    kv(["Azure Key Vault<br/>user tokens · app secrets"])
+    pg(["Azure PostgreSQL<br/>runs · RunEvents · memory"])
+    gh(["GitHub<br/>OAuth · api.github.com"])
 
     client -->|"HTTPS :443"| gw
     gw -->|"/"| fe
-    gw -->|"/api /auth"| api
+    gw -->|"/api /auth /stream"| api
     gw -->|"/mcp"| mcp
     mcp -->|"API calls :8080"| api
-    api -->|"SandboxClaim\n+ POST /configure"| ahpool
-    worker -->|"in-api exec"| sbpool
+    api & worker -->|"SandboxClaim + POST /configure"| ahpool
     api & worker --- ws
     ahpool --- ws
-    api & worker -->|"TLS :5432"| pg
+    api -->|"RunEvents cursor reads"| pg
+    worker -->|"RunEvents writes"| pg
     api -->|"workload identity"| kv
     ahpool -->|"fetch user token"| kv
     api & mcp -->|"OAuth · REST"| gh
@@ -161,7 +160,7 @@ flowchart TB
     class gw,fe,mcp svc
     class api core
     class worker worker
-    class ahpool,sbpool runtime
+    class ahpool runtime
     class ws data
     class kv,pg,gh ext
 ```

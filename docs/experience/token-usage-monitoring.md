@@ -1,96 +1,54 @@
-# Token usage monitoring
+# Token usage and cost visibility
 
-Agentweaver tracks GitHub Copilot token consumption at four levels — individual run, workflow orchestration, project, and app — and surfaces the data live during execution and in post-run dashboards. This guide covers where the token counter appears in the product, what it shows, and how to read the numbers.
-
-Scope: this page describes the token usage surfaces in the web UI. For the API and MCP tool contracts see the [reference](../reference/token-usage.md); for the architecture see the [deep dive](../deep-dive/token-usage-monitoring.md).
+Agentweaver tracks GitHub Copilot token consumption and AI Credit (AIC) cost at run, workflow/coordinator, project, and app scope. The UI now surfaces that cost in compact run cards, graph nodes, the project dashboard leaderboard, and the fleet Overview page. For API contracts see the [reference](../reference/token-usage.md); for event/projection internals see the [deep dive](../deep-dive/token-usage-monitoring.md).
 
 ## Live run view (Watch page)
 
-While an agent is running, a live token counter appears below the execution timeline on the Watch page. It updates automatically each time the agent completes a turn and the `agent.turn.usage` SSE event arrives — no manual refresh needed.
-
-The counter shows:
-
-- **Input tokens** — prompt tokens sent to the model this run.
-- **Output tokens** — completion tokens returned by the model.
-- **Total tokens** — sum of input and output.
-- **Total AIC** — total AI Credits consumed to 4 decimal places.
-- **Per-model breakdown** — a table listing each model that was called, with its individual token counts and AIC contribution.
-
-The per-model table is especially useful for coordinator orchestrations where different specialist agents run on different models: you can see which model is responsible for the most consumption at a glance.
+While an agent is running, a live token counter appears below the execution timeline on the Watch page. It updates as `agent.turn.usage` events arrive through the run stream and renders total tokens, input tokens, output tokens, total AICs, and a per-model table. Source: `apps/web/src/components/TokenUsagePanel.tsx:80`, `apps/web/src/components/TokenUsagePanel.tsx:87`, `apps/web/src/components/TokenUsagePanel.tsx:101`, `apps/web/src/components/TokenUsagePanel.tsx:106`.
 
 ![Token counter on the Watch page](/screenshots/watch-token-counter.png)
 
 📸 **Screenshot** — Watch page showing the live token counter and per-model breakdown.
 
-The counter starts at zero and accumulates as turns complete. If the run has no model activity yet (e.g. it is still connecting or only coordinator lifecycle events have arrived), the panel shows zero. It will populate as soon as the first model response lands.
+## Run cards and DAG nodes
+
+Run cards in the board show a compact cost chip beside the status badge. If `total_nano_aiu` is positive, the chip displays AICs; otherwise it falls back to compact token count when only tokens are available. Run cards use embedded card fields when present and fetch `GET /api/runs/{id}/usage` as supplementary data when the card did not include totals. Source: `apps/web/src/components/CostChip.tsx:18`, `apps/web/src/components/CostChip.tsx:24`, `apps/web/src/components/board/RunCard.tsx:78`, `apps/web/src/components/board/RunCard.tsx:90`, `apps/web/src/components/board/RunCard.tsx:160`.
+
+Workflow and coordinator graphs use the same `CostChip`. Workflow run pages attach run usage to the agent node; coordinator run pages attach usage to the coordinator node and child-run usage to subtask nodes. Source: `apps/web/src/components/WorkflowGraphPanel.tsx:108`, `apps/web/src/components/WorkflowGraphPanel.tsx:594`, `apps/web/src/pages/WorkflowRunPage.tsx:700`, `apps/web/src/pages/CoordinatorRunPage.tsx:1527`, `apps/web/src/pages/CoordinatorRunPage.tsx:1604`.
 
 ## Project dashboard
 
-The project dashboard includes a **Token usage** section with a time-range selector. Navigate to a project and open its **Dashboard** tab to find it.
-
-The section shows:
-
-- **Total tokens** and **Total AIC** for the selected time window.
-- **Per-model breakdown** — same table format as the Watch page, aggregated across all runs in the period.
-
-The time-range selector offers **7 days**, **30 days**, and **90 days** presets. The default view is 30 days. Switching ranges reloads the section from `GET /api/projects/{id}/usage?from=...&to=...`.
+The project dashboard's **Agent and usage metrics** range selector scopes both the **Token and AIC usage** panel and the leaderboard's **Cost** column. The selector offers **Last 7 days**, **Last 30 days**, and **Last 90 days**; changing it calls `GET /api/projects/{id}/usage?from=...&to=...`, then fetches scoped run usage to aggregate costs per leaderboard agent. Source: `apps/web/src/pages/DashboardPage.tsx:40`, `apps/web/src/pages/DashboardPage.tsx:44`, `apps/web/src/pages/DashboardPage.tsx:289`, `apps/web/src/pages/DashboardPage.tsx:293`, `apps/web/src/pages/DashboardPage.tsx:299`, `apps/web/src/pages/DashboardPage.tsx:304`, `apps/web/src/pages/DashboardPage.tsx:425`, `apps/web/src/pages/DashboardPage.tsx:461`, `apps/web/src/pages/DashboardPage.tsx:494`, `apps/web/src/pages/DashboardPage.tsx:504`.
 
 ![Token usage section on the project dashboard](/screenshots/dashboard-token-usage.png)
 
-📸 **Screenshot** — Project dashboard showing the token usage section with model breakdown.
-
-### Reading AICs on the dashboard
-
-AICs (AI Credits) are displayed to four decimal places. Very small runs will show fractional credits such as `0.0023 AIC`. Larger projects with many parallel coordinator runs will accumulate whole credits or more. The conversion is:
-
-```
-1 AIC = 1,000,000,000 nano-AIU
-displayed AIC = total_nano_aiu ÷ 1,000,000,000
-```
-
-This is a product-level display convention; the raw `total_nano_aiu` value is available in the API response for precise comparisons.
+📸 **Screenshot** — Project dashboard showing the shared range filter, leaderboard Cost column, and Token/AIC usage panel.
 
 ## App overview (admin)
 
-The **Overview** page includes an app-level token usage section visible to admin users. It shows total tokens and AICs across **all projects** in the selected time window, plus a per-project breakdown table so you can see which projects are contributing most to model spend.
-
-- **Admin-only**: non-admin users see the Overview page but the token usage section is hidden (the underlying `/api/usage` endpoint returns `403 Forbidden` for non-admins, and the UI degrades gracefully without showing an error).
-- **Per-project breakdown**: each row shows the project name, total tokens, total AIC, and a collapsed per-model table.
-- **Time range**: the same `from` and `to` query parameters apply; the default is the last 30 days.
+The **Overview** page reads the embedded `token_usage` from `GET /api/overview` when available and separately fetches `GET /api/usage`. A `403` from the app-wide endpoint is treated as admin-only and hidden without a visible error. Admins see a **Cost overview** tile with total AICs, total tokens, top-project bars, a per-model `TokenUsagePanel`, and a **Usage by project** table. Source: `apps/web/src/pages/OverviewPage.tsx:222`, `apps/web/src/pages/OverviewPage.tsx:225`, `apps/web/src/pages/OverviewPage.tsx:239`, `apps/web/src/pages/OverviewPage.tsx:245`, `apps/web/src/pages/OverviewPage.tsx:272`, `apps/web/src/pages/OverviewPage.tsx:439`, `apps/web/src/pages/OverviewPage.tsx:442`, `apps/web/src/pages/OverviewPage.tsx:445`, `apps/web/src/pages/OverviewPage.tsx:450`, `apps/web/src/pages/OverviewPage.tsx:465`, `apps/web/src/pages/OverviewPage.tsx:475`.
 
 ![App-level usage on the Overview page](/screenshots/overview-token-usage.png)
 
-📸 **Screenshot** — Overview page showing app-level token usage and per-project breakdown.
+📸 **Screenshot** — Overview page showing the Cost overview tile, top project usage bars, and project usage table.
 
 ## Understanding the numbers
 
-### Token definitions
+| Term | What it counts | Source |
+|---|---|---|
+| **Input tokens** | Prompt tokens sent to the model. | `apps/web/src/api/types.ts:1187` |
+| **Output tokens** | Completion tokens returned by the model. | `apps/web/src/api/types.ts:1189` |
+| **Total tokens** | Aggregate token count for the selected run/project/app scope. | `apps/web/src/api/types.ts:1190` |
+| **Total AICs** | `total_nano_aiu` converted by `formatAic`. Values below `1` AIC show four decimal places. | `apps/web/src/api/types.ts:1191`, `apps/web/src/components/CostChip.tsx:3` |
+| **Per-model breakdown** | Model rows in `by_model`, used by `TokenUsagePanel`. | `apps/web/src/api/types.ts:1179`, `apps/web/src/components/TokenUsagePanel.tsx:118` |
 
-| Term | What it counts |
-|---|---|
-| **Input tokens** | The prompt sent to the model — system prompt, conversation history, tool definitions, and tool results |
-| **Output tokens** | The completion returned by the model — agent messages and structured tool calls |
-| **Total tokens** | Input + output; this is the primary billing unit |
+## DAG layout note
 
-Long-running coordinator orchestrations accumulate tokens across many child agents. Each agent's turns are recorded separately and aggregated when you query at workflow-run or project level.
-
-### AIC conversion
-
-The Agentweaver backend stores cost as `totalNanoAiu` (nano-AIU). The display conversion is:
-
-```
-1 AIC = 1,000,000,000 nano-AIU
-```
-
-The product always displays AICs rounded to 4 decimal places. If you need the raw integer for budget comparisons or exports, use the `total_nano_aiu` field in the API response.
-
-### Why per-model matters
-
-Different Copilot models have different token costs. If your project uses a mix — for example a lighter model for triage agents and a heavier model for implementation agents — the per-model breakdown lets you understand which model is driving spend and adjust your agent definitions accordingly.
+The added cost chips and pod/status badges made DAG cards taller, so graph layout now shares `DAG_NODE_SEP = 96` and per-node rendered-height hints. Workflow runs, coordinator topology, shared workflow graph panels, and the visual workflow editor all pass those hints into `layoutDag`, preventing node overlap as cards gain metadata. Source: `apps/web/src/utils/dagLayout.ts:6`, `apps/web/src/utils/dagLayout.ts:24`, `apps/web/src/utils/dagLayout.ts:48`, `apps/web/src/pages/WorkflowRunPage.tsx:706`, `apps/web/src/components/CoordinatorTopologyGraph.tsx:522`, `apps/web/src/components/WorkflowGraphPanel.tsx:931`, `apps/web/src/components/VisualWorkflowEditor.tsx:236`.
 
 ## See also
 
-- [Token usage — Reference](../reference/token-usage.md) — endpoints, DTOs, status codes, MCP tools.
-- [Token usage monitoring — Deep Dive](../deep-dive/token-usage-monitoring.md) — concept, event flow, source table.
-- [Runs, board, and live watch](./runs-board-watch.md) — the Watch page and timeline.
-- [Operations](./operations.md) — project health and observability surfaces.
+- [Token usage — Reference](../reference/token-usage.md) — endpoints, DTOs, and status codes.
+- [Token usage monitoring — Deep Dive](../deep-dive/token-usage-monitoring.md) — event flow, projections, and source table.
+- [Runs, board, and live watch](./runs-board-watch.md) — run cards, the board, and Watch page flow.
+- [Distributed execution & scaling](../deep-dive/distributed-execution-scaling.md) — shared event-store streaming under multiple replicas.

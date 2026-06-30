@@ -1,182 +1,69 @@
 # Run Event Stream (`IRunEventStream`)
 
-> Feature: `016-run-event-stream` · Foundation wave `016-US4`
+> Feature: `016-run-event-stream` · updated for cross-replica streaming
 
-A durable, pub/sub event log for a run. It replaces the ad-hoc, memory-only
-`RunStreamStore` ring buffer as the **system of record** for a run's `RunEvent`
-timeline, while preserving the existing SSE wire protocol byte-for-byte.
+Agentweaver treats a run's event stream as a durable, ordered log first and a live SSE feed second. The current implementation mirrors every `RunStreamEntry` append into the shared `RunEvents` table, and the EF/Postgres stream reads from that table by cursor so any replica can stream any run. The pod-local `RunStreamStore` remains a same-replica compatibility and low-latency path; it is no longer the only place an SSE client can see a run's live history. Source: `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:98`, `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:115`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:416`.
 
-## Why
+For the scaling story, see [Distributed execution & scaling](./deep-dive/distributed-execution-scaling.md#run-event-fan-out-under-multiple-replicas). For the event taxonomy, see [Events reference](./reference/events.md).
 
-The legacy `RunStreamStore` / `RunStreamEntry` held each run's events in an
-in-memory list and only snapshotted them to SQLite at terminal time
-(fire-and-forget). That design lost mid-run events on a crash, capped runs at
-10k events (silent drop), and forced the coordinator to poll child runs. The
-`IRunEventStream` abstraction makes every append durable per-append and gives
-consumers a push-based `await foreach` over an `IAsyncEnumerable<RunEvent>`.
+## Architecture — shared store, cursor stream
 
-## Architecture — two layers
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart LR
+    Producer["Run producer<br/>workflow · coordinator · review"]
+    Local["RunStreamEntry<br/>pod-local history"]
+    DB[("RunEvents<br/>shared database")]
+    WebA["Replica A<br/>SSE endpoint"]
+    WebB["Replica B<br/>SSE endpoint"]
+    Browser["Browser / MCP watcher<br/>Last-Event-ID cursor"]
 
-```
- Producer (agent runtime / workflow / endpoints)
-        │  AppendAsync(runId, evt)
-        ▼
- ┌─────────────────────────────────────────────────────────────┐
- │ SqliteRunEventStream                                          │
- │                                                              │
- │  Layer 1 — SQLite write-through (DURABILITY)                 │
- │    synchronous INSERT into RunEvents (memory.db, WAL)        │
- │    ── returns only after the row is committed ──            │
- │                                                              │
- │  Layer 2 — in-process Channel<RunEvent> per run (FAN-OUT)   │
- │    bounded (capacity 1000); TryWrite publishes to live      │
- │    subscribers; surplus live copies are dropped (durable    │
- │    copy remains in Layer 1)                                 │
- └─────────────────────────────────────────────────────────────┘
-        ▲                              │
-        │ SubscribeAsync(runId, from)  │ replay (Layer 1) then tail (Layer 2)
-        │                              ▼
- Consumer (SSE endpoint / MCP run_watch / coordinator ObserveChild)
+    Producer -->|RecordNext / Record| Local
+    Local -->|AppendAsync mirror| DB
+    Producer -->|terminal backfill safety net| DB
+    DB -->|SubscribeAsync run id + cursor| WebA
+    DB -->|SubscribeAsync run id + cursor| WebB
+    WebA -->|SSE frames| Browser
+    WebB -->|SSE frames| Browser
 ```
 
-- **Layer 1** is the source of truth. The `RunEvents` table shape is frozen by
-  migration `20260616063937_AddRunEvents`
-  (`RunId`, `Sequence`, `EventType`, `PayloadJson`, `CreatedAt`, unique index on
-  `(RunId, Sequence)`) and lives in `memory.db`, the EF Core `MemoryDbContext`
-  file — separate from the main `agentweaver.db`. No new migration is added.
-- **Layer 2** is an in-process `Channel<RunEvent>` per active run for
-  low-latency tailing. It is *not* a system of record: a slow or absent consumer
-  that fills the bounded channel causes surplus *live* copies to be dropped; the
-  durable copy in Layer 1 is unaffected and is recovered by a reconnecting
-  subscriber via replay.
+The horizontal-scale invariant is simple: **the database log is the source of truth, and the cursor is the replay boundary**. `EfRunEventStream.AppendAsync` writes through before acknowledging (`WriteThroughAsync`), and `SubscribeAsync` repeatedly loads rows whose sequence is greater than the caller's last seen cursor, yielding them in sequence order until a terminal event appears. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:180`.
 
-## Interface contract
+## What changed from the old in-memory-only stream
 
-```csharp
-public interface IRunEventStream
-{
-    // Durable, synchronous SQLite write BEFORE return, then publish to the channel.
-    // Honors evt.Sequence when > 0 (idempotent on the unique (RunId, Sequence)
-    // index); otherwise assigns the next monotonic sequence.
-    ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
+| Concern | Current behavior | Source |
+|---|---|---|
+| Event production | `RunStreamEntry.RecordNext` and `Record` add to local history, wake local waiters, and synchronously mirror the same event into `IRunEventStream`. | `RunStreamStore.cs:87`, `RunStreamStore.cs:98`, `RunStreamStore.cs:106`, `RunStreamStore.cs:115`, `RunStreamStore.cs:164` |
+| Cross-replica reads | `EfRunEventStream.SubscribeAsync` polls the shared `RunEvents` table every `250 ms` when no new rows were emitted, so a subscriber on a different replica catches up without sticky sessions. | `EfRunEventStream.cs:33`, `EfRunEventStream.cs:77`, `EfRunEventStream.cs:96`, `EfRunEventStream.cs:180` |
+| Sequence safety | Caller-assigned sequences are idempotent if already present; auto-assigned sequences are computed in a serializable transaction with retry on `DbUpdateException`. | `EfRunEventStream.cs:118`, `EfRunEventStream.cs:128`, `EfRunEventStream.cs:131`, `EfRunEventStream.cs:141`, `EfRunEventStream.cs:163` |
+| Terminal safety net | Terminal persistence re-appends the full in-memory history through `IRunEventStream`; duplicate `(RunId, Sequence)` rows are skipped, so missed mirrors are reconciled without duplication. | `RunWorkflowFactory.cs:287`, `RunWorkflowFactory.cs:296`, `RunWorkflowFactory.cs:298`, `RunWorkflowFactory.cs:301` |
+| SSE fallback | If the current replica has no local stream entry, `/api/runs/{id}/stream` subscribes to `IRunEventStream` from the `Last-Event-ID` cursor and writes those events as SSE frames. | `RunEndpoints.cs:416`, `RunEndpoints.cs:423`, `RunEndpoints.cs:429`, `RunEndpoints.cs:431`, `RunEndpoints.cs:443` |
 
-    // Replay persisted events from fromSequence, then tail the live channel.
-    // Completes on a terminal event, channel completion, or cancellation.
-    IAsyncEnumerable<RunEvent> SubscribeAsync(string runId, int fromSequence = 0, CancellationToken ct = default);
+`EfRunEventStreamTests` proves the cross-replica behavior by creating two stream instances over the same database: one appends events and the other receives them through `SubscribeAsync`. The tests also prove that `RunStreamStore.RecordNext` mirrors into the shared stream. Source: `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:27`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:30`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:37`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:42`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:50`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:56`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:63`.
 
-    // Close the live channel so subscribers drain and complete normally.
-    ValueTask CompleteAsync(string runId, CancellationToken ct = default);
-}
-```
+## SSE wire protocol
 
-`RunEvent` (`packages/Agentweaver.Domain/RunEvent.cs`) is unchanged:
-`record RunEvent(int Sequence, string Type, object Payload)`.
+The `/api/runs/{id}/stream` endpoint still emits the same Server-Sent Event shape: an `id` line with the run-event sequence, an `event` line with the event type, and a JSON `data` line, followed by a `done` frame when the server closes the stream. Source: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:315`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:448`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:468`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:489`.
 
-## `SubscribeAsync` — replay-then-tail
+Reconnects use the browser's `Last-Event-ID` header as the `fromSequence` cursor. The endpoint parses that header on the replay path and on the local path, so refreshes resume from the last emitted sequence instead of starting over. Source: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:424`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:452`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:453`.
 
-```
-Subscriber                         Stream                         SQLite        Channel
-   │  SubscribeAsync(run, K)         │                              │             │
-   │────────────────────────────────▶ GetOrAdd channel ───────────────────────────▶ (created)
-   │                                 │  SELECT … WHERE Sequence > K  │             │
-   │                                 │◀──────────────────────────────│             │
-   │  ◀── yield persisted events ────│  (track lastReplayed)         │             │
-   │                                 │   terminal? → yield break     │             │
-   │                                 │  await ReadAllAsync ──────────────────────▶ tail
-   │  ◀── yield live events ─────────│   skip Sequence ≤ lastReplayed             │
-   │                                 │   terminal? / channel closed → complete    │
-```
+## Read-through coordinator gates
 
-Boundary guarantees:
+Browser refreshes around coordinator gates no longer surface transient `404` or `409` responses just because the spec or plan row is being created. `GET /api/runs/{id}/outcome-spec` waits up to three seconds for the persisted `OutcomeSpec`, and `GET /api/runs/{coordinatorRunId}/work-plan` waits up to five seconds for the persisted work plan before returning not found. Confirming an already-confirmed outcome spec also attempts to return the confirmed spec instead of a conflict. Source: `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:53`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:88`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:90`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:167`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:571`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:574`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:580`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:591`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:594`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:600`.
 
-- **No gap.** The channel is created *before* the DB read, so any append that
-  lands during replay is captured by the channel and delivered while tailing.
-- **No duplicate.** While tailing, events with `Sequence <= lastReplayed`
-  (already delivered by replay) are skipped.
-- **Clean termination.** Replay stops at a terminal event
-  (`run.completed` / `run.failed` / `run.cancelled`), so subscribing to a
-  finished run replays its full history and then completes. Tailing ends when
-  `CompleteAsync` closes the channel or `ct` is cancelled.
+## Source
 
-> Edge case: subscribing to a run that has *no* terminal event and *no* live
-> producer (e.g. an orphan) tails until `ct` cancels. In production the SSE
-> handler passes the HTTP request-abort token, and `WorkflowRestartService`
-> terminalizes orphans at startup, so this is bounded in practice.
+| Concern | File |
+|---|---|
+| Local stream entry and mirror to shared stream | `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs` |
+| EF/Postgres shared event stream and cursor polling | `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs` |
+| SSE endpoint, `Last-Event-ID`, replay fallback | `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs` |
+| Coordinator outcome/work-plan read-through waits | `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs` |
+| Terminal backfill and recording writer integration | `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs` |
+| Cross-instance tests | `tests/Agentweaver.Tests/EfRunEventStreamTests.cs` |
 
-## SSE wire protocol (frozen)
+## See also
 
-The `/api/runs/{id}/stream` handler in `RunEndpoints.cs` emits exactly:
-
-```
-id: <Sequence>
-event: <EventType>
-data: <camelCase JSON payload>
-
-```
-
-terminated by:
-
-```
-event: done
-data: {}
-
-```
-
-The `done` frame closes the current SSE connection. For most runs this is permanent — it signals the run has reached a true terminal state (`run.completed`, `run.failed`, `run.cancelled`). However, for coordinator runs, `done` can also close the stream at an intermediate gate. When the coordinator pauses at the outcome-spec `awaiting_confirmation` gate (autopilot off, or before the unattended confirm fires), the server closes the SSE connection with `done`. After the user confirms the spec, the frontend calls `onReconnect()` to reopen the stream from the last received sequence, and the run continues. The `done` frame at a spec gate is therefore not a permanent terminal — the stream can be reconnected.
-
-True permanent terminals are the run-level events `run.completed`, `run.failed`, and `run.cancelled`. Once any of these is replayed, `SubscribeAsync` completes and further reconnects return only the history.
-
-Reconnects send `Last-Event-ID: <Sequence>`, which maps to
-`SubscribeAsync(runId, fromSequence: <Sequence>)`. The frame layout, the
-`Last-Event-ID` semantics, and the `[DONE]` terminator are unchanged; the
-frontend `useRunStream` reader and the MCP `run_watch` client require no changes.
-
-## Migration guide — producers/consumers `RunStreamStore` → `IRunEventStream`
-
-This is staged across waves so the wire format stays frozen at every step.
-
-| Concern | Legacy (`RunStreamStore`) | `IRunEventStream` |
-| --- | --- | --- |
-| Produce an event | `entry.Record(...)` / `entry.RecordNext(...)` | `AppendAsync(runId, evt)` |
-| Durability | terminal-only `PersistRunEventsAsync` (fire-and-forget) | synchronous per-append write-through |
-| Consume | `GetSnapshotSince(lastSeen)` + `WaitForChangeAsync` poll loop | `await foreach (… in SubscribeAsync(runId, from))` |
-| Completion | `streamStore.Complete(runId)` | `CompleteAsync(runId)` |
-| Cap / eviction | `MaxEventsPerRun`, stale-sweep, generation bumps | none (durable, unbounded) |
-
-### Wave status
-
-- **`016-US4` (this wave) — foundation.**
-  - `IRunEventStream` + `SqliteRunEventStream` shipped and registered in DI
-    (`AddSingleton<IRunEventStream, SqliteRunEventStream>()`).
-  - **Producers**: the agent event path (`RecordingChannelWriter`, via
-    `RunWorkflowFactory.GetRecordingWriter` / `CreateSubStreamWriter`) now writes
-    *through* `IRunEventStream.AppendAsync` per append, using the sequence the
-    in-memory entry assigned. `PersistRunEventsAsync` re-appends the full history
-    idempotently as a terminal **backfill safety net** and then calls
-    `CompleteAsync`.
-  - `RunStreamStore` is **retained** as the live fan-out path so all current
-    consumers (the SSE live loop, review/merge endpoints, sandbox/outcome reads,
-    coordinator `ObserveChildAsync`) behave exactly as before.
-- **`016-US2`** migrates coordinator child observation
-  (`CoordinatorDispatchService.ObserveChildAsync`) to `SubscribeAsync` and
-  retires the `Task.Delay(200)` polling fallback.
-- **`016-US3`** removes the cap / eviction / generation machinery and deletes
-  `RunStreamStore` once every consumer subscribes via `IRunEventStream`.
-
-### Adding a new producer or consumer
-
-Depend only on `IRunEventStream`:
-
-```csharp
-// produce
-await runEventStream.AppendAsync(runId, new RunEvent(seq, EventTypes.AgentMessage, payload));
-
-// consume
-await foreach (var evt in runEventStream.SubscribeAsync(runId, fromSequence, ct))
-{
-    // …
-}
-```
-
-A future multi-instance backend (e.g. Redis Streams, Postgres `LISTEN`/`NOTIFY`)
-is a one-class swap of `SqliteRunEventStream` with no producer/consumer changes.
+- [Distributed execution & scaling](./deep-dive/distributed-execution-scaling.md#run-event-fan-out-under-multiple-replicas) — why the shared event store is required for multi-replica deployments.
+- [Events & observability](./deep-dive/events-observability.md) — event taxonomy and observability model.
+- [Token usage monitoring](./experience/token-usage-monitoring.md) — one UI surface that consumes the same live stream and usage projections.

@@ -32,7 +32,7 @@ isolation model — filesystem containment, governance, executor selection, and 
   `-preview` A2A transport — there is no alternate wire transport to deploy. See the
   [A2A reference](./a2a.md) for the transport's preview status and pinning.
 
-> AgentHost user-token delivery is selected by `AgentHost:KeyVaultUri` in AKS. Legacy file/CSI settings exist only for compatibility; the warm-pool path uses runtime Key Vault fetch after `/configure`.
+> AgentHost user-token delivery is selected by `AgentHost:KeyVaultUri` in AKS. File/CSI settings exist only for local compatibility; the warm-pool path uses runtime Key Vault fetch after `/configure`.
 
 ## Pod identity and quota
 
@@ -45,10 +45,10 @@ turns) rather than only ad-hoc shell commands.
 | Runtime class | `kata-vm-isolation` — a VM boundary around the container, so each run's secret and execution live inside a per-run microVM and are destroyed with it. |
 | Identity | Dedicated sandbox service account; **workload identity** (federated OIDC) is the preferred path for the model credential, projecting **only** the narrowly-scoped workload-identity token volume — not the full Kubernetes API service-account token. |
 | Cluster API access | None. The pod does not automatically receive Kubernetes API credentials; the sandbox stays tokenless for the cluster API even when workload identity is enabled for the model endpoint. |
-| Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is bound to a concrete pod. AgentHost uses the shared `agentweaver-agent-host` pool (`replicas: 2`), then receives per-run context through `POST /configure` before `/healthz` is expected to become ready. The old generic `agentweaver-sandbox` sleep-infinity pool is no longer deployed. |
+| Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is bound to a concrete pod. AgentHost uses the shared `agentweaver-agent-host` pool (`replicas: 2`), then receives per-run context through `POST /configure` before `/healthz` is expected to become ready. No separate per-run template or per-run warm pool is created for AgentHost. |
 | AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context plus `workingDirectory`, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
 | A2A turn authentication | Run launch generates a 256-bit random turn bearer token, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {token}` on `message:stream`; each pod accepts only its configured run token. |
-| Per-pod resources | Sized for a real agent runtime (a live session + model I/O), not a `sleep infinity` placeholder — materially larger CPU/memory requests than the shell-only baseline. Exact numbers are a capacity decision. |
+| Per-pod resources | Sized for a real agent runtime (a live session + model I/O), not a minimal standby placeholder — materially larger CPU/memory requests than the shell-only baseline. Exact numbers are a capacity decision. |
 | Quota | Namespace `ResourceQuota` caps pod count, CPU/memory requests, and sandbox-claim count. Heavier per-pod requests plus multiple web/worker replicas require these caps to be **raised deliberately** via a reviewed manifest change, never a live patch. |
 | Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; pods never persist past the run. |
 | Egress | Default-deny NetworkPolicy with a narrow allowlist (see [Security properties](#security-properties)). |

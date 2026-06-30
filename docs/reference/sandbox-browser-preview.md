@@ -5,8 +5,8 @@ live HTTPS preview of a server an agent started **inside its run's sandbox pod**
 
 When `Sandbox:Preview:Enabled=true` (the default in AKS deployments), `POST …/port-forward` provisions a **Gateway-direct
 reverse proxy** — a per-preview HTTPRoute → per-run ClusterIP Service → the run's sandbox pod — and returns a
-public `preview_url` plus a `keepalive_url`. When disabled (local dev), the same route falls back to the
-legacy `kubectl port-forward` and returns a loopback `local_port` instead. Every call verifies the run
+public `preview_url` plus a `keepalive_url`. When disabled (local dev), the same route falls back to
+`kubectl port-forward` and returns a loopback `local_port` instead. Every call verifies the run
 exists and the caller owns it (`404`/`403`). Source:
 [`SandboxEndpoints.cs`](#source), [`SandboxPreviewService.cs`](#source).
 
@@ -18,7 +18,7 @@ exists and the caller owns it (`404`/`403`). Source:
 | `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:57`](#source)). |
 | `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview's idle expiry to now + `IdleTimeoutMinutes`. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
 | `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Explicit stop. For the preview path `sessionId` is the capability token; deletes the HTTPRoute then the Service. Verifies run↔token first. |
-| `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists active legacy port-forward sessions for the run. |
+| `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists active port-forward sessions for the run. |
 
 The relative `keepalive_url` returned by `POST …/port-forward` is
 `/api/runs/{runId}/sandbox/preview/{token}/keepalive` ([`SandboxEndpoints.cs:70`](#source)).
@@ -41,7 +41,7 @@ The request routes through a **human-in-the-loop approval gate** before any prev
   `POST /api/runs/{runId}/tool-approvals` (with the emitted `request_id`) or the 5-minute window times out.
 
 `StartPreviewRequest` ([`SandboxEndpoints.cs:311`](#source)) uses the snake_case DTO convention — the wire
-field is `target_port` via `[JsonPropertyName("target_port")]`, unlike the legacy `PortForwardRequest` which
+field is `target_port` via `[JsonPropertyName("target_port")]`, unlike `PortForwardRequest` which
 binds camelCase `targetPort`.
 
 ### Auto-approve sources
@@ -67,7 +67,7 @@ From [`apps/web/src/api/types.ts:1169`](#source).
 | Field | Type | Meaning |
 |---|---|---|
 | `session_id` | string | Session identifier. In the preview path this **is** the capability token; used as `{sessionId}` to stop the preview. |
-| `local_port` | number | Loopback port on the API host (legacy fallback only). In the preview path this is `0` — the preview is a public URL, not a loopback. |
+| `local_port` | number | Loopback port on the API host (local fallback only). In the preview path this is `0` — the preview is a public URL, not a loopback. |
 | `target_port` | number | Port **inside** the sandbox pod being exposed. |
 | `pod_name` | string | Bound sandbox pod the preview targets (resolved from the run's `SandboxClaim` status). |
 | `started_at` | string | ISO timestamp of when the preview started. |
@@ -80,7 +80,7 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 
 | Config key | Default | Meaning |
 |---|---|---|
-| `Sandbox:Preview:Enabled` | `true` (AKS) / `false` (local dev) | Master switch. When `true` the API provisions Gateway-direct HTTPRoute+Service objects and returns a `preview_url`. When `false` the Gateway path and reaper are no-ops; the legacy `kubectl port-forward` is used instead. **Enabled by default** in AKS deployments via `Sandbox__Preview__Enabled=true`. |
+| `Sandbox:Preview:Enabled` | `true` (AKS) / `false` (local dev) | Master switch. When `true` the API provisions Gateway-direct HTTPRoute+Service objects and returns a `preview_url`. When `false` the Gateway path and reaper are no-ops and `kubectl port-forward` is used instead. **Enabled by default** in AKS deployments via `Sandbox__Preview__Enabled=true`. |
 | `Sandbox:Preview:ZoneSuffix` | `""` (set by deploy) | Managed `aksapp.io` zone; the preview host is `{token}-preview.{ZoneSuffix}`. Supplied by the AKS deploy script. Production value: `6a41f26c75d5cf00019ef7d7.westus2.staging.aksapp.io`. |
 | `Sandbox:Preview:GatewayName` | `agentweaver-preview-gateway` | Shared Gateway the per-preview HTTPRoute attaches to. Applied from `k8s/gateway-preview.yaml`. |
 | `Sandbox:Preview:GatewayNamespace` | `agentweaver` | Namespace of the shared preview Gateway. |
@@ -101,8 +101,8 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `403 Forbidden` | Caller does not own the run (operator route); or — on the agent route — the caller is neither the owner nor the run's own agent callback, **or** the agent-preview approval was denied / timed out at the HITL gate. |
 | `404 Not Found` | Run does not exist; or (keepalive/`DELETE`, preview path) the token's HTTPRoute does not carry the matching run (run↔token binding). |
 | `409 Conflict` | No bound sandbox pod for the run (the `SandboxClaim` is missing or not yet `Bound`), or the Gateway preview is not enabled on the keepalive path. |
-| `429 Too Many Requests` | A session cap was hit on the legacy port-forward fallback. |
-| `500` | Unexpected failure provisioning the preview (or `kubectl` failed to start the legacy tunnel). |
+| `429 Too Many Requests` | A session cap was hit on the port-forward fallback. |
+| `500` | Unexpected failure provisioning the preview (or `kubectl` failed to start the fallback tunnel). |
 
 ## Example
 

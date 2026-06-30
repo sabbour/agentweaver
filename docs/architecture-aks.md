@@ -37,7 +37,7 @@ flowchart TB
         end
 
         kv(["Azure Key Vault<br/>agentweaver-kv<br/>user tokens: ghtok-user--{id}<br/>app secrets: client-id/secret/oauth-key"])
-        pg(["Azure PostgreSQL<br/>Flexible Server<br/>runs · events · projects · memory"])
+        pg(["Azure PostgreSQL<br/>Flexible Server<br/>runs · RunEvents · projects · memory"])
         acr(["Azure Container Registry<br/>agentweaverregistry"])
     end
 
@@ -45,15 +45,15 @@ flowchart TB
 
     client -->|"HTTPS :443"| gw
     gw -->|"/ catch-all"| fe
-    gw -->|"/api · /auth"| api
+    gw -->|"/api · /auth · SSE"| api
     gw -->|"/mcp"| mcp
     mcp -->|"API calls :8080"| api
     api & worker -->|"SandboxClaim + POST /configure<br/>A2A Bearer :8088"| ahpool
     api --- ws
     worker --- ws
     ahpool --- ws
-    api -->|"TLS :5432"| pg
-    worker -->|"TLS :5432"| pg
+    api -->|"TLS :5432<br/>RunEvents cursor reads"| pg
+    worker -->|"TLS :5432<br/>RunEvents writes"| pg
     spc -->|"CSI volume mount"| api
     spc -->|"CSI volume mount"| mcp
     spc -->|"CSI volume mount"| worker
@@ -97,16 +97,17 @@ The Worker now runs in `pod-per-run`, so coordinator child agents execute in Age
 Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with `{ runId, userId, turnBearerToken, kvUserSecretName, workingDirectory }`, then waits for `/healthz` to become ready before sending the first `message:stream` turn. `workingDirectory` is the run's `WorktreePath`, so pod setup and file tools share the worktree path named by the system prompt. The pod lifecycle is:
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Standby: warm pool creates pod\n.NET + SDK process pre-warmed
-    Standby --> Configuring: POST /configure\nRunId/UserId/token/KV secret
-    Configuring --> Ready: SetupAsync completes\n/healthz 200
-    Ready --> Serving: A2A message:stream turns
-    Serving --> Released: run completes / suspends\nclaim deleted or TTL
-    Released --> [*]
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart LR
+    Standby["Standby<br/>warm pool creates pod<br/>.NET + SDK pre-warmed"] --> Configuring["Configuring<br/>POST /configure<br/>RunId/UserId/token/KV secret"]
+    Configuring --> Ready["Ready<br/>SetupAsync complete<br/>/healthz 200"]
+    Ready --> Serving["Serving<br/>A2A message:stream turns"]
+    Serving --> Released["Released<br/>run completes or suspends<br/>claim deleted or TTL"]
 ```
 
 `/configure` has one-time semantics (`409` after the first successful configuration). It is not protected by the turn bearer token because it delivers that token; the NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
+
+The live sandbox path binds claims to the AgentHost warm pool (`AgentHostWarmPoolRef`, default `agentweaver-agent-host`) and delivers per-run context through `/configure`; it does not create per-run templates or per-run warm pools for AgentHost. Source: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:40`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:332`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:480`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:497`, `k8s/sandbox-template-agenthost.yaml:36`, `k8s/sandbox-warmpool-agenthost.yaml:19`.
 
 ---
 
@@ -203,7 +204,7 @@ flowchart LR
         API["API Pod"]
         MCP["MCP Pod"]
         FE["Frontend Pods"]
-        SB["Sandbox Pod<br/>deny-all ingress"]
+        SB["AgentHost sandbox pod<br/>deny-all ingress"]
     end
 
     GW -->|":8080 allowed"| API
@@ -211,7 +212,7 @@ flowchart LR
     GW -->|":8080 allowed"| FE
 
     API -->|":8080 internal"| MCP
-    API -->|"pods/exec<br/>via kube-apiserver"| SB
+    API & worker -->|"A2A :8088<br/>/configure guarded by NetworkPolicy"| SB
 
     API & MCP -->|":443 HTTPS<br/>FQDN allowlist"| GH["api.github.com<br/>github.com"]
     API & MCP -->|"CSI driver for app secrets"| KV["Azure Key Vault"]

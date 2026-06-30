@@ -100,7 +100,7 @@ The rule that keeps P1 single-writer-safe is precise: the pod must never open a 
 
 ### P2 — Azure Database for PostgreSQL Flexible Server
 
-P2 makes the backing store **provider-aware**, with **Azure Database for PostgreSQL Flexible Server** as the multi-writer target (the current, locked direction). The provider is selected by `Database:Provider`: `postgres`/`postgresql` routes durable state through the EF Core `MemoryDbContext` and its EF-backed stores (`EfRunStore`, `EfRunRevisionStore`, `EfWorkflowRunStore`, `EfBacklogTaskStore`, `EfCastProposalStore`, and `EfRunEventStream`), while the default `sqlite` keeps the legacy single-writer SQLite stores. Once a real multi-writer database is underneath, the ReadWriteOnce data volume can be dropped, the deployment can move from a recreate to a rolling update strategy, and `replicas` can exceed one.
+P2 makes the backing store **provider-aware**, with **Azure Database for PostgreSQL Flexible Server** as the multi-writer target (the current, locked direction). The provider is selected by `Database:Provider`: `postgres`/`postgresql` routes durable state through the EF Core `MemoryDbContext` and its EF-backed stores (`EfRunStore`, `EfRunRevisionStore`, `EfWorkflowRunStore`, `EfBacklogTaskStore`, `EfCastProposalStore`, and `EfRunEventStream`), while the default `sqlite` keeps the single-writer SQLite stores. Once a real multi-writer database is underneath, the ReadWriteOnce data volume can be dropped, the deployment can move from a recreate to a rolling update strategy, and `replicas` can exceed one.
 
 P2 is mostly invisible to end users — the run/review model and the public API and event contracts do not change. What changes is *where* state lives and *who may write it concurrently*. The previously separate raw stores now fold into the single `MemoryDbContext` (which maps `runs`, `run_revisions`, `projects`, `backlog_tasks`, `workflow_runs`, and `cast_proposals` to Postgres tables and `model.Ignore<>()`s them on non-Npgsql providers), so there is one connection story and one migration mechanism; the [data-layer reference](../reference/scaling-data-layer.md) covers exactly which stores move and how.
 
@@ -205,52 +205,33 @@ A second, related guarantee covers **child dispatch** *(design target, not yet i
 
 ## Run-event fan-out under multiple replicas
 
-The live event stream is what makes a run watchable in real time. In a single process this is easy: the producer writes events into a process-local channel and the SSE relay reads from the same channel. The moment there are multiple replicas, that breaks — a run executes on worker A, but an SSE client may be connected to web pod B, whose local channel never sees A's events. Durability is fine because every event is written through to the shared database before it is acknowledged; what is lost is **live cross-replica delivery**.
+The live event stream is what makes a run watchable in real time. In a single process this is easy: the producer writes events into a process-local history and the SSE relay reads from the same process. With multiple replicas, a run can execute on worker A while an SSE client is connected to web pod B. The shipped fix is to make the shared `RunEvents` table the live replay source: every local `RunStreamEntry` append mirrors into `IRunEventStream`, and `EfRunEventStream.SubscribeAsync` polls the shared table by cursor. Source: `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:98`, `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:115`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:96`.
 
-### What exists today: durable write-through + same-replica fan-out
+### Current mechanism: durable write-through + cursor polling
 
-The Postgres path is `EfRunEventStream` (registered as `IRunEventStream` when `Database:Provider=postgres`). It mirrors the SQLite stream's two-layer shape:
-
-- **Durable write-through.** Every `AppendAsync` inserts the event into the `RunEvents` table inside a **serializable** transaction that computes `MAX(Sequence)+1` for the run, before the event is acknowledged. A unique `(RunId, Sequence)` index is the safety net; on a concurrent-append conflict the transaction retries (up to three attempts). This is what makes replay possible and gapless.
-- **In-process channel.** `SubscribeAsync` first **replays** durable rows after the caller's cursor from the database, then **tails** a bounded process-local channel for new events. Because the channel is per-process, a subscriber on a *different* replica does not receive live pushes from the producing worker — it sees new events only by replaying from the durable log on (re)subscribe.
-
-> **Design target, not yet implemented.** True live **cross-replica** delivery — a `LISTEN/NOTIFY` (or external-bus) cursor notification plus a low-frequency catch-up poll as a backstop — is the intended next step but is **not** in `EfRunEventStream` today. The durable log and the same-replica fast path below are what ship now; cross-replica live watching currently relies on durable replay.
-
-### The intended cross-replica mechanism
-
-The reconstruction principle is *durable-write-through plus cross-replica notification, with a polling backstop*:
-
-- Every event is synchronously persisted to the shared event log **before** it is acknowledged — this never changes, and it is what makes replay possible.
-- On each durable write, the producing worker emits a lightweight cross-replica notification carrying only a cursor (run id and sequence), not the payload. Any replay with subscribers for that run wakes them, and they read the new rows from the database.
-- Every subscriber *also* runs a low-frequency catch-up poll: "give me everything for this run after my cursor." Because reads are cursor-based and the event log enforces a unique (run, sequence) ordering, catch-up is idempotent and gapless. A missed notification can never strand a client — it only delays delivery until the next poll.
-
-The process-local channel does not disappear; it is retained as a **same-replica fast path** so that a client connected to the worker actually executing a run still gets the lowest-latency stream. The cross-replica notification plus the catch-up poll are the *floor* that guarantees correctness everywhere else.
+`EfRunEventStream` is registered as the Postgres `IRunEventStream` implementation (`Program.cs:534`). Its append path writes through to `RunEvents` before acknowledging, using a serializable transaction and retrying sequence conflicts. Its subscribe path repeatedly loads rows with `Sequence > lastSeen`, yields them in order, and sleeps for `250 ms` only when no new row was emitted. That gives every replica the same live floor: it can stream any run as long as it can read the shared database. Source: `apps/Agentweaver.Api/Program.cs:534`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:89`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:97`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:114`.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
-    Prod["Worker producing events"] -->|"1. durable write-through"| Log[("Run-event log<br/>unique (RunId, Sequence)")]
-    Prod -->|"2. notify cursor"| Bus{{"cross-replica notify"}}
-    Bus --> Sub["Subscriber on another replica"]
-    Log -->|"3. cursor read after last seen"| Sub
-    Sub -. "catch-up poll (backstop)" .-> Log
-    Prod -->|"same-replica fast path"| LocalSub["Local subscriber"]
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class Prod core;
-    class Log data;
-    class Bus evt;
-    class Sub svc;
-    class LocalSub svc;
+    W["Worker replica<br/>owns run"] -->|RecordNext / Record| L["RunStreamEntry<br/>local history"]
+    L -->|AppendAsync mirror| E["EfRunEventStream"]
+    E -->|INSERT RunEvents| DB[("Shared RunEvents table")]
+    A["Web replica A<br/>SSE"] -->|SubscribeAsync after cursor| DB
+    B["Web replica B<br/>SSE"] -->|SubscribeAsync after cursor| DB
+    DB -->|ordered rows| A
+    DB -->|ordered rows| B
+    A --> C["Browser / MCP watcher"]
+    B --> C
 ```
 
-One subtlety the data layer must handle: **sequence allocation has to stay correct under concurrent writers.** A naive "max sequence + 1" is racy across database snapshots once more than one writer can touch the same run. The unique (run, sequence) index is the durable safety net, backed by a per-run allocation strategy; the reference doc covers the mechanics. If leasing guarantees exactly one writer per run, contention only exists across the rare re-lease boundary, which keeps the allocation cheap.
+The process-local `RunStreamStore` still matters for same-replica compatibility and low-latency waiters, but it is no longer a horizontal-scale boundary. If a web replica does not have a local stream entry, `/api/runs/{id}/stream` falls back to `IRunEventStream.SubscribeAsync` with the `Last-Event-ID` cursor and writes the replayed rows as SSE frames. Source: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:416`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:431`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:443`.
+
+The regression test `SubscribeAsync_TailsEventsWrittenByAnotherStreamInstance` creates producer and subscriber `EfRunEventStream` instances over the same database and verifies the subscriber receives events appended by the other instance. Source: `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:27`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:30`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:37`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:42`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:46`.
+
+### Coordinator refresh race hardening
+
+Multi-replica streaming also made browser refreshes more common while coordinator rows were still being created. The coordinator endpoints now read through brief creation races: outcome-spec GET waits up to three seconds, work-plan GET waits up to five seconds, and confirm re-reads a confirmed spec before returning a conflict. Source: `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:53`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:88`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:167`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:571`, `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs:591`.
 
 ## How the pieces reinforce each other
 

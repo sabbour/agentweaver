@@ -109,6 +109,8 @@ With the Worker deployment now set to `Sandbox:AgentExecutionMode=pod-per-run`, 
 AgentHost warm pool is on the live execution path: its standby pods are claimed, configured, and
 serve real child-run turns instead of sitting idle.
 
+The AgentHost claim path binds to `AgentHostWarmPoolRef` (default `agentweaver-agent-host`) and calls `/configure` after the warm pod is bound; it does not create an AgentHost-specific per-run `SandboxTemplate` or per-run warm pool. Source: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:40`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:332`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:480`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:497`.
+
 The existing per-command exec path is **retained for its current utility purpose** (ad-hoc
 `run_command`); it is simply never the agent-turn transport. Nothing about pod-per-run deletes that
 capability — see [Sandbox](./sandbox.md#kubernetes-sandbox-lifecycle-claims-over-pods).

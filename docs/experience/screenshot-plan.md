@@ -70,8 +70,9 @@ rg "📸 \*\*Screenshot" docs/experience
 | 37 | `heartbeat-automation-column.png` | `operations.md` | `/projects/:projectId/heartbeat` | **Heartbeat** in left rail | Heartbeat page **Recent Activity** table showing the **Automation** column as the first column, with values such as `Coordinator Heartbeat` and `Checkpoint GC` alongside When, Acted, Errors, Duration. |
 | 38 | `run-pending-capacity.png` | `operations.md` | `/projects/:projectId/runs/:runId/workflow` | Open an active coordinator run with at least one subtask in `PendingCapacity` | Coordinator topology graph with one or more subtask nodes showing the amber **⏳ Waiting for capacity** badge. |
 | 39 | `watch-token-counter.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/runs/:runId/execution/:executionId` | Run in progress | Shows live token counter below the watch timeline |
-| 40 | `dashboard-token-usage.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/dashboard` | Default view | Shows token/AIC section with time-range filter and per-model breakdown |
-| 41 | `overview-token-usage.png` | `experience/token-usage-monitoring.md` | `/overview` | Admin user | Shows app-level usage section with per-project breakdown |
+| 40 | `dashboard-token-usage.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/dashboard` | Default view → **Agent and usage metrics** range | Shows shared 7d/30d/90d range filter, **Agent leaderboard** with **Cost** column, and the Token/AIC usage panel. |
+| 41 | `overview-token-usage.png` | `experience/token-usage-monitoring.md` | `/overview` | Admin user | Shows **Cost overview** tile, total AICs/tokens, top-project bars, per-model breakdown, and **Usage by project** table. |
+| 42 | `project-board.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/board` | Board with runs populated | Shows run cards with compact AIC/token cost chips next to status badges; open a run graph to verify the same chip on DAG nodes. |
 
 ## Count per page
 
@@ -87,5 +88,5 @@ rg "📸 \*\*Screenshot" docs/experience
 | `operations.md` | 6 |
 | `scaling-operations.md` | 2 |
 | `cluster-page.md` | 2 |
-| `token-usage-monitoring.md` | 3 |
-| **Total** | **41** |
+| `token-usage-monitoring.md` | 4 |
+| **Total** | **42** |

@@ -85,13 +85,21 @@ flowchart LR
 
 8. **Live Watch counter.** `WatchPage.tsx` (`apps/web/src/pages/WatchPage.tsx`) listens for
    `agent.turn.usage` SSE events via the `RunWatcher.tsx` `onTurnUsageEvent` callback and updates a live
-   counter. `TokenUsagePanel.tsx` (`apps/web/src/components/TokenUsagePanel.tsx`) renders the running
-   total and per-model breakdown table.
+   counter. `TokenUsagePanel.tsx` renders the running total and per-model breakdown table, with fixed-width
+   numeric cells so token and AIC columns align. Source: `apps/web/src/components/TokenUsagePanel.tsx:66`,
+   `apps/web/src/components/TokenUsagePanel.tsx:74`, `apps/web/src/components/TokenUsagePanel.tsx:108`.
 
-9. **Dashboard and overview.** `DashboardPage.tsx` (`apps/web/src/pages/DashboardPage.tsx`) shows a
-   token/AIC section with a 7d/30d/90d time-range filter. `OverviewPage.tsx`
-   (`apps/web/src/pages/OverviewPage.tsx`) shows an app-level usage section (admin-only; degrades
-   gracefully on `403`).
+9. **Dashboard, cards, and overview.** `CostChip` converts `total_nano_aiu` to AIC labels and falls back
+   to compact token labels. Run cards, workflow/coordinator DAG nodes, the dashboard leaderboard Cost
+   column, and the Overview Cost overview all render from the same usage summaries. Source:
+   `apps/web/src/components/CostChip.tsx:18`, `apps/web/src/components/board/RunCard.tsx:160`,
+   `apps/web/src/components/WorkflowGraphPanel.tsx:594`, `apps/web/src/pages/DashboardPage.tsx:461`,
+   `apps/web/src/pages/OverviewPage.tsx:442`.
+
+
+## DAG card layout
+
+Usage chips add metadata to graph cards, so the graph layout now shares `DAG_NODE_SEP = 96` and rendered-height hints by node type. `WorkflowRunPage`, `CoordinatorTopologyGraph`, `WorkflowGraphPanel`, and `VisualWorkflowEditor` all pass those hints into `layoutDag`, which prevents overlapping cards as cost, pod, status, and action badges appear. Source: `apps/web/src/utils/dagLayout.ts:6`, `apps/web/src/utils/dagLayout.ts:24`, `apps/web/src/utils/dagLayout.ts:48`, `apps/web/src/pages/WorkflowRunPage.tsx:706`, `apps/web/src/components/CoordinatorTopologyGraph.tsx:522`, `apps/web/src/components/WorkflowGraphPanel.tsx:931`, `apps/web/src/components/VisualWorkflowEditor.tsx:236`.
 
 ## AIC unit and display
 

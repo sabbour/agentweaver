@@ -2,7 +2,7 @@
 
 This reference is the exhaustive companion to the [Distributed execution & scaling deep dive](../deep-dive/distributed-execution-scaling.md). It documents the data and topology layer of horizontal scaling: the SQLite ↔ Azure Database for PostgreSQL Flexible Server **provider switch**, the store inventory and how the raw stores unify into one context, the leasing schema, the run-event stream, the web/worker deployment topology, provisioning and connectivity, and the configuration flags that gate each phase.
 
-The database target is **Azure Database for PostgreSQL Flexible Server** — the current, locked direction. The data layer is **provider-aware** (`Database:Provider`): `postgres`/`postgresql` routes durable state through the EF Core `MemoryDbContext` and EF-backed stores; the default `sqlite` keeps the legacy single-writer SQLite stores. Sections below note where a capability is implemented versus a documented design target.
+The database target is **Azure Database for PostgreSQL Flexible Server** — the current, locked direction. The data layer is **provider-aware** (`Database:Provider`): `postgres`/`postgresql` routes durable state through the EF Core `MemoryDbContext` and EF-backed stores; the default `sqlite` keeps the single-writer SQLite stores. Sections below note where a capability is implemented versus a documented design target.
 
 ## 1. Store inventory
 
@@ -10,7 +10,7 @@ The original shape was two physical SQLite databases under the data directory: o
 
 ### 1a. Operational stores (raw SQLite → EF, now provider-aware)
 
-These six stores began as hand-written SQL against the operational database. They now have **provider-aware** equivalents: under `Database:Provider=postgres` they are served by EF-backed stores over `MemoryDbContext` (`EfRunStore`, `EfRunRevisionStore`, `EfWorkflowRunStore`, `EfBacklogTaskStore`, `EfCastProposalStore`); under the default `sqlite` the legacy `Sqlite*` stores remain. The SQLite-specific idioms below describe the original raw form and how each maps onto Postgres/EF.
+These six stores began as hand-written SQL against the operational database. They now have **provider-aware** equivalents: under `Database:Provider=postgres` they are served by EF-backed stores over `MemoryDbContext` (`EfRunStore`, `EfRunRevisionStore`, `EfWorkflowRunStore`, `EfBacklogTaskStore`, `EfCastProposalStore`); under the default `sqlite` the `Sqlite*` stores remain. The SQLite-specific idioms below describe the original raw form and how each maps onto Postgres/EF.
 
 | Store | Tables | Data held |
 | --- | --- | --- |
@@ -117,29 +117,25 @@ Only the replica that gets `rows == 1` would spawn the child (and write the `dis
 
 ## 4. Run-event stream
 
-### What exists today
+### Current implementation
 
-The run-event stream is durable write-through plus in-process fan-out. The Postgres implementation is `EfRunEventStream` (registered as `IRunEventStream` when `Database:Provider=postgres`; the SQLite path uses `SqliteRunEventStream`). Each `AppendAsync`:
+The run-event stream is durable write-through plus shared-store cursor polling. The Postgres implementation is `EfRunEventStream` (registered as `IRunEventStream` when `Database:Provider=postgres`; the SQLite path remains separate). Each append writes to `RunEvents` before acknowledgement, and each subscriber reads rows after its cursor from the shared table. Source: `apps/Agentweaver.Api/Program.cs:534`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`.
 
-1. **Durable write-through** — inserts the event into the `RunEvents` table inside a **serializable** transaction that computes `MAX(Sequence)+1` for the run, before acknowledging. The unique `(RunId, Sequence)` index is the safety net; on a concurrent-append conflict (`DbUpdateException`) the transaction rolls back and retries, up to three attempts.
-2. **In-process channel** — pushes the stamped event into a bounded (`capacity 1000`) process-local `Channel<RunEvent>`. `SubscribeAsync` first replays durable rows after the caller's cursor from the database, then tails this channel.
+| Behavior | Contract | Source |
+|---|---|---|
+| Shared store append | `WriteThroughAsync` inserts a `RunEventRecord` with run id, sequence, event type, JSON payload, and timestamp. | `EfRunEventStream.cs:114`, `EfRunEventStream.cs:150`, `EfRunEventStream.cs:159` |
+| Sequence safety | Caller sequences are idempotent on duplicate; auto sequences use `MAX(Sequence)+1` under a serializable transaction and retry update conflicts up to three times. | `EfRunEventStream.cs:32`, `EfRunEventStream.cs:121`, `EfRunEventStream.cs:128`, `EfRunEventStream.cs:141`, `EfRunEventStream.cs:163` |
+| Cross-replica subscribe | `SubscribeAsync` loads rows where `RunId` matches and `Sequence > lastSeen`, orders by sequence, and polls every `250 ms` when no row is available. | `EfRunEventStream.cs:33`, `EfRunEventStream.cs:77`, `EfRunEventStream.cs:96`, `EfRunEventStream.cs:180` |
+| Local mirror | `RunStreamEntry.RecordNext` / `Record` still keep local history, but each append mirrors into `IRunEventStream` through `PersistBestEffort`. | `RunStreamStore.cs:87`, `RunStreamStore.cs:98`, `RunStreamStore.cs:106`, `RunStreamStore.cs:115`, `RunStreamStore.cs:164` |
+| SSE fallback | A replica without a local entry streams from `IRunEventStream.SubscribeAsync` using the `Last-Event-ID` cursor. | `RunEndpoints.cs:416`, `RunEndpoints.cs:423`, `RunEndpoints.cs:429`, `RunEndpoints.cs:431` |
 
-Both the channel and the SSE history are **per-process**, so at more than one replica a client connected to one pod does not receive live pushes for events produced on another — it sees them only by replaying from the durable log on (re)subscribe. Durability is unaffected (the log is shared); **live cross-replica delivery is the gap.**
+This means cross-replica live watching is implemented without sticky sessions: any web replica can observe events written by another worker by polling the shared event table from its cursor. The test `SubscribeAsync_TailsEventsWrittenByAnotherStreamInstance` covers this by using two stream instances over the same database. Source: `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:27`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:30`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:37`, `tests/Agentweaver.Tests/EfRunEventStreamTests.cs:42`.
 
-### Mechanism: notify + catch-up poll *(design target — not yet implemented)*
+### Operational notes
 
-The intended Postgres design keeps durability identical and adds cross-replica delivery. **None of the following is implemented in `EfRunEventStream` yet** — it is the documented next step:
-
-1. **Durable write-through (unchanged).** Synchronous insert into the event log before ack.
-2. **Live push via `LISTEN/NOTIFY`.** On each durable insert the producer would also issue `NOTIFY run_events, '<runId>:<sequence>'`. Each replica holds a `LISTEN run_events` connection; on a notify it wakes the relevant local subscribers, which then read the new rows from Postgres. The notification carries only the cursor, never the payload (payloads can exceed the NOTIFY size limit).
-3. **Catch-up poll backstop.** Every subscriber also runs a low-frequency poll (`SELECT ... WHERE RunId=@id AND Sequence > @cursor ORDER BY Sequence`). Because reads are cursor-based and the `(RunId, Sequence)` index is unique, catch-up is idempotent and gapless; a missed or undelivered notify can never strand a client, only delay it.
-4. **Same-replica fast path.** The per-process channel (which already exists) stays as a latency optimization for a client connected to the worker producing the events.
-
-`LISTEN/NOTIFY` requires **session-mode** connections — it does not pass through transaction-pooled PgBouncer. This must be reconciled with the pooling choice (§5): the wrong pooling mode silently disables live delivery, and the catch-up poll masks it as merely "slow," making the misconfiguration hard to detect.
-
-### Sequence allocation under concurrency
-
-`EfRunEventStream` implements the **serializable `MAX(Sequence)+1` with a unique-index retry loop** described above. The unique `(RunId, Sequence)` index is the durable safety net. If the worker tier guarantees exactly one writer per run via leasing, contention exists only across the rare re-lease boundary, which keeps the retry cheap. A per-run advisory lock or a dedicated per-run sequence are alternatives if contention ever warrants them.
+- The polling floor is intentionally database-backed and payload-safe; it does not depend on process-local channels, `LISTEN/NOTIFY`, or an external bus. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:96`.
+- Terminal events stop a subscription (`run.completed`, `run.failed`, `run.cancelled`, merge/review terminal events, and `run.assemble_ready`), so finished streams replay and close cleanly. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:35`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:89`.
+- Terminal backfill still re-appends the full local history through `IRunEventStream`; duplicates are skipped by the stream implementation, so this reconciles missed best-effort mirrors. Source: `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:287`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:296`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:298`, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:301`.
 
 ## 5. Deployment topology — web vs worker
 
@@ -188,7 +184,7 @@ The DB-side connection details are summarized here; the full platform runbook li
 - **Connectivity — private access via VNet integration (recommended).** Inject the Flexible Server into a dedicated delegated subnet in the AKS VNet and reach it over a private IP with the `privatelink.postgres.database.azure.com` Private DNS zone linked to the VNet. This matches the cluster's "no public app surface" posture. A Private Endpoint is an acceptable alternative when VNet injection is blocked by subnet topology; public access plus firewall allowlists is not recommended for production.
 - **Auth — passwordless Entra via workload identity (recommended).** The cluster already runs Azure Workload Identity end to end. The app exchanges its federated service-account token for an Entra access token (audience `https://ossrdbms-aad.database.windows.net`) and presents it as the Postgres password at connect time, so no DB password ever lives in Key Vault or a pod env var. App-side this needs a token-credential provider wired to the existing workload-identity env, and an Npgsql token-refresh hook. A Key Vault password via CSI is the documented fallback but reintroduces rotation burden.
 - **High availability.** Zone-redundant HA (primary + standby in different zones) on a General Purpose (or higher) tier, paired with zone-redundant backups and a 7–35 day point-in-time-restore retention window.
-- **Pooling.** Front Postgres with PgBouncer or use Npgsql pooling for N replicas — but reconcile with §4: `LISTEN/NOTIFY` needs session-mode (not transaction-pooled) connections.
+- **Pooling.** Front Postgres with PgBouncer or use Npgsql pooling for N replicas; the shipped run-event stream uses cursor polling against shared `RunEvents`, so it does not require session-mode `LISTEN/NOTIFY` connections.
 - **Migrations at deploy time.** Apply EF migrations from an init container/migration job rather than `EnsureCreated`, so schema is versioned and replica startup is race-free. Generate a **separate Postgres migrations set** (the existing snapshots encode SQLite affinity and must not be run against Postgres) and select it by provider at runtime. With multiple replicas the init container runs per-pod; rely on EF's migration-history table for idempotency.
 
 ## 7. Configuration flags that gate the phases

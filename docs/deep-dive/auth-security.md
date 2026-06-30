@@ -666,7 +666,7 @@ sequenceDiagram
 
 ### Configuration
 
-`AgentHost:KeyVaultUri` enables the warm-pool runtime fetch path. The AgentHost template injects it as static config because the pod must know which vault to call before `/configure` arrives. `AgentHost:KvTokenMountPath` and `AgentHost:UseSharedTokenStore` remain legacy/local compatibility paths, not the AKS production path.
+`AgentHost:KeyVaultUri` enables the warm-pool runtime fetch path. The AgentHost template injects it as static config because the pod must know which vault to call before `/configure` arrives. `AgentHost:KvTokenMountPath` and `AgentHost:UseSharedTokenStore` remain local compatibility paths, not the AKS production path.
 
 > **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) covers `AgentHostRuntimeState`, `KeyVaultUserTokenProvider`, the configure endpoint, and the security trade-off.
 
