@@ -536,7 +536,7 @@ Token scopes separate storage domains:
 
 In AKS, each authenticated user's GitHub token is stored in Azure Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never written to shared storage. The Key Vault token store no longer mirrors tokens to the workspace PVC. Local development may use Windows Credential Manager or per-scope JSON files under the developer data directory, depending on platform. A signed-out tombstone is stored to distinguish "user explicitly signed out" from "never signed in".
 
-A refresh helper centralizes token retrieval. It returns still-valid tokens directly, serializes refreshes per scope to avoid refresh races, signs out when refresh is impossible, and avoids logging raw token values.
+A refresh helper centralizes token retrieval. It returns still-valid tokens directly, serializes refreshes per scope to avoid refresh races, signs out when refresh is impossible, and avoids logging raw token values. In Key Vault-backed deployments, the token store also provides a short-lived per-scope refresh lease so only one API replica rotates an expiring GitHub token while other callers re-read the stored winner. Local stores fall back to an in-process per-scope gate.
 
 ### OAuth authorization state and web exchange codes
 
