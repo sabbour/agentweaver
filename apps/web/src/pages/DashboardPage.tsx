@@ -22,9 +22,8 @@ import {
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ThroughputPointDto, TokenUsageSummary } from '../api/types';
+import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, ThroughputPointDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
-import { TokenUsagePanel } from '../components/TokenUsagePanel';
 import { formatAic } from '../components/CostChip';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
@@ -37,8 +36,6 @@ import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 const REFRESH_MS = 30000;
 
 type TimeRange = '7d' | '30d' | '90d';
-
-type AgentCost = { totalNanoAiu: number; totalTokens: number };
 
 function timeRangeDates(range: TimeRange): { from: string; to: string } {
   const to = new Date();
@@ -185,14 +182,14 @@ function formatDuration(ms: number | null): string {
 }
 
 function successBadgeColor(rate: number): 'success' | 'warning' | 'danger' {
-  if (rate >= 0.8) return 'success';
-  if (rate >= 0.5) return 'warning';
+  if (rate >= 80) return 'success';
+  if (rate >= 50) return 'warning';
   return 'danger';
 }
 
 function formatSuccessRate(row: AgentLeaderboardEntryDto): string {
-  if (row.terminal_runs === 0) return '—';
-  return `${Math.round(row.success_rate * 100)}%`;
+  if (row.runsTotal === 0) return '—';
+  return `${Math.round(row.successRate)}%`;
 }
 
 // Lightweight dependency-free SVG line chart for the throughput series.
@@ -239,13 +236,11 @@ export function DashboardPage() {
   const { projectId } = useParams<{ projectId: string }>();
 
   const [data, setData] = useState<ProjectDashboardDto | null>(null);
+  const [metrics, setMetrics] = useState<ProjectMetricsDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedRange, setSelectedRange] = useState<TimeRange>('30d');
-  const [filteredUsage, setFilteredUsage] = useState<TokenUsageSummary | null>(null);
-  const [usageLoading, setUsageLoading] = useState(false);
-  const [agentCosts, setAgentCosts] = useState<Record<string, AgentCost>>({});
   const rangeDates = useMemo(() => timeRangeDates(selectedRange), [selectedRange]);
 
   const formatError = (err: unknown): string =>
@@ -258,9 +253,13 @@ export function DashboardPage() {
   const load = useCallback(async (signal: { cancelled: boolean }) => {
     if (!projectId) return;
     try {
-      const dto = await apiClient.getProjectDashboard(projectId, rangeDates.from, rangeDates.to);
+      const [dashboardDto, metricsDto] = await Promise.all([
+        apiClient.getProjectDashboard(projectId),
+        apiClient.getProjectMetrics(projectId, rangeDates.from, rangeDates.to),
+      ]);
       if (!signal.cancelled) {
-        setData(dto);
+        setData(dashboardDto);
+        setMetrics(metricsDto);
         setError(null);
       }
     } catch (err) {
@@ -281,50 +280,6 @@ export function DashboardPage() {
       clearInterval(iv);
     };
   }, [projectId, load]);
-
-  const loadProjectUsage = useCallback(async () => {
-    if (!projectId) return;
-    setUsageLoading(true);
-    try {
-      const { from, to } = rangeDates;
-      const usage = await apiClient.getProjectUsage(projectId, from, to);
-      setFilteredUsage(usage);
-
-      const fromMs = new Date(from).getTime();
-      const toMs = new Date(to).getTime();
-      const runs = await apiClient.getProjectRuns(projectId, { includeChildren: true, limit: 500 });
-      const scopedRuns = runs.filter((run) => {
-        const started = new Date(run.started_at).getTime();
-        return run.agent_name && !Number.isNaN(started) && started >= fromMs && started <= toMs;
-      });
-      const usageRows = await Promise.all(scopedRuns.map(async (run) => {
-        try {
-          return { agent: run.agent_name!, usage: await apiClient.getRunUsage(run.execution_id) };
-        } catch {
-          return null;
-        }
-      }));
-      const nextCosts: Record<string, AgentCost> = {};
-      for (const row of usageRows) {
-        if (!row) continue;
-        const prev = nextCosts[row.agent] ?? { totalNanoAiu: 0, totalTokens: 0 };
-        prev.totalNanoAiu += row.usage.total_nano_aiu;
-        prev.totalTokens += row.usage.total_tokens;
-        nextCosts[row.agent] = prev;
-      }
-      setAgentCosts(nextCosts);
-    } catch {
-      // Usage section is supplementary — degrade gracefully.
-      setFilteredUsage(null);
-      setAgentCosts({});
-    } finally {
-      setUsageLoading(false);
-    }
-  }, [projectId, rangeDates]);
-
-  useEffect(() => {
-    void loadProjectUsage();
-  }, [loadProjectUsage]);
 
   const cards = useMemo(() => {
     if (!data) return [];
@@ -398,7 +353,7 @@ export function DashboardPage() {
           </div>
 
           <div className={styles.section}>
-            <Title3>Throughput (last 30 days)</Title3>
+            <Title3>Throughput</Title3>
             <div className={styles.panel}>
               <div className={styles.legend}>
                 <span className={styles.legendItem}>
@@ -410,16 +365,16 @@ export function DashboardPage() {
                   Done
                 </span>
               </div>
-              {data.throughput.length === 0 ? (
+              {(metrics?.throughput.length ?? 0) === 0 ? (
                 <Text>No throughput data yet.</Text>
               ) : (
-                <ThroughputChart points={data.throughput} />
+                <ThroughputChart points={metrics?.throughput ?? []} />
               )}
             </div>
           </div>
 
           <div className={styles.sharedMetricsHeader}>
-            <Title3>Agent and usage metrics</Title3>
+            <Title3>Agent metrics</Title3>
             <div className={styles.filterGroup}>
               <Text className={styles.metricNote}>Range</Text>
               <Select
@@ -438,10 +393,8 @@ export function DashboardPage() {
 
           <div className={styles.section}>
             <Title3>Agent leaderboard</Title3>
-            <Text className={styles.metricNote}>
-              Success rate = successful terminal runs / terminal runs (queued, waiting-review, and in-progress excluded).
-            </Text>
-            {data.agent_leaderboard.length === 0 ? (
+            <Text className={styles.metricNote}>Success rate is reported directly from Application Insights telemetry.</Text>
+            {(metrics?.leaderboard.length ?? 0) === 0 ? (
               <Text>No agent activity yet.</Text>
             ) : (
               <div className={styles.leaderboardPanel}>
@@ -458,52 +411,41 @@ export function DashboardPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {data.agent_leaderboard.map((row) => (
-                      <TableRow key={row.agent}>
+                    {(metrics?.leaderboard ?? []).map((row) => (
+                      <TableRow key={row.agentName}>
                         <TableCell>
                           <TableCellLayout className={styles.agentCell}>
                             <Link
-                              to={`/projects/${projectId}/flow?agent=${encodeURIComponent(row.agent)}`}
+                              to={`/projects/${projectId}/flow?agent=${encodeURIComponent(row.agentName)}`}
                               className={styles.breadcrumbLink}
                             >
-                              {row.agent}
+                              {row.agentName}
                             </Link>
                           </TableCellLayout>
                         </TableCell>
                         <TableCell>
-                          <TableCellLayout className={styles.roleCell}>{row.role_title ?? '—'}</TableCellLayout>
+                          <TableCellLayout className={styles.roleCell}>{row.role ?? '—'}</TableCellLayout>
                         </TableCell>
-                        <TableCell>{row.runs_this_week}</TableCell>
-                        <TableCell>{row.runs_total}</TableCell>
+                        <TableCell>{row.runsThisWeek}</TableCell>
+                        <TableCell>{row.runsTotal}</TableCell>
                         <TableCell>
                           <div className={styles.successCell}>
                             <Badge
                               appearance="tint"
-                              color={row.terminal_runs === 0 ? 'subtle' : successBadgeColor(row.success_rate)}
+                              color={row.runsTotal === 0 ? 'subtle' : successBadgeColor(row.successRate)}
                             >
                               {formatSuccessRate(row)}
                             </Badge>
-                            <Text className={styles.successBasis}>{row.successful_runs}/{row.terminal_runs}</Text>
+                            <Text className={styles.successBasis}>{row.runsTotal > 0 ? `${row.successRate}%` : '—'}</Text>
                           </div>
                         </TableCell>
-                        <TableCell>{formatDuration(row.avg_duration_ms)}</TableCell>
-                        <TableCell>{agentCosts[row.agent]?.totalNanoAiu ? `${formatAic(agentCosts[row.agent].totalNanoAiu)} AIC` : '—'}</TableCell>
+                        <TableCell>{formatDuration(row.avgDurationMs)}</TableCell>
+                        <TableCell>{row.costAic > 0 ? `${formatAic(Math.round(row.costAic * 1_000_000_000))} AIC` : '—'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               </div>
-            )}
-          </div>
-
-          <div className={styles.section}>
-            <Title3>Token and AIC usage</Title3>
-            {usageLoading && <Spinner size="tiny" label="Loading usage" />}
-            {!usageLoading && (filteredUsage ?? data.token_usage) && (
-              <TokenUsagePanel usage={(filteredUsage ?? data.token_usage)!} title="" />
-            )}
-            {!usageLoading && !(filteredUsage ?? data.token_usage) && (
-              <Text>No usage data available for this period.</Text>
             )}
           </div>
         </>

@@ -128,6 +128,12 @@ To force a rebuild of all images (ignore changed-path optimisation):
 FORCE_REBUILD=true bash scripts/aks/20-build-push-images.sh
 ```
 
+## Observability notes
+
+- Token and AIC usage data now lives in **Application Insights / Azure Monitor**, not in the application database.
+- The project dashboard throughput chart and agent leaderboard read from `GET /api/projects/{id}/metrics`, which proxies App Insights KQL.
+- If `APPLICATIONINSIGHTS_CONNECTION_STRING` is not configured, the metrics endpoint returns empty arrays so the dashboard degrades gracefully.
+
 ## Related scripts
 
 | Script | Purpose |

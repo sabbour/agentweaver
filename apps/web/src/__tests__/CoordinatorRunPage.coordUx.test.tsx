@@ -27,7 +27,6 @@ vi.mock('../api/apiClient', () => ({
     getRun: vi.fn(),
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
-    getRunUsage: vi.fn().mockResolvedValue({ input_tokens: 0, output_tokens: 0, total_tokens: 0, total_nano_aiu: 0, by_model: [] }),
     setAutopilot: vi.fn(),
     setAutoApprove: vi.fn(),
     retryRun: vi.fn(),
@@ -80,7 +79,6 @@ beforeEach(() => {
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
-  vi.mocked(apiClient.getRunUsage).mockResolvedValue({ input_tokens: 0, output_tokens: 0, total_tokens: 0, total_nano_aiu: 0, by_model: [] });
   vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
   vi.mocked(apiClient.answerQuestion).mockResolvedValue({ run_id: 'child-run-2', request_id: 'q-1', answered: true });

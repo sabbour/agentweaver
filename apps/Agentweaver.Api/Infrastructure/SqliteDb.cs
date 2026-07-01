@@ -62,7 +62,6 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN worktree_path TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN worktree_branch TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN tree_hash TEXT;", ct);
-        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN diff TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merge_conflicts TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN project_id TEXT;", ct);
@@ -77,12 +76,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN parent_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN subtask_id TEXT;", ct);
 
-        // Human-review dwell accounting (Feature: exclude human-review time from measured duration).
-        // review_ready_at = timestamp the run MOST RECENTLY entered awaiting_review (NULL when not
-        // currently parked in review). review_wait_ms = cumulative human-review dwell in ms, accrued
-        // on every exit from awaiting_review so revise loops sum correctly.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN review_ready_at TEXT;", ct);
-        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN review_wait_ms INTEGER NOT NULL DEFAULT 0;", ct);
 
         // Durable run-origin marker for backlog-pickup coordinator runs (Feature 009). Existing rows
         // default to 'interactive'; only the claim+reserve transaction writes 'backlog_pickup'.
@@ -155,27 +149,7 @@ public sealed class SqliteDb
         // source_file_path, title). NULL for tasks captured manually or through other methods.
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN source_file_path TEXT;", ct);
 
-        // Token usage records for Feature 019 (AI Credit and token monitoring).
-        await TryAlterAsync(connection,
-            """
-            CREATE TABLE IF NOT EXISTS token_usage_records (
-                id              TEXT PRIMARY KEY,
-                run_id          TEXT NOT NULL,
-                workflow_run_id TEXT,
-                project_id      TEXT,
-                model_id        TEXT NOT NULL,
-                input_tokens    INTEGER NOT NULL DEFAULT 0,
-                output_tokens   INTEGER NOT NULL DEFAULT 0,
-                total_nano_aiu  INTEGER NOT NULL DEFAULT 0,
-                recorded_at     TEXT NOT NULL
-            );
-            """, ct);
-        await TryAlterAsync(connection,
-            "CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage_records (run_id);", ct);
-        await TryAlterAsync(connection,
-            "CREATE INDEX IF NOT EXISTS idx_token_usage_project_time ON token_usage_records (project_id, recorded_at);", ct);
-        await TryAlterAsync(connection,
-            "CREATE INDEX IF NOT EXISTS idx_token_usage_wfr ON token_usage_records (workflow_run_id);", ct);
+        await MigrateLegacyMetricsSchemaAsync(connection, ct).ConfigureAwait(false);
     }
 
     private static async Task TryAlterAsync(SqliteConnection connection, string sql, CancellationToken ct)
@@ -205,6 +179,93 @@ public sealed class SqliteDb
         await tx.CommitAsync(ct).ConfigureAwait(false);
     }
 
+    private static async Task MigrateLegacyMetricsSchemaAsync(SqliteConnection connection, CancellationToken ct)
+    {
+        await TryDropTableAsync(connection, "token_usage_records", ct).ConfigureAwait(false);
+
+        var columns = await GetRunColumnsAsync(connection, ct).ConfigureAwait(false);
+        if (!columns.Contains("step_count") && !columns.Contains("review_wait_ms"))
+            return;
+
+        await using var tx = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
+        cmd.Transaction = (SqliteTransaction)tx;
+        cmd.CommandText =
+            """
+            CREATE TABLE runs__new (
+                run_id             TEXT PRIMARY KEY,
+                repository_path    TEXT NOT NULL,
+                originating_branch TEXT NOT NULL,
+                model_source       TEXT NOT NULL,
+                task               TEXT NOT NULL,
+                submitting_user    TEXT NOT NULL,
+                status             TEXT NOT NULL,
+                started_at         TEXT NOT NULL,
+                ended_at           TEXT,
+                result             TEXT,
+                worktree_path      TEXT,
+                worktree_branch    TEXT,
+                tree_hash          TEXT,
+                diff               TEXT,
+                review_ready_at    TEXT,
+                merge_conflicts    TEXT,
+                project_id         TEXT,
+                model_id           TEXT,
+                agent_name         TEXT,
+                agent_charter      TEXT,
+                reviewed_by        TEXT,
+                workflow_run_id    TEXT,
+                merged_commit_hash TEXT,
+                parent_run_id      TEXT,
+                subtask_id         TEXT,
+                origin             TEXT NOT NULL DEFAULT 'interactive',
+                retried_from       TEXT,
+                archived_at        TEXT
+            );
+
+            INSERT INTO runs__new (
+                run_id, repository_path, originating_branch, model_source, task,
+                submitting_user, status, started_at, ended_at, result,
+                worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
+                merge_conflicts, project_id, model_id, agent_name, agent_charter,
+                reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+                origin, retried_from, archived_at
+            )
+            SELECT
+                run_id, repository_path, originating_branch, model_source, task,
+                submitting_user, status, started_at, ended_at, result,
+                worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
+                merge_conflicts, project_id, model_id, agent_name, agent_charter,
+                reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+                COALESCE(origin, 'interactive'), retried_from, archived_at
+            FROM runs;
+
+            DROP TABLE runs;
+            ALTER TABLE runs__new RENAME TO runs;
+            CREATE INDEX IF NOT EXISTS idx_runs_origin_status ON runs (origin, status);
+            """;
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    private static async Task<HashSet<string>> GetRunColumnsAsync(SqliteConnection connection, CancellationToken ct)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(runs);";
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            columns.Add(reader.GetString(1));
+        return columns;
+    }
+
+    private static async Task TryDropTableAsync(SqliteConnection connection, string tableName, CancellationToken ct)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"DROP TABLE IF EXISTS {tableName};";
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     private const string SchemaSql = """
         CREATE TABLE IF NOT EXISTS runs (
             run_id             TEXT PRIMARY KEY,
@@ -220,10 +281,8 @@ public sealed class SqliteDb
             worktree_path      TEXT,
             worktree_branch    TEXT,
             tree_hash          TEXT,
-            step_count         INTEGER NOT NULL DEFAULT 0,
             diff               TEXT,
             review_ready_at    TEXT,
-            review_wait_ms     INTEGER NOT NULL DEFAULT 0,
             archived_at        TEXT
         );
 

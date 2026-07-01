@@ -48,7 +48,7 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, TokenUsageSummary, PortForwardSessionDto } from '../api/types';
+import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto } from '../api/types';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
@@ -1116,8 +1116,6 @@ export function CoordinatorRunPage() {
   // Per-run work-plan + children snapshot — used to drive the AgentRail.
   const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
   const [childrenData, setChildrenData] = useState<CoordinatorChildResponse[]>([]);
-  const [coordUsage, setCoordUsage] = useState<TokenUsageSummary | null>(null);
-  const [childUsageByRun, setChildUsageByRun] = useState<Record<string, TokenUsageSummary>>({});
   const [blockedSteerPending, setBlockedSteerPending] = useState(false);
 
   // Sandbox preview port-forward state.
@@ -1127,15 +1125,6 @@ export function CoordinatorRunPage() {
   const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
   const [previewBusy,       setPreviewBusy]       = useState(false);
   const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    apiClient.getRunUsage(runId)
-      .then((usage) => { if (!cancelled) setCoordUsage(usage); })
-      .catch(() => { if (!cancelled) setCoordUsage(null); });
-    return () => { cancelled = true; };
-  }, [runId]);
 
   // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
   // Used to render a graceful empty state and to back off the lifecycle poll so the page
@@ -1374,38 +1363,6 @@ export function CoordinatorRunPage() {
     [events, topoSeed],
   );
 
-  const childUsageRunIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const child of childrenData) {
-      if (child.childRunId) ids.add(child.childRunId);
-    }
-    for (const node of effectiveDescriptor?.nodes ?? []) {
-      const id = readChildRunId(node);
-      if (id) ids.add(id);
-    }
-    for (const node of Object.values(topology.nodes)) {
-      if (node.childRunId) ids.add(node.childRunId);
-    }
-    return [...ids].sort();
-  }, [childrenData, effectiveDescriptor, topology]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (childUsageRunIds.length === 0) { setChildUsageByRun({}); return; }
-    void Promise.all(childUsageRunIds.map(async (id) => {
-      try {
-        const usage = await apiClient.getRunUsage(id);
-        return [id, usage] as const;
-      } catch {
-        return null;
-      }
-    })).then((entries) => {
-      if (cancelled) return;
-      setChildUsageByRun(Object.fromEntries(entries.filter((x): x is readonly [string, TokenUsageSummary] => x !== null)));
-    });
-    return () => { cancelled = true; };
-  }, [childUsageRunIds]);
-
   // Per-subtask elapsed timing, derived from the subtask.* coordinator events (which carry a
   // timestamp_utc). Keyed by the raw subtaskId string. startedAt = first dispatched/running;
   // completedAt = first terminal (completed/failed/assemble_ready/rai_flagged). Drives a live counter
@@ -1595,8 +1552,6 @@ export function CoordinatorRunPage() {
             projectId:     projectId ?? '',
             startedAt:     timing?.startedAt,
             completedAt:   timing?.completedAt,
-            totalNanoAiu:  childRunId ? childUsageByRun[childRunId]?.total_nano_aiu : undefined,
-            totalTokens:   childRunId ? childUsageByRun[childRunId]?.total_tokens : undefined,
             executionPodName: topoNode?.executionPodName ?? null,
             dir:           'LR',
           } as SubtaskNodeData,
@@ -1673,8 +1628,6 @@ export function CoordinatorRunPage() {
           executionId: runId    ?? '',
           projectId:   projectId ?? '',
           dir:         'LR',
-          totalNanoAiu: node.id === 'coordinator' ? coordUsage?.total_nano_aiu : undefined,
-          totalTokens:  node.id === 'coordinator' ? coordUsage?.total_tokens : undefined,
         } as WorkflowNodeData,
         position: { x: 0, y: 0 },
       };
@@ -1684,7 +1637,7 @@ export function CoordinatorRunPage() {
       rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: COORDINATOR_GRAPH_NODE_SEP }, nodeSizeHints),
       displayEdges: allEdges,
     };
-  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, childUsageByRun, coordUsage]);
+  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
 
   // While the Coordinator is still drafting the outcome spec (inSpecAuthoring), the assembly
   // stages (RAI / Human Review / Merge / Scribe) are not yet committed work — no spec confirmed,

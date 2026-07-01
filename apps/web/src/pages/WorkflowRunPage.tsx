@@ -35,7 +35,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent, type EventType } from '../api/sse';
 import { apiClient } from '../api/apiClient';
-import type { TeamDto, GraphDescriptor, PortForwardSessionDto, TokenUsageSummary } from '../api/types';
+import type { TeamDto, GraphDescriptor, PortForwardSessionDto } from '../api/types';
 import { DAG_NODE_SEP, layoutDag, NODE_W, workflowNodeSizeHint } from '../utils/dagLayout';
 import { RunWatcher } from '../components/RunWatcher';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
@@ -260,7 +260,6 @@ export function WorkflowRunPage() {
   // Per-run auto-approve-tools option (seeded from the run detail; toggled live).
   const [autoApprove,    setAutoApprove]    = useState(false);
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
-  const [runUsage,       setRunUsage]       = useState<TokenUsageSummary | null>(null);
 
   // Sandbox preview port-forward state.
   const [sandboxBackend,      setSandboxBackend]      = useState<string | undefined>(undefined);
@@ -367,16 +366,6 @@ export function WorkflowRunPage() {
       .catch(() => { /* endpoint may 404 if the durable log is absent — fall back to SSE */ });
     return () => { cancelled = true; };
   }, [executionId, runStatus]);
-
-  // Fetch the graph descriptor for this execution; 404 → null → hardcoded fallback.
-  useEffect(() => {
-    if (!executionId) { setRunUsage(null); return; }
-    let cancelled = false;
-    apiClient.getRunUsage(executionId)
-      .then((usage) => { if (!cancelled) setRunUsage(usage); })
-      .catch(() => { if (!cancelled) setRunUsage(null); });
-    return () => { cancelled = true; };
-  }, [executionId]);
 
   useEffect(() => {
     if (!executionId) return;
@@ -697,8 +686,6 @@ export function WorkflowRunPage() {
             runDegraded:    node.id === 'agent' ? runDegraded : undefined,
             hasPendingApproval: node.id === 'agent' ? hasPendingApproval : undefined,
             executionPodName: planned ? undefined : (executorStates[node.id]?.executionPodName ?? null),
-            totalNanoAiu:    node.id === 'agent' ? runUsage?.total_nano_aiu : undefined,
-            totalTokens:     node.id === 'agent' ? runUsage?.total_tokens : undefined,
           } as WorkflowNodeData,
           position: { x: 0, y: 0 },
         };
@@ -733,8 +720,6 @@ export function WorkflowRunPage() {
         runDegraded:    def.key === 'agent' ? runDegraded : undefined,
         hasPendingApproval: def.key === 'agent' ? hasPendingApproval : undefined,
         executionPodName: executorStates[def.key]?.executionPodName ?? null,
-        totalNanoAiu:    def.key === 'agent' ? runUsage?.total_nano_aiu : undefined,
-        totalTokens:     def.key === 'agent' ? runUsage?.total_tokens : undefined,
       } as WorkflowNodeData,
       position: { x: 0, y: 0 },
     }));
@@ -748,7 +733,7 @@ export function WorkflowRunPage() {
       rfNodes:      layoutDag(raw, fallbackFwd, { rankdir: 'LR', rankSep: 60, nodeSep: DAG_NODE_SEP }, fallbackNodeSizeHints),
       displayEdges: fallbackEdges,
     };
-  }, [effectiveDescriptor, isChild, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded, hasPendingApproval, runUsage]);
+  }, [effectiveDescriptor, isChild, executorStates, agentName, agentRoleTitle, modelId, reviewedBy, executionId, runId, projectId, runOutcome, runDegraded, hasPendingApproval]);
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
