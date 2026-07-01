@@ -315,6 +315,13 @@ Some actions require a human or external decision:
 - URL fetches can be approval-gated;
 - `ask_question` can pause on a question gate and resume with the answer.
 
+API-hosted runs persist tool-approval context, approval/denial decisions, run-scoped
+and always-allowed policies, parent-child approval inheritance, and run options
+such as `auto-approve` and `autopilot` as ordered run events. The API registers
+durable `IToolApprovalGate` and `IRunOptionsStore` implementations after the
+runtime defaults, so a worker on one replica can wait while an operator click or
+toggle lands on another replica.
+
 The tool should always produce a useful result even when the gate is unavailable or times out: either a denial, a fallback instruction to use best judgment, or an explicit explanation. Silent blocking is not acceptable.
 
 ```mermaid
@@ -341,7 +348,9 @@ Where this lives:
 - `packages/Agentweaver.AgentTools`
 - `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs`
 - `packages/Agentweaver.AgentRuntime/SandboxGovernance.cs`
-- `packages/Agentweaver.AgentRuntime/InMemoryToolApprovalGate.cs`
+- `apps/Agentweaver.Api/Runs/DurableToolApprovalGate.cs`
+- `apps/Agentweaver.Api/Runs/DurableRunOptionsStore.cs`
+- `apps/Agentweaver.Api/Runs/DurableRunControlState.cs`
 - `packages/Agentweaver.AgentRuntime/InMemoryQuestionGate.cs`
 
 ## Governance and sandboxing

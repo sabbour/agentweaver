@@ -67,8 +67,8 @@ Each project has three pickup-level settings, visible in the **Pickup settings**
 | Setting | What it controls |
 |---|---|
 | **Max Ready items per heartbeat** | How many Ready tasks the coordinator claims per tick (1–20, default 3) |
-| **Autopilot** | For automatically picked-up runs: auto-answers the coordinator's clarifying questions using the coordinator model, and auto-confirms the outcome spec so the run proceeds without waiting for manual confirmation. Tool and permission approvals are still required, and every auto-answer is logged in the timeline. Defaults to on. |
-| **Auto-approve tools** | Automatically approves tool calls for picked-up runs, except tools blocked by sandbox policy |
+| **Autopilot** | For automatically picked-up runs: auto-answers the coordinator's clarifying questions using the coordinator model, and auto-confirms the outcome spec so the run proceeds without waiting for manual confirmation. Tool and permission approvals are still required, every auto-answer is logged in the timeline, and the setting is persisted in the run event log so any API replica can honor it. Defaults to on. |
+| **Auto-approve tools** | Automatically approves tool calls for picked-up runs, except tools blocked by sandbox policy. The setting is persisted per run so a resumed worker or another API replica sees the same value. |
 
 When **Autopilot** is off, a pickup run pauses at the outcome-spec confirmation gate and waits for a human to confirm before any work begins. When it is on, the spec is confirmed automatically on behalf of the accountable human captured on the backlog item. This setting does not apply to runs you start manually — those always pause at the confirmation gate regardless.
 
