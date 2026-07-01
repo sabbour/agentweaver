@@ -1,7 +1,10 @@
+using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs.Graph;
@@ -143,6 +146,99 @@ public sealed class RunWatchLoopService
         }, _appStopping);
     }
 
+    private async Task PollDeferredReviewDecisionsAsync(
+        string runId, StreamingRun streamingRun, RunStreamEntry entry, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            if (_registry.Get(runId) is null)
+                return;
+
+            WorkflowReviewDecision? decision;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+                var row = await db.DeferredDecisions
+                    .FirstOrDefaultAsync(d => d.RunId == runId, ct)
+                    .ConfigureAwait(false);
+                if (row is null)
+                    continue;
+
+                decision = JsonSerializer.Deserialize<WorkflowReviewDecision>(row.DecisionJson, JsonDefaults.Options);
+                var deleted = await db.DeferredDecisions
+                    .Where(d => d.RunId == runId)
+                    .ExecuteDeleteAsync(ct)
+                    .ConfigureAwait(false);
+                if (deleted == 0 || decision is null)
+                    continue;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error polling deferred review decisions for run {RunId}", runId);
+                continue;
+            }
+
+            var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
+            if (pending is null)
+            {
+                _logger.LogWarning("Deferred review decision for run {RunId}: pending gate already consumed", runId);
+                return;
+            }
+
+            RecordDeferredReviewDecisionEvents(runId, entry, decision);
+
+            try
+            {
+                await streamingRun.SendResponseAsync(pending.Request.CreateResponse(decision)).ConfigureAwait(false);
+                _logger.LogInformation("Deferred review decision for run {RunId} applied on owner replica", runId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Deferred review SendResponseAsync failed for run {RunId}; transitioning to failed", runId);
+                await FailRunSafeAsync(runId, entry, "send_response_failed").ConfigureAwait(false);
+            }
+
+            return;
+        }
+    }
+
+    private static void RecordDeferredReviewDecisionEvents(
+        string runId, RunStreamEntry entry, WorkflowReviewDecision decision)
+    {
+        var reviewTs = DateTimeOffset.UtcNow.ToString("O");
+        if (decision.Approved)
+        {
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs, reviewer = decision.ReviewedBy });
+            entry.RecordNext(EventTypes.MergeStarted, new { });
+        }
+        else if (decision.RequestChanges)
+        {
+            entry.ClearAwaitingReview();
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "revise", label = "Review", timestamp_utc = reviewTs, reviewer = decision.ReviewedBy });
+            entry.RecordNext(EventTypes.ReviewChangesRequested, new { });
+            entry.RecordNext(EventTypes.RevisionStarted, new { });
+        }
+        else
+        {
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = reviewTs, reviewer = decision.ReviewedBy });
+        }
+    }
+
     private async Task WatchAsync(
         string runId,
         StreamingRun streamingRun,
@@ -176,29 +272,31 @@ public sealed class RunWatchLoopService
                     // WorkflowRestartService before this consumer reads the event), skip to
                     // avoid double-processing. WatchStreamAsync is single-consumer per run;
                     // WorkflowRestartService only reads briefly on startup to repopulate.
-                    if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is not null)
-                        break;
-
-                    // Workflow paused at review-gate.
-                    await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
-
-                    // Update SQLite: InProgress -> AwaitingReview.
-                    // Retrieve agent output from the request data for the review-ready update.
-                    if (rie.Request.TryGetDataAs<WorkflowReviewRequest>(out var reviewReq))
+                    if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is null)
                     {
-                        await _runStore.UpdateReviewReadyAsync(
-                            RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
-                            reviewReq.StepCount, CancellationToken.None).ConfigureAwait(false);
+                        // Workflow paused at review-gate.
+                        await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
+
+                        // Update SQLite: InProgress -> AwaitingReview.
+                        // Retrieve agent output from the request data for the review-ready update.
+                        if (rie.Request.TryGetDataAs<WorkflowReviewRequest>(out var reviewReq))
+                        {
+                            await _runStore.UpdateReviewReadyAsync(
+                                RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
+                                reviewReq.StepCount, CancellationToken.None).ConfigureAwait(false);
+                        }
+
+                        entry.MarkAwaitingReview();
+
+                        entry.RecordNext(EventTypes.ReviewRequested, new
+                        {
+                            tree_hash = reviewReq?.TreeHash,
+                            request_id = rie.Request.RequestId
+                        });
+                        entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "started", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
                     }
 
-                    entry.MarkAwaitingReview();
-
-                    entry.RecordNext(EventTypes.ReviewRequested, new
-                    {
-                        tree_hash = reviewReq?.TreeHash,
-                        request_id = rie.Request.RequestId
-                    });
-                    entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "started", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
+                    _ = PollDeferredReviewDecisionsAsync(runId, streamingRun, entry, ct);
 
                     // Q3 hybrid: checkpoint-and-release the AgentHost pod when the workflow
                     // suspends at a RequestPort gate, if ReleasePodOnSuspend=true (spec §9/§12.2).
