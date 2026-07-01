@@ -95,7 +95,7 @@ The durable artifacts are:
 - **Plan before dispatch.** Child runs are launched from a persisted WorkPlan, never from transient model text.
 - **One parent owns the combined outcome.** Children do agent work; the parent owns the collective RAI pass, review, merge, and scribe.
 - **The dependency graph is the hard ordering rule.** A subtask can run only when every dependency is satisfied.
-- **`assemble_ready` and `completed` satisfy dependencies.** `failed` and `rai_flagged` do not; their dependents are blocked or failed.
+- **`assemble_ready` and `completed` satisfy dependencies.** `failed`, `rai_flagged`, and `blocked` do not; blocked dependents never become ready.
 - **Isolation is advisory.** Child subtasks share the orchestration worktree. File-scope declarations and conservative conflict checks are what reduce clobbering.
 - **Dispatch is single-writer.** The dispatch loop owns subtask status mutation while active.
 - **Assembly is exactly-once by database compare-and-swap.** In-memory guards are helpful but not authoritative.
@@ -362,6 +362,12 @@ The dispatcher therefore adds two conservative safeguards:
 
 This favors correctness over maximum parallelism. A poorly scoped subtask may reduce parallelism, but it is less likely to clobber sibling work.
 
+### Dispatch lock contention on the dependency base branch
+
+When dispatch rebuilds the dependency-base integration branch for downstream subtasks, it treats git ref-lock contention as a transient recovery case rather than a fatal orchestration fault. If LibGit2Sharp throws a locked-file error, the dispatcher asks `WorktreeManager` to best-effort delete stale `.git/refs/heads/{branch}.lock` and `.git/packed-refs.lock` files, then retries up to three times with a short linear backoff.
+
+This path exists for crashed or interrupted prior processes that left a stale lock behind. If the retry still fails, dispatch logs the problem and continues without refreshing that dependency base branch, instead of crashing the whole coordinator loop.
+
 ### Child run construction
 
 For each dispatched subtask, the coordinator creates a child run with:
@@ -392,7 +398,9 @@ Terminal child events map to coordinator outcomes:
 
 Mid-run child questions and tool approval requests are re-emitted on the coordinator stream with child run id, subtask id, and request id. Autopilot may answer bubbled **questions** by running a one-shot Copilot coordinator turn grounded in the OutcomeSpec and subtask. Tool approvals remain separate and are not auto-granted by Autopilot.
 
-Observation includes stall handling. If a child emits no events within the configured stall timeout, the coordinator persists any partial output checkpoint it saw, fails the subtask with recovery guidance, increments the recovery-attempt counter, and propagates failure to dependents.
+Observation includes stall handling. If a child emits no events within `Coordinator:SubtaskStallTimeoutMinutes` (default five minutes), the coordinator emits `coordinator.child_stall_detected`, persists any partial-output checkpoint it saw, fails the stalled child subtask with recovery guidance, and increments the recovery-attempt counter.
+
+Pending dependents of that stalled prerequisite do not become runnable. Instead, the dispatcher marks them `blocked`: a terminal, assembly-ineligible status that does not satisfy dependencies and means "this subtask never ran because an upstream dependency stalled." That distinction matters operationally: the stalled child owns the failure, while the blocked dependents record the cascade.
 
 ### Topology emission and pod registry projection
 
@@ -570,8 +578,8 @@ The frontend **Heartbeat** page shows **Automation** as the first column in the 
 Several paths intentionally convert ambiguous failure into durable, inspectable state:
 
 - Child start failure creates a terminal failed child run before marking the subtask failed, so the child run page is not empty.
-- Orphaned/stalled children are failed after the stall TTL instead of being observed forever.
-- Pending dependents of a failed prerequisite are failed with recovery guidance.
+- Orphaned/stalled children are failed after the stall TTL instead of being observed forever, and the coordinator emits `coordinator.child_stall_detected`.
+- Pending dependents of a failed prerequisite are failed with recovery guidance; pending dependents of a stalled prerequisite are marked `blocked`.
 - Unexpected assembly exceptions mark the WorkPlan failed, emit a human-readable assembly failure, terminalize the run, and complete/persist the stream.
 - Corrupt reconciler candidates are marked failed rather than retried endlessly.
 - Steering recovery is capped per subtask to avoid infinite auto-resume loops.
@@ -615,7 +623,7 @@ The provider-neutral `AgentRunnerDispatcher` can route one-shot runner calls to 
 | Workflow selection fails | Fall back to project default workflow. |
 | Child run cannot start | Persist terminal failed child run, then fail the subtask. |
 | Child safety flagged | Mark subtask `rai_flagged`; dependents do not proceed. |
-| Child stream stalls | Persist partial output checkpoint when possible, fail subtask, propagate failure. |
+| Child stream stalls | Emit `coordinator.child_stall_detected`, persist partial output checkpoint when possible, fail the stalled subtask, and mark pending dependents `blocked`. |
 | Assembly has ineligible subtasks | Block whole assembly; no partial merge. |
 | Integration branch conflict | Mark needs resolution; do not enter review/merge. |
 | Collective RAI flagged | Current behavior: mark `rai_blocked` and terminalize failed. |

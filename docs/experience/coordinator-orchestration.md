@@ -94,13 +94,13 @@ Over MCP, `coordinator_outcome_spec_get` is the snapshot tool. It is useful afte
 
 ### Confirming the spec
 
-When the status is **Awaiting confirmation**, the UI offers **Confirm**. Clicking it confirms the spec and resumes the suspended coordinator run. The panel switches to **Confirmed** and shows **Outcome spec confirmed... Dispatch is unblocked.** The detail page then makes room for the coordinator graph and child execution experience.
+When the status is **Awaiting confirmation**, the UI offers **Confirm**. Clicking it confirms the spec and resumes the suspended coordinator run. The panel switches to **Confirmed** immediately and shows **Outcome spec confirmed... Dispatch is unblocked.** The detail page then makes room for the coordinator graph and child execution experience.
 
 Over MCP, `coordinator_outcome_spec_confirm` performs the same action. It confirms the current drafted OutcomeSpec for the coordinator run and resumes the run past the gate. This is the transition that allows the coordinator to select a workflow shape, decompose the work plan, persist subtasks and dependencies, and begin dispatching ready children.
 
 Confirmation is not just an acknowledgement. It is the user's approval that the coordinator's interpretation is the execution contract for the rest of the orchestration.
 
-After the user clicks **Confirm**, the web UI automatically reconnects the live stream. The coordinator stream closed at the `awaiting_confirmation` gate; confirmation resumes the run and reopens the stream so the topology, subtask graph, and coordinator session update in real time without a manual page refresh. The **View session** link in the spec authoring state also works correctly: it expands the coordinator session column if it was collapsed before scrolling to the session content.
+After the user clicks **Confirm**, the web UI automatically reconnects the live stream. The coordinator stream closed at the `awaiting_confirmation` gate; confirmation resumes the run and reopens the stream so the topology, subtask graph, and coordinator session update in real time without a manual page refresh. If the confirming SSE event arrives slightly later, the panel still keeps the terminal **Confirmed** state instead of briefly flipping back to an older drafting or awaiting-confirmation snapshot. The **View session** link in the spec authoring state also works correctly: it expands the coordinator session column if it was collapsed before scrolling to the session content.
 
 ### Requesting a revision
 
@@ -167,7 +167,7 @@ Each subtask includes:
 - `selectedModelId` — the model selected for that subtask.
 - `phase` — planning, execution, validation, or another server-authored phase.
 - `isolation` — an advisory worktree/shared hint.
-- `status` — pending, dispatched, running, assemble-ready, completed, failed, or RAI-flagged.
+- `status` — pending, dispatched, running, assemble-ready, completed, failed, blocked, or RAI-flagged.
 - `childRunId` — present once the subtask has a dispatched child run.
 
 Dependency rows point from prerequisite to dependent. In the topology, edges mean "this must finish before that can run." The coordinator advances only the ready frontier: pending subtasks with all dependencies satisfied can dispatch; blocked predecessors keep dependents from running.
@@ -178,7 +178,7 @@ The orchestration detail page titles the graph section **Coordinator Graph**. It
 
 The hint explains the graph's job: **Live view of the coordinator and its subtasks. Expand a subtask to see its pipeline, or use the steering controls to send a course-correction to the coordinator or stop the orchestration.**
 
-Subtask cards show the subtask title, assigned agent, role label when available, selected model, phase, status badge, and elapsed time. Status labels are direct and operational: **Pending**, **Dispatched**, **Running**, **Awaiting assembly**, **RAI flagged**, **Completed**, and **Failed**. A subtask that has finished its part but is waiting for the parent shows the note **Finished its part — waiting for collective assembly**.
+Subtask cards show the subtask title, assigned agent, role label when available, selected model, phase, status badge, and elapsed time. Status labels are direct and operational: **Pending**, **Dispatched**, **Running**, **Awaiting assembly**, **RAI flagged**, **Completed**, **Failed**, and **Blocked**. A subtask that has finished its part but is waiting for the parent shows the note **Finished its part — waiting for collective assembly**.
 
 The graph uses left-to-right dependency layout. Root subtasks appear after the coordinator; dependent subtasks appear after their prerequisites. The user can see which work is parallel, which work is serial, and which node is blocking the rest.
 
@@ -325,6 +325,8 @@ Below the graph, the page uses two columns. The left column is the **Outcome spe
 
 The coordinator session reuses the standard run timeline. It shows the coordinator's own messages, lifecycle cards, tool activity, and stream state. It filters out raw serialized work-plan JSON when the structured plan is already visible in the graph and panels.
 
+Coordinator-only artifacts are also intentionally quiet on misses. The page stops retrying `work-plan` or `outcome-spec` REST reads after the first `404`, because the live coordinator stream is enough to fill in those artifacts once they exist. Child runs skip those calls entirely: a child run never has its own work plan or outcome spec, so its page does not poll those coordinator-only endpoints at all.
+
 ### Bubbled child actions
 
 When a child asks a question or needs a tool approval, the coordinator re-projects that action onto the coordinator stream. The detail page shows those items in the all-up view so the user does not have to hunt through every child run.
@@ -338,6 +340,12 @@ After child subtasks settle, the coordinator assembles the collective output. Du
 During **In review**, the page shows a warning that review is pending and directs the user to the Changes panel. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
 
 If assembly blocks or fails, the page explains why. It can show conflict files, blocking subtasks, status badges, and hints such as re-running affected subtasks or stopping the run. The important UX rule is that the user gets a reason and a recovery surface, not a bare failed state.
+
+### Stall diagnostics
+
+If a child stops making progress long enough to hit the configured stall timeout, the coordinator records a `coordinator.child_stall_detected` event on the parent stream and marks the stalled path as ineligible to continue. In practice, the stalled child subtask shows a terminal failure with recovery guidance, while still-pending dependents can surface as **Blocked** because they never became runnable after their prerequisite stalled.
+
+If the run later shows **Blocked** at assembly time, `assembly_blocked` means the coordinator refused partial assembly because one or more subtasks were ineligible, including blocked dependency paths. The recovery action is to re-run the affected stalled or blocked branch through the recovery or steering controls if the plan is still valid, or stop the run if you want to abandon that orchestration attempt.
 
 ## MCP flow patterns
 
@@ -411,4 +419,3 @@ Steer means the user intervenes while the orchestration is alive or parked. Stop
 The experience keeps the user oriented at every scale. At the start, the user sees one understandable contract: the OutcomeSpec. In the middle, the user sees a topology: who is doing what, what is blocked, and which dependencies matter. At intervention time, the user has steering verbs that match intent: stop, redirect, amend, recover. At the end, the user reviews one assembled outcome.
 
 The web UI makes that lifecycle visual and action-oriented. MCP makes the same lifecycle scriptable and composable. Both surfaces preserve the same product promise: the coordinator can run a team, but the user confirms intent before work starts and retains control while the team executes.
-

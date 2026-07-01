@@ -172,11 +172,27 @@ The coordinator dispatches subtasks as first-class **child runs** parented by th
 
 - Subtasks with no unmet dependencies dispatch together and run **in parallel**.
 - A subtask with a dependency does not start until every prerequisite reaches `assemble_ready`/`completed`, so dependent work runs **serially** behind it.
-- A failed or RAI-flagged predecessor does not satisfy a dependency, so its dependents stay blocked.
+- A failed, blocked, or RAI-flagged predecessor does not satisfy a dependency, so its dependents stay blocked.
 
 Each child worker is dispatched with its charter (catalog or bespoke inline charter) plus the project's active **architectural/scope decisions** — compiled by `MemoryContextCompiler.CompileDecisionsAsync` and injected as the `## Boundaries and Decisions` block. Children deliberately do **not** receive the full four-layer memory stack (core context, learnings, session), which duplicated the charter and carried artifact-write instructions that broke inside a child worktree; only the non-negotiable decisions reach them, ensuring scope constraints bind the agents doing the actual work. See the [Memory reference](./memory.md#coordinator-child-workers--decisions-only).
 
-A subtask's status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`, surfaced as `subtask.*` events. The dispatched child runs (paired with subtask status) are available from `GET /api/runs/{id}/children` or the `coordinator_children_get` MCP tool.
+A subtask's status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`, surfaced as `subtask.*` events. The dispatcher can also mark a pending dependent `blocked` when an upstream prerequisite stalls and therefore never satisfies its dependency. The dispatched child runs (paired with subtask status) are available from `GET /api/runs/{id}/children` or the `coordinator_children_get` MCP tool.
+
+#### Subtask status enum
+
+The persisted subtask status values are:
+
+| Status | Meaning | Satisfies dependencies? | Terminal? |
+| --- | --- | --- | --- |
+| `pending` | Planned and waiting for its dependencies and conflict checks. | No | No |
+| `dispatched` | Child run was created and handed off. | No | No |
+| `running` | Child run is actively executing. | No | No |
+| `pending_capacity` | Temporarily parked because no AgentHost pod capacity was available yet. | No | No |
+| `assemble_ready` | Child finished with mergeable changes ready for collective assembly. | Yes | Yes |
+| `completed` | Child finished with no further mergeable changes required. | Yes | Yes |
+| `rai_flagged` | Child hit a responsible-AI block. | No | Yes |
+| `failed` | Child ran but ended unsuccessfully. | No | Yes |
+| `blocked` | The subtask never ran because an upstream dependency stalled, so the coordinator terminalized it as ineligible. | No | Yes |
 
 ### Observation and topology events
 
@@ -228,6 +244,13 @@ Two per-run boolean options, both default OFF, can be set at launch (`autopilot`
 ## Phase 3 collective assembly and terminal status
 
 After every child subtask finishes, the coordinator runs ONE collective assembly: it builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs ONE collective RAI pass over the aggregate diff, and arms ONE human review gate (`POST /api/runs/{coordinatorRunId}/assembly/review`). On approve it merges, runs the collective scribe, and completes; on request_changes it re-dispatches the inferred children; on decline, conflict, or RAI block it parks terminal. The review POST is replica-safe: a non-owner API replica can persist a deferred decision while the work plan is durably `in_review`, and the owner pipeline consumes it at most once. The full event sequence is documented in the [events reference](./events.md).
+
+When assembly stops with `coordinator.assembly_blocked`, the payload always includes `workPlanId` and `reason`. For the `ineligible_subtasks` path it also includes:
+
+- `ineligibleSubtaskIds` — the blocking subtask ids, preserved as the stable compact list for clients.
+- `ineligibleSubtasks` — enriched rows with `id`, `title`, `status`, `agent`, and `recoveryGuidance` so the UI can explain which subtasks blocked collective assembly and why.
+
+This is the no-partial-assembly gate: if any subtask is still ineligible, including `blocked`, the coordinator stops before collective review or merge.
 
 A coordinator run stays `in_progress` for the whole dispatch-plus-assembly window (its stream stays open), so the bare `RunStatus` is not enough for a UI to describe where the orchestration is. Two surfaces fix this:
 
