@@ -562,7 +562,8 @@ public sealed class RunWorkflowFactory
                 // AgentTurnInput is stored at ("agent-input","run-context") by the workflow entry storer.
                 string? projectId = run?.ProjectId?.ToString();
                 string? agentName = run?.AgentName;
-                if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName))
+                string? submittingUser = run?.SubmittingUser;
+                if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName) || string.IsNullOrEmpty(submittingUser))
                 {
                     var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
@@ -574,6 +575,11 @@ public sealed class RunWorkflowFactory
                     {
                         agentName = agentInput!.AgentName;
                         log.LogInformation("scribe-input-merge: resolved AgentName from workflow context for run {RunId}", output.RunId);
+                    }
+                    if (string.IsNullOrEmpty(submittingUser) && !string.IsNullOrEmpty(agentInput?.SubmittingUser))
+                    {
+                        submittingUser = agentInput!.SubmittingUser;
+                        log.LogInformation("scribe-input-merge: resolved SubmittingUser from workflow context for run {RunId}", output.RunId);
                     }
                 }
 
@@ -587,7 +593,8 @@ public sealed class RunWorkflowFactory
                     run?.ModelId,
                     TerminalStatus: output.Status,
                     MergeResult: output.MergeResult,
-                    MergeMode: output.MergeMode);
+                    MergeMode: output.MergeMode,
+                    SubmittingUser: submittingUser);
             });
 
         ExecutorBinding scribeInputNoChanges = new VisualFunctionExecutor<NoChangesOutput, ScribeTurnInput>(
@@ -615,7 +622,8 @@ public sealed class RunWorkflowFactory
                 // AgentTurnInput is stored at ("agent-input","run-context") by the workflow entry storer.
                 string? projectId = run?.ProjectId?.ToString();
                 string? agentName = run?.AgentName;
-                if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName))
+                string? submittingUser = run?.SubmittingUser;
+                if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName) || string.IsNullOrEmpty(submittingUser))
                 {
                     var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
@@ -628,6 +636,11 @@ public sealed class RunWorkflowFactory
                         agentName = agentInput!.AgentName;
                         log.LogInformation("scribe-input-no-changes: resolved AgentName from workflow context for run {RunId}", output.RunId);
                     }
+                    if (string.IsNullOrEmpty(submittingUser) && !string.IsNullOrEmpty(agentInput?.SubmittingUser))
+                    {
+                        submittingUser = agentInput!.SubmittingUser;
+                        log.LogInformation("scribe-input-no-changes: resolved SubmittingUser from workflow context for run {RunId}", output.RunId);
+                    }
                 }
 
                 return new ScribeTurnInput(
@@ -638,7 +651,8 @@ public sealed class RunWorkflowFactory
                     run?.RepositoryPath ?? "",
                     run?.ModelSource.ToApiString() ?? "github-copilot",
                     run?.ModelId,
-                    TerminalStatus: "no_changes");
+                    TerminalStatus: "no_changes",
+                    SubmittingUser: submittingUser);
             });
 
         // Scribe output adapters: reconstruct terminal output types from pass-through.
@@ -815,13 +829,16 @@ public sealed class RunWorkflowFactory
 
         string? projectId = run?.ProjectId?.ToString();
         string? agentName = run?.AgentName;
-        if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName))
+        string? submittingUser = run?.SubmittingUser;
+        if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName) || string.IsNullOrEmpty(submittingUser))
         {
             var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
             if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
                 projectId = agentInput!.ProjectId;
             if (string.IsNullOrEmpty(agentName) && !string.IsNullOrEmpty(agentInput?.AgentName))
                 agentName = agentInput!.AgentName;
+            if (string.IsNullOrEmpty(submittingUser) && !string.IsNullOrEmpty(agentInput?.SubmittingUser))
+                submittingUser = agentInput!.SubmittingUser;
         }
 
         return new ScribeTurnInput(
@@ -832,7 +849,8 @@ public sealed class RunWorkflowFactory
             run?.RepositoryPath ?? "",
             run?.ModelSource.ToApiString() ?? "github-copilot",
             run?.ModelId,
-            TerminalStatus: terminalStatus);
+            TerminalStatus: terminalStatus,
+            SubmittingUser: submittingUser);
     }
 
     /// <summary>

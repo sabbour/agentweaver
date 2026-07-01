@@ -116,7 +116,8 @@ public sealed record ScribeTurnInput(
     // Terminal output data so output adapters can reconstruct MergeOutput/NoChangesOutput
     string? TerminalStatus = null,
     string? MergeResult = null,
-    string? MergeMode = null);
+    string? MergeMode = null,
+    string? SubmittingUser = null);
 
 /// <summary>Input to the Rai RAI-review agent turn.</summary>
 public sealed record RaiTurnInput(
