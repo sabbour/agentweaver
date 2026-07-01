@@ -141,6 +141,12 @@ public sealed class WorktreeManager
         }
     }
 
+    public bool BranchExists(string repositoryPath, string branchName)
+    {
+        using var repo = new Repository(repositoryPath);
+        return repo.Branches[branchName] is not null;
+    }
+
     public string CommitChanges(string worktreePath, RunId runId)
     {
         using var repo = new Repository(worktreePath);
