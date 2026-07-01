@@ -1,15 +1,30 @@
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Api.Infrastructure;
 
 /// <summary>
 /// Default workspace provider for developer machines. The working directory is a
-/// plain filesystem path: resolve maps to the absolute canonical path, ensure creates
-/// the directory if absent and validates it is writable, IsAvailable is a directory-exists
-/// probe, and Release is a no-op. Selected when Workspace:Provider is "local" (default).
+/// plain filesystem path: resolve maps to the absolute canonical path for absolute paths,
+/// or to a per-project subdirectory under the configured <c>Workspace:Local:RootPath</c>
+/// for relative or empty paths. Ensure creates the directory if absent and validates it
+/// is writable, IsAvailable is a directory-exists probe, and Release is a no-op.
+/// Selected when Workspace:Provider is "local" (default).
 /// </summary>
 public sealed class LocalFilesystemWorkspaceProvider : IProjectWorkspaceProvider
 {
+    private readonly string _workspaceBase;
+
+    public LocalFilesystemWorkspaceProvider(IConfiguration configuration)
+    {
+        var configured = configuration["Workspace:Local:RootPath"];
+        _workspaceBase = string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".agentweaver", "workspaces")
+            : configured;
+    }
+
     public string BackendName => "local-filesystem";
 
     /// <inheritdoc />
@@ -18,9 +33,14 @@ public sealed class LocalFilesystemWorkspaceProvider : IProjectWorkspaceProvider
     public Task<string> ResolveWorkingDirectoryAsync(
         ProjectId id, string requestedPath, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(requestedPath))
-            throw new ArgumentException("Working directory path must not be empty.", nameof(requestedPath));
-        return Task.FromResult(Path.GetFullPath(requestedPath));
+        // Absolute path supplied → use it as-is (developer pointing at an existing repo clone).
+        if (!string.IsNullOrWhiteSpace(requestedPath) && Path.IsPathRooted(requestedPath))
+            return Task.FromResult(Path.GetFullPath(requestedPath));
+
+        // Relative or empty path → resolve to a per-project directory under the configured
+        // workspace base so Path.GetFullPath never silently anchors to the application CWD.
+        var projectRoot = Path.Combine(_workspaceBase, id.ToString());
+        return Task.FromResult(Path.GetFullPath(projectRoot));
     }
 
     public Task<WorkspaceHandle> EnsureWorkspaceAsync(

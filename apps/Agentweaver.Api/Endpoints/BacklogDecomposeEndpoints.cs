@@ -1,7 +1,10 @@
 using System.Text.Json.Serialization;
 using Agentweaver.Api.Backlog;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Projects;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
 
@@ -34,7 +37,13 @@ public sealed record DecomposeRequest(
     /// When <c>true</c>, creates Backlog tasks for all non-duplicate proposed items.
     /// When <c>false</c>, returns a preview without persisting anything.
     /// </summary>
-    [property: JsonPropertyName("confirm")] bool Confirm);
+    [property: JsonPropertyName("confirm")] bool Confirm,
+    /// <summary>
+    /// Optional git ref (branch name) to read <see cref="FilePath"/> from. When supplied, file
+    /// content is resolved through <see cref="Projects.ProjectWorkspaceService"/> so worktree and
+    /// assembly branches are supported. When omitted, the base working directory is used.
+    /// </summary>
+    [property: JsonPropertyName("ref")] string? Ref);
 
 /// <summary>A proposed backlog item in the decomposition preview or confirm response.</summary>
 public sealed record ProposedBacklogItem(
@@ -74,8 +83,10 @@ public static class BacklogDecomposeEndpoints
     {
         // GET /api/projects/{id}/workspace/files — workspace file tree (sandbox-scoped)
         app.MapGet("/api/projects/{id}/workspace/files", async (
+            HttpContext httpContext,
             string id,
             IProjectStore projectStore,
+            ProjectWorkspaceService projectWorkspaceService,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(id, out var projectId))
@@ -84,21 +95,37 @@ public static class BacklogDecomposeEndpoints
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
 
+            // When a ref is supplied, delegate to the ref-aware workspace service.
+            var @ref = httpContext.Request.Query["ref"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(@ref))
+            {
+                var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+                var listResult = await projectWorkspaceService.ListWorkspaceAsync(projectId, caller, @ref, ct);
+                if (listResult.Outcome == WorkspaceOutcome.NotFound)
+                    return Results.NotFound();
+                // Map WorkspaceNode flat list to WorkspaceFileNode tree for backward compatibility.
+                var nodes = listResult.Nodes ?? [];
+                var tree = BuildTreeFromNodes(nodes);
+                return Results.Ok(tree);
+            }
+
             var workspaceRoot = project.WorkingDirectory;
             if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot))
                 return Results.Ok(Array.Empty<WorkspaceFileNode>());
 
-            var tree = BuildTree(workspaceRoot, workspaceRoot);
-            return Results.Ok(tree);
+            var fileTree = BuildTree(workspaceRoot, workspaceRoot);
+            return Results.Ok(fileTree);
         }).WithTags("Backlog");
 
         // POST /api/projects/{id}/backlog/decompose — spec-to-backlog decomposition
         app.MapPost("/api/projects/{id}/backlog/decompose", async (
+            HttpContext httpContext,
             string id,
             DecomposeRequest request,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             BacklogDecomposeService decomposeService,
+            ProjectWorkspaceService projectWorkspaceService,
             MemoryDbContext db,
             CancellationToken ct) =>
         {
@@ -134,31 +161,51 @@ public static class BacklogDecomposeEndpoints
                 if (!EndpointHelpers.TryValidateRelativePath(request.FilePath, out normalizedPath))
                     return Results.BadRequest(new { error = "File path must be within the project workspace." });
 
-                var workspaceRoot = project.WorkingDirectory
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var fullPath = Path.GetFullPath(Path.Combine(workspaceRoot, normalizedPath));
-
-                // Containment check: reject any resolved path that escapes the workspace root.
-                var rootWithSep = workspaceRoot + Path.DirectorySeparatorChar;
-                var cmp = OperatingSystem.IsWindows()
-                    ? StringComparison.OrdinalIgnoreCase
-                    : StringComparison.Ordinal;
-
-                if (!fullPath.StartsWith(rootWithSep, cmp) && !fullPath.Equals(workspaceRoot, cmp))
-                    return Results.BadRequest(new { error = "File path must be within the project workspace." });
-
-                if (!File.Exists(fullPath))
-                    return Results.NotFound(new { error = "File not found in project workspace." });
-
-                try
+                // Ref-aware path: when a ref is supplied, resolve through ProjectWorkspaceService
+                // so worktree and assembly branches are supported correctly.
+                if (!string.IsNullOrWhiteSpace(request.Ref))
                 {
-                    fileContent = await File.ReadAllTextAsync(fullPath, ct);
+                    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+                    var contentResult = await projectWorkspaceService.GetFileContentAsync(
+                        projectId, caller, normalizedPath, request.Ref, ct);
+
+                    if (contentResult.Outcome == WorkspaceOutcome.InvalidPath)
+                        return Results.BadRequest(new { error = "File path must be within the project workspace." });
+                    if (contentResult.Outcome != WorkspaceOutcome.Ok || contentResult.Value is null)
+                        return Results.NotFound(new { error = "File not found in project workspace." });
+                    if (contentResult.Value.IsBinary || contentResult.Value.Content is null)
+                        return Results.BadRequest(new { error = "File is binary and cannot be decomposed." });
+
+                    fileContent = contentResult.Value.Content;
                 }
-                catch (Exception ex)
+                else
                 {
-                    return Results.Problem(
-                        $"Decomposition failed: could not read file — {ex.Message}",
-                        statusCode: 500);
+                    var workspaceRoot = project.WorkingDirectory
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    var fullPath = Path.GetFullPath(Path.Combine(workspaceRoot, normalizedPath));
+
+                    // Containment check: reject any resolved path that escapes the workspace root.
+                    var rootWithSep = workspaceRoot + Path.DirectorySeparatorChar;
+                    var cmp = OperatingSystem.IsWindows()
+                        ? StringComparison.OrdinalIgnoreCase
+                        : StringComparison.Ordinal;
+
+                    if (!fullPath.StartsWith(rootWithSep, cmp) && !fullPath.Equals(workspaceRoot, cmp))
+                        return Results.BadRequest(new { error = "File path must be within the project workspace." });
+
+                    if (!File.Exists(fullPath))
+                        return Results.NotFound(new { error = "File not found in project workspace." });
+
+                    try
+                    {
+                        fileContent = await File.ReadAllTextAsync(fullPath, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        return Results.Problem(
+                            $"Decomposition failed: could not read file — {ex.Message}",
+                            statusCode: 500);
+                    }
                 }
             }
 
@@ -250,6 +297,54 @@ public static class BacklogDecomposeEndpoints
             sb.AppendLine(spec.ClarifyingQuestions);
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds a <see cref="WorkspaceFileNode"/> tree from a flat <see cref="WorkspaceNode"/> list
+    /// returned by <see cref="ProjectWorkspaceService.ListWorkspaceAsync"/>. Directories are inferred
+    /// from the folder-flagged nodes; files are nested under their parent directories.
+    /// </summary>
+    private static IReadOnlyList<WorkspaceFileNode> BuildTreeFromNodes(IReadOnlyList<WorkspaceNode> flatNodes)
+    {
+        // Build a lookup of directory path → children list so files can be nested.
+        var dirChildren = new Dictionary<string, List<WorkspaceFileNode>>(StringComparer.Ordinal)
+        {
+            [""] = new(),
+        };
+
+        // First pass: register all directory entries.
+        foreach (var node in flatNodes.Where(n => n.IsFolder))
+        {
+            var key = node.Path.TrimEnd('/');
+            if (!dirChildren.ContainsKey(key))
+                dirChildren[key] = new();
+        }
+
+        // Second pass: place each node into its parent's child list.
+        foreach (var node in flatNodes.OrderBy(n => n.IsFolder ? 0 : 1).ThenBy(n => n.Path, StringComparer.Ordinal))
+        {
+            var path = node.Path.TrimEnd('/');
+            var name = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+            var parentKey = path.Contains('/') ? path[..path.LastIndexOf('/')] : "";
+
+            if (!dirChildren.TryGetValue(parentKey, out var parentList))
+            {
+                parentList = new();
+                dirChildren[parentKey] = parentList;
+            }
+
+            if (node.IsFolder)
+            {
+                dirChildren.TryGetValue(path, out var children);
+                parentList.Add(new WorkspaceFileNode(name, node.Path, true, children ?? []));
+            }
+            else
+            {
+                parentList.Add(new WorkspaceFileNode(name, node.Path, false, null));
+            }
+        }
+
+        return dirChildren[""];
     }
 
     /// <summary>
