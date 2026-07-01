@@ -126,6 +126,8 @@ As work runs, the graph animates:
 - Each node carries a status label — **Dispatching, Awaiting assembly,
   Assembling, In review, Complete, Blocked, Failed** — projected live from the run
   stream.
+- Subtask cards also surface the child run's cost chip when usage exists and the
+  executing sandbox pod chip when the run is in Kubernetes.
 - When a child needs a clarifying answer or a tool approval, the request surfaces
   **on the coordinator**, not on a sibling. You answer once, in one place, and the
   answer routes back to the child that asked. Tool approvals and run-level
