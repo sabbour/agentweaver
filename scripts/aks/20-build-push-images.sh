@@ -87,6 +87,8 @@ build_image() {
     --file "${dockerfile}" \
     .
   echo "  [built]  ${ACR_LOGIN_SERVER}/${image}:${tag}"
+  # Also tag as latest-release so it always points at the most recently built version
+  retag_image "${image}" "${tag}" "latest-release"
 }
 
 retag_image() {
