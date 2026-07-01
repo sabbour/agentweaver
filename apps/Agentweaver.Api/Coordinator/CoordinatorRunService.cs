@@ -453,16 +453,28 @@ public sealed class CoordinatorRunService
             "Coordinator run {RunId} is still awaiting confirmation but its gate is not armed; attempting inline recovery",
             runId);
 
-        try
+        if (_registry.Get(runId) is null)
         {
-            await RecoverSpecPhaseAsync(run, ct).ConfigureAwait(false);
+            try
+            {
+                await RecoverSpecPhaseAsync(run, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Inline recovery failed for coordinator run {RunId} after missing confirmation gate",
+                    runId);
+                return (null, null);
+            }
         }
-        catch (Exception ex)
+        else
         {
-            _logger.LogError(ex,
-                "Inline recovery failed for coordinator run {RunId} after missing confirmation gate",
+            // Startup recovery already registered this run — skip the inline RecoverSpecPhaseAsync.
+            // Racing with it would replace CTS_A in the registry and cause Path A's catch block to
+            // abandon the new CTS, destroying both streaming runs and stranding the run permanently.
+            _logger.LogInformation(
+                "Startup recovery already running for {RunId}; skipping inline RecoverSpecPhaseAsync",
                 runId);
-            return (null, null);
         }
 
         var recoveredRun = _registry.Get(runId);
@@ -474,7 +486,7 @@ public sealed class CoordinatorRunService
             return (null, null);
         }
 
-        var pending = await WaitForGateToArmAsync(runId, ct).ConfigureAwait(false);
+        var pending = await WaitForGateToArmAsync(runId, ct, TimeSpan.FromSeconds(8)).ConfigureAwait(false);
         if (pending is null)
         {
             _logger.LogError(
@@ -636,13 +648,13 @@ public sealed class CoordinatorRunService
     /// (double-submit / drained gate after dispatch hand-off), so there is no gate coming and we
     /// fall through to NoPendingGate immediately — preserving replay/double-POST protection.
     /// </summary>
-    private async Task<PendingEntry?> WaitForGateToArmAsync(string runId, CancellationToken ct)
+    private async Task<PendingEntry?> WaitForGateToArmAsync(string runId, CancellationToken ct, TimeSpan? timeout = null)
     {
         var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
         if (spec is null || spec.Status != "awaiting_confirmation")
             return null;
 
-        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(GateArmWaitTimeoutMs);
+        var deadline = DateTimeOffset.UtcNow.Add(timeout ?? TimeSpan.FromMilliseconds(GateArmWaitTimeoutMs));
         while (DateTimeOffset.UtcNow < deadline)
         {
             try
@@ -1025,9 +1037,14 @@ public sealed class CoordinatorRunService
             var runCt = _registry.Register(runId, streamingRun, runCts);
             ctsRegistered = true;
 
-            await RehydrateConfirmationGateAsync(run, streamingRun, ct).ConfigureAwait(false);
+            var recoveredRequest = await RehydrateConfirmationGateAsync(run, streamingRun, ct).ConfigureAwait(false);
 
             StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
+            // RehydrateConfirmationGateAsync consumed the RequestInfoEvent before WatchAsync starts,
+            // so WatchAsync will never see it. Start PollDeferredDecisionsAsync here so deferred
+            // decisions from secondary replicas are picked up for recovered runs.
+            if (recoveredRequest is not null)
+                _ = PollDeferredDecisionsAsync(runId, streamingRun, recoveredRequest, run.SubmittingUser, runCt);
             _logger.LogInformation("Recovered coordinator run {RunId} at the spec confirmation gate", run.Id);
         }
         catch
@@ -1040,7 +1057,7 @@ public sealed class CoordinatorRunService
         }
     }
 
-    private async Task RehydrateConfirmationGateAsync(Run run, StreamingRun streamingRun, CancellationToken ct)
+    private async Task<ExternalRequest?> RehydrateConfirmationGateAsync(Run run, StreamingRun streamingRun, CancellationToken ct)
     {
         var runId = run.Id.ToString();
 
@@ -1051,7 +1068,7 @@ public sealed class CoordinatorRunService
             _logger.LogWarning(
                 "Recovered coordinator run {RunId} resumed with status {Status}; confirmation gate was not pending during recovery",
                 runId, status);
-            return;
+            return null;
         }
 
         using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -1067,7 +1084,7 @@ public sealed class CoordinatorRunService
                     await _pendingStore.SetAsync(runId, rie.Request, run.SubmittingUser, ct).ConfigureAwait(false);
 
                 _logger.LogInformation("Confirmation gate re-armed for run {RunId}", runId);
-                return;
+                return rie.Request;
             }
         }
         catch (OperationCanceledException) when (probeCts.IsCancellationRequested && !ct.IsCancellationRequested)
