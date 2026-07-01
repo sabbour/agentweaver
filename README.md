@@ -110,6 +110,66 @@ bash install.sh --aks --image-tag <git-sha>
 
 ## AKS architecture
 
+### Block diagram
+
+```mermaid
+flowchart TB
+    client[Client]
+    gateway[Gateway]
+
+    subgraph aks[AKS Cluster]
+        direction TB
+
+        subgraph core[Core Services]
+            direction LR
+            fe[Frontend ×2]
+            api[API ×2]
+            worker[Worker ×1 + HPA]
+            mcp[MCP ×1]
+        end
+
+        subgraph kata[Kata VM Pool]
+            host[AgentHost Warm Pool ×2]
+        end
+
+        subgraph storage[Shared Storage]
+            direction LR
+            pvc[Workspace PVC]
+            csi[CSI SecretProvider]
+        end
+    end
+
+    pg[PostgreSQL]
+    kv[Key Vault]
+    acr[ACR]
+    gh[GitHub]
+
+    client --> gateway
+    gateway --> core
+    core --> host
+    core --- pvc
+    core --- csi
+    api --> pg
+    api --> kv
+    host --> kv
+    core --> gh
+    acr -.-> aks
+
+    classDef edge fill:#E8EEF9,stroke:#0F6CBD,color:#242424
+    classDef service fill:#CFE4FA,stroke:#0F6CBD,color:#242424
+    classDef runtime fill:#DFF6DD,stroke:#107C10,color:#242424
+    classDef storageStyle fill:#FFF4CE,stroke:#C19C00,color:#242424
+    classDef ext fill:#F3F2F1,stroke:#8A8886,color:#242424
+
+    class client,gateway edge
+    class fe,api,worker,mcp service
+    class host runtime
+    class pvc,csi storageStyle
+    class pg,kv,acr,gh ext
+```
+
+### Full component diagram (Mermaid)
+
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TB
@@ -173,25 +233,3 @@ flowchart TB
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
 - [AKS architecture](docs/architecture-aks.md)
-
-## Reference
-
-This section places Agentweaver alongside Agent eXecutor (AX) so the scope and tradeoffs of each project are easy to compare.
-
-| Dimension | Agent eXecutor (AX) | Agentweaver |
-| --- | --- | --- |
-| What it is | Google open-source distributed harness runtime | Full-stack agent orchestration system |
-| Layer | Agent runtime / harness | Orchestration runtime + workspace + review stack |
-| Language | Go | C#, TypeScript |
-| Execution model | Single-writer controller with append-only event log; sessions identified by `conversationId`; resumable gRPC streams | Coordinator expands an OutcomeSpec into a WorkPlan DAG and runs child tasks in parallel git worktrees on AgentHost pods |
-| Isolation | Compute-agnostic; relies on Agent Substrate (gVisor) or custom compute; no built-in VM isolation | Kata VM hardware-level isolation per AgentHost pod with layered network controls |
-| Human-in-the-loop | Roadmap only: tool-call approvals are planned, not implemented | First-class review gates with approve / request-changes / decline and PostgreSQL-serialized merge |
-| Streaming | Resumable gRPC streams, OpenTelemetry telemetry, event-log sequence cursors | SSE event stream, durable RunEvents in PostgreSQL, real-time topology graph |
-| Git/Workspace | No git or workspace concept | Per-run git worktree + branch with auto-conflict-resolve and merge serialization |
-| MCP | No built-in MCP surface | Yes; MCP server exposes runs as tools |
-| Steering | No steering / redirect concept | Mid-run coordinator steering |
-| Status | Open-source runtime | Alpha software |
-| License | Apache 2.0 | MIT |
-| Links | [github.com/google/ax](https://github.com/google/ax)<br>[Google Cloud blog](https://cloud.google.com/blog/products/ai-machine-learning/agent-executor-googles-distributed-agent-runtime) | [github.com/sabbour/agentweaver](https://github.com/sabbour/agentweaver)<br>[sabbour.me/agentweaver](https://sabbour.me/agentweaver/) |
-
-AX and Agentweaver overlap most at the orchestration layer, but they optimize for different boundaries. AX is a framework-agnostic distributed harness runtime with resumable streams and a durable append-only event log, while Agentweaver couples orchestration to git worktrees, review gates, and merge flow. AX is stronger if the goal is a general controller that can sit over different compute backends at scale without prescribing developer workflow. Agentweaver is broader in scope because it also owns the workspace, human approval path, and run-to-merge lifecycle.

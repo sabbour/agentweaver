@@ -82,6 +82,7 @@ export default withMermaid({
             { text: 'Sandbox setup', link: '/reference/sandbox-setup' },
             { text: 'Token usage', link: '/reference/token-usage' },
             { text: 'A2A transport', link: '/reference/a2a' },
+            { text: 'Agent eXecutor (AX) comparison', link: '/reference/agent-executor' },
             { text: 'Cluster diagnostics', link: '/reference/cluster-diagnostics' },
             { text: 'Scaling & data layer', link: '/reference/scaling-data-layer' },
           ],
