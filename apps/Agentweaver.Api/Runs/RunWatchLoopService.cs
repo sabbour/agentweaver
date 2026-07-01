@@ -110,6 +110,7 @@ public sealed class RunWatchLoopService
 
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
             linkedCts.CancelAfter(_watchLoopTimeout);
+            var durableStopMonitor = MonitorDurableSteeringStopAsync(runId, entry, linkedCts.Token);
             try
             {
                 await WatchAsync(runId, streamingRun, entry, ownerUser, linkedCts.Token).ConfigureAwait(false);
@@ -136,11 +137,40 @@ public sealed class RunWatchLoopService
             }
             finally
             {
+                await linkedCts.CancelAsync().ConfigureAwait(false);
+                try { await durableStopMonitor.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Durable steering stop monitor failed for run {RunId}", runId);
+                }
                 renewCts.Cancel();
                 _activeLeases.TryRemove(runId, out _);
                 await _leaseStore.ReleaseAsync(runId, _workerId, fencingToken, CancellationToken.None).ConfigureAwait(false);
             }
         }, _appStopping);
+    }
+
+    private async Task MonitorDurableSteeringStopAsync(string runId, RunStreamEntry entry, CancellationToken ct)
+    {
+        if (!RunId.TryParse(runId, out var parsedRunId))
+            return;
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+        {
+            var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (run is not { Status: RunStatus.Failed, Result: "steering_stop" })
+                continue;
+
+            if (!entry.HasEventType(EventTypes.RunCancelled))
+                entry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop" });
+            _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
+            _registry.Abandon(runId);
+            _logger.LogInformation("Run {RunId}: durable steering stop observed; local workflow abandoned", runId);
+            return;
+        }
     }
 
     private async Task WatchAsync(

@@ -1060,6 +1060,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             }
             catch (OperationCanceledException) when (stallCts.IsCancellationRequested && !ct.IsCancellationRequested)
             {
+                if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } resolved)
+                    return new ChildResult(subtaskId, childRunId, resolved);
+
                 // Stall TTL expired: child emitted no event within the configured window.
                 _logger.LogWarning(
                     "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) emitted no event " +
