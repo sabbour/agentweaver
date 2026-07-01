@@ -82,16 +82,11 @@ public sealed class EfRunStore : IRunStore
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.TreeHash, treeHash)
                 .SetProperty(r => r.Diff, diff)
-                .SetProperty(r => r.StepCount, stepCount)
                 .SetProperty(r => r.Status, RunStatus.AwaitingReview.ToApiString())
                 .SetProperty(r => r.ReviewReadyAt, ts), ct);
         WarnIfNoRows(rows, runId, "mark review ready");
     }
 
-    /// <summary>
-    /// Transitions AwaitingReview → InProgress; accrues the dwell time.
-    /// review_wait_ms delta is computed in C# (no julianday).
-    /// </summary>
     public async Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null)
     {
@@ -100,10 +95,8 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && r.Status == "awaiting_review", ct);
         if (rec is null) return false;
-        var dwellMs = (long)(ts - (rec.ReviewReadyAt ?? ts)).TotalMilliseconds;
         rec.Status = "in_progress";
         rec.EndedAt = null;
-        rec.ReviewWaitMs += dwellMs;
         rec.ReviewReadyAt = null;
         await db.SaveChangesAsync(ct);
         return true;
@@ -117,12 +110,10 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && r.Status == "awaiting_review", ct);
         if (rec is null) return false;
-        var dwellMs = (long)(endedAt - (rec.ReviewReadyAt ?? endedAt)).TotalMilliseconds;
         rec.Status = toStatus.ToApiString();
         rec.EndedAt = endedAt;
         rec.Result = result;
         rec.ReviewedBy = reviewer;
-        rec.ReviewWaitMs += dwellMs;
         rec.ReviewReadyAt = null;
         await db.SaveChangesAsync(ct);
         return true;
@@ -136,9 +127,7 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && r.Status == "awaiting_review", ct);
         if (rec is null) return false;
-        var dwellMs = (long)(ts - (rec.ReviewReadyAt ?? ts)).TotalMilliseconds;
         rec.Status = "committing";
-        rec.ReviewWaitMs += dwellMs;
         rec.ReviewReadyAt = null;
         await db.SaveChangesAsync(ct);
         return true;
@@ -168,10 +157,8 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && mergingFromStates.Contains(r.Status), ct);
         if (rec is null) return false;
-        var dwellMs = (long)(ts - (rec.ReviewReadyAt ?? ts)).TotalMilliseconds;
         rec.Status = "merging";
         rec.ReviewedBy = reviewer ?? rec.ReviewedBy;
-        rec.ReviewWaitMs += dwellMs;
         rec.ReviewReadyAt = null;
         await db.SaveChangesAsync(ct);
         return true;
@@ -233,7 +220,6 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.TreeHash, treeHash)
                 .SetProperty(r => r.WorktreeBranch, worktreeBranch)
                 .SetProperty(r => r.Diff, diff)
-                .SetProperty(r => r.StepCount, stepCount)
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt), ct);
         return rows > 0;
     }
@@ -396,7 +382,6 @@ public sealed class EfRunStore : IRunStore
         WorktreePath = r.WorktreePath,
         WorktreeBranch = r.WorktreeBranch,
         TreeHash = r.TreeHash,
-        StepCount = r.StepCount,
         Diff = r.Diff,
         MergeConflicts = r.MergeConflicts,
         ProjectId = r.ProjectId?.ToString(),
@@ -412,7 +397,6 @@ public sealed class EfRunStore : IRunStore
         RetriedFrom = r.RetriedFrom,
         ArchivedAt = r.ArchivedAt,
         ReviewReadyAt = null,
-        ReviewWaitMs = 0,
     };
 
     private static Run FromRecord(RunRecord r) => new()
@@ -430,7 +414,7 @@ public sealed class EfRunStore : IRunStore
         WorktreePath = r.WorktreePath,
         WorktreeBranch = r.WorktreeBranch,
         TreeHash = r.TreeHash,
-        StepCount = r.StepCount,
+        StepCount = 0,
         Diff = r.Diff,
         MergeConflicts = r.MergeConflicts,
         ProjectId = r.ProjectId is null ? null : ProjectId.Parse(r.ProjectId),

@@ -397,7 +397,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     }
 
     [Fact]
-    public async Task DwellComputation_ReviewWaitMs_IsNonNegative()
+    public async Task ReviewTransition_CompletesWithoutPersistedReviewWaitColumns()
     {
         var store = new EfRunStore(pg.Factory);
         var runId = RunId.New();
@@ -426,12 +426,9 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
             runId, RunStatus.Merged, approvedAt, "merged:ok");
         transitioned.Should().BeTrue();
 
-        // Re-read — the C# dwell computation (not julianday) must produce a non-negative value
-        await using var db = await pg.CreateDbContextAsync();
-        var id = runId.ToString();
-        var rec = await db.Runs.AsNoTracking().FirstAsync(r => r.RunId == id);
-        rec.ReviewWaitMs.Should().BeGreaterThanOrEqualTo(0,
-            "dwell computation must produce a non-negative value");
+        var reread = await store.GetAsync(runId);
+        reread.Should().NotBeNull();
+        reread!.Status.Should().Be(RunStatus.Merged);
     }
 }
 

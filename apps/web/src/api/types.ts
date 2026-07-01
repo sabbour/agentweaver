@@ -1164,54 +1164,13 @@ export interface ThroughputPointDto {
 
 // Per-agent activity + quality on a single project.
 export interface AgentLeaderboardEntryDto {
-  agent: string;
-  role_title?: string | null;
-  runs_this_week: number;
-  runs_total: number;
-  success_rate: number;        // successful terminal runs / terminal runs, [0,1]
-  successful_runs: number;
-  terminal_runs: number;
-  avg_duration_ms: number | null;
-  total_tokens?: number | null;
-  total_nano_aiu?: number | null;
-}
-
-// ── Feature 019 — AI token and credit usage ──────────────────────────────────
-// Per-model breakdown row returned by the usage endpoints.
-export interface TokenUsageByModel {
-  model_id: string;
-  input_tokens: number;
-  output_tokens: number;
-  total_nano_aiu: number;
-}
-
-// Aggregate token usage summary for a single run or project window.
-export interface TokenUsageSummary {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  total_nano_aiu: number;
-  by_model: TokenUsageByModel[];
-}
-
-// Per-project rollup inside an app-level usage snapshot.
-export interface ProjectUsage {
-  project_id: string;
-  project_name: string;
-  total_tokens: number;
-  total_nano_aiu: number;
-  by_model: TokenUsageByModel[];
-}
-
-// App-level usage snapshot (admin only — GET /api/usage).
-export interface AppUsage {
-  generated_utc: string;
-  from_utc: string;
-  to_utc: string;
-  total_tokens: number;
-  total_nano_aiu: number;
-  by_project: ProjectUsage[];
-  by_model: TokenUsageByModel[];
+  agentName: string;
+  role?: string | null;
+  runsThisWeek: number;
+  runsTotal: number;
+  successRate: number;
+  avgDurationMs: number | null;
+  costAic: number;
 }
 
 // Response body for GET /api/projects/{id}/dashboard.
@@ -1220,9 +1179,12 @@ export interface ProjectDashboardDto {
   project_name: string;
   generated_utc: string;
   summary: DashboardSummaryDto;
+}
+
+// Response body for GET /api/projects/{id}/metrics.
+export interface ProjectMetricsDto {
   throughput: ThroughputPointDto[];
-  agent_leaderboard: AgentLeaderboardEntryDto[];
-  token_usage?: TokenUsageSummary;
+  leaderboard: AgentLeaderboardEntryDto[];
 }
 
 // Global overview "at a glance" counters.
@@ -1279,7 +1241,6 @@ export interface OverviewDto {
   active_workflow_runs: ActiveWorkflowRunDto[];
   active_projects: ActiveProjectDto[];
   recent_activity: RecentActivityDto[];
-  token_usage?: AppUsage;
 }
 
 // ── Feature 014 — Spec-to-Backlog decomposition ───────────────────────────────

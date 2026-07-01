@@ -44,9 +44,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<WorkflowRunRecord> WorkflowRuns => Set<WorkflowRunRecord>();
     public DbSet<CastProposalRecord> CastProposals => Set<CastProposalRecord>();
 
-    // Token usage records (Feature 019: AI Credit and token monitoring)
-    public DbSet<TokenUsageRecordRow> TokenUsageRecords => Set<TokenUsageRecordRow>();
-
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
@@ -135,7 +132,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<WorkflowRunRecord>();
             model.Ignore<CastProposalRecord>();
             model.Ignore<WorkflowCheckpointRecord>();
-            model.Ignore<TokenUsageRecordRow>();
             return;
         }
 
@@ -157,7 +153,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.WorktreePath).HasColumnName("worktree_path");
             e.Property(r => r.WorktreeBranch).HasColumnName("worktree_branch");
             e.Property(r => r.TreeHash).HasColumnName("tree_hash");
-            e.Property(r => r.StepCount).HasColumnName("step_count").HasDefaultValue(0);
             e.Property(r => r.Diff).HasColumnName("diff");
             e.Property(r => r.MergeConflicts).HasColumnName("merge_conflicts");
             e.Property(r => r.ProjectId).HasColumnName("project_id");
@@ -172,7 +167,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.Origin).HasColumnName("origin").HasDefaultValue("interactive");
             e.Property(r => r.RetriedFrom).HasColumnName("retried_from");
             e.Property(r => r.ReviewReadyAt).HasColumnName("review_ready_at");
-            e.Property(r => r.ReviewWaitMs).HasColumnName("review_wait_ms").HasDefaultValue(0L);
             e.Property(r => r.ArchivedAt).HasColumnName("archived_at");
             e.Property(r => r.OwnerId).HasColumnName("owner_id");
             e.Property(r => r.LeaseExpiresAt).HasColumnName("lease_expires_at");
@@ -298,21 +292,5 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .HasDatabaseName("IX_workflow_checkpoints_store_session");
         });
 
-        model.Entity<TokenUsageRecordRow>(e =>
-        {
-            e.ToTable("token_usage_records").HasKey(t => t.Id);
-            e.Property(t => t.Id).HasColumnName("id");
-            e.Property(t => t.RunId).HasColumnName("run_id");
-            e.Property(t => t.WorkflowRunId).HasColumnName("workflow_run_id");
-            e.Property(t => t.ProjectId).HasColumnName("project_id");
-            e.Property(t => t.ModelId).HasColumnName("model_id");
-            e.Property(t => t.InputTokens).HasColumnName("input_tokens").HasDefaultValue(0L);
-            e.Property(t => t.OutputTokens).HasColumnName("output_tokens").HasDefaultValue(0L);
-            e.Property(t => t.TotalNanoAiu).HasColumnName("total_nano_aiu").HasDefaultValue(0L);
-            e.Property(t => t.RecordedAt).HasColumnName("recorded_at");
-            e.HasIndex(t => t.RunId).HasDatabaseName("IX_token_usage_run");
-            e.HasIndex(t => new { t.ProjectId, t.RecordedAt }).HasDatabaseName("IX_token_usage_project_time");
-            e.HasIndex(t => t.WorkflowRunId).HasDatabaseName("IX_token_usage_wfr");
-        });
     }
 }

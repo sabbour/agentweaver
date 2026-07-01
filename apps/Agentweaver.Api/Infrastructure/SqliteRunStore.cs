@@ -110,11 +110,6 @@ public sealed class SqliteRunStore : IRunStore
         WarnIfNoRows(rows, runId, $"update result to {status.ToApiString()}");
     }
 
-    /// <summary>
-    /// Sets tree_hash, diff, and step_count after the agent commits its changes,
-    /// and advances status to AwaitingReview. ended_at is intentionally not set
-    /// because the run is still awaiting a human decision.
-    /// </summary>
     public async Task UpdateReviewReadyAsync(
         RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default,
         DateTimeOffset? now = null)
@@ -123,8 +118,7 @@ public sealed class SqliteRunStore : IRunStore
         var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
-               SET tree_hash = $treeHash, diff = $diff, step_count = $stepCount,
-                   status = $status, review_ready_at = $now
+               SET tree_hash = $treeHash, diff = $diff, status = $status, review_ready_at = $now
              WHERE run_id = $runId
                AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """,
@@ -132,7 +126,6 @@ public sealed class SqliteRunStore : IRunStore
             {
                 cmd.Parameters.AddWithValue("$treeHash", treeHash);
                 cmd.Parameters.AddWithValue("$diff", diff);
-                cmd.Parameters.AddWithValue("$stepCount", stepCount);
                 cmd.Parameters.AddWithValue("$status", RunStatus.AwaitingReview.ToApiString());
                 cmd.Parameters.AddWithValue("$now", Ts(ts));
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
@@ -155,10 +148,7 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             UPDATE runs
-               SET status = 'in_progress', ended_at = NULL,
-                   review_wait_ms = review_wait_ms
-                       + CAST((julianday($now) - julianday(COALESCE(review_ready_at, $now))) * 86400000 AS INTEGER),
-                   review_ready_at = NULL
+               SET status = 'in_progress', ended_at = NULL, review_ready_at = NULL
              WHERE run_id = $runId AND status = 'awaiting_review';
             """;
         command.Parameters.AddWithValue("$now", Ts(ts));
@@ -179,8 +169,6 @@ public sealed class SqliteRunStore : IRunStore
             """
             UPDATE runs
                SET status = $toStatus, ended_at = $endedAt, result = $result, reviewed_by = $reviewer,
-                   review_wait_ms = review_wait_ms
-                       + CAST((julianday($endedAt) - julianday(COALESCE(review_ready_at, $endedAt))) * 86400000 AS INTEGER),
                    review_ready_at = NULL
              WHERE run_id = $runId AND status = 'awaiting_review';
             """;
@@ -208,10 +196,7 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             UPDATE runs
-               SET status = 'committing',
-                   review_wait_ms = review_wait_ms
-                       + CAST((julianday($now) - julianday(COALESCE(review_ready_at, $now))) * 86400000 AS INTEGER),
-                   review_ready_at = NULL
+               SET status = 'committing', review_ready_at = NULL
              WHERE run_id = $runId AND status = 'awaiting_review';
             """;
         command.Parameters.AddWithValue("$now", Ts(ts));
@@ -258,10 +243,8 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             UPDATE runs
-               SET status = 'merging', reviewed_by = $reviewer,
-                   review_wait_ms = review_wait_ms
-                       + CAST((julianday($now) - julianday(COALESCE(review_ready_at, $now))) * 86400000 AS INTEGER),
-                   review_ready_at = NULL
+              SET status = 'merging', reviewed_by = $reviewer,
+                  review_ready_at = NULL
              WHERE run_id = $runId AND status IN ('awaiting_review', 'committing');
             """;
         command.Parameters.AddWithValue("$reviewer", (object?)reviewer ?? DBNull.Value);
@@ -337,16 +320,6 @@ public sealed class SqliteRunStore : IRunStore
         WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
-    /// <summary>
-    /// Conditionally sets a terminal status. Only writes if the current status is NOT already
-    /// terminal (Guardrail 3: dual-writer safety). Returns true if the update was applied.
-    /// </summary>
-    /// <summary>
-    /// Records a coordinator CHILD run's assemble-ready hand-off: persists the produced tree hash,
-    /// worktree branch, diff, and step count, and transitions the run to <c>assemble_ready</c>.
-    /// This is the contract the coordinator's collect/assemble wave reads (branch + tree hash).
-    /// Guarded so an already-terminal run is not overwritten. Returns true if the row was updated.
-    /// </summary>
     public async Task<bool> SetAssembleReadyAsync(
         RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount,
         DateTimeOffset endedAt, CancellationToken ct = default)
@@ -357,15 +330,13 @@ public sealed class SqliteRunStore : IRunStore
             """
             UPDATE runs
                SET status = 'assemble_ready', tree_hash = $treeHash,
-                   worktree_branch = $worktreeBranch, diff = $diff,
-                   step_count = $stepCount, ended_at = $endedAt
+                   worktree_branch = $worktreeBranch, diff = $diff, ended_at = $endedAt
              WHERE run_id = $runId
                AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """;
         command.Parameters.AddWithValue("$treeHash", treeHash);
         command.Parameters.AddWithValue("$worktreeBranch", worktreeBranch);
         command.Parameters.AddWithValue("$diff", diff);
-        command.Parameters.AddWithValue("$stepCount", stepCount);
         command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -605,17 +576,17 @@ public sealed class SqliteRunStore : IRunStore
 
     // Ordinals: 0=run_id 1=repository_path 2=originating_branch 3=model_source 4=task
     //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
-    //           10=worktree_path 11=worktree_branch 12=tree_hash 13=step_count 14=diff
-    //           15=merge_conflicts 16=project_id 17=model_id 18=agent_name 19=agent_charter
-    //           20=reviewed_by 21=workflow_run_id 22=merged_commit_hash 23=parent_run_id 24=subtask_id
-    //           25=origin 26=retried_from 27=archived_at
+    //           10=worktree_path 11=worktree_branch 12=tree_hash 13=diff 14=merge_conflicts
+    //           15=project_id 16=model_id 17=agent_name 18=agent_charter 19=reviewed_by
+    //           20=workflow_run_id 21=merged_commit_hash 22=parent_run_id 23=subtask_id
+    //           24=origin 25=retried_from 26=archived_at
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
                submitting_user, status, started_at, ended_at, result,
-               worktree_path, worktree_branch, tree_hash, step_count, diff,
-               merge_conflicts, project_id, model_id, agent_name, agent_charter,
-               reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+               worktree_path, worktree_branch, tree_hash, diff, merge_conflicts,
+               project_id, model_id, agent_name, agent_charter, reviewed_by,
+               workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                origin, retried_from, archived_at
           FROM runs
         """;
@@ -635,21 +606,21 @@ public sealed class SqliteRunStore : IRunStore
         WorktreePath     = r.IsDBNull(10) ? null : r.GetString(10),
         WorktreeBranch   = r.IsDBNull(11) ? null : r.GetString(11),
         TreeHash         = r.IsDBNull(12) ? null : r.GetString(12),
-        StepCount        = r.IsDBNull(13) ? 0    : r.GetInt32(13),
-        Diff             = r.IsDBNull(14) ? null : r.GetString(14),
-        MergeConflicts   = r.IsDBNull(15) ? null : r.GetString(15),
-        ProjectId        = r.IsDBNull(16) ? null : ProjectId.Parse(r.GetString(16)),
-        ModelId          = r.IsDBNull(17) ? null : r.GetString(17),
-        AgentName        = r.IsDBNull(18) ? null : r.GetString(18),
-        AgentCharter     = r.IsDBNull(19) ? null : r.GetString(19),
-        ReviewedBy       = r.IsDBNull(20) ? null : r.GetString(20),
-        WorkflowRunId    = r.IsDBNull(21) ? null : r.GetString(21),
-        MergedCommitHash = r.IsDBNull(22) ? null : r.GetString(22),
-        ParentRunId      = r.IsDBNull(23) ? null : r.GetString(23),
-        SubtaskId        = r.IsDBNull(24) ? null : r.GetString(24),
-        Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(25) ? null : r.GetString(25)),
-        RetriedFrom      = r.IsDBNull(26) ? null : r.GetString(26),
-        ArchivedAt       = r.IsDBNull(27) ? null : DateTimeOffset.Parse(r.GetString(27), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        StepCount        = 0,
+        Diff             = r.IsDBNull(13) ? null : r.GetString(13),
+        MergeConflicts   = r.IsDBNull(14) ? null : r.GetString(14),
+        ProjectId        = r.IsDBNull(15) ? null : ProjectId.Parse(r.GetString(15)),
+        ModelId          = r.IsDBNull(16) ? null : r.GetString(16),
+        AgentName        = r.IsDBNull(17) ? null : r.GetString(17),
+        AgentCharter     = r.IsDBNull(18) ? null : r.GetString(18),
+        ReviewedBy       = r.IsDBNull(19) ? null : r.GetString(19),
+        WorkflowRunId    = r.IsDBNull(20) ? null : r.GetString(20),
+        MergedCommitHash = r.IsDBNull(21) ? null : r.GetString(21),
+        ParentRunId      = r.IsDBNull(22) ? null : r.GetString(22),
+        SubtaskId        = r.IsDBNull(23) ? null : r.GetString(23),
+        Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(24) ? null : r.GetString(24)),
+        RetriedFrom      = r.IsDBNull(25) ? null : r.GetString(25),
+        ArchivedAt       = r.IsDBNull(26) ? null : DateTimeOffset.Parse(r.GetString(26), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

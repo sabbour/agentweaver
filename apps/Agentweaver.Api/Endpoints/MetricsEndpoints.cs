@@ -4,25 +4,17 @@ using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Endpoints;
 
-/// <summary>
-/// Maps the read-only metrics/aggregation endpoints that power the per-project Dashboard and the
-/// global "Now" Overview pages. Register with <c>app.MapMetricsEndpoints()</c> in Program.cs after
-/// the other endpoint registrations.
-///
-/// <para>Every value returned is sourced from live stores (no mocks, no fabricated metrics,
-/// Constitution Principle VII). Cost is never reported because Agentweaver has no real cost source.</para>
-/// </summary>
 public static class MetricsEndpoints
 {
     public static void MapMetricsEndpoints(this WebApplication app)
     {
-        // Per-project dashboard. Owner-authorized (same pattern as other project endpoints).
         app.MapGet("/api/projects/{id}/dashboard", async (
             HttpContext httpContext,
             string id,
+            DashboardReadService dashboard,
+            AppInsightsMetricsService metrics,
             string? from,
             string? to,
-            MetricsService metrics,
             IProjectStore projectStore,
             CancellationToken ct) =>
         {
@@ -35,22 +27,62 @@ public static class MetricsEndpoints
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (!caller.Owns(project.Owner)) return Results.Forbid();
 
-            var dto = await metrics.GetProjectDashboardAsync(
-                project,
+            var summary = await dashboard.GetProjectDashboardAsync(project, ct).ConfigureAwait(false);
+            var metricDto = await metrics.GetProjectMetricsAsync(
+                projectId.ToString(),
                 ParseDateTimeOffset(from),
                 ParseDateTimeOffset(to),
                 ct).ConfigureAwait(false);
-            return Results.Ok(dto);
+
+            return Results.Ok(summary with
+            {
+                Throughput = metricDto.Throughput,
+                AgentLeaderboard = metricDto.Leaderboard.Select(entry => new DashboardAgentLeaderboardEntryDto
+                {
+                    Agent = entry.AgentName,
+                    RoleTitle = entry.Role,
+                    RunsThisWeek = entry.RunsThisWeek,
+                    RunsTotal = entry.RunsTotal,
+                    SuccessRate = entry.TerminalRuns > 0 ? entry.SuccessfulRuns / (double)entry.TerminalRuns : 0d,
+                    SuccessfulRuns = entry.SuccessfulRuns,
+                    TerminalRuns = entry.TerminalRuns,
+                    AvgDurationMs = entry.AvgDurationMs,
+                }).ToList(),
+            });
         });
 
-        // Global cross-project "Now" overview. API-key authenticated like other global endpoints
-        // (e.g. GET /api/diagnostics, GET /api/projects).
-        app.MapGet("/api/overview", async (
-            MetricsService metrics,
+        app.MapGet("/api/projects/{id}/metrics", async (
+            HttpContext httpContext,
+            string id,
+            string? from,
+            string? to,
+            AppInsightsMetricsService metrics,
+            IProjectStore projectStore,
             CancellationToken ct) =>
         {
-            var dto = await metrics.GetOverviewAsync(ct).ConfigureAwait(false);
-            return Results.Ok(dto);
+            if (!ProjectId.TryParse(id, out var projectId))
+                return Results.BadRequest(new { error = "Invalid project id." });
+
+            var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+            if (project is null) return Results.NotFound();
+
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            if (!caller.Owns(project.Owner)) return Results.Forbid();
+
+            return Results.Ok(await metrics.GetProjectMetricsAsync(
+                projectId.ToString(),
+                ParseDateTimeOffset(from),
+                ParseDateTimeOffset(to),
+                ct).ConfigureAwait(false));
+        });
+
+        app.MapGet("/api/overview", async (
+            HttpContext httpContext,
+            DashboardReadService dashboard,
+            CancellationToken ct) =>
+        {
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            return Results.Ok(await dashboard.GetOverviewAsync(caller, ct).ConfigureAwait(false));
         });
     }
 

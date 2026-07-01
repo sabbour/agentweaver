@@ -270,17 +270,8 @@ builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbe
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.ReviewPolicies.ReviewPolicyRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
-builder.Services.AddSingleton<Agentweaver.Api.Metrics.MetricsService>();
-
-// Feature 019: token usage store (provider-conditional like IRunStore)
-{
-    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
-    if (_provider is "postgres" or "postgresql")
-        builder.Services.AddSingleton<ITokenUsageStore, EfTokenUsageStore>();
-    else
-        builder.Services.AddSingleton<ITokenUsageStore, SqliteTokenUsageStore>();
-}
-builder.Services.AddHostedService<TokenUsageProjectionService>();
+builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
+builder.Services.AddSingleton<Agentweaver.Api.Metrics.AppInsightsMetricsService>();
 
 // Agent runtime
 builder.Services.AddAgentRuntime();
@@ -779,7 +770,6 @@ else
     app.MapReviewPolicyEndpoints();
     app.MapDiagnosticsEndpoints();
     app.MapMetricsEndpoints();
-    app.MapUsageEndpoints();
     app.MapSandboxEndpoints();
     app.MapSystemEndpoints();
     app.MapVersionEndpoints();

@@ -103,9 +103,9 @@ export function RunDetail({ runId }: RunDetailProps) {
     ['Model source', run.model_source],
     ['Started', run.started_at],
     ['Ended', run.ended_at ?? '-'],
-    ['Steps', run.step_count.toString()],
     ['Result', run.result ?? '-'],
   ];
+  if (run.step_count > 0) rows.splice(5, 0, ['Steps', run.step_count.toString()]);
 
   const centerContent = (
     <div className={styles.centerContent}>

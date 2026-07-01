@@ -35,42 +35,49 @@ public sealed record ThroughputPointDto
     [JsonPropertyName("done")]    public required int    Done    { get; init; }
 }
 
-/// <summary>Per-agent activity and quality on a single project.</summary>
+/// <summary>Per-agent activity and quality on a single project, sourced from Application Insights.</summary>
 public sealed record AgentLeaderboardEntryDto
 {
-    [JsonPropertyName("agent")]          public required string  Agent         { get; init; }
-    [JsonPropertyName("role_title")]     public string?          RoleTitle     { get; init; }
-    [JsonPropertyName("runs_this_week")] public required int     RunsThisWeek  { get; init; }
-    [JsonPropertyName("runs_total")]     public required int     RunsTotal     { get; init; }
-    /// <summary>
-    /// Successful terminal runs / terminal runs, in [0,1]. Non-terminal runs are excluded.
-    /// Successful terminal statuses are merged, completed, and assemble_ready.
-    /// </summary>
-    [JsonPropertyName("success_rate")]   public required double  SuccessRate   { get; init; }
-    [JsonPropertyName("successful_runs")] public required int     SuccessfulRuns { get; init; }
-    [JsonPropertyName("terminal_runs")]   public required int     TerminalRuns   { get; init; }
-    /// <summary>
-    /// Average wall-clock duration of FINISHED runs (ended_at set), EXCLUDING time the run spent
-    /// parked in the awaiting_review human-review gate (subtracts the accrued review_wait_ms,
-    /// clamped at 0). Null when no runs have finished.
-    /// </summary>
-    [JsonPropertyName("avg_duration_ms")] public required double? AvgDurationMs { get; init; }
+    [JsonPropertyName("agentName")]      public required string AgentName      { get; init; }
+    [JsonPropertyName("role")]           public string?         Role           { get; init; }
+    [JsonPropertyName("runsThisWeek")]   public required int    RunsThisWeek   { get; init; }
+    [JsonPropertyName("runsTotal")]      public required int    RunsTotal      { get; init; }
+    [JsonPropertyName("successRate")]    public required int    SuccessRate    { get; init; }
+    [JsonPropertyName("successfulRuns")] public required int    SuccessfulRuns { get; init; }
+    [JsonPropertyName("terminalRuns")]   public required int    TerminalRuns   { get; init; }
+    [JsonPropertyName("avgDurationMs")]  public long?           AvgDurationMs  { get; init; }
+    [JsonPropertyName("costAic")]        public decimal         CostAic        { get; init; }
 }
 
-/// <summary>
-/// Per-project dashboard response. workflow_health is intentionally absent: a run row carries no
-/// reference to the workflow DEFINITION it executed (workflow_run_id is an orchestration grouping id,
-/// not a workflow type), so per-workflow pass-rate cannot be computed from real data.
-/// </summary>
+/// <summary>Legacy dashboard leaderboard shape preserved on /dashboard for compatibility.</summary>
+public sealed record DashboardAgentLeaderboardEntryDto
+{
+    [JsonPropertyName("agent")]           public required string  Agent          { get; init; }
+    [JsonPropertyName("role_title")]      public string?          RoleTitle      { get; init; }
+    [JsonPropertyName("runs_this_week")]  public required int     RunsThisWeek   { get; init; }
+    [JsonPropertyName("runs_total")]      public required int     RunsTotal      { get; init; }
+    [JsonPropertyName("success_rate")]    public required double  SuccessRate    { get; init; }
+    [JsonPropertyName("successful_runs")] public required int     SuccessfulRuns { get; init; }
+    [JsonPropertyName("terminal_runs")]   public required int     TerminalRuns   { get; init; }
+    [JsonPropertyName("avg_duration_ms")] public required double? AvgDurationMs  { get; init; }
+}
+
+/// <summary>Per-project dashboard response.</summary>
 public sealed record ProjectDashboardDto
 {
-    [JsonPropertyName("project_id")]       public required string                              ProjectId        { get; init; }
-    [JsonPropertyName("project_name")]     public required string                              ProjectName      { get; init; }
-    [JsonPropertyName("generated_utc")]    public required DateTimeOffset                      GeneratedUtc     { get; init; }
-    [JsonPropertyName("summary")]          public required DashboardSummaryDto                 Summary          { get; init; }
-    [JsonPropertyName("throughput")]       public required IReadOnlyList<ThroughputPointDto>   Throughput       { get; init; }
-    [JsonPropertyName("agent_leaderboard")] public required IReadOnlyList<AgentLeaderboardEntryDto> AgentLeaderboard { get; init; }
-    [JsonPropertyName("token_usage")]      public TokenUsageSummaryDto?                        TokenUsage       { get; init; }
+    [JsonPropertyName("project_id")]        public required string                                       ProjectId        { get; init; }
+    [JsonPropertyName("project_name")]      public required string                                       ProjectName      { get; init; }
+    [JsonPropertyName("generated_utc")]     public required DateTimeOffset                               GeneratedUtc     { get; init; }
+    [JsonPropertyName("summary")]           public required DashboardSummaryDto                          Summary          { get; init; }
+    [JsonPropertyName("throughput")]        public required IReadOnlyList<ThroughputPointDto>            Throughput       { get; init; }
+    [JsonPropertyName("agent_leaderboard")] public required IReadOnlyList<DashboardAgentLeaderboardEntryDto> AgentLeaderboard { get; init; }
+}
+
+/// <summary>Per-project dashboard widgets sourced from Application Insights.</summary>
+public sealed record ProjectMetricsDto
+{
+    [JsonPropertyName("throughput")]  public required IReadOnlyList<ThroughputPointDto> Throughput { get; init; }
+    [JsonPropertyName("leaderboard")] public required IReadOnlyList<AgentLeaderboardEntryDto> Leaderboard { get; init; }
 }
 
 // =====================================================================================
@@ -150,46 +157,4 @@ public sealed record OverviewDto
     [JsonPropertyName("active_workflow_runs")] public required IReadOnlyList<ActiveWorkflowRunDto>     ActiveWorkflowRuns { get; init; }
     [JsonPropertyName("active_projects")]      public required IReadOnlyList<ActiveProjectDto>         ActiveProjects     { get; init; }
     [JsonPropertyName("recent_activity")]      public required IReadOnlyList<RecentActivityDto>        RecentActivity     { get; init; }
-    [JsonPropertyName("token_usage")]          public AppUsageDto?                                     TokenUsage         { get; init; }
-}
-
-// =====================================================================================
-// TOKEN USAGE DTOs (Feature 019: AI Credit and token monitoring)
-// =====================================================================================
-
-public sealed record TokenUsageByModelDto
-{
-    [JsonPropertyName("model_id")]       public required string ModelId      { get; init; }
-    [JsonPropertyName("input_tokens")]   public required long   InputTokens  { get; init; }
-    [JsonPropertyName("output_tokens")]  public required long   OutputTokens { get; init; }
-    [JsonPropertyName("total_nano_aiu")] public required long   TotalNanoAiu { get; init; }
-}
-
-public sealed record TokenUsageSummaryDto
-{
-    [JsonPropertyName("input_tokens")]   public required long                              InputTokens  { get; init; }
-    [JsonPropertyName("output_tokens")]  public required long                              OutputTokens { get; init; }
-    [JsonPropertyName("total_tokens")]   public required long                              TotalTokens  { get; init; }
-    [JsonPropertyName("total_nano_aiu")] public required long                              TotalNanoAiu { get; init; }
-    [JsonPropertyName("by_model")]       public required IReadOnlyList<TokenUsageByModelDto> ByModel    { get; init; }
-}
-
-public sealed record ProjectUsageDto
-{
-    [JsonPropertyName("project_id")]     public required string                              ProjectId    { get; init; }
-    [JsonPropertyName("project_name")]   public required string                              ProjectName  { get; init; }
-    [JsonPropertyName("total_tokens")]   public required long                                TotalTokens  { get; init; }
-    [JsonPropertyName("total_nano_aiu")] public required long                                TotalNanoAiu { get; init; }
-    [JsonPropertyName("by_model")]       public required IReadOnlyList<TokenUsageByModelDto> ByModel      { get; init; }
-}
-
-public sealed record AppUsageDto
-{
-    [JsonPropertyName("generated_utc")]  public required DateTimeOffset                      GeneratedUtc { get; init; }
-    [JsonPropertyName("from_utc")]       public required DateTimeOffset                      FromUtc      { get; init; }
-    [JsonPropertyName("to_utc")]         public required DateTimeOffset                      ToUtc        { get; init; }
-    [JsonPropertyName("total_tokens")]   public required long                                TotalTokens  { get; init; }
-    [JsonPropertyName("total_nano_aiu")] public required long                                TotalNanoAiu { get; init; }
-    [JsonPropertyName("by_project")]     public required IReadOnlyList<ProjectUsageDto>      ByProject    { get; init; }
-    [JsonPropertyName("by_model")]       public required IReadOnlyList<TokenUsageByModelDto> ByModel      { get; init; }
 }

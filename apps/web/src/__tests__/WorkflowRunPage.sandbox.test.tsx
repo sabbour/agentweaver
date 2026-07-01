@@ -23,7 +23,6 @@ vi.mock('../api/apiClient', () => ({
     getRun: vi.fn(),
     getRunEvents: vi.fn(),
     getRunGraph: vi.fn(),
-    getRunUsage: vi.fn().mockResolvedValue(null),
   },
 }));
 

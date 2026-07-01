@@ -1,10 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Text, Title2, makeStyles, tokens } from '@fluentui/react-components';
-import { apiClient } from '../api/apiClient';
-import type { TokenUsageSummary } from '../api/types';
 import { RunWatcher } from '../components/RunWatcher';
-import { TokenUsagePanel } from '../components/TokenUsagePanel';
 
 const useStyles = makeStyles({
   root: {
@@ -47,19 +43,6 @@ export function WatchPage() {
     executionId: string;
   }>();
 
-  const [runUsage, setRunUsage] = useState<TokenUsageSummary | null>(null);
-
-  const fetchUsage = useCallback(() => {
-    if (!executionId) return;
-    void apiClient.getRunUsage(executionId).then(setRunUsage).catch(() => {
-      // Usage is supplementary — degrade gracefully on error.
-    });
-  }, [executionId]);
-
-  useEffect(() => {
-    fetchUsage();
-  }, [fetchUsage]);
-
   if (!executionId) {
     return <Text>No execution id provided.</Text>;
   }
@@ -83,9 +66,7 @@ export function WatchPage() {
         <span className={styles.idLabel}>{short(executionId)}</span>
       </div>
 
-      <RunWatcher key={executionId} runId={executionId} onTurnUsageEvent={fetchUsage} />
-
-      {runUsage && <TokenUsagePanel usage={runUsage} title="Token usage" />}
+      <RunWatcher key={executionId} runId={executionId} />
     </div>
   );
 }

@@ -16,7 +16,6 @@ public sealed class RunRecord
     public string? WorktreePath { get; set; }
     public string? WorktreeBranch { get; set; }
     public string? TreeHash { get; set; }
-    public int StepCount { get; set; }
     public string? Diff { get; set; }
     public string? MergeConflicts { get; set; }
     public string? ProjectId { get; set; }
@@ -31,7 +30,6 @@ public sealed class RunRecord
     public string Origin { get; set; } = "interactive";
     public string? RetriedFrom { get; set; }
     public DateTimeOffset? ReviewReadyAt { get; set; }
-    public long ReviewWaitMs { get; set; }
     public DateTimeOffset? ArchivedAt { get; set; }
     public string? OwnerId { get; set; }
     public DateTimeOffset? LeaseExpiresAt { get; set; }

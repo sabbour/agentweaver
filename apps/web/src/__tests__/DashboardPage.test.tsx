@@ -2,14 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup, within, fireEvent } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import type { ProjectDashboardDto } from '../api/types';
+import type { ProjectDashboardDto, ProjectMetricsDto } from '../api/types';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getProjectDashboard: vi.fn(),
-    getProjectUsage: vi.fn(),
-    getProjectRuns: vi.fn(),
-    getRunUsage: vi.fn(),
+    getProjectMetrics: vi.fn(),
   },
 }));
 
@@ -27,20 +25,22 @@ const dto: ProjectDashboardDto = {
     active_agents: 3,
     tasks_done_this_week: 4,
   },
+};
+
+const metricsDto: ProjectMetricsDto = {
   throughput: [
     { date: '2026-06-01', created: 2, done: 1 },
     { date: '2026-06-02', created: 3, done: 2 },
   ],
-  agent_leaderboard: [
+  leaderboard: [
     {
-      agent: 'Ada',
-      role_title: 'Frontend engineer',
-      runs_this_week: 3,
-      runs_total: 10,
-      success_rate: 0.9,
-      successful_runs: 9,
-      terminal_runs: 10,
-      avg_duration_ms: 65000,
+      agentName: 'Ada',
+      role: 'Frontend engineer',
+      runsThisWeek: 3,
+      runsTotal: 10,
+      successRate: 90,
+      avgDurationMs: 65000,
+      costAic: 12.5,
     },
   ],
 };
@@ -59,21 +59,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(apiClient.getProjectUsage).mockResolvedValue({
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-    total_nano_aiu: 0,
-    by_model: [],
-  });
-  vi.mocked(apiClient.getProjectRuns).mockResolvedValue([]);
-  vi.mocked(apiClient.getRunUsage).mockResolvedValue({
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-    total_nano_aiu: 0,
-    by_model: [],
-  });
+  vi.mocked(apiClient.getProjectMetrics).mockResolvedValue(metricsDto);
 });
 afterEach(() => {
   cleanup();
@@ -87,33 +73,30 @@ describe('DashboardPage', () => {
 
     await waitFor(() => expect(screen.getByText('Active agents')).toBeDefined());
     expect(screen.getByText('Tasks done (7d)')).toBeDefined();
-    expect(screen.getByText('Throughput (last 30 days)')).toBeDefined();
+    expect(screen.getByText('Throughput')).toBeDefined();
     expect(screen.getByText('Agent leaderboard')).toBeDefined();
     expect(screen.getByText('Ada')).toBeDefined();
     expect(screen.getByRole('link', { name: 'Ada' }).getAttribute('href'))
       .toBe('/projects/p1/flow?agent=Ada');
     expect(screen.getByText('Frontend engineer')).toBeDefined();
-    expect(screen.getByText('Success rate = successful terminal runs / terminal runs (queued, waiting-review, and in-progress excluded).')).toBeDefined();
-    expect(screen.getByText('90%')).toBeDefined();
-    expect(screen.getByText('9/10')).toBeDefined();
-
     const table = screen.getByRole('table', { name: 'Agent leaderboard' });
+    expect(within(table).getAllByText('90%').length).toBeGreaterThan(0);
     const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
     expect(headers).toEqual(['Agent', 'Role', 'Runs this week', 'Runs total', 'Success rate', 'Avg duration', 'Cost']);
   });
 
   it('renders a role fallback when the dashboard payload omits role', async () => {
-    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue({
-      ...dto,
-      agent_leaderboard: [
+    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue(dto);
+    vi.mocked(apiClient.getProjectMetrics).mockResolvedValue({
+      ...metricsDto,
+      leaderboard: [
         {
-          agent: 'Ada',
-          runs_this_week: 3,
-          runs_total: 10,
-          success_rate: 0.9,
-          successful_runs: 9,
-          terminal_runs: 10,
-          avg_duration_ms: 65000,
+          agentName: 'Ada',
+          runsThisWeek: 3,
+          runsTotal: 10,
+          successRate: 90,
+          avgDurationMs: 65000,
+          costAic: 0,
         },
       ],
     });
@@ -124,19 +107,19 @@ describe('DashboardPage', () => {
     expect(within(table).getAllByText('—').length).toBeGreaterThan(0);
   });
 
-  it('renders zero-terminal success rate as unknown with count basis', async () => {
-    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue({
-      ...dto,
-      agent_leaderboard: [
+  it('renders zero-run success rate as unknown', async () => {
+    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue(dto);
+    vi.mocked(apiClient.getProjectMetrics).mockResolvedValue({
+      ...metricsDto,
+      leaderboard: [
         {
-          agent: 'Ada',
-          role_title: 'Frontend engineer',
-          runs_this_week: 2,
-          runs_total: 2,
-          success_rate: 0,
-          successful_runs: 0,
-          terminal_runs: 0,
-          avg_duration_ms: null,
+          agentName: 'Ada',
+          role: 'Frontend engineer',
+          runsThisWeek: 0,
+          runsTotal: 0,
+          successRate: 0,
+          avgDurationMs: null,
+          costAic: 0,
         },
       ],
     });
@@ -145,7 +128,6 @@ describe('DashboardPage', () => {
 
     const table = await screen.findByRole('table', { name: 'Agent leaderboard' });
     expect(within(table).getAllByText('—').length).toBeGreaterThan(0);
-    expect(within(table).getByText('0/0')).toBeDefined();
   });
 
   it('surfaces a load error', async () => {
@@ -157,34 +139,30 @@ describe('DashboardPage', () => {
     await waitFor(() => expect(screen.getByText(/API error 404/)).toBeDefined());
   });
 
-  it('uses the same range for dashboard and usage queries', async () => {
+  it('uses the selected range for metrics queries', async () => {
     vi.mocked(apiClient.getProjectDashboard).mockResolvedValue(dto);
 
     renderPage();
 
     await waitFor(() => expect(apiClient.getProjectDashboard).toHaveBeenCalled());
-    await waitFor(() => expect(apiClient.getProjectUsage).toHaveBeenCalled());
+    await waitFor(() => expect(apiClient.getProjectMetrics).toHaveBeenCalled());
 
     const initialDashboardArgs = vi.mocked(apiClient.getProjectDashboard).mock.calls.at(-1)!;
-    const initialUsageArgs = vi.mocked(apiClient.getProjectUsage).mock.calls.at(-1)!;
+    const initialMetricsArgs = vi.mocked(apiClient.getProjectMetrics).mock.calls.at(-1)!;
 
     expect(initialDashboardArgs[0]).toBe('p1');
-    expect(initialUsageArgs[0]).toBe('p1');
-    expect(initialDashboardArgs[1]).toBe(initialUsageArgs[1]);
-    expect(initialDashboardArgs[2]).toBe(initialUsageArgs[2]);
+    expect(initialMetricsArgs[0]).toBe('p1');
 
     fireEvent.change(screen.getByLabelText('Time range'), { target: { value: '7d' } });
 
     await waitFor(() => expect(vi.mocked(apiClient.getProjectDashboard).mock.calls.length).toBeGreaterThan(1));
-    await waitFor(() => expect(vi.mocked(apiClient.getProjectUsage).mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(vi.mocked(apiClient.getProjectMetrics).mock.calls.length).toBeGreaterThan(1));
 
     const updatedDashboardArgs = vi.mocked(apiClient.getProjectDashboard).mock.calls.at(-1)!;
-    const updatedUsageArgs = vi.mocked(apiClient.getProjectUsage).mock.calls.at(-1)!;
+    const updatedMetricsArgs = vi.mocked(apiClient.getProjectMetrics).mock.calls.at(-1)!;
 
     expect(updatedDashboardArgs[0]).toBe('p1');
-    expect(updatedUsageArgs[0]).toBe('p1');
-    expect(updatedDashboardArgs[1]).toBe(updatedUsageArgs[1]);
-    expect(updatedDashboardArgs[2]).toBe(updatedUsageArgs[2]);
-    expect(updatedDashboardArgs[1]).not.toBe(initialDashboardArgs[1]);
+    expect(updatedMetricsArgs[0]).toBe('p1');
+    expect(updatedMetricsArgs[1]).not.toBe(initialMetricsArgs[1]);
   });
 });

@@ -220,12 +220,11 @@ public sealed class SqliteToPostgresMigrator
         cmd.CommandText =
             """
             SELECT run_id, repository_path, originating_branch, model_source, task,
-                   submitting_user, status, started_at, ended_at, result,
-                   worktree_path, worktree_branch, tree_hash, COALESCE(step_count,0), diff,
-                   merge_conflicts, project_id, model_id, agent_name, agent_charter,
-                   reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
-                   COALESCE(origin,'interactive'), retried_from, review_ready_at,
-                   COALESCE(review_wait_ms,0), archived_at
+                  submitting_user, status, started_at, ended_at, result,
+                  worktree_path, worktree_branch, tree_hash, diff,
+                  merge_conflicts, project_id, model_id, agent_name, agent_charter,
+                  reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+                  COALESCE(origin,'interactive'), retried_from, review_ready_at, archived_at
               FROM runs;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -246,23 +245,21 @@ public sealed class SqliteToPostgresMigrator
                 WorktreePath = reader.IsDBNull(10) ? null : reader.GetString(10),
                 WorktreeBranch = reader.IsDBNull(11) ? null : reader.GetString(11),
                 TreeHash = reader.IsDBNull(12) ? null : reader.GetString(12),
-                StepCount = reader.GetInt32(13),
-                Diff = reader.IsDBNull(14) ? null : reader.GetString(14),
-                MergeConflicts = reader.IsDBNull(15) ? null : reader.GetString(15),
-                ProjectId = reader.IsDBNull(16) ? null : reader.GetString(16),
-                ModelId = reader.IsDBNull(17) ? null : reader.GetString(17),
-                AgentName = reader.IsDBNull(18) ? null : reader.GetString(18),
-                AgentCharter = reader.IsDBNull(19) ? null : reader.GetString(19),
-                ReviewedBy = reader.IsDBNull(20) ? null : reader.GetString(20),
-                WorkflowRunId = reader.IsDBNull(21) ? null : reader.GetString(21),
-                MergedCommitHash = reader.IsDBNull(22) ? null : reader.GetString(22),
-                ParentRunId = reader.IsDBNull(23) ? null : reader.GetString(23),
-                SubtaskId = reader.IsDBNull(24) ? null : reader.GetString(24),
-                Origin = reader.GetString(25),
-                RetriedFrom = reader.IsDBNull(26) ? null : reader.GetString(26),
-                ReviewReadyAt = reader.IsDBNull(27) ? null : ParseTs(reader.GetString(27)),
-                ReviewWaitMs = reader.GetInt64(28),
-                ArchivedAt = reader.IsDBNull(29) ? null : ParseTs(reader.GetString(29)),
+                Diff = reader.IsDBNull(13) ? null : reader.GetString(13),
+                MergeConflicts = reader.IsDBNull(14) ? null : reader.GetString(14),
+                ProjectId = reader.IsDBNull(15) ? null : reader.GetString(15),
+                ModelId = reader.IsDBNull(16) ? null : reader.GetString(16),
+                AgentName = reader.IsDBNull(17) ? null : reader.GetString(17),
+                AgentCharter = reader.IsDBNull(18) ? null : reader.GetString(18),
+                ReviewedBy = reader.IsDBNull(19) ? null : reader.GetString(19),
+                WorkflowRunId = reader.IsDBNull(20) ? null : reader.GetString(20),
+                MergedCommitHash = reader.IsDBNull(21) ? null : reader.GetString(21),
+                ParentRunId = reader.IsDBNull(22) ? null : reader.GetString(22),
+                SubtaskId = reader.IsDBNull(23) ? null : reader.GetString(23),
+                Origin = reader.GetString(24),
+                RetriedFrom = reader.IsDBNull(25) ? null : reader.GetString(25),
+                ReviewReadyAt = reader.IsDBNull(26) ? null : ParseTs(reader.GetString(26)),
+                ArchivedAt = reader.IsDBNull(27) ? null : ParseTs(reader.GetString(27)),
             });
         }
         return results;

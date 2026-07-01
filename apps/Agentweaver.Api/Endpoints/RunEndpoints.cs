@@ -144,10 +144,10 @@ app.MapGet("/api/runs/{id}", async (
     // Returns null for older runs whose stream entries have been evicted.
     SandboxStatusDto? sandboxStatus = null;
     var streamEntry = streamStore.Get(id);
+    var streamEvents = streamEntry?.GetSnapshotSince(0).Events;
     if (streamEntry is not null)
     {
-        var events = streamEntry.GetSnapshotSince(0).Events;
-        var selectedEvt = events.FirstOrDefault(e => e.Type == "sandbox.selected");
+        var selectedEvt = streamEvents!.FirstOrDefault(e => e.Type == "sandbox.selected");
         if (selectedEvt is not null)
         {
             var json = System.Text.Json.JsonSerializer.Serialize(selectedEvt.Payload,
@@ -156,7 +156,7 @@ app.MapGet("/api/runs/{id}", async (
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (parsed is not null)
             {
-                var hasNetworkWarning = events.Any(e => e.Type == "sandbox.warning");
+                var hasNetworkWarning = streamEvents!.Any(e => e.Type == "sandbox.warning");
                 sandboxStatus = new SandboxStatusDto
                 {
                     Backend = parsed.Backend ?? string.Empty,
@@ -173,7 +173,7 @@ app.MapGet("/api/runs/{id}", async (
     string? outcomeReason = null;
     if (streamEntry is not null)
     {
-        var outcomeEvt = streamEntry.GetSnapshotSince(0).Events
+        var outcomeEvt = streamEvents!
             .FirstOrDefault(e => e.Type == EventTypes.RunOutcome);
         if (outcomeEvt is not null)
         {
@@ -196,6 +196,17 @@ app.MapGet("/api/runs/{id}", async (
     if (isCoordinatorRun)
         coordinatorStatus = (await coordinator.GetCoordinatorStatusesAsync(new[] { run.Id.ToString() }, ct))
             .GetValueOrDefault(run.Id.ToString());
+    var stepCount = run.StepCount;
+    if (stepCount <= 0 && streamEvents is not null)
+        stepCount = streamEvents.Count(e => e.Type == EventTypes.ToolCall);
+    if (stepCount <= 0)
+    {
+        await using var dbScope = httpContext.RequestServices.CreateAsyncScope();
+        var memoryDb = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        stepCount = await memoryDb.RunEvents
+            .Where(e => e.RunId == id && e.EventType == EventTypes.ToolCall)
+            .CountAsync(ct);
+    }
 
     return Results.Json(new RunResponse
     {
@@ -206,7 +217,7 @@ app.MapGet("/api/runs/{id}", async (
         EndedAt = run.EndedAt,
         Result = run.Result,
         Diff = diff,
-        StepCount = run.StepCount,
+        StepCount = stepCount,
         TreeHash = run.TreeHash,
         MergeConflicts = run.MergeConflicts,
         Sandbox = sandboxStatus,

@@ -20,10 +20,8 @@ import {
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { AppUsage, OverviewDto } from '../api/types';
+import type { OverviewDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
-import { TokenUsagePanel } from '../components/TokenUsagePanel';
-import { formatAic } from '../components/CostChip';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Overview ("Now") — the global, cross-project live view at /overview (also the
@@ -120,50 +118,6 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   muted: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
-  costDashboard: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(220px, 1fr) minmax(260px, 2fr)',
-    gap: tokens.spacingHorizontalL,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    '@media (max-width: 720px)': {
-      gridTemplateColumns: '1fr',
-    },
-  },
-  costHero: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-  },
-  costValue: {
-    fontSize: tokens.fontSizeHero800,
-    fontWeight: tokens.fontWeightSemibold,
-    lineHeight: tokens.lineHeightHero800,
-  },
-  costBreakdown: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-  },
-  costBarRow: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(120px, 1fr) minmax(120px, 2fr) auto',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-  },
-  costBarTrack: {
-    height: '8px',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorNeutralBackground3,
-    overflow: 'hidden',
-  },
-  costBarFill: {
-    height: '100%',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorBrandBackground,
-  },
   projectLink: { color: tokens.colorBrandForeground1, textDecoration: 'none' },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   numericCell: { textAlign: 'right' as const },
@@ -207,7 +161,6 @@ export function OverviewPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [appUsage, setAppUsage] = useState<AppUsage | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -222,8 +175,6 @@ export function OverviewPage() {
       const dto = await apiClient.getOverview();
       if (!signal.cancelled) {
         setData(dto);
-        // Use token_usage embedded in the overview response when present.
-        if (dto.token_usage) setAppUsage(dto.token_usage);
         setLastUpdated(new Date().toISOString());
         setError(null);
       }
@@ -233,17 +184,6 @@ export function OverviewPage() {
       if (!signal.cancelled) {
         setLoading(false);
         setRefreshing(false);
-      }
-    }
-
-    // Separately fetch app-level usage from the dedicated endpoint.
-    // This endpoint is admin-only; a 403 means the section is hidden (no error shown).
-    try {
-      const usage = await apiClient.getAppUsage();
-      if (!signal.cancelled) setAppUsage(usage);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        // Admin-only — degrade gracefully.
       }
     }
   }, []);
@@ -269,11 +209,6 @@ export function OverviewPage() {
     : [];
 
   const health = data?.at_a_glance.health;
-  const topUsageProjects = appUsage
-    ? [...appUsage.by_project].sort((a, b) => b.total_nano_aiu - a.total_nano_aiu).slice(0, 4)
-    : [];
-  const maxProjectAic = Math.max(1, ...topUsageProjects.map((p) => p.total_nano_aiu));
-
   return (
     <div className={styles.root}>
       <PageHeader
@@ -436,70 +371,6 @@ export function OverviewPage() {
         </>
       )}
 
-      {appUsage && (
-        <>
-          <div className={styles.section}>
-            <Title3>Cost overview</Title3>
-            <div className={styles.costDashboard}>
-              <div className={styles.costHero}>
-                <Text className={styles.cardLabel}>Total AICs</Text>
-                <Text className={styles.costValue}>{formatAic(appUsage.total_nano_aiu)} AIC</Text>
-                <Text className={styles.muted}>{appUsage.total_tokens.toLocaleString()} tokens across {appUsage.by_project.length} projects</Text>
-              </div>
-              <div className={styles.costBreakdown}>
-                <Text className={styles.cardLabel}>Top project usage</Text>
-                {topUsageProjects.length === 0 ? (
-                  <Text>No project usage yet.</Text>
-                ) : topUsageProjects.map((p) => (
-                  <div key={p.project_id} className={styles.costBarRow}>
-                    <Link to={`/projects/${p.project_id}`} className={styles.projectLink}>{p.project_name}</Link>
-                    <div className={styles.costBarTrack} aria-hidden="true">
-                      <div className={styles.costBarFill} style={{ width: `${Math.max(4, (p.total_nano_aiu / maxProjectAic) * 100)}%` }} />
-                    </div>
-                    <Text className={styles.muted}>{formatAic(p.total_nano_aiu)} AIC</Text>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <TokenUsagePanel usage={{
-              input_tokens: appUsage.by_model.reduce((sum, model) => sum + model.input_tokens, 0),
-              output_tokens: appUsage.by_model.reduce((sum, model) => sum + model.output_tokens, 0),
-              total_tokens: appUsage.total_tokens,
-              total_nano_aiu: appUsage.total_nano_aiu,
-              by_model: appUsage.by_model,
-            }} title="Token usage breakdown" />
-
-            {appUsage.by_project.length > 0 && (
-              <>
-                <Title3>Usage by project</Title3>
-                <Table aria-label="Usage by project" size="small">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHeaderCell>Project</TableHeaderCell>
-                      <TableHeaderCell className={styles.numericCell}>Total tokens</TableHeaderCell>
-                      <TableHeaderCell className={styles.numericCell}>AICs</TableHeaderCell>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {appUsage.by_project.map((p) => (
-                      <TableRow key={p.project_id}>
-                        <TableCell>
-                          <Link to={`/projects/${p.project_id}`} className={styles.projectLink}>
-                            {p.project_name}
-                          </Link>
-                        </TableCell>
-                        <TableCell className={styles.numericCell}>{p.total_tokens.toLocaleString()}</TableCell>
-                        <TableCell className={styles.numericCell}>{formatAic(p.total_nano_aiu)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </>
-            )}
-          </div>
-        </>
-      )}
     </div>
   );
 }

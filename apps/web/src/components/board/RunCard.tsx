@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Badge, Button, Caption1, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArchiveRegular, WarningRegular } from '@fluentui/react-icons';
@@ -6,7 +6,6 @@ import type { RunCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import { AgentAvatar } from '../AgentAvatar';
-import { CostChip } from '../CostChip';
 
 const useStyles = makeStyles({
   card: {
@@ -75,28 +74,12 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
   const [retrying, setRetrying] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [usage, setUsage] = useState<{ total_nano_aiu: number; total_tokens: number } | null>(
-    card.total_nano_aiu != null || card.total_tokens != null
-      ? { total_nano_aiu: card.total_nano_aiu ?? 0, total_tokens: card.total_tokens ?? 0 }
-      : null,
-  );
 
   // Coordinator-run detail pages (CoordinatorRunPage -> /api/runs/{id}/...) are run_id-keyed for
   // EVERY coordinator run, so navigate by the canonical run_id. (workflow_run_id is null for both
   // interactive and backlog-pickup coordinator runs and must not be used as the detail key.)
   const target = card.run_id;
   const stage = card.assembly_stage ?? card.work_plan_status ?? card.status;
-
-  useEffect(() => {
-    if (card.total_nano_aiu != null || card.total_tokens != null) return;
-    let cancelled = false;
-    apiClient.getRunUsage(card.run_id)
-      .then((u) => {
-        if (!cancelled) setUsage({ total_nano_aiu: u.total_nano_aiu, total_tokens: u.total_tokens });
-      })
-      .catch(() => { /* usage is supplementary */ });
-    return () => { cancelled = true; };
-  }, [card.run_id, card.total_nano_aiu, card.total_tokens]);
 
   const isRetryable = card.status === 'failed' || card.status === 'merge_failed';
   const retriedFromShort = card.retried_from ? card.retried_from.slice(0, 8) : null;
@@ -157,7 +140,6 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
               Approval needed
             </Badge>
           )}
-          <CostChip totalNanoAiu={usage?.total_nano_aiu ?? card.total_nano_aiu} totalTokens={usage?.total_tokens ?? card.total_tokens} />
           <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
           <Button
             appearance="subtle"
