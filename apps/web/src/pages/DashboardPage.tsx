@@ -17,7 +17,6 @@ import {
   Text,
   Title3,
   makeStyles,
-  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
@@ -158,12 +157,9 @@ const useStyles = makeStyles({
   roleCell: {
     color: tokens.colorNeutralForeground2,
   },
-  numericCell: {
-    textAlign: 'right',
-  },
   successCell: {
     display: 'flex',
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
   },
@@ -171,7 +167,6 @@ const useStyles = makeStyles({
     minWidth: '34px',
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase200,
-    textAlign: 'right',
   },
   metricNote: {
     color: tokens.colorNeutralForeground2,
@@ -454,11 +449,11 @@ export function DashboardPage() {
                     <TableRow>
                       <TableHeaderCell className={styles.headerCell}>Agent</TableHeaderCell>
                       <TableHeaderCell className={styles.headerCell}>Role</TableHeaderCell>
-                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Runs this week</TableHeaderCell>
-                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Runs total</TableHeaderCell>
-                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Success rate</TableHeaderCell>
-                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Avg duration</TableHeaderCell>
-                      <TableHeaderCell className={mergeClasses(styles.headerCell, styles.numericCell)}>Cost</TableHeaderCell>
+                      <TableHeaderCell className={styles.headerCell}>Runs this week</TableHeaderCell>
+                      <TableHeaderCell className={styles.headerCell}>Runs total</TableHeaderCell>
+                      <TableHeaderCell className={styles.headerCell}>Success rate</TableHeaderCell>
+                      <TableHeaderCell className={styles.headerCell}>Avg duration</TableHeaderCell>
+                      <TableHeaderCell className={styles.headerCell}>Cost</TableHeaderCell>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -477,8 +472,8 @@ export function DashboardPage() {
                         <TableCell>
                           <TableCellLayout className={styles.roleCell}>{row.role_title ?? '—'}</TableCellLayout>
                         </TableCell>
-                        <TableCell className={styles.numericCell}>{row.runs_this_week}</TableCell>
-                        <TableCell className={styles.numericCell}>{row.runs_total}</TableCell>
+                        <TableCell>{row.runs_this_week}</TableCell>
+                        <TableCell>{row.runs_total}</TableCell>
                         <TableCell>
                           <div className={styles.successCell}>
                             <Badge
@@ -490,8 +485,8 @@ export function DashboardPage() {
                             <Text className={styles.successBasis}>{row.successful_runs}/{row.terminal_runs}</Text>
                           </div>
                         </TableCell>
-                        <TableCell className={styles.numericCell}>{formatDuration(row.avg_duration_ms)}</TableCell>
-                        <TableCell className={styles.numericCell}>{agentCosts[row.agent]?.totalNanoAiu ? `${formatAic(agentCosts[row.agent].totalNanoAiu)} AIC` : '—'}</TableCell>
+                        <TableCell>{formatDuration(row.avg_duration_ms)}</TableCell>
+                        <TableCell>{agentCosts[row.agent]?.totalNanoAiu ? `${formatAic(agentCosts[row.agent].totalNanoAiu)} AIC` : '—'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
