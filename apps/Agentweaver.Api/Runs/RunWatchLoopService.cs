@@ -475,6 +475,7 @@ public sealed class RunWatchLoopService
                 await _runStore.TrySetTerminalStatusAsync(
                     parsedRunId, RunStatus.Merged, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
+                AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "succeeded"));
                 entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
                 entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
@@ -501,6 +502,7 @@ public sealed class RunWatchLoopService
                 await _runStore.TrySetTerminalStatusAsync(
                     parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, mergeOutput.MergeResult ?? "completed", CancellationToken.None).ConfigureAwait(false);
 
+                AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "succeeded"));
                 entry.RecordNext(EventTypes.RunCompleted, new { result = mergeOutput.MergeResult ?? "completed" });
 
                 _streamStore.Complete(runId);
@@ -513,6 +515,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
+            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
             entry.RecordNext(EventTypes.ReviewApproved, new { });
             entry.RecordNext(EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult });
@@ -532,6 +535,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, "no_changes", CancellationToken.None).ConfigureAwait(false);
 
+            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "succeeded"));
             entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
 
             _streamStore.Complete(runId);
@@ -593,6 +597,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None).ConfigureAwait(false);
 
+            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "merge", status = "skipped", label = "Merge", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
             entry.RecordNext(EventTypes.ReviewDeclined, new { });
@@ -613,6 +618,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "content_safety", CancellationToken.None).ConfigureAwait(false);
 
+            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
             entry.RecordNext(EventTypes.RunFailed, new { reason = "content_safety" });
 
             _streamStore.Complete(runId);
@@ -679,6 +685,7 @@ public sealed class RunWatchLoopService
             await _runStore.TrySetTerminalStatusAsync(
                 RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, reason, CancellationToken.None).ConfigureAwait(false);
 
+            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
             entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);

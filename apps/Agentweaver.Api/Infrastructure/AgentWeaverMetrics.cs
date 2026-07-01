@@ -11,6 +11,14 @@ public static class AgentWeaverMetrics
 {
     public static readonly Meter Meter = new("Agentweaver", "1.0.0");
 
+    /// <summary>Runs created (started).</summary>
+    public static readonly Counter<long> RunsCreated =
+        Meter.CreateCounter<long>("agentweaver.run.created", "runs", "Runs created");
+
+    /// <summary>Runs that reached a terminal state, tagged with <c>status</c> = "succeeded" | "failed".</summary>
+    public static readonly Counter<long> RunsCompleted =
+        Meter.CreateCounter<long>("agentweaver.run.completed", "runs", "Runs completed by status");
+
     /// <summary>Token usage by agent and model.</summary>
     public static readonly Counter<long> TokenUsage =
         Meter.CreateCounter<long>("agentweaver.token.usage", "tokens", "Token usage by agent and model");

@@ -124,6 +124,7 @@ public sealed class RunOrchestrator
         try
         {
             await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+            AgentWeaverMetrics.RunsCreated.Add(1, new KeyValuePair<string, object?>("agent_name", run.AgentName ?? "unknown"));
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
             var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
@@ -214,6 +215,7 @@ public sealed class RunOrchestrator
         try
         {
             await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+            AgentWeaverMetrics.RunsCreated.Add(1, new KeyValuePair<string, object?>("agent_name", run.AgentName ?? "unknown"));
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
             var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
