@@ -10,6 +10,11 @@ namespace Agentweaver.SandboxFs;
 /// canonical path. Uses GetFinalPathNameByHandle on Windows and
 /// realpath(3) P/Invoke on Unix (Linux &amp; macOS).
 /// </summary>
+/// <remarks>
+/// This remains public package API because the API layer's repository-root
+/// validation uses it to compare configured allowlist roots against submitted
+/// repository paths after symlinks and junctions are resolved.
+/// </remarks>
 public static class RealPath
 {
     /// <summary>
