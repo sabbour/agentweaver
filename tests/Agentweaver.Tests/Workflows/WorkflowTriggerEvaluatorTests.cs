@@ -23,6 +23,7 @@ public sealed class WorkflowTriggerEvaluatorTests
     [Theory]
     [InlineData(WorkflowTriggerType.Manual, true)]
     [InlineData(WorkflowTriggerType.Heartbeat, false)]
+    [InlineData(WorkflowTriggerType.Schedule, false)]
     [InlineData(WorkflowTriggerType.Event, false)]
     public void Manual_Invocation_OnlyMatchesManualTrigger(WorkflowTriggerType type, bool expected)
     {
@@ -35,6 +36,7 @@ public sealed class WorkflowTriggerEvaluatorTests
     [Theory]
     [InlineData(WorkflowTriggerType.Manual, false)]
     [InlineData(WorkflowTriggerType.Heartbeat, true)]
+    [InlineData(WorkflowTriggerType.Schedule, false)]
     [InlineData(WorkflowTriggerType.Event, true)]
     public void Heartbeat_Invocation_MatchesHeartbeatAndTaskAddedToReadyEvent(WorkflowTriggerType type, bool expected)
     {

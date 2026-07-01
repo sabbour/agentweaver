@@ -12,6 +12,9 @@ public enum WorkflowTriggerType
     /// <summary>The coordinator picks up eligible work on its periodic heartbeat (FR-021).</summary>
     Heartbeat,
 
+    /// <summary>The workflow starts from a declared recurring cadence.</summary>
+    Schedule,
+
     /// <summary>The workflow starts in response to a declared event (FR-022).</summary>
     Event,
 }
@@ -72,6 +75,9 @@ public sealed record WorkflowTrigger
 
     /// <summary>Set iff <see cref="Type"/> is <see cref="WorkflowTriggerType.Event"/>.</summary>
     public WorkflowEventType? Event { get; init; }
+
+    /// <summary>Set iff <see cref="Type"/> is <see cref="WorkflowTriggerType.Schedule"/>.</summary>
+    public string? Schedule { get; init; }
 }
 
 /// <summary>A typed unit within a workflow definition. Carries render metadata equivalent to the

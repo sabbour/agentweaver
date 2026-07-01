@@ -293,6 +293,8 @@ A workflow declares one `WorkflowTrigger` (`apps/Agentweaver.Api/Workflows/Workf
 
 - **`Manual`** — eligible when a person or client explicitly starts the run.
 - **`Heartbeat`** — eligible when the coordinator heartbeat picks up ready backlog work.
+- **`Schedule`** — declares a recurring cadence such as `weekly:monday`; scheduled trigger-task
+  automation fires it rather than the existing manual/backlog-pickup selectors.
 - **`Event`** — eligible for a named `WorkflowEventType`. The current supported event is `TaskAddedToReady`.
 
 The invocation context is derived from run origin by `CoordinatorOrchestratorExecutor.ResolveInvocationKindAsync`. A `RunOrigin.BacklogPickup` run is treated as `WorkflowInvocationKind.Heartbeat`; other origins (and lookup failures) are treated as `WorkflowInvocationKind.Manual`.
@@ -307,9 +309,11 @@ flowchart TD
     HeartbeatKind[Invocation: Heartbeat]
     ManualEligible[Eligible: trigger manual]
     HeartbeatEligible[Eligible: trigger heartbeat<br/>or event task-added-to-ready]
+    ScheduleTrigger[Schedule trigger<br/>cadence metadata for trigger tasks]
 
     RunOrigin --> ManualStart --> ManualKind --> ManualEligible
     RunOrigin --> BacklogPickup --> HeartbeatKind --> HeartbeatEligible
+    ScheduleTrigger -. not selected by these paths .- HeartbeatEligible
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -594,6 +598,8 @@ A workflow is selected at the point where a run needs an execution process. Diff
 
 - **Manual run** — usually uses a manual-trigger workflow.
 - **Backlog pickup coordinator run** — usually uses heartbeat or `task-added-to-ready` event workflows.
+- **Scheduled trigger-task run** — uses schedule workflows whose trigger carries a cadence such as
+  `weekly:monday`.
 - **Coordinator parent run** — owns planning, assembly, review, merge, and scribe for coordinated work.
 - **Coordinator child run** — uses a trimmed child pipeline: agent work plus RAI, terminating at assemble-ready. It does not perform human review, merge, or scribe independently.
 

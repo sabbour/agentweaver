@@ -78,7 +78,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
     private static (string Yaml, WorkflowDefinition? Definition, string? Error) ParseCandidate(
         string raw, string description)
     {
-        var yaml = EnsureWorkflowId(StripFences(raw), description);
+        var yaml = ApplyInferredSchedule(EnsureWorkflowId(StripFences(raw), description), description);
         var result = WorkflowDefinitionLoader.Load(yaml, "generated");
         if (!result.IsValid || result.Definition is null)
             return (yaml, null, result.Error ?? "The generated YAML did not validate.");
@@ -118,8 +118,14 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - name: string (required). Short human-readable name.
             - description: string. One or two sentences: what the workflow does and when to use it.
             - version: string. Use "1.0".
-            - trigger: object (required). { type: manual | heartbeat | event }. For type 'event' also set
-              `event: task-added-to-ready` (the only supported event).
+            - trigger: object (required).
+              - Manual runs: { type: manual }.
+              - Backlog pickup: { type: heartbeat }.
+              - Recurring cadence: { type: schedule, schedule: weekly:monday }. If the description says
+                "every Monday", "weekly on Monday", or another recurring cadence, MUST use type
+                `schedule` and include a concise lowercase cadence in `schedule` (prefer
+                `weekly:<day>` for weekly weekday cadences). Do not drop the cadence.
+              - Event runs: { type: event, event: task-added-to-ready } (the only supported event).
             - start: string (required). The id of the entry node where execution begins.
             - nodes: list (required, >= 1). Each node: { id, type, label, role?, kind?, agent?, prompt?,
               charter?, target?, steps?, branches? }.
@@ -285,6 +291,58 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         var slug = Slugify(description);
         return $"id: {slug}\n{yaml}";
+    }
+
+    private static string ApplyInferredSchedule(string yaml, string description)
+    {
+        if (!TryInferSchedule(description, out var cadence))
+            return yaml;
+
+        if (Regex.IsMatch(yaml, @"(?im)^\s*type\s*:\s*schedule\s*$"))
+        {
+            return Regex.IsMatch(yaml, @"(?im)^\s*schedule\s*:")
+                ? yaml
+                : InsertScheduleAfterTriggerType(yaml, cadence);
+        }
+
+        var triggerBlock = Regex.Match(yaml, @"(?im)^(?<indent>\s*)trigger\s*:\s*$");
+        if (!triggerBlock.Success)
+            return yaml;
+
+        var typePattern = @"(?im)^(?<indent>\s+)type\s*:\s*(manual|heartbeat|event)\s*$";
+        if (!Regex.IsMatch(yaml, typePattern))
+            return yaml;
+
+        yaml = new Regex(typePattern).Replace(yaml, m => $"{m.Groups["indent"].Value}type: schedule", 1);
+        return InsertScheduleAfterTriggerType(yaml, cadence);
+    }
+
+    private static string InsertScheduleAfterTriggerType(string yaml, string cadence)
+    {
+        return new Regex(@"(?im)^(?<indent>\s*)type\s*:\s*schedule\s*$")
+            .Replace(yaml, m => $"{m.Value}\n{m.Groups["indent"].Value}schedule: {cadence}", 1);
+    }
+
+    private static bool TryInferSchedule(string description, out string cadence)
+    {
+        var match = Regex.Match(
+            description,
+            @"\b(?:every|weekly\s+on)\s+(?<day>monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+            RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            cadence = $"weekly:{match.Groups["day"].Value.ToLowerInvariant()}";
+            return true;
+        }
+
+        if (Regex.IsMatch(description, @"\bevery\s+day\b|\bdaily\b", RegexOptions.IgnoreCase))
+        {
+            cadence = "daily";
+            return true;
+        }
+
+        cadence = string.Empty;
+        return false;
     }
 
     private static string Slugify(string text)
