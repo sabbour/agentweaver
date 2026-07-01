@@ -168,7 +168,7 @@ Merging is guarded in two layers.
 
 The database layer controls state transitions. A run must move through compare-and-set style states such as `awaiting_review -> merging` or `awaiting_review -> committing -> merging`. This prevents two approvals, commits, declines, or request-changes operations from winning the same run.
 
-The repository layer uses a process-wide per-repository semaphore. That serializes approvals for the same repository and closes timing windows where two runs could both inspect the same target branch tip and then race to update it.
+The repository layer uses a per-repository merge lock. In PostgreSQL deployments, the lock is a session advisory lock keyed by canonical repository path so it spans API replicas. In SQLite/local development, the lock falls back to a process-wide semaphore. That serializes approvals for the same repository and closes timing windows where two runs could both inspect the same target branch tip and then race to update it.
 
 The merge algorithm then checks:
 
