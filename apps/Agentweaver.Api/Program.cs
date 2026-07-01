@@ -616,6 +616,12 @@ builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowGenerator, Agen
 // Spec-to-backlog decomposition (Feature 014)
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>();
 
+// Azure Monitor OpenTelemetry (Application Insights) — enabled only when connection string is set.
+if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+{
+    Agentweaver.Api.Infrastructure.AzureMonitorBootstrap.Configure(builder.Services);
+}
+
 var app = builder.Build();
 
 // For Postgres, skip SqliteDb.EnsureCreatedAsync (agentweaver.db tables are in MemoryDbContext).

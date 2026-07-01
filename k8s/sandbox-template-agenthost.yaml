@@ -128,6 +128,12 @@ spec:
               value: "/workspace"
             - name: AgentHost__KeyVaultUri
               value: "${AGENTHOST_KEYVAULT_URI}"
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: appinsights-connection-string
+                  optional: true
           resources:
             requests:
               memory: "1Gi"

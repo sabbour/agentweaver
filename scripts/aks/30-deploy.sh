@@ -46,6 +46,13 @@ export AGENTHOST_KEYVAULT_URI
 echo "Applying namespace..."
 kubectl apply -f "${REPO_ROOT}/k8s/namespace.yaml"
 
+# Provision monitoring if not already done
+if ! az monitor app-insights component show --app agentweaver-insights -g "${RESOURCE_GROUP}" &>/dev/null; then
+    echo ""
+    echo "Provisioning monitoring (Application Insights + Managed Prometheus)..."
+    bash "$(dirname "$0")/15-provision-monitoring.sh"
+fi
+
 echo ""
 echo "Checking DefaultDomainCertificate 'cert' in namespace '${NAMESPACE}'..."
 if kubectl get defaultdomaincertificate cert --namespace "${NAMESPACE}" &>/dev/null; then

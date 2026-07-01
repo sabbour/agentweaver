@@ -169,15 +169,17 @@ spec:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-            # OTEL telemetry — same endpoint as the web tier.
+            # OTEL telemetry — Azure Monitor via Application Insights.
             - name: OTEL_SERVICE_NAME
               value: agentweaver-worker
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: service.namespace=agentweaver,deployment.environment=production
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://otel-collector.observability.svc.cluster.local:4317
-            - name: OTEL_EXPORTER_OTLP_PROTOCOL
-              value: grpc
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: appinsights-connection-string
+                  optional: true
             - name: TMPDIR
               value: /tmp
             # A2A mTLS client cert (spec-018 H1) — the worker connects to each sandbox agent pod
