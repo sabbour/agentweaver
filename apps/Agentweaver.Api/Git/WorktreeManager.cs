@@ -342,10 +342,12 @@ public sealed class WorktreeManager
     /// child branch in <paramref name="childBranchesInOrder"/> (already dependency/topologically
     /// ordered) into it using HEADLESS tree merges (<see cref="ObjectDatabase.MergeCommits"/>) — no
     /// working directory or worktree is checked out, so this is safe to run from the coordinator's
-    /// background loop. On the FIRST conflict it stops with NO partial assembly and returns the
-    /// conflicting branch + files (D2). On success it returns the aggregate tree hash and the
-    /// aggregate diff vs the originating branch. An empty <paramref name="childBranchesInOrder"/>
-    /// (every child was a no-change <c>completed</c>) yields an empty-diff success.
+    /// background loop. When a merge conflict occurs, the coordinator currently auto-resolves it by
+    /// accepting the CHILD branch's version for each conflicting path and continues building the
+    /// aggregate. On success it returns the aggregate tree hash, the aggregate diff vs the
+    /// originating branch, and any auto-resolutions that occurred. An empty
+    /// <paramref name="childBranchesInOrder"/> (every child was a no-change <c>completed</c>) yields
+    /// an empty-diff success.
     /// <para>Branch-ref only: the originating branch is never modified here; that happens later in the
     /// single collective merge.</para>
     /// </summary>
@@ -374,6 +376,7 @@ public sealed class WorktreeManager
         var intBranch = repo.CreateBranch(integrationBranch, origin.Tip);
 
         var integrationCommit = origin.Tip;
+        var autoResolutions = new List<(string Branch, IReadOnlyList<string> Files)>();
 
         foreach (var childBranch in childBranchesInOrder)
         {
@@ -402,11 +405,57 @@ public sealed class WorktreeManager
             var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, child.Tip, new MergeTreeOptions());
             if (merge.Status == MergeTreeStatus.Conflicts)
             {
-                return IntegrationBranchResult.Conflict(
-                    integrationBranch,
+                var conflictingFiles = ExtractConflictingFiles(merge);
+                _logger.LogInformation(
+                    "Integration build: auto-resolving {Count} conflict(s) from branch '{Branch}' by accepting child changes. Files: {Files}",
+                    conflictingFiles.Count,
                     childBranch,
-                    ExtractConflictingFiles(merge),
-                    $"Child branch conflicts with the integration branch and requires human resolution.");
+                    string.Join(", ", conflictingFiles));
+
+                // TODO(issue-85): distinguish "single child amends another child's file" (safe to
+                // auto-resolve) from true sibling-vs-sibling conflicts that should still surface as
+                // IntegrationBranchOutcome.Conflict for human resolution.
+                if (mergeBase is null)
+                {
+                    return IntegrationBranchResult.Conflict(
+                        integrationBranch,
+                        childBranch,
+                        conflictingFiles,
+                        "Unable to auto-resolve integration conflict because no merge base was found.");
+                }
+
+                var treeDefinition = TreeDefinition.From(integrationCommit.Tree);
+                var childTree = child.Tip.Tree;
+                var childChanges = repo.Diff.Compare<TreeChanges>(mergeBase.Tree, child.Tip.Tree);
+                foreach (var change in childChanges)
+                {
+                    if (change.Status is ChangeKind.Deleted or ChangeKind.Renamed)
+                        treeDefinition.Remove(change.OldPath ?? change.Path);
+
+                    if (change.Status is ChangeKind.Deleted or ChangeKind.Unmodified)
+                        continue;
+
+                    var childEntry = childTree[change.Path];
+                    if (childEntry?.TargetType == TreeEntryTargetType.Blob)
+                    {
+                        var childBlob = repo.Lookup<Blob>(childEntry.Target.Id);
+                        if (childBlob is not null)
+                            treeDefinition.Add(change.Path, childBlob, childEntry.Mode);
+                    }
+                }
+
+                var resolvedTree = repo.ObjectDatabase.CreateTree(treeDefinition);
+                var resolvedSignature = WithTimestamp();
+                integrationCommit = repo.ObjectDatabase.CreateCommit(
+                    resolvedSignature,
+                    resolvedSignature,
+                    $"Assemble {childBranch} into {integrationBranch} [auto-resolved {conflictingFiles.Count} conflict(s) — accepted child changes]",
+                    resolvedTree,
+                    new[] { integrationCommit, child.Tip },
+                    prettifyMessage: true);
+
+                autoResolutions.Add((childBranch, conflictingFiles));
+                continue;
             }
 
             var signature = WithTimestamp();
@@ -423,7 +472,11 @@ public sealed class WorktreeManager
         repo.Refs.UpdateTarget(repo.Refs[intBranch.CanonicalName], integrationCommit.Id);
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
-        return IntegrationBranchResult.Success(integrationBranch, integrationCommit.Tree.Sha, patch.Content);
+        return IntegrationBranchResult.Success(
+            integrationBranch,
+            integrationCommit.Tree.Sha,
+            patch.Content,
+            autoResolutions);
     }
 
     /// <summary>

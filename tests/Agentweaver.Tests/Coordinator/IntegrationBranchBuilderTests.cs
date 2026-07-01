@@ -11,7 +11,7 @@ namespace Agentweaver.Tests.Coordinator;
 /// Tests for the D1 collective integration-branch build
 /// (<see cref="WorktreeManager.BuildIntegrationBranch"/>) against a real temp git repository. Eligible
 /// child branches must merge into the integration branch in dependency order (happy path); a
-/// conflicting pair must stop with NO partial assembly and surface the conflict (D2).
+/// conflicting pair is auto-resolved by accepting the later child branch's version.
 /// </summary>
 public sealed class IntegrationBranchBuilderTests : IDisposable
 {
@@ -61,7 +61,7 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
     }
 
     [Fact]
-    public void BuildIntegrationBranch_ConflictingChildren_StopsWithConflict_NoPartialAssembly()
+    public void BuildIntegrationBranch_ConflictingChildren_AutoResolvesByAcceptingLaterChild()
     {
         var repoPath = CreateTempGitRepo();
 
@@ -73,9 +73,16 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
             repoPath, "main", "agentweaver/integration/coord-3",
             new[] { "agentweaver/child-x", "agentweaver/child-y" });
 
-        result.Outcome.Should().Be(IntegrationBranchOutcome.Conflict);
-        result.ConflictingBranch.Should().Be("agentweaver/child-y");
-        result.ConflictingFiles.Should().Contain("shared.txt");
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        result.AutoResolutions.Should().ContainSingle();
+        result.AutoResolutions[0].Branch.Should().Be("agentweaver/child-y");
+        result.AutoResolutions[0].Files.Should().Contain("shared.txt");
+
+        using var repo = new Repository(repoPath);
+        var intTip = repo.Branches["agentweaver/integration/coord-3"].Tip;
+        intTip["shared.txt"].Should().NotBeNull();
+        ReadBlob(repo, intTip["shared.txt"]).Should().Be("from Y\n");
+        intTip.Message.Should().Contain("auto-resolved");
     }
 
     // ── helpers (mirrors CommitEndpointMergeTests git setup) ──────────────────────────────────
@@ -128,6 +135,14 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
         {
             if (File.Exists(tmpBlobPath)) File.Delete(tmpBlobPath);
         }
+    }
+
+    private static string ReadBlob(Repository repo, TreeEntry? entry)
+    {
+        entry.Should().NotBeNull();
+        using var content = ((Blob)entry!.Target).GetContentStream();
+        using var reader = new StreamReader(content, Encoding.UTF8);
+        return reader.ReadToEnd();
     }
 
     public void Dispose()
