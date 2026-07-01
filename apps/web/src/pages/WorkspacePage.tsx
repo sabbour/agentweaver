@@ -171,7 +171,7 @@ export function WorkspacePage() {
     setDecomposeItems([]);
     setDecomposePreviewOpen(true);
     try {
-      const result = await apiClient.decomposeSpec(projectId, selectedPath, false);
+      const result = await apiClient.decomposeSpec(projectId, selectedPath, false, null, selectedRef);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
@@ -187,7 +187,7 @@ export function WorkspacePage() {
     setDecomposeLoading(true);
     setDecomposeError(null);
     try {
-      const result = await apiClient.decomposeSpec(projectId, selectedPath, true);
+      const result = await apiClient.decomposeSpec(projectId, selectedPath, true, null, selectedRef);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);

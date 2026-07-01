@@ -16,7 +16,41 @@ import {
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { WorkspaceFileNode } from '../api/types';
+import type { WorkspaceFileNode, WorkspaceNode } from '../api/types';
+
+/** Convert the flat ref-aware workspace tree into the nested WorkspaceFileNode tree. */
+function buildFileTree(flat: WorkspaceNode[]): WorkspaceFileNode[] {
+  const dirMap = new Map<string, WorkspaceFileNode>();
+  const roots: WorkspaceFileNode[] = [];
+
+  // Ensure parent dirs are processed before their children.
+  const sorted = [...flat].sort((a, b) => a.path.localeCompare(b.path));
+
+  for (const node of sorted) {
+    const parts = node.path.split('/');
+    const name = parts[parts.length - 1];
+    const fileNode: WorkspaceFileNode = {
+      name,
+      relative_path: node.path,
+      is_directory: node.is_folder,
+      children: node.is_folder ? [] : undefined,
+    };
+
+    if (node.is_folder) {
+      dirMap.set(node.path, fileNode);
+    }
+
+    const parentPath = parts.slice(0, -1).join('/');
+    const parent = parentPath ? dirMap.get(parentPath) : undefined;
+    if (parent) {
+      parent.children!.push(fileNode);
+    } else {
+      roots.push(fileNode);
+    }
+  }
+
+  return roots;
+}
 
 const useStyles = makeStyles({
   root: {
@@ -158,11 +192,13 @@ function FileTreeNode({ node, depth, selectedPath, onSelect }: FileTreeNodeProps
 
 export interface WorkspaceFilePickerProps {
   projectId: string;
+  /** Branch/worktree ref to browse. Defaults to the project base branch ('main'). */
+  workspaceRef?: string;
   selectedPath: string | null;
   onSelect: (path: string) => void;
 }
 
-export function WorkspaceFilePicker({ projectId, selectedPath, onSelect }: WorkspaceFilePickerProps) {
+export function WorkspaceFilePicker({ projectId, workspaceRef, selectedPath, onSelect }: WorkspaceFilePickerProps) {
   const styles = useStyles();
   const [nodes, setNodes] = useState<WorkspaceFileNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -172,8 +208,8 @@ export function WorkspaceFilePicker({ projectId, selectedPath, onSelect }: Works
     let cancelled = false;
     setLoading(true);
     setError(null);
-    apiClient.getWorkspaceFiles(projectId)
-      .then((files) => { if (!cancelled) { setNodes(files); setLoading(false); } })
+    apiClient.getProjectWorkspace(projectId, workspaceRef)
+      .then((flat) => { if (!cancelled) { setNodes(buildFileTree(flat)); setLoading(false); } })
       .catch((err) => {
         if (!cancelled) {
           setError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
@@ -181,7 +217,7 @@ export function WorkspaceFilePicker({ projectId, selectedPath, onSelect }: Works
         }
       });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, workspaceRef]);
 
   return (
     <div className={styles.root}>

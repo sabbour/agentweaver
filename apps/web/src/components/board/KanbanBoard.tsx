@@ -192,7 +192,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     setImportSuccess(false);
     setDecomposePreviewOpen(true);
     try {
-      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, false);
+      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, false, null, undefined);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
@@ -208,7 +208,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     setDecomposeLoading(true);
     setDecomposeError(null);
     try {
-      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, true);
+      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, true, null, undefined);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);

@@ -734,8 +734,8 @@ export class AgentweaverApiClient {
   // Decompose a spec file into proposed backlog items (Feature 014, FR-003/004).
   // filePath=null uses the project's confirmed outcome spec stored on the server (requires runId).
   // confirm=false → dry-run preview; confirm=true → create the tasks.
-  decomposeSpec(projectId: string, filePath: string | null, confirm: boolean, runId?: string | null): Promise<DecomposeResponse> {
-    return this.request<DecomposeResponse>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/decompose`, { file_path: filePath, run_id: runId ?? null, confirm });
+  decomposeSpec(projectId: string, filePath: string | null, confirm: boolean, runId?: string | null, ref?: string): Promise<DecomposeResponse> {
+    return this.request<DecomposeResponse>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/decompose`, { file_path: filePath, run_id: runId ?? null, confirm, ...(ref ? { ref } : {}) });
   }
 
   // Sandbox port-forward (017-preview): tunnel a sandbox pod port to the API server.
