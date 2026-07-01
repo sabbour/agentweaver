@@ -1,8 +1,11 @@
 using FluentAssertions;
+using LibGit2Sharp;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -30,6 +33,7 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
     private readonly ServiceProvider _provider;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RunOrchestrator _orchestrator;
+    private readonly List<string> _tempDirs = [];
 
     public CoordinatorChildFailureTests()
     {
@@ -102,6 +106,31 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         fetched.Result.Should().Contain("workflow start boom");
     }
 
+    [Fact]
+    public async Task StartChildRunAsync_WhenLaunchFailsAfterWorktreeCreation_CleansUpChildWorktree()
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore,
+            _streamStore,
+            manager,
+            workflowFactory: null!,
+            registry: null!,
+            watchLoop: null!,
+            _scopeFactory,
+            configuration: null!,
+            NullLogger<RunOrchestrator>.Instance);
+        var childRun = NewChildRun() with { RepositoryPath = repoPath, OriginatingBranch = "main" };
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            orchestrator.StartChildRunAsync(childRun, default));
+
+        var expectedWorktreePath = Path.Combine(worktreesBase, childRun.Id.ToString());
+        Directory.Exists(expectedWorktreePath).Should().BeFalse(
+            "failed child launch must remove the per-child worktree it just created");
+    }
+
     [Theory]
     [InlineData(@"could not create worktree at C:\Users\asabbour\.local\share\agentweaver\worktrees\abc")]
     [InlineData("path /home/asabbour/.copilot/session-state/x rejected")]
@@ -137,10 +166,48 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         SubtaskId = "7",
     };
 
+    private (string RepoPath, string WorktreesBase) CreateRepository()
+    {
+        var repoPath = Path.Combine(Path.GetTempPath(), $"aw-child-failure-repo-{Guid.NewGuid():N}");
+        var worktreesBase = Path.Combine(Path.GetTempPath(), $"aw-child-failure-wt-{Guid.NewGuid():N}");
+        _tempDirs.Add(repoPath);
+        _tempDirs.Add(worktreesBase);
+
+        Repository.Init(repoPath);
+        using var repo = new Repository(repoPath);
+        File.WriteAllText(Path.Combine(repoPath, "README.md"), "init");
+        Commands.Stage(repo, "*");
+        var sig = new Signature("Test", "test@test.com", DateTimeOffset.UtcNow);
+        repo.Commit("init", sig, sig);
+        if (!string.Equals(repo.Head.FriendlyName, "main", StringComparison.Ordinal))
+            repo.Branches.Rename(repo.Head, "main");
+        Commands.Checkout(repo, repo.Head.Tip);
+
+        return (repoPath, worktreesBase);
+    }
+
+    private static WorktreeManager BuildWorktreeManager(string worktreesBase)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Worktrees:BasePath"] = worktreesBase,
+                ["Git:Author:Name"] = "Test",
+                ["Git:Author:Email"] = "test@test.com",
+            })
+            .Build();
+        return new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
+    }
+
     public async ValueTask DisposeAsync()
     {
         _provider.Dispose();
         _memoryConn.Dispose();
         await _runDb.DisposeAsync();
+        foreach (var dir in _tempDirs)
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch { /* best effort */ }
+        }
     }
 }

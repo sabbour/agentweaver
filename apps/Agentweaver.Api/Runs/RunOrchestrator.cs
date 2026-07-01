@@ -210,39 +210,49 @@ public sealed class RunOrchestrator
             AgentCharter = agentCharter,
         };
 
-        await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
-        var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
-
-        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
-
-        var input = new AgentTurnInput(
-            run.Id.ToString(),
-            taskWithHarvest,
-            worktreeInfo.WorktreePath,
-            worktreeInfo.BranchName,
-            run.RepositoryPath,
-            run.OriginatingBranch,
-            run.ModelSource.ToApiString(),
-            run.ModelId,
-            run.SubmittingUser,
-            systemPromptContext,
-            run.ProjectId?.ToString(),
-            run.AgentName,
-            started.StartedAt);
-
-        var runCts = new CancellationTokenSource();
-        var ctsRegistered = false;
+        var launchCompleted = false;
         try
         {
-            var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
-            var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
-            ctsRegistered = true;
-            _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+            await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+            var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+
+            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+
+            var input = new AgentTurnInput(
+                run.Id.ToString(),
+                taskWithHarvest,
+                worktreeInfo.WorktreePath,
+                worktreeInfo.BranchName,
+                run.RepositoryPath,
+                run.OriginatingBranch,
+                run.ModelSource.ToApiString(),
+                run.ModelId,
+                run.SubmittingUser,
+                systemPromptContext,
+                run.ProjectId?.ToString(),
+                run.AgentName,
+                started.StartedAt);
+
+            var runCts = new CancellationTokenSource();
+            var ctsRegistered = false;
+            try
+            {
+                var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
+                var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
+                ctsRegistered = true;
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                launchCompleted = true;
+            }
+            catch
+            {
+                CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
+                throw;
+            }
         }
-        catch
+        finally
         {
-            CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
-            throw;
+            if (!launchCompleted)
+                CleanupWorktreeSafe(run.RepositoryPath, worktreeInfo, run.Id);
         }
     }
 

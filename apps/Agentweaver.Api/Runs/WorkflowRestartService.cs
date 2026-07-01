@@ -280,7 +280,6 @@ public sealed class WorkflowRestartService
             .ConfigureAwait(false) ?? 0;
         var sequence = maxSequence + 1;
 
-        entry.Record(new RunEvent(sequence, eventType, payload));
         db.RunEvents.Add(new RunEventRecord
         {
             RunId = runId,
@@ -290,6 +289,7 @@ public sealed class WorkflowRestartService
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        entry.Record(new RunEvent(sequence, eventType, payload));
     }
 
     private void CleanupWorktreeSafe(DomainRun run)

@@ -201,6 +201,31 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
             "a child AgentQuestionAsked event must be bubbled onto the coordinator stream");
     }
 
+    [Fact]
+    public async Task RunDispatchLoop_CoordinatorStoppedAfterActiveChild_DoesNotDispatchRemainingPendingSubtasks()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.Failed);
+        var childRunId = await SeedChildRunAsync(RunStatus.Failed);
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.RunCancelled, new { reason = "steering_stop" }));
+        await stream.CompleteAsync(childRunId);
+
+        var (_, ids) = await SeedPlanAsync(coord,
+            [(SubtaskStatus.Running, childRunId), (SubtaskStatus.Pending, null)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream);
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed);
+        var pending = await GetSubtaskAsync(ids[1]);
+        pending.Status.Should().Be(SubtaskStatus.Pending,
+            "a stopped coordinator must not launch new children after active stop cancellation is observed");
+        pending.ChildRunId.Should().BeNull();
+        _assembly.Started.Should().Be(0, "stopped dispatch must not hand off to assembly");
+    }
+
     // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
@@ -257,7 +282,7 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
     private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(
         string coordinatorRunId,
-        (string Status, string ChildRunId)[] subtasks)
+        (string Status, string? ChildRunId)[] subtasks)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -321,6 +346,25 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         return await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == id);
     }
 
+    private async Task SeedCoordinatorRunAsync(string coordinatorRunId, RunStatus status)
+    {
+        var run = new Run
+        {
+            Id = RunId.Parse(coordinatorRunId),
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "coordinate",
+            SubmittingUser = "owner",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Coordinator",
+        };
+        await _runStore.InsertAsync(run);
+        if (status != RunStatus.InProgress)
+            await _runStore.UpdateStatusAsync(run.Id, status, DateTimeOffset.UtcNow);
+    }
+
     private static void CreateRunEventsTable(string memoryDbPath)
     {
         using var conn = new SqliteConnection($"Data Source={memoryDbPath}");
@@ -353,7 +397,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
     private sealed class RecordingAssembly : ICoordinatorAssembly
     {
-        public void StartAssembly(CoordinatorDispatchContext context) { }
+        public int Started { get; private set; }
+        public void StartAssembly(CoordinatorDispatchContext context) => Started++;
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

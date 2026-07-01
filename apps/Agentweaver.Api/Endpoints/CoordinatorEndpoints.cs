@@ -86,10 +86,8 @@ app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
     return outcome switch
     {
         CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
-        CoordinatorGateOutcome.RunNotActive => await ReadConfirmedOutcomeSpecResultAsync(coordinator, id, ct)
-            ?? Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
-        CoordinatorGateOutcome.NoPendingGate => await ReadConfirmedOutcomeSpecResultAsync(coordinator, id, ct)
-            ?? Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
+        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
+        CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
         _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
     };
 });
@@ -582,7 +580,7 @@ static async Task<bool> TryDeferAssemblyReviewDecisionAsync(
         .FirstOrDefaultAsync(d => d.RunId == coordinatorRunId, ct)
         .ConfigureAwait(false);
     if (existing is not null)
-        return true;
+        return false;
 
     db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
     {
@@ -597,7 +595,7 @@ static async Task<bool> TryDeferAssemblyReviewDecisionAsync(
     }
     catch (DbUpdateException)
     {
-        return true;
+        return false;
     }
 
     logger.LogInformation(
@@ -640,13 +638,6 @@ static async Task<OutcomeSpec?> ReadOutcomeSpecWithBriefWaitAsync(
             return spec;
         await Task.Delay(100, ct);
     }
-}
-
-static async Task<IResult?> ReadConfirmedOutcomeSpecResultAsync(
-    CoordinatorRunService coordinator, string runId, CancellationToken ct)
-{
-    var spec = await coordinator.GetOutcomeSpecAsync(runId, ct);
-    return spec?.Status == "confirmed" ? Results.Json(MapOutcomeSpec(spec)) : null;
 }
 
 static async Task<CoordinatorWorkPlanView?> ReadWorkPlanWithBriefWaitAsync(

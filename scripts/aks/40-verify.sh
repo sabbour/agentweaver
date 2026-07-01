@@ -71,13 +71,34 @@ fi
 
 if [[ -n "${HOST}" ]]; then
   echo ""
-  echo "--- HTTP smoke tests ---"
-  fe_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 "https://${HOST}/" 2>/dev/null || echo "000")
-  api_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 "https://${HOST}/api/health" 2>/dev/null || echo "000")
-  mcp_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 "https://${HOST}/mcp/health" 2>/dev/null || echo "000")
-  [[ "${fe_status}" == "200" ]] && ok "Frontend / → HTTP ${fe_status}" || fail "Frontend / → HTTP ${fe_status} (expected 200)"
-  [[ "${api_status}" == "200" ]] && ok "API /api/health → HTTP ${api_status}" || fail "API /api/health → HTTP ${api_status} (expected 200)"
-  [[ "${mcp_status}" == "200" ]] && ok "MCP /mcp/health → HTTP ${mcp_status}" || fail "MCP /mcp/health → HTTP ${mcp_status} (expected 200)"
+  echo "--- Authenticated feature validation ---"
+  unauth_projects_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 "https://${HOST}/api/projects" 2>/dev/null || echo "000")
+  [[ "${unauth_projects_status}" == "401" ]] && ok "Unauthenticated /api/projects rejected → HTTP ${unauth_projects_status}" || fail "Unauthenticated /api/projects → HTTP ${unauth_projects_status} (expected 401)"
+
+  validation_token="${AGENTWEAVER_VALIDATION_TOKEN:-${GH_TOKEN:-}}"
+  if [[ -z "${validation_token}" ]]; then
+    info "Set AGENTWEAVER_VALIDATION_TOKEN or GH_TOKEN to validate signed-in identity plus project memory/decision APIs"
+  else
+    auth_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 -H "Authorization: Bearer ${validation_token}" "https://${HOST}/api/auth/github" 2>/dev/null || echo "000")
+    projects_status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 -H "Authorization: Bearer ${validation_token}" "https://${HOST}/api/projects" 2>/dev/null || echo "000")
+    [[ "${auth_status}" == "200" ]] && ok "Authenticated /api/auth/github → HTTP ${auth_status}" || fail "Authenticated /api/auth/github → HTTP ${auth_status} (expected 200)"
+    [[ "${projects_status}" == "200" ]] && ok "Authenticated /api/projects → HTTP ${projects_status}" || fail "Authenticated /api/projects → HTTP ${projects_status} (expected 200)"
+
+    if command -v jq >/dev/null 2>&1; then
+      projects_json=$(curl -sf --max-time 10 -H "Authorization: Bearer ${validation_token}" "https://${HOST}/api/projects" 2>/dev/null || echo "[]")
+      project_id=$(printf '%s' "${projects_json}" | jq -r 'if type=="array" then .[0].id // .[0].projectId // empty else .projects[0].id // .projects[0].projectId // .items[0].id // .items[0].projectId // empty end' 2>/dev/null || echo "")
+      if [[ -n "${project_id}" ]]; then
+        for path in "/api/projects/${project_id}/memory" "/api/projects/${project_id}/decisions/inbox" "/api/projects/${project_id}/decisions"; do
+          status=$(curl -sSo /dev/null -w "%{http_code}" --max-time 10 -H "Authorization: Bearer ${validation_token}" "https://${HOST}${path}" 2>/dev/null || echo "000")
+          [[ "${status}" == "200" ]] && ok "Authenticated ${path} → HTTP ${status}" || fail "Authenticated ${path} → HTTP ${status} (expected 200)"
+        done
+      else
+        info "Authenticated account has no project id to validate memory/decision APIs"
+      fi
+    else
+      info "Install jq to validate project-scoped memory and decision APIs from the first authenticated project"
+    fi
+  fi
 fi
 
 echo ""

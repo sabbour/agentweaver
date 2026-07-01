@@ -1,4 +1,6 @@
 using System;
+using Agentweaver.Api.Memory;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -6,6 +8,8 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Agentweaver.Api.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(MemoryDbContext))]
+    [Migration("20260628160000_AddWebSessionExchangeCodes")]
     public partial class AddWebSessionExchangeCodes : Migration
     {
         /// <inheritdoc />
