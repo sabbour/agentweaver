@@ -36,8 +36,11 @@ public sealed class FoundryClientFactory
         var uri = new Uri(_endpoint);
         var resourceEndpoint = new Uri($"{uri.Scheme}://{uri.Host}");
 
-        return new AzureOpenAIClient(resourceEndpoint, new AzureKeyCredential(_apiKey))
-            .GetChatClient(deployment)
-            .AsIChatClient();
+        return new ChatClientBuilder(
+                new AzureOpenAIClient(resourceEndpoint, new AzureKeyCredential(_apiKey))
+                    .GetChatClient(deployment)
+                    .AsIChatClient())
+            .UseOpenTelemetry()
+            .Build();
     }
 }

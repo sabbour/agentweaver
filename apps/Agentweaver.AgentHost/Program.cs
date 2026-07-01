@@ -158,6 +158,13 @@ agentHostedBuilder.AddA2AServer(options =>
     options.AgentRunMode = AgentRunMode.DisallowBackground;
 });
 
+// Azure Monitor OpenTelemetry (Application Insights) — enabled only when connection string is set.
+var appInsightsConnStr = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+if (!string.IsNullOrEmpty(appInsightsConnStr))
+{
+    Agentweaver.AgentHost.AzureMonitorBootstrap.Configure(builder.Services, builder.Logging);
+}
+
 // ── Build app ─────────────────────────────────────────────────────────────────
 var app = builder.Build();
 

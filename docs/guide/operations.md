@@ -134,6 +134,91 @@ FORCE_REBUILD=true bash scripts/aks/20-build-push-images.sh
 |---|---|
 | `scripts/release.sh` | Full semver release (see above) |
 | `scripts/aks/00-variables.sh` | Shared AKS variables (source this before other scripts) |
+| `scripts/aks/15-provision-monitoring.sh` | Provision Application Insights + AKS Managed Prometheus |
 | `scripts/aks/20-build-push-images.sh` | Build and push images to ACR |
 | `scripts/aks/30-deploy.sh` | Deploy to AKS |
 | `scripts/aks/40-verify.sh` | Smoke-test the deployed cluster |
+
+## Observability
+
+Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry Distro** (Application Insights) and **AKS Managed Prometheus**.
+
+### Provisioning monitoring resources
+
+Monitoring is provisioned automatically by `scripts/aks/30-deploy.sh` when Application Insights does not yet exist. To provision it standalone:
+
+```bash
+source scripts/aks/00-variables.sh
+bash scripts/aks/15-provision-monitoring.sh
+```
+
+This creates:
+- A **Log Analytics workspace** (`agentweaver-logs`)
+- A **workspace-based Application Insights** resource (`agentweaver-insights`) — workspace-based is required for the Agents (Preview) view
+- Stores the connection string as `appinsights-connection-string` in Key Vault
+- Enables **AKS Managed Prometheus** on the cluster
+
+### Finding the Application Insights resource
+
+1. Open the [Azure Portal](https://portal.azure.com)
+2. Navigate to your resource group (`agentweaver-rg` by default)
+3. Select the **Application Insights** resource named `agentweaver-insights`
+
+### Using the Agents (Preview) view
+
+The **Agents (Preview)** view in Application Insights shows GenAI-specific telemetry including agent runs, token usage, and model calls.
+
+1. In the Application Insights resource, select **Agents (Preview)** from the left menu
+2. Use the time range picker to scope your investigation
+3. Filter by agent using the `gen_ai.agent.name` attribute — this maps to the configured agent name in the squad definition (e.g. `morpheus`, `seraph`)
+
+Key span attributes emitted by Agentweaver:
+
+| Attribute | Description |
+|---|---|
+| `gen_ai.agent.name` | Squad agent name |
+| `gen_ai.agent.id` | Agent identifier |
+| `gen_ai.usage.input_tokens` | Prompt tokens consumed |
+| `gen_ai.usage.output_tokens` | Completion tokens produced |
+| `gen_ai.request.model` | Model deployment name |
+| `gen_ai.operation.name` | `chat` or `execute_tool` |
+
+### Querying a specific run in Application Insights Search
+
+To find all telemetry for a single run by its `RunId`:
+
+1. In Application Insights, select **Search** (or **Transaction search**)
+2. Enter the RunId (e.g. `run_abc123`) in the search box
+3. Alternatively, use **Logs** with a KQL query:
+
+```kusto
+traces
+| where customDimensions["RunId"] == "run_abc123"
+| order by timestamp asc
+```
+
+Or to see all token usage for a run:
+
+```kusto
+customMetrics
+| where name == "agentweaver.token.usage"
+| where customDimensions["run_id"] == "run_abc123"
+| summarize totalTokens = sum(value) by tostring(customDimensions["agent_name"])
+```
+
+### AKS Managed Prometheus metrics
+
+Business metrics emitted by `AgentWeaverMetrics` are exported to the AKS Managed Prometheus workspace:
+
+| Metric | Type | Description |
+|---|---|---|
+| `agentweaver_token_usage_total` | Counter | Token usage by agent and model |
+| `agentweaver_run_duration` | Histogram | Run duration in milliseconds |
+| `agentweaver_run_errors_total` | Counter | Run errors by type |
+| `agentweaver_run_active` | UpDownCounter | Currently active runs |
+
+To query in Azure Managed Grafana (linked to the Prometheus workspace), use standard PromQL:
+
+```promql
+rate(agentweaver_token_usage_total[5m])
+```
