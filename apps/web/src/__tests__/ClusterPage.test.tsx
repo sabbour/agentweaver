@@ -87,8 +87,8 @@ describe('ClusterPage', () => {
       expect(screen.getByText('Health checks')).toBeDefined();
     });
 
-    // KPI cards
-    expect(screen.getByText('Active')).toBeDefined();
+    // KPI cards — "Active" removed (captured in Sandbox claims)
+    expect(screen.queryByText('Active')).toBeNull();
     expect(screen.getByText('Orphaned')).toBeDefined();
     expect(screen.getByText('Pending capacity')).toBeDefined();
     expect(screen.getByText('Checks OK')).toBeDefined();
@@ -98,9 +98,8 @@ describe('ClusterPage', () => {
     expect(screen.getByText('PostgreSQL')).toBeDefined();
     expect(screen.getByText('GitHub Token')).toBeDefined();
 
-    // Active pods section
-    expect(screen.getByText('Active agent pods (2)')).toBeDefined();
-    expect(screen.getByText('agent-abc123')).toBeDefined();
+    // Active agent pods section removed
+    expect(screen.queryByText(/Active agent pods/)).toBeNull();
 
     // Pending capacity section
     expect(screen.getByText('Pending capacity (1)')).toBeDefined();

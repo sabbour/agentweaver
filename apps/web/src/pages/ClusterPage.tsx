@@ -398,7 +398,6 @@ export function ClusterPage() {
         <>
           {/* KPI row */}
           <div className={styles.kpiRow}>
-            <KpiCard label="Active" value={data.active_agent_pods.length} />
             <KpiCard label="Orphaned" value={data.orphaned_agent_pods.length} />
             <KpiCard label="Pending capacity" value={data.pending_capacity_runs.length} />
             <KpiCard
@@ -419,11 +418,13 @@ export function ClusterPage() {
             <HealthChecksTable rows={data.checks} />
           </div>
 
-          {/* Active agent pods */}
+          {/* Sandbox claims — moved up: shows bound pods, making active-pods section redundant */}
           <div className={styles.section}>
-            <Title3>Active agent pods ({data.active_agent_pods.length})</Title3>
-            <AgentPodsTable pods={data.active_agent_pods} label="Active agent pods" />
+            <Title3>Sandbox claims ({data.sandbox_claims?.length ?? 0})</Title3>
+            <SandboxClaimsTable rows={data.sandbox_claims ?? []} />
           </div>
+
+          {/* Active agent pods removed — already captured in Sandbox claims */}
 
           {/* Orphaned agent pods */}
           {data.orphaned_agent_pods.length > 0 && (
@@ -449,12 +450,6 @@ export function ClusterPage() {
           <div className={styles.section}>
             <Title3>Sandbox objects ({data.sandbox_objects?.length ?? 0})</Title3>
             <SandboxObjectsTable rows={data.sandbox_objects ?? []} />
-          </div>
-
-          {/* Sandbox claims */}
-          <div className={styles.section}>
-            <Title3>Sandbox claims ({data.sandbox_claims?.length ?? 0})</Title3>
-            <SandboxClaimsTable rows={data.sandbox_claims ?? []} />
           </div>
 
           <Text className={styles.generated}>Generated {data.generated_utc} · {data.total_duration_ms.toFixed(0)} ms</Text>

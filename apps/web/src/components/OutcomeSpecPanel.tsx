@@ -210,6 +210,10 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   // coordinator.outcome_spec when the spec is ready, making repeated REST retries unnecessary.
   const specNotFoundRef = useRef(false);
 
+  // Synchronous in-flight guard for confirm — prevents a second click from firing before
+  // React has had a chance to re-render the button as disabled (acting state update is async).
+  const confirmInFlightRef = useRef(false);
+
   const fetchSpec = useCallback(async () => {
     try {
       const spec = await apiClient.getOutcomeSpec(runId);
@@ -293,6 +297,9 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   }, [specFromApi, events]);
 
   const handleConfirm = async () => {
+    // Synchronous guard: blocks re-entrant clicks before React re-renders with acting=true.
+    if (confirmInFlightRef.current) return;
+    confirmInFlightRef.current = true;
     setActing(true);
     setActionError(null);
     // Defense-in-depth for the gate-arming race: after a revise re-draft, the spec can be
@@ -321,6 +328,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     } catch (err) {
       setActionError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
+      confirmInFlightRef.current = false;
       setActing(false);
     }
   };
