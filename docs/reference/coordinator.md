@@ -168,7 +168,7 @@ The `isolation` field (`worktree` | `shared`) is an **advisory hint only** with 
 
 ### Child dispatch: parallel and serial
 
-The coordinator dispatches subtasks as first-class **child runs** parented by the coordinator run, reusing the existing single-agent run machinery (per-child RAI, sandboxing, and step streaming) rather than new run primitives. Dispatch is dependency-ordered:
+The coordinator dispatches subtasks as first-class **child runs** parented by the coordinator run, reusing the existing single-agent run machinery (sandboxing and step streaming) rather than new run primitives. Dispatch is dependency-ordered:
 
 - Subtasks with no unmet dependencies dispatch together and run **in parallel**.
 - A subtask with a dependency does not start until every prerequisite reaches `assemble_ready`/`completed`, so dependent work runs **serially** behind it.

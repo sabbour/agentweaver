@@ -209,7 +209,7 @@ flowchart TD
 
 ### Why coordinator children do not each merge
 
-Child runs are workers, not final approvers. They produce candidate branches, diffs, and RAI-reviewed outputs. They intentionally skip per-child human review, merge, and Scribe. The coordinator then assembles all child outputs into one integration branch and asks for one review of the whole change.
+Child runs are workers, not final approvers. They produce candidate branches and diffs, then stop at assemble-ready. They intentionally skip per-child RAI, human review, merge, and Scribe. The coordinator then assembles all child outputs into one integration branch and asks for one review of the whole change.
 
 That design prevents a common multi-agent failure mode: independently "correct" child changes that conflict or form an incoherent whole. By reviewing and merging once, Agentweaver treats the user-visible outcome as the unit of approval.
 
@@ -256,7 +256,7 @@ flowchart LR
 
 The workflow abstraction matters because it gives project authors and future features a vocabulary for changing process without rewriting orchestration primitives. However, Agentweaver does not blindly execute arbitrary graph nodes. Runtime binding classifies nodes by supported type and gate semantics, then maps them to known executors. Unsupported nodes fail closed. That preserves extensibility without allowing a malformed workflow to bypass review, RAI, or merge policy.
 
-Trade-off: workflow graphs add indirection. The payoff is that single-agent runs, coordinator child runs, and future project-authored workflows can share the same execution concepts while choosing different pipelines. For example, coordinator child runs use a trimmed agent-plus-RAI pipeline because their review and merge happen later at collective assembly.
+Trade-off: workflow graphs add indirection. The payoff is that single-agent runs, coordinator child runs, and future project-authored workflows can share the same execution concepts while choosing different pipelines. For example, coordinator child runs use a trimmed agent-only pipeline because RAI, review, and merge happen later at collective assembly.
 
 Where this lives: `apps/Agentweaver.Api/Workflows`, `apps/Agentweaver.Api/Runs`, `packages/Agentweaver.AgentRuntime/Workflow`.
 

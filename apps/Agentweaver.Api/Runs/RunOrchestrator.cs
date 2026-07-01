@@ -172,8 +172,8 @@ public sealed class RunOrchestrator
     /// <summary>
     /// Starts a coordinator CHILD run (Feature 008 Phase 2 dispatch). Identical to
     /// <see cref="StartRunAsync"/> except:
-    /// 1. The workflow is built with the TRIMMED child pipeline (<c>isChild: true</c>): agent + RAI
-    ///    terminating assemble-ready, with no per-child review gate, merge, or scribe.
+    /// 1. The workflow is built with the TRIMMED child pipeline (<c>isChild: true</c>): agent
+    ///    terminating assemble-ready, with no per-child RAI, review gate, merge, or scribe.
     /// 2. The child gets its own git worktree/branch. The dispatch loop advances a coordinator
     ///    integration branch at dependency boundaries so dependent children can still see committed
     ///    outputs from their prerequisites without concurrent siblings sharing one git index.
@@ -354,8 +354,8 @@ public sealed class RunOrchestrator
     /// commits. The stream entry is reused to preserve full event history for replay. The caller
     /// is responsible for the CAS transition, checkpoint deletion, and audit row insertion BEFORE
     /// invoking this method. When <paramref name="isChild"/> is true the revised turn runs the
-    /// TRIMMED coordinator child pipeline (agent + RAI, no review/merge/scribe gate), matching how
-    /// the child was originally launched via <see cref="StartChildRunAsync"/>;
+    /// TRIMMED coordinator child pipeline (agent only, no per-child RAI/review/merge/scribe gate),
+    /// matching how the child was originally launched via <see cref="StartChildRunAsync"/>;
     /// this is the mechanism a queued <c>redirect</c>/<c>amend</c> steering directive uses to inject
     /// the steered instruction at the child's next turn boundary.
     /// </summary>

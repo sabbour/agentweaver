@@ -541,7 +541,7 @@ public sealed class RunWatchLoopService
         }
 
         // Coordinator CHILD run (ParentRunId != null) assemble-ready terminal (B1).
-        // The child completed agent + RAI; it does NOT run its own review gate, merge, or scribe.
+        // The child completed its agent turn; it does NOT run its own RAI, review gate, merge, or scribe.
         // Persist the produced tree hash + worktree branch (the coordinator's hand-off contract),
         // emit run.assemble_ready on the child's existing stream, and preserve the worktree so the
         // coordinator can collect/assemble it in Phase 3. No scribe, no merge, no cleanup.

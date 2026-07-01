@@ -123,10 +123,9 @@ public sealed class CoordinatorWorkflowExecutorStepTests : IClassFixture<Coordin
         map["child-assemble-ready"].DisplayLabel.Should().Be("Assemble-ready");
         map["child-assemble-ready"].Hidden.Should().BeFalse();
 
-        // The child pipeline's agent + rai executors are present and map to their logical nodes
-        // (they self-emit, so the translator skips them — but the lookup must still resolve).
+        // The child pipeline's agent executor is present and maps to its logical node
+        // (it self-emits, so the translator skips it — but the lookup must still resolve).
         map["agent-turn"].LogicalNodeId.Should().Be("agent");
-        map["rai-turn"].LogicalNodeId.Should().Be("rai");
     }
 
     [Fact]

@@ -139,18 +139,16 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
     }
 
     [Fact]
-    public void ChildVariant_RemainsTrimmedAgentRaiAssembleReady_ForStage2Parity()
+    public void ChildVariant_RemainsTrimmedAgentAssembleReady_ForStage2Parity()
     {
         var d = Factory.GetGraphDescriptor(isChild: true);
 
         d.Variant.Should().Be("child");
-        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(["agent", "rai", "assemble-ready"]);
+        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(["agent", "assemble-ready"]);
         d.Edges.Select(e => new EdgeShape(e.From, e.To, e.Cardinality, e.Loopback)).ToHashSet()
             .Should().BeEquivalentTo(
             [
-                new EdgeShape("agent", "rai", "direct", false),
-                new EdgeShape("rai", "agent", "direct", true),
-                new EdgeShape("rai", "assemble-ready", "direct", false),
+                new EdgeShape("agent", "assemble-ready", "direct", false),
             ]);
     }
 
