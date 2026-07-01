@@ -23,17 +23,27 @@ public static class SubtaskStatus
     public const string PendingCapacity = "pending_capacity";
 
     /// <summary>
+    /// A subtask whose upstream dependency stalled (TTL-expired without progress). Terminal and
+    /// assembly-ineligible, but semantically distinct from <see cref="Failed"/>: the subtask was
+    /// blocked by an upstream stall — it never ran — not by a self-owned failure. Allows the
+    /// coordinator API and assembly-blocked diagnostic payload to distinguish dependency-blocked
+    /// subtasks from independently failing ones, making recovery actions clearer to operators.
+    /// </summary>
+    public const string Blocked = "blocked";
+
+    /// <summary>
     /// A subtask is <em>satisfied</em> for the purpose of unblocking its dependents only when it
-    /// reached <see cref="AssembleReady"/> or <see cref="Completed"/>. A <see cref="RaiFlagged"/>
-    /// or <see cref="Failed"/> predecessor does NOT satisfy a dependency — its dependents stay
-    /// blocked (they never dispatch), which is the correct serial-ordering semantics.
+    /// reached <see cref="AssembleReady"/> or <see cref="Completed"/>. A <see cref="RaiFlagged"/>,
+    /// <see cref="Failed"/>, or <see cref="Blocked"/> predecessor does NOT satisfy a dependency —
+    /// its dependents stay blocked (they never dispatch), which is the correct serial-ordering
+    /// semantics.
     /// </summary>
     public static bool Satisfies(string status) =>
         status is AssembleReady or Completed;
 
     /// <summary>True once a subtask can make no further progress on its own.</summary>
     public static bool IsTerminal(string status) =>
-        status is AssembleReady or Completed or RaiFlagged or Failed;
+        status is AssembleReady or Completed or RaiFlagged or Failed or Blocked;
 }
 
 /// <summary>

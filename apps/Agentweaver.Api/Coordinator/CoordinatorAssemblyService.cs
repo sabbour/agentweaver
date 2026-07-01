@@ -280,11 +280,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 .Select(id =>
                 {
                     var s = subtasks.First(x => x.Id == id);
-                    return new { id = s.Id, title = s.Title, status = s.Status, agent = s.AssignedAgent };
+                    return new { id = s.Id, title = s.Title, status = s.Status, agent = s.AssignedAgent, recoveryGuidance = s.RecoveryGuidance };
                 })
                 .ToList();
 
-            await BlockAsync(context, workPlanId, edges, "ineligible_subtasks", new
+            // Include the blocking subtask IDs in the reason so the coordinator run FailureReason
+            // names WHICH subtasks blocked assembly (e.g. "assembly_blocked: ineligible_subtasks [47,48,49]").
+            var ineligibleIdSummary = $"ineligible_subtasks [{string.Join(",", ineligible)}]";
+            await BlockAsync(context, workPlanId, edges, ineligibleIdSummary, new
             {
                 workPlanId,
                 reason = "ineligible_subtasks",
