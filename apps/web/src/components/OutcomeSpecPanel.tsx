@@ -281,6 +281,14 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
       }
     }
 
+    // REST GET is authoritative for terminal states. After confirm/decline, specFromApi is
+    // updated immediately but the confirming SSE event may have been seen already (its
+    // sequence ≤ lastSeqRef) and gets filtered on reconnect. Trust the REST snapshot.
+    if (!confirmedEvent && (specFromApi?.status === 'confirmed' || specFromApi?.status === 'declined')) {
+      merged.status = specFromApi.status;
+      if (specFromApi.confirmedBy) merged.confirmedBy = specFromApi.confirmedBy;
+    }
+
     return merged;
   }, [specFromApi, events]);
 

@@ -21,6 +21,16 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
 }
 
+const staleAwaitingEvent = {
+  sequence: 1,
+  type: 'coordinator.outcome_spec',
+  payload: {
+    status: 'awaiting_confirmation',
+    goal: 'Ship the feature',
+    desiredOutcome: 'A working feature',
+  },
+} as const;
+
 const awaitingSpec: OutcomeSpec = {
   status: 'awaiting_confirmation',
   goal: 'Ship the feature',
@@ -72,6 +82,29 @@ describe('OutcomeSpecPanel confirm retry', () => {
     expect(vi.mocked(apiClient.confirmOutcomeSpec)).toHaveBeenCalledTimes(3);
     expect(document.body.textContent).not.toContain('no_pending_gate');
     expect(document.body.textContent).not.toContain('API error 409');
+  });
+
+  it('keeps the REST confirmed status when stale SSE still says awaiting confirmation after confirm', async () => {
+    vi.mocked(apiClient.confirmOutcomeSpec).mockResolvedValue(confirmedSpec);
+    const onReconnect = vi.fn();
+
+    render(
+      <Wrapper>
+        <OutcomeSpecPanel
+          runId="run-1"
+          events={[staleAwaitingEvent]}
+          streamStatus="streaming"
+          onReconnect={onReconnect}
+        />
+      </Wrapper>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
+
+    await waitFor(() => expect(screen.getByText('Confirmed')).toBeTruthy());
+    expect(screen.getByText(/Outcome spec confirmed by Ahmed/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull();
+    expect(onReconnect).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -153,5 +186,21 @@ describe('OutcomeSpecPanel — 404 suppression', () => {
 
     // getOutcomeSpec must NOT be called again — the 404 flag prevents the streamStatus=done retry.
     expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OutcomeSpecPanel terminal REST status precedence', () => {
+  it('shows declined from the REST snapshot even when the latest SSE spec event is awaiting confirmation', async () => {
+    vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue({ ...awaitingSpec, status: 'declined' });
+
+    render(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[staleAwaitingEvent]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Declined')).toBeTruthy());
+    expect(screen.getByText(/Outcome spec declined/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull();
   });
 });
