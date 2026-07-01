@@ -394,6 +394,19 @@ Mid-run child questions and tool approval requests are re-emitted on the coordin
 
 Observation includes stall handling. If a child emits no events within the configured stall timeout, the coordinator persists any partial output checkpoint it saw, fails the subtask with recovery guidance, increments the recovery-attempt counter, and propagates failure to dependents.
 
+### Topology emission and pod registry projection
+
+Each phase transition and subtask state change emits a `coordinator.topology` event on the coordinator stream. The event is either a **snapshot** (full node list + edges, `seq: 0`) or a **delta** (`seq > 0`, changed nodes only). Edges are emitted only in the snapshot and never change after the work plan is confirmed.
+
+`CoordinatorTopology.BuildSnapshot` and `CoordinatorTopology.SubtaskNode` are the two emission helpers (`apps/Agentweaver.Api/Coordinator/CoordinatorTopology.cs`). Both accept an `IPodNameRegistry?` to populate `executionPodName` per subtask node:
+
+- **Subtask node** — `executionPodName` is set to the Kubernetes pod name registered under the subtask's `childRunId` in `IPodNameRegistry`. `null` when the subtask has not been dispatched yet or the pod binding has not been recorded.
+- **Coordinator node** — `executionPodName` is set to the Kubernetes pod name of the API process itself (passed as `coordinatorPodName`, sourced from `IKubernetesEnvironment.PodName`). `null` when running outside Kubernetes.
+
+The frontend renders a pod chip on a node only when `executionPodName` is non-null. It does not fall back to the API pod name for child or intermediate nodes. This means a subtask that has not yet been bound to a pod shows no chip — which is accurate, not misleading.
+
+`IKubernetesEnvironment.PodName` returns `Environment.MachineName` inside a Kubernetes cluster (the pod hostname equals the pod name in a default deployment) and `null` otherwise (`apps/Agentweaver.Api/Infrastructure/KubernetesEnvironment.cs`).
+
 ## Collective assembly
 
 When all subtasks settle, dispatch moves the WorkPlan to `awaiting_assembly` and hands off to the assembly service. Assembly is service-driven rather than a MAF workflow because it starts from already-produced git state, has a coordinator-owned review gate, and routes review changes back to re-dispatch rather than back to one model turn.

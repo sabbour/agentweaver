@@ -59,7 +59,6 @@ import type { TopologyNodeState } from '../state/topologyReducer';
 import { DAG_NODE_SEP, layoutDag, NODE_W, RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
 import { PodIndicator } from './PodIndicator';
-import { useRuntimeInfo } from '../hooks/useRuntimeInfo';
 import { STEERING_HELP } from './steeringHelp';
 
 // ---------------------------------------------------------------------------
@@ -249,9 +248,6 @@ interface TopologyNodeData extends Record<string, unknown> {
 function TopologyNodeCard({ data }: NodeProps) {
   const styles = useStyles();
   const { node, projectId } = data as TopologyNodeData;
-  const { podName: globalPodName } = useRuntimeInfo();
-  // Per-node pod name takes priority; fall back to the global API pod when on k8s.
-  const resolvedPodName = node.executionPodName ?? globalPodName;
   const onSteer = useContext(SteerContext);
 
   const isCoordinator = node.kind === 'coordinator';
@@ -272,7 +268,7 @@ function TopologyNodeCard({ data }: NodeProps) {
 
   return (
     <>
-      <PodIndicator podName={resolvedPodName} />
+      <PodIndicator podName={node.executionPodName} />
       <div className={cardClass} role="article" aria-label={`${node.title}: ${sm.label}`}>
         <Handle type="target" position={Position.Left} style={handleStyle} />
         <Handle type="source" position={Position.Right} style={handleStyle} />

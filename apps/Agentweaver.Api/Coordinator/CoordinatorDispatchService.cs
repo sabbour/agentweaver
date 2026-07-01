@@ -79,6 +79,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly IRunEventStream? _eventStream;
     private readonly IToolApprovalGate? _approvalGate;
     private readonly IPodNameRegistry? _podRegistry;
+    private readonly IKubernetesEnvironment? _k8sEnv;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILogger<CoordinatorDispatchService> _logger;
@@ -122,7 +123,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IToolApprovalGate? approvalGate = null,
         IPodNameRegistry? podRegistry = null,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        IKubernetesEnvironment? k8sEnv = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -136,6 +138,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _eventStream = eventStream;
         _approvalGate = approvalGate;
         _podRegistry = podRegistry;
+        _k8sEnv = k8sEnv;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
@@ -219,7 +222,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
         var snapshotSubtasks = await ReloadSubtasksAsync(workPlanId.Value, ct).ConfigureAwait(false);
         entry?.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
-            context.CoordinatorRunId, workPlanId.Value, WorkPlanStatus.Dispatching, snapshotSubtasks, edges, seq.Current, _podRegistry));
+            context.CoordinatorRunId, workPlanId.Value, WorkPlanStatus.Dispatching, snapshotSubtasks, edges, seq.Current, _podRegistry, _k8sEnv?.PodName));
         await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId.Value, ct).ConfigureAwait(false);
 
         if (subtasks.Count == 0)
@@ -484,7 +487,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             var finalSubtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
             finalEntry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
                 context.CoordinatorRunId, workPlanId, WorkPlanStatus.AwaitingAssembly,
-                finalSubtasks, edges, seq.Next(), _podRegistry));
+                finalSubtasks, edges, seq.Next(), _podRegistry, _k8sEnv?.PodName));
             await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         }
 
