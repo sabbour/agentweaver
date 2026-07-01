@@ -93,10 +93,18 @@ public sealed class MetricsService
     // ENDPOINT 1 — Per-project dashboard
     // ---------------------------------------------------------------------------------
 
-    public async Task<ProjectDashboardDto> GetProjectDashboardAsync(Project project, CancellationToken ct = default)
+    public Task<ProjectDashboardDto> GetProjectDashboardAsync(Project project, CancellationToken ct = default) =>
+        GetProjectDashboardAsync(project, from: null, to: null, ct);
+
+    public async Task<ProjectDashboardDto> GetProjectDashboardAsync(
+        Project project,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
         var weekAgo = now.AddDays(-7);
+        var (dashboardFrom, dashboardTo) = ResolveDashboardRange(from, to, now);
         // 30-day window inclusive of today: today and the preceding 29 days.
         var windowStart = now.UtcDateTime.Date.AddDays(-29);
         var pid = project.Id.ToString();
@@ -106,13 +114,12 @@ public sealed class MetricsService
         var summary = ReadSummary(runs, weekAgo);
         var throughput = ReadThroughput(runs, windowStart);
         var agentRoles = ReadAgentRoles(project);
-        var leaderboard = ReadLeaderboard(runs, weekAgo, agentRoles);
+        var leaderboard = ReadLeaderboard(runs, dashboardFrom, dashboardTo, agentRoles);
 
         TokenUsageSummaryDto? tokenUsage = null;
         try
         {
-            var from = now.AddDays(-30);
-            var usage = await _usageStore.GetProjectUsageAsync(pid, from, now, ct).ConfigureAwait(false);
+            var usage = await _usageStore.GetProjectUsageAsync(pid, dashboardFrom, dashboardTo, ct).ConfigureAwait(false);
             tokenUsage = ToSummaryDto(usage);
         }
         catch (Exception ex)
@@ -130,6 +137,16 @@ public sealed class MetricsService
             AgentLeaderboard = leaderboard,
             TokenUsage      = tokenUsage,
         };
+    }
+
+    private static (DateTimeOffset From, DateTimeOffset To) ResolveDashboardRange(
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        DateTimeOffset now)
+    {
+        var resolvedTo = to ?? now;
+        var resolvedFrom = from ?? (to is null ? now.AddDays(-7) : resolvedTo.AddDays(-7));
+        return (resolvedFrom, resolvedTo);
     }
 
     private static DashboardSummaryDto ReadSummary(IReadOnlyList<RunRow> runs, DateTimeOffset weekAgo)
@@ -195,7 +212,8 @@ public sealed class MetricsService
 
     private static IReadOnlyList<AgentLeaderboardEntryDto> ReadLeaderboard(
         IReadOnlyList<RunRow> runs,
-        DateTimeOffset weekAgo,
+        DateTimeOffset rangeStart,
+        DateTimeOffset rangeEnd,
         IReadOnlyDictionary<string, string> agentRoles)
     {
         // Aggregate per agent_name (children included, matching the original GROUP BY agent_name).
@@ -205,7 +223,7 @@ public sealed class MetricsService
             if (r.AgentName is null) continue;
             var a = acc.GetValueOrDefault(r.AgentName);
             a.runsTotal++;
-            if (r.StartedAt >= weekAgo) a.runsThisWeek++;
+            if (r.StartedAt >= rangeStart && r.StartedAt <= rangeEnd) a.runsThisWeek++;
             if (SuccessStatuses.Contains(r.Status)) a.success++;
             if (FinishedStatuses.Contains(r.Status)) a.terminal++;
             if (r.EndedAt is not null)

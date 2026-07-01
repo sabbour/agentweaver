@@ -277,6 +277,59 @@ public sealed class MetricsServiceTests
     }
 
     [Fact]
+    public async Task Dashboard_RangeParameters_ApplyToLeaderboardWindow_AndTokenUsage()
+    {
+        await using var test = await TestSqliteDb.CreateAsync();
+        var runStore = new SqliteRunStore(test.Db);
+        var projectStore = new SqliteProjectStore(test.Db);
+        var usageStore = new SqliteTokenUsageStore(test.Db);
+        var service = TestMetrics.SqliteService(test.Db, projectStore, MakeHeartbeat());
+
+        var now = DateTimeOffset.UtcNow;
+        var project = MakeProject(ProjectId.New());
+        await projectStore.InsertAsync(project);
+
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Merged,
+            now.AddDays(-2), now.AddDays(-2).AddMinutes(10), agent: "neo"));
+        await runStore.InsertAsync(MakeRun(project.Id, RunStatus.Merged,
+            now.AddDays(-20), now.AddDays(-20).AddMinutes(5), agent: "neo"));
+
+        await usageStore.RecordAsync(new TokenUsageRecord
+        {
+            Id = $"{Guid.NewGuid()}:1",
+            RunId = Guid.NewGuid().ToString(),
+            ProjectId = project.Id.ToString(),
+            ModelId = "gpt-4o",
+            InputTokens = 100,
+            OutputTokens = 40,
+            TotalNanoAiu = 1_000_000_000L,
+            RecordedAt = now.AddDays(-2),
+        });
+        await usageStore.RecordAsync(new TokenUsageRecord
+        {
+            Id = $"{Guid.NewGuid()}:1",
+            RunId = Guid.NewGuid().ToString(),
+            ProjectId = project.Id.ToString(),
+            ModelId = "gpt-4o-mini",
+            InputTokens = 60,
+            OutputTokens = 20,
+            TotalNanoAiu = 500_000_000L,
+            RecordedAt = now.AddDays(-20),
+        });
+
+        var defaultDto = await service.GetProjectDashboardAsync(project);
+        var rangedDto = await service.GetProjectDashboardAsync(project, now.AddDays(-30), now);
+
+        defaultDto.AgentLeaderboard.Single(e => e.Agent == "neo").RunsThisWeek.Should().Be(1);
+        defaultDto.TokenUsage.Should().NotBeNull();
+        defaultDto.TokenUsage!.TotalTokens.Should().Be(140);
+
+        rangedDto.AgentLeaderboard.Single(e => e.Agent == "neo").RunsThisWeek.Should().Be(2);
+        rangedDto.TokenUsage.Should().NotBeNull();
+        rangedDto.TokenUsage!.TotalTokens.Should().Be(220);
+    }
+
+    [Fact]
     public async Task Overview_AggregatesAcrossProjects_FromRealStores()
     {
         await using var test = await TestSqliteDb.CreateAsync();

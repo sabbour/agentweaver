@@ -20,6 +20,8 @@ public static class MetricsEndpoints
         app.MapGet("/api/projects/{id}/dashboard", async (
             HttpContext httpContext,
             string id,
+            string? from,
+            string? to,
             MetricsService metrics,
             IProjectStore projectStore,
             CancellationToken ct) =>
@@ -33,7 +35,11 @@ public static class MetricsEndpoints
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (!caller.Owns(project.Owner)) return Results.Forbid();
 
-            var dto = await metrics.GetProjectDashboardAsync(project, ct).ConfigureAwait(false);
+            var dto = await metrics.GetProjectDashboardAsync(
+                project,
+                ParseDateTimeOffset(from),
+                ParseDateTimeOffset(to),
+                ct).ConfigureAwait(false);
             return Results.Ok(dto);
         });
 
@@ -46,5 +52,14 @@ public static class MetricsEndpoints
             var dto = await metrics.GetOverviewAsync(ct).ConfigureAwait(false);
             return Results.Ok(dto);
         });
+    }
+
+    private static DateTimeOffset? ParseDateTimeOffset(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return DateTimeOffset.TryParse(value, null,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var result)
+            ? result
+            : null;
     }
 }
