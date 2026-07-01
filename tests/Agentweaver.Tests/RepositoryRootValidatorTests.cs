@@ -232,6 +232,52 @@ public class RepositoryRootValidatorTests
 
             var result = validator.ValidateAndCanonicalize(symlinkPath);
             Assert.False(string.IsNullOrWhiteSpace(result));
+            Assert.Equal(
+                Path.GetFullPath(realTarget).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                result.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                ignoreCase: OperatingSystem.IsWindows());
+        }
+        finally
+        {
+            try { Directory.Delete(symlinkPath); } catch { }
+            Directory.Delete(allowedRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Symlink_alias_returns_same_resolved_repository_identity()
+    {
+        var allowedRoot = Path.Combine(Path.GetTempPath(), $"allowed-{Guid.NewGuid():N}");
+        var realTarget = Path.Combine(allowedRoot, "realrepo");
+        var symlinkPath = Path.Combine(allowedRoot, "linkedrepo");
+        Directory.CreateDirectory(realTarget);
+
+        try
+        {
+            Directory.CreateSymbolicLink(symlinkPath, realTarget);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Directory.Delete(allowedRoot, recursive: true);
+            return;
+        }
+        catch (IOException)
+        {
+            Directory.Delete(allowedRoot, recursive: true);
+            return;
+        }
+
+        try
+        {
+            var validator = CreateValidator(new Dictionary<string, string?>
+            {
+                ["Runs:AllowedRepositoryRoots:0"] = allowedRoot
+            });
+
+            var realResult = validator.ValidateAndCanonicalize(realTarget);
+            var aliasResult = validator.ValidateAndCanonicalize(symlinkPath);
+
+            Assert.Equal(realResult, aliasResult, ignoreCase: OperatingSystem.IsWindows());
         }
         finally
         {

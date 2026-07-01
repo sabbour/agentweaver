@@ -269,6 +269,22 @@ public sealed class CoordinatorReconciler
         var staleThreshold = DateTimeOffset.UtcNow - _staleLeaseTtl;
         var now = DateTimeOffset.UtcNow;
 
+        if (db.Database.IsSqlite())
+        {
+            var sqliteRows = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE "WorkPlans"
+                   SET "CoordinatorPodId" = {_myPodId},
+                       "UpdatedAt" = {now}
+                 WHERE "Id" = {planId}
+                   AND "Status" = {WorkPlanStatus.Dispatching}
+                   AND ("CoordinatorPodId" IS NULL
+                        OR "CoordinatorPodId" = {_myPodId}
+                        OR "UpdatedAt" < {staleThreshold})
+                """, ct).ConfigureAwait(false);
+
+            return sqliteRows == 1;
+        }
+
         int rows = await db.WorkPlans
             .Where(w => w.Id == planId
                      && w.Status == WorkPlanStatus.Dispatching

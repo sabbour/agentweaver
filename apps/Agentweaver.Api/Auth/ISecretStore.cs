@@ -20,6 +20,24 @@ public sealed class SecretPreconditionFailedException : Exception
 }
 
 /// <summary>
+/// Handle returned by an atomic lease acquisition. Disposing releases the lease best-effort.
+/// </summary>
+public interface ISecretStoreLease : IAsyncDisposable;
+
+/// <summary>
+/// Provides an atomic compare-and-set lease attached to an existing secret key.
+/// Implementations must guarantee that only one unexpired owner can acquire a key at a time.
+/// </summary>
+public interface IAtomicSecretLeaseStore
+{
+    Task<ISecretStoreLease?> TryAcquireLeaseAsync(
+        string key,
+        string owner,
+        TimeSpan ttl,
+        CancellationToken ct = default);
+}
+
+/// <summary>
 /// Backend-agnostic key/value secret store used by token stores.
 /// Implementations: <see cref="InMemorySecretStore"/> (tests/dev),
 /// <c>KeyVaultSecretStore</c> (Azure Key Vault, production).

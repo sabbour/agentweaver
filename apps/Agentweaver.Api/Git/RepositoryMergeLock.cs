@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using Agentweaver.SandboxFs;
 
 namespace Agentweaver.Api.Git;
 
@@ -13,7 +14,7 @@ namespace Agentweaver.Api.Git;
 /// advisory locks so it spans API replicas; local SQLite/dev keeps the existing
 /// process-wide semaphore behavior.
 ///
-/// Keyed by canonical repository path.
+/// Keyed by resolved repository identity.
 /// </summary>
 public sealed class RepositoryMergeLock
 {
@@ -51,10 +52,12 @@ public sealed class RepositoryMergeLock
         TimeSpan timeout,
         CancellationToken ct)
     {
-        if (_postgresConnectionString is not null)
-            return await TryAcquirePostgresAsync(canonicalRepoPath, timeout, ct).ConfigureAwait(false);
+        var lockIdentity = GetLockIdentity(canonicalRepoPath);
 
-        var semaphore = _locks.GetOrAdd(canonicalRepoPath, _ => new SemaphoreSlim(1, 1));
+        if (_postgresConnectionString is not null)
+            return await TryAcquirePostgresAsync(lockIdentity, timeout, ct).ConfigureAwait(false);
+
+        var semaphore = _locks.GetOrAdd(lockIdentity, _ => new SemaphoreSlim(1, 1));
 
         if (!await semaphore.WaitAsync(timeout, ct).ConfigureAwait(false))
             return null;
@@ -110,6 +113,19 @@ public sealed class RepositoryMergeLock
         var normalized = canonicalRepoPath.ToUpperInvariant();
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"agentweaver:repository-merge:{normalized}"));
         return BitConverter.ToInt64(bytes, 0);
+    }
+
+    private static string GetLockIdentity(string repoPath)
+    {
+        var fullPath = Path.GetFullPath(repoPath);
+        try
+        {
+            return RealPath.Resolve(fullPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (IOException)
+        {
+            return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
     }
 
     private sealed class SemaphoreReleaser(SemaphoreSlim semaphore) : IDisposable

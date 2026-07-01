@@ -275,6 +275,44 @@ public sealed class KeyVaultGitHubTokenStoreTests
         await act.Should().ThrowAsync<SecretPreconditionFailedException>();
     }
 
+    [Fact]
+    public async Task TryAcquireRefreshLeaseAsync_AllowsOnlyOneConcurrentOwner()
+    {
+        var (_, store) = MakeStore();
+        await store.SetAsync(GitHubTokenScope.Installation, SampleToken());
+
+        var attempts = Enumerable.Range(0, 16)
+            .Select(i => store.TryAcquireRefreshLeaseAsync(
+                GitHubTokenScope.Installation,
+                $"owner-{i}",
+                TimeSpan.FromSeconds(30)))
+            .ToArray();
+
+        var leases = await Task.WhenAll(attempts);
+        leases.Count(l => l is not null).Should().Be(1,
+            "refresh-token rotation must have a single distributed lease owner");
+
+        foreach (var lease in leases.OfType<IDistributedGitHubTokenRefreshLease>())
+            await lease.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task TryAcquireRefreshLeaseAsync_DoesNotCreateStandaloneLeaseSecret()
+    {
+        var (secrets, store) = MakeStore();
+        await store.SetAsync(GitHubTokenScope.Installation, SampleToken());
+
+        await using var lease = await store.TryAcquireRefreshLeaseAsync(
+            GitHubTokenScope.Installation,
+            "owner",
+            TimeSpan.FromSeconds(30));
+
+        lease.Should().NotBeNull();
+        var legacyLeaseSecret = await secrets.GetSecretAsync("refresh-lock:installation");
+        legacyLeaseSecret.Found.Should().BeFalse(
+            "leases are attached atomically to the token secret instead of a non-atomic check-then-set lease secret");
+    }
+
     // ── Caching decorator ─────────────────────────────────────────────────────
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Reflection;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -125,6 +127,37 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         persistedEntry.GetProperty("title").GetString().Should().Be("t1");
         persistedEntry.GetProperty("status").GetString().Should().Be("failed");
         persistedEntry.GetProperty("agent").GetString().Should().Be("morpheus");
+    }
+
+    [Fact]
+    public async Task DeferAssemblyReviewDecision_Duplicate_ReturnsFalseAndKeepsFirstDecision()
+    {
+        const string coordinatorRunId = "coord-deferred-duplicate";
+        var decision = new AssemblyReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: null,
+            TargetFiles: null,
+            Reviewer: "alice");
+
+        var first = await InvokeTryDeferAssemblyReviewDecisionAsync(coordinatorRunId, decision);
+        var duplicate = await InvokeTryDeferAssemblyReviewDecisionAsync(coordinatorRunId, decision with
+        {
+            Approved = false,
+            Feedback = "duplicate decline",
+        });
+
+        first.Should().BeTrue();
+        duplicate.Should().BeFalse(
+            "a duplicate deferred assembly review is ignored and must not be reported as accepted");
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var rows = await db.DeferredDecisions.AsNoTracking()
+            .Where(d => d.RunId == coordinatorRunId)
+            .ToListAsync();
+        rows.Should().ContainSingle();
+        rows[0].DecisionJson.Should().Contain("\"Approved\":true");
     }
 
     // ── Happy path: event sequence + node-flip ──────────────────────────────────────────────────
@@ -434,6 +467,26 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
     private static string DiffTouching(string path) =>
         $"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1 @@\n+change\n";
+
+    private async Task<bool> InvokeTryDeferAssemblyReviewDecisionAsync(
+        string coordinatorRunId,
+        AssemblyReviewDecision decision)
+    {
+        var method = typeof(CoordinatorEndpoints).GetMethod(
+            "TryDeferAssemblyReviewDecisionAsync",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull("the endpoint helper owns deferred assembly review persistence");
+
+        var task = (Task<bool>)method!.Invoke(null,
+        [
+            coordinatorRunId,
+            decision,
+            _scopeFactory,
+            NullLogger<Program>.Instance,
+            CancellationToken.None,
+        ])!;
+        return await task.ConfigureAwait(false);
+    }
 
     private async Task WaitUntilArmedAsync(string coordinatorRunId)
     {

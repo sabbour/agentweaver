@@ -205,6 +205,14 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var entry = _streamStore.Get(context.CoordinatorRunId);
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
         var seq = new SeqCounter();
+        var coordinatorStopped = await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (coordinatorStopped && !HasActiveSubtasks(subtasks))
+        {
+            _logger.LogInformation(
+                "Coordinator dispatch: run {RunId} is already terminal/stopped; no subtasks will be dispatched",
+                context.CoordinatorRunId);
+            return;
+        }
 
         // Advance the plan to dispatching and publish the FULL topology snapshot (reflecting the new
         // status) so the client can render the graph thin before any child has been launched.
@@ -264,6 +272,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         while (!ct.IsCancellationRequested)
         {
+            if (coordinatorStopped || await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))
+            {
+                coordinatorStopped = true;
+                if (inFlight.Count == 0)
+                {
+                    _logger.LogInformation(
+                        "Coordinator dispatch: run {RunId} is terminal/stopped; stopping before dispatching pending subtasks",
+                        context.CoordinatorRunId);
+                    return;
+                }
+            }
+
             // Thaw capacity-parked subtasks whose back-off window elapsed: flip them back to pending
             // (in-memory) so the frontier re-dispatches them — capacity may have freed up via the
             // reaper or a node scale-out. The retry count is preserved in capacityRetry.
@@ -274,6 +294,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // (deferred until the conflicting in-flight task completes).
             foreach (var subtaskId in SubtaskFrontier.ReadyPending(statusById, edges))
             {
+                if (coordinatorStopped || await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))
+                {
+                    coordinatorStopped = true;
+                    _logger.LogInformation(
+                        "Coordinator dispatch: run {RunId} stopped while evaluating frontier; no further children will be launched",
+                        context.CoordinatorRunId);
+                    break;
+                }
+
                 if (inFlight.ContainsKey(subtaskId))
                     continue;
 
@@ -291,6 +320,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                         .ConfigureAwait(false))
                     continue;
 
+                if (await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))
+                {
+                    coordinatorStopped = true;
+                    _logger.LogInformation(
+                        "Coordinator dispatch: run {RunId} stopped after capacity gate; subtask {SubtaskId} will remain pending",
+                        context.CoordinatorRunId, subtaskId);
+                    break;
+                }
+
                 var dispatched = await DispatchOneAsync(
                     context, workPlanId.Value, subtaskId, statusById, edges, seq, ct).ConfigureAwait(false);
 
@@ -303,6 +341,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
             if (inFlight.Count == 0)
             {
+                if (coordinatorStopped)
+                    return;
+
                 // If subtasks are parked awaiting capacity, don't go quiescent — wait for the soonest
                 // retry window (bounded) and loop so they are re-attempted once the reaper frees quota.
                 var nextRetry = capacityRetry.Count == 0
@@ -341,7 +382,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // turn (no mid-turn interrupt). Only a child that reached a clean boundary
             // (assemble_ready / completed) can carry a revised turn; a failed/cancelled child falls
             // through to normal finalization.
-            if (result.Outcome is ChildOutcome.AssembleReady or ChildOutcome.Completed)
+            if (!coordinatorStopped && result.Outcome is (ChildOutcome.AssembleReady or ChildOutcome.Completed))
             {
                 var directive = await _steering.TryTakeForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
@@ -356,7 +397,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // A redirect directive targeting this child can also apply when the child was force-cancelled
             // (by the steering service or the proactive reconciler sweep) to unblock a stuck child.
             // Amend is not applied on failure — it is additive and requires a clean boundary.
-            else if (result.Outcome == ChildOutcome.Failed)
+            else if (!coordinatorStopped && result.Outcome == ChildOutcome.Failed)
             {
                 var redirect = await _steering.TryTakeRedirectForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
@@ -375,6 +416,26 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         await FinalizeDispatchAsync(context, workPlanId.Value, statusById, edges, seq, ct).ConfigureAwait(false);
     }
+
+    private async Task<bool> IsCoordinatorDispatchStoppedAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return false;
+
+        var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        return run is not null && IsTerminalRunStatus(run.Status);
+    }
+
+    private static bool HasActiveSubtasks(IEnumerable<Subtask> subtasks) =>
+        subtasks.Any(s => s.Status is SubtaskStatus.Dispatched or SubtaskStatus.Running);
+
+    private static bool IsTerminalRunStatus(RunStatus status) => status is
+        RunStatus.Completed or
+        RunStatus.Failed or
+        RunStatus.Merged or
+        RunStatus.Declined or
+        RunStatus.MergeFailed or
+        RunStatus.AssembleReady;
 
     /// <summary>
     /// Every child subtask is now terminal. This emits an explicit children-complete signal, moves

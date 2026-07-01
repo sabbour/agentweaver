@@ -15,8 +15,9 @@ namespace Agentweaver.Api.Auth;
 ///   present + status="signed-in"    → SignedIn
 ///   malformed                       → NeverSignedIn (defensive)
 ///
-/// Concurrency: SetAsync reads the current ETag, then writes with If-Match.
-/// On precondition failure the winner's value is adopted (no clobber of a newer token).
+/// Concurrency: refresh-token rotation is serialized through the backing store's
+/// <see cref="IAtomicSecretLeaseStore"/> implementation. Value-write ETags remain
+/// a best-effort stale-write guard for stores that support atomic conditional writes.
 ///
 /// Migration/back-compat: when the KV secret is absent and a <paramref name="diskFallback"/>
 /// is provided, the on-disk token is lazily read and written through to KV.
@@ -100,8 +101,8 @@ public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGi
         };
         var json = JsonSerializer.Serialize(stored, _json);
 
-        // Optimistic concurrency: read ETag first so concurrent refresh-token rotation
-        // doesn't clobber a newer token that was written by a parallel caller.
+        // Best-effort stale-write guard; refresh-token rotation is protected by the
+        // atomic lease acquired before the GitHub refresh call.
         var current = await _secretStore.GetSecretAsync(scope.Key, ct).ConfigureAwait(false);
         var currentETag = current.Found ? current.ETag : null;
 
@@ -161,36 +162,11 @@ public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGi
         TimeSpan ttl,
         CancellationToken ct = default)
     {
-        var key = RefreshLeaseKey(scope);
-        var now = DateTimeOffset.UtcNow;
-        var current = await _secretStore.GetSecretAsync(key, ct).ConfigureAwait(false);
-
-        if (!CanAcquireLease(current, now))
+        if (_secretStore is not IAtomicSecretLeaseStore leaseStore)
             return null;
 
-        if (!current.Found)
-        {
-            await _secretStore.SetSecretAsync(key, SerializeLease(new RefreshLease("seed", now)), etag: null, ct)
-                .ConfigureAwait(false);
-            current = await _secretStore.GetSecretAsync(key, ct).ConfigureAwait(false);
-        }
-
-        var expiresAt = now + ttl;
-        try
-        {
-            await _secretStore.SetSecretAsync(
-                    key,
-                    SerializeLease(new RefreshLease(owner, expiresAt)),
-                    current.ETag,
-                    ct)
-                .ConfigureAwait(false);
-        }
-        catch (SecretPreconditionFailedException)
-        {
-            return null;
-        }
-
-        return new SecretStoreRefreshLease(_secretStore, key, owner);
+        var lease = await leaseStore.TryAcquireLeaseAsync(scope.Key, owner, ttl, ct).ConfigureAwait(false);
+        return lease is null ? null : new SecretStoreRefreshLease(lease);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
@@ -230,26 +206,6 @@ public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGi
         return null;
     }
 
-    private static string RefreshLeaseKey(GitHubTokenScope scope) => $"refresh-lock:{scope.Key}";
-
-    private static bool CanAcquireLease(SecretGetResult current, DateTimeOffset now)
-    {
-        if (!current.Found)
-            return true;
-
-        try
-        {
-            var lease = JsonSerializer.Deserialize<RefreshLease>(current.Value!, _json);
-            return lease?.ExpiresAt <= now;
-        }
-        catch (Exception)
-        {
-            return true;
-        }
-    }
-
-    private static string SerializeLease(RefreshLease lease) => JsonSerializer.Serialize(lease, _json);
-
     // ── JSON shape ────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -267,39 +223,8 @@ public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGi
         [JsonPropertyName("Scopes")]       public string[]? Scopes { get; init; }
     }
 
-    private sealed record RefreshLease(
-        [property: JsonPropertyName("Owner")] string Owner,
-        [property: JsonPropertyName("ExpiresAt")] DateTimeOffset ExpiresAt);
-
-    private sealed class SecretStoreRefreshLease : IDistributedGitHubTokenRefreshLease
+    private sealed class SecretStoreRefreshLease(ISecretStoreLease inner) : IDistributedGitHubTokenRefreshLease
     {
-        private readonly ISecretStore _secretStore;
-        private readonly string _key;
-        private readonly string _owner;
-
-        public SecretStoreRefreshLease(ISecretStore secretStore, string key, string owner)
-        {
-            _secretStore = secretStore;
-            _key = key;
-            _owner = owner;
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            try
-            {
-                var current = await _secretStore.GetSecretAsync(_key).ConfigureAwait(false);
-                if (!current.Found)
-                    return;
-
-                var lease = JsonSerializer.Deserialize<RefreshLease>(current.Value!, _json);
-                if (lease?.Owner == _owner)
-                    await _secretStore.DeleteSecretAsync(_key).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // Best effort: expired leases are ignored by future acquirers.
-            }
-        }
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }

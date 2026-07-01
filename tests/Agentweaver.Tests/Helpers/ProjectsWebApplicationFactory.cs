@@ -65,6 +65,7 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
+                ["Auth:GitHub:ScopeProvider"]             = "installation",
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
                 ["Auth:GitHub:BaseUrl"]                   = "https://github.com",
                 ["Git:Author:Name"]                       = "Test",
@@ -85,6 +86,8 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
             // Replace OS credential store with in-memory store for tests.
             RemoveService<IGitHubTokenStore>(services);
             services.AddSingleton<IGitHubTokenStore>(TokenStore);
+            RemoveService<IGitHubTokenScopeProvider>(services);
+            services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
 
             // Replace ProjectGitInitializer with a no-op stub.
             RemoveService<ProjectGitInitializer>(services);

@@ -14,9 +14,11 @@ namespace Agentweaver.Api.Auth;
 /// to <see cref="SetSecretAsync"/>, the current version is read first and the write is
 /// performed only if the ETags match (best-effort optimistic concurrency).
 /// </summary>
-public sealed class KeyVaultSecretStore : ISecretStore
+public sealed class KeyVaultSecretStore : ISecretStore, IAtomicSecretLeaseStore
 {
     private readonly SecretClient _client;
+    private const string LeaseOwnerTag = "agentweaver-lease-owner";
+    private const string LeaseExpiresTag = "agentweaver-lease-expires";
 
     public KeyVaultSecretStore(SecretClient client) => _client = client;
 
@@ -82,10 +84,9 @@ public sealed class KeyVaultSecretStore : ISecretStore
     {
         var kvKey = SanitizeKey(key);
 
-        // Optimistic concurrency: if an ETag is supplied, verify it matches the current version.
-        // Note: Azure KV doesn't expose atomic conditional set on the value itself via the SDK,
-        // so we read first and compare.  The check-then-write is not atomic but suffices for
-        // the refresh-token-overwrite protection use-case.
+        // Best-effort optimistic concurrency for value writes. Azure Key Vault SetSecret
+        // creates a new version and does not provide an atomic If-Match value update here;
+        // refresh serialization uses TryAcquireLeaseAsync instead.
         if (etag is not null)
         {
             var current = await GetSecretAsync(key, ct).ConfigureAwait(false);
@@ -95,6 +96,46 @@ public sealed class KeyVaultSecretStore : ISecretStore
 
         var setResponse = await _client.SetSecretAsync(kvKey, value, ct).ConfigureAwait(false);
         return setResponse.Value.Properties.Version ?? string.Empty;
+    }
+
+    public async Task<ISecretStoreLease?> TryAcquireLeaseAsync(
+        string key,
+        string owner,
+        TimeSpan ttl,
+        CancellationToken ct = default)
+    {
+        var kvKey = SanitizeKey(key);
+        KeyVaultSecret current;
+        try
+        {
+            current = (await _client.GetSecretAsync(kvKey, cancellationToken: ct).ConfigureAwait(false)).Value;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var tags = current.Properties.Tags;
+        if (tags.TryGetValue(LeaseExpiresTag, out var expiresRaw)
+            && DateTimeOffset.TryParse(expiresRaw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var expiresAt)
+            && expiresAt > now)
+        {
+            return null;
+        }
+
+        tags[LeaseOwnerTag] = owner;
+        tags[LeaseExpiresTag] = (now + ttl).ToString("O");
+
+        try
+        {
+            await _client.UpdateSecretPropertiesAsync(current.Properties, ct).ConfigureAwait(false);
+            return new KeyVaultSecretStoreLease(this, kvKey, owner);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 409 || ex.Status == 412)
+        {
+            return null;
+        }
     }
 
     public async Task DeleteSecretAsync(string key, CancellationToken ct = default)
@@ -107,6 +148,38 @@ public sealed class KeyVaultSecretStore : ISecretStore
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
             // Already absent — no error.
+        }
+    }
+
+    private async ValueTask ReleaseLeaseAsync(string kvKey, string owner)
+    {
+        try
+        {
+            var current = (await _client.GetSecretAsync(kvKey).ConfigureAwait(false)).Value;
+            var tags = current.Properties.Tags;
+            if (!tags.TryGetValue(LeaseOwnerTag, out var currentOwner) || currentOwner != owner)
+                return;
+
+            tags.Remove(LeaseOwnerTag);
+            tags.Remove(LeaseExpiresTag);
+            await _client.UpdateSecretPropertiesAsync(current.Properties).ConfigureAwait(false);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404 || ex.Status == 409 || ex.Status == 412)
+        {
+        }
+    }
+
+    private sealed class KeyVaultSecretStoreLease(
+        KeyVaultSecretStore store,
+        string kvKey,
+        string owner) : ISecretStoreLease
+    {
+        private int _disposed;
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                await store.ReleaseLeaseAsync(kvKey, owner).ConfigureAwait(false);
         }
     }
 }

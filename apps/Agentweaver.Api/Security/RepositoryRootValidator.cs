@@ -60,7 +60,7 @@ public sealed class RepositoryRootValidator
 
     /// <summary>
     /// Validates and canonicalizes <paramref name="repositoryPath"/>.
-    /// Returns the canonical path (via <see cref="Path.GetFullPath"/>) on success.
+    /// Returns the resolved real path on success.
     /// Throws <see cref="RunSubmissionValidationException"/> on any rejection.
     /// </summary>
     /// <remarks>
@@ -146,9 +146,7 @@ public sealed class RepositoryRootValidator
 
         // 9. If no allowlist configured: permissive (UNC/device/relative already rejected above).
 
-        // 10. Return canonical path (not the real/resolved path) — this is what gets stored
-        //     on Run.RepositoryPath and used by git operations.
-        return canonical;
+        return real;
     }
 
     private static void RejectUncAndDevicePaths(string path)

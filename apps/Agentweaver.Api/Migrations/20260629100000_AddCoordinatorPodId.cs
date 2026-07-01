@@ -1,3 +1,5 @@
+using Agentweaver.Api.Memory;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -5,6 +7,8 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Agentweaver.Api.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(MemoryDbContext))]
+    [Migration("20260629100000_AddCoordinatorPodId")]
     public partial class AddCoordinatorPodId : Migration
     {
         /// <inheritdoc />

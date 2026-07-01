@@ -5,6 +5,7 @@ using System.Text;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Domain;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -158,7 +159,8 @@ public sealed class GitHubTokenAuthMiddleware
         {
             var bypassToken = header[SchemePrefixStr.Length..].Trim();
             var resolvedUser = _testApiKeyMap.TryGetValue(bypassToken, out var u) ? u : bypassToken;
-            context.Items[CallerItemKey] = new CallerContext { User = resolvedUser, GitHubLogin = resolvedUser };
+            var githubLogin = await ResolveSignedInGitHubLoginAsync(context, resolvedUser).ConfigureAwait(false);
+            context.Items[CallerItemKey] = new CallerContext { User = resolvedUser, GitHubLogin = githubLogin };
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -236,6 +238,21 @@ public sealed class GitHubTokenAuthMiddleware
 
     public static CallerContext GetCaller(HttpContext context) =>
         (CallerContext)context.Items[CallerItemKey]!;
+
+    private static async Task<string?> ResolveSignedInGitHubLoginAsync(HttpContext context, string resolvedUser)
+    {
+        var tokenStore = context.RequestServices.GetService<IGitHubTokenStore>();
+        var scopeProvider = context.RequestServices.GetService<IGitHubTokenScopeProvider>();
+        if (tokenStore is null || scopeProvider is null)
+            return null;
+
+        var scope = scopeProvider.Resolve(resolvedUser);
+        var entry = await tokenStore.GetAsync(scope, context.RequestAborted).ConfigureAwait(false);
+        if (entry.Status != GitHubTokenStatus.SignedIn)
+            return null;
+
+        return (await tokenStore.GetIdentityAsync(scope, context.RequestAborted).ConfigureAwait(false))?.Login;
+    }
 
     private async Task<string?> ValidateGitHubTokenAsync(string token, CancellationToken ct)
     {

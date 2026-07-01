@@ -5,6 +5,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Agentweaver.SandboxFs;
 
 namespace Agentweaver.Api.Runs;
 
@@ -38,7 +39,11 @@ public sealed class MergeCoordinator : IMergeCoordinator
         if (!Directory.Exists(canonicalPath))
             return MergeLockResult.Failed("repository_path_not_found");
 
-        var lockHandle = await _mergeLock.TryAcquireAsync(canonicalPath, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+        string lockPath;
+        try { lockPath = RealPath.Resolve(canonicalPath); }
+        catch { return MergeLockResult.Failed("repository_path_not_found"); }
+
+        var lockHandle = await _mergeLock.TryAcquireAsync(lockPath, TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
         if (lockHandle is null)
             return MergeLockResult.Failed("repository_busy");
 
