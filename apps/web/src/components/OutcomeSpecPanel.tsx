@@ -163,7 +163,7 @@ const RUN_NOT_ACTIVE_MESSAGES: Record<string, string> = {
   agent_pod_reconciler_error: 'The agent pod failed to start due to a configuration error. Please contact support if this persists.',
   capacity_unavailable: 'No agent capacity is available after multiple retries. Please try again later.',
 };
-const DEFAULT_INTERRUPTED_MESSAGE = 'This run was interrupted (server restart or timeout) and can no longer be confirmed. Please start a new task.';
+const DEFAULT_INTERRUPTED_MESSAGE = 'This run was interrupted and its state could not be restored. Please start a new task.';
 
 const STATUS_META: Record<OutcomeSpecStatus, { label: string; color: 'informative' | 'warning' | 'success' | 'danger' }> = {
   drafting: { label: 'Drafting', color: 'informative' },

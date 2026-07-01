@@ -400,7 +400,14 @@ public sealed class CoordinatorRunService
             // preserve replay/double-POST protection.
             pending = await WaitForGateToArmAsync(runId, ct).ConfigureAwait(false);
             if (pending is null)
-                return CoordinatorGateOutcome.NoPendingGate;
+            {
+                var recovery = await TryRecoverMissingConfirmationGateAsync(runId, ct).ConfigureAwait(false);
+                if (recovery.StreamingRun is not null)
+                    streamingRun = recovery.StreamingRun;
+                pending = recovery.Pending;
+                if (pending is null)
+                    return CoordinatorGateOutcome.NoPendingGate;
+            }
         }
 
         if (decision.Revise)
@@ -423,6 +430,61 @@ public sealed class CoordinatorRunService
         }
 
         return CoordinatorGateOutcome.Accepted;
+    }
+
+    private async Task<(StreamingRun? StreamingRun, PendingEntry? Pending)> TryRecoverMissingConfirmationGateAsync(
+        string runId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(runId, out var id))
+            return (null, null);
+
+        var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
+        if (run is null
+            || run.Status != RunStatus.InProgress
+            || run.ParentRunId is not null
+            || !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+            return (null, null);
+
+        var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
+        if (spec?.Status != "awaiting_confirmation")
+            return (null, null);
+
+        _logger.LogError(
+            "Coordinator run {RunId} is still awaiting confirmation but its gate is not armed; attempting inline recovery",
+            runId);
+
+        try
+        {
+            await RecoverSpecPhaseAsync(run, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Inline recovery failed for coordinator run {RunId} after missing confirmation gate",
+                runId);
+            return (null, null);
+        }
+
+        var recoveredRun = _registry.Get(runId);
+        if (recoveredRun is null)
+        {
+            _logger.LogError(
+                "Inline recovery for coordinator run {RunId} did not register a live workflow",
+                runId);
+            return (null, null);
+        }
+
+        var pending = await WaitForGateToArmAsync(runId, ct).ConfigureAwait(false);
+        if (pending is null)
+        {
+            _logger.LogError(
+                "Inline recovery for coordinator run {RunId} did not re-arm the confirmation gate",
+                runId);
+            return (recoveredRun, null);
+        }
+
+        _logger.LogInformation("Confirmation gate re-armed for run {RunId}", runId);
+        return (recoveredRun, pending);
     }
 
     /// <summary>
@@ -905,17 +967,24 @@ public sealed class CoordinatorRunService
     private async Task RecoverSpecPhaseAsync(Run run, CancellationToken ct)
     {
         var runId = run.Id.ToString();
+        _logger.LogInformation("Recovering spec-phase coordinator run {RunId}", runId);
+
         var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
         entry.MarkAwaitingReview();
 
         var checkpointInfo = await _factory.GetLatestCheckpointAsync(runId, ct).ConfigureAwait(false);
         if (checkpointInfo is null)
         {
-            _logger.LogWarning(
-                "Coordinator run {RunId} was drafting its spec at restart with no checkpoint; failing it", run.Id);
-            await FailRunSafeAsync(runId, entry).ConfigureAwait(false);
+            _logger.LogError(
+                "Failed to load checkpoint for run {RunId}: checkpoint not found",
+                runId);
+            await FailRunSafeAsync(runId, entry, "checkpoint_missing").ConfigureAwait(false);
             return;
         }
+
+        _logger.LogInformation(
+            "Checkpoint loaded for run {RunId}: {CheckpointId}",
+            runId, checkpointInfo.CheckpointId);
 
         var runCts = new CancellationTokenSource();
         var ctsRegistered = false;
@@ -925,26 +994,7 @@ public sealed class CoordinatorRunService
             var runCt = _registry.Register(runId, streamingRun, runCts);
             ctsRegistered = true;
 
-            // Repopulate the pending confirmation request so the confirm/revise endpoints find a live gate.
-            var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);
-            if (status == Microsoft.Agents.AI.Workflows.RunStatus.PendingRequests)
-            {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(TimeSpan.FromSeconds(5));
-                try
-                {
-                    await foreach (var evt in streamingRun.WatchStreamAsync(cts.Token).ConfigureAwait(false))
-                    {
-                        if (evt is RequestInfoEvent rie)
-                        {
-                            if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is null)
-                                await _pendingStore.SetAsync(runId, rie.Request, run.SubmittingUser, ct).ConfigureAwait(false);
-                            break;
-                        }
-                    }
-                }
-                catch (OperationCanceledException) { /* timeout is acceptable */ }
-            }
+            await RehydrateConfirmationGateAsync(run, streamingRun, ct).ConfigureAwait(false);
 
             StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
             _logger.LogInformation("Recovered coordinator run {RunId} at the spec confirmation gate", run.Id);
@@ -957,6 +1007,52 @@ public sealed class CoordinatorRunService
                 runCts.Dispose();
             throw;
         }
+    }
+
+    private async Task RehydrateConfirmationGateAsync(Run run, StreamingRun streamingRun, CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+
+        // Repopulate the pending confirmation request so the confirm/revise endpoints find a live gate.
+        var status = await streamingRun.GetStatusAsync(ct).ConfigureAwait(false);
+        if (status != Microsoft.Agents.AI.Workflows.RunStatus.PendingRequests)
+        {
+            _logger.LogWarning(
+                "Recovered coordinator run {RunId} resumed with status {Status}; confirmation gate was not pending during recovery",
+                runId, status);
+            return;
+        }
+
+        using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        probeCts.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            await foreach (var evt in streamingRun.WatchStreamAsync(probeCts.Token).ConfigureAwait(false))
+            {
+                if (evt is not RequestInfoEvent rie)
+                    continue;
+
+                if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is null)
+                    await _pendingStore.SetAsync(runId, rie.Request, run.SubmittingUser, ct).ConfigureAwait(false);
+
+                _logger.LogInformation("Confirmation gate re-armed for run {RunId}", runId);
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (probeCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            _logger.LogError(
+                "Confirmation gate probe timed out for recovered coordinator run {RunId}",
+                runId);
+            throw new InvalidOperationException(
+                $"Recovered coordinator run '{runId}' did not re-arm its confirmation gate.");
+        }
+
+        _logger.LogError(
+            "Recovered coordinator run {RunId} ended its gate probe without a RequestInfoEvent",
+            runId);
+        throw new InvalidOperationException(
+            $"Recovered coordinator run '{runId}' ended recovery without a confirmation gate.");
     }
 
     /// <summary>
@@ -1128,12 +1224,12 @@ public sealed class CoordinatorRunService
         _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
     }
 
-    private async Task FailRunSafeAsync(string runId, RunStreamEntry entry)
+    private async Task FailRunSafeAsync(string runId, RunStreamEntry entry, string reason = "watch_loop_error")
     {
         try
         {
             var changed = await _runStore.TrySetTerminalStatusAsync(
-                RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "watch_loop_error", CancellationToken.None)
+                RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, reason, CancellationToken.None)
                 .ConfigureAwait(false);
             if (!changed)
             {
@@ -1146,7 +1242,7 @@ public sealed class CoordinatorRunService
                     runId);
                 return;
             }
-            entry.RecordNext(EventTypes.RunFailed, new { reason = "watch_loop_error" });
+            entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
         }

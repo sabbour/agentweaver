@@ -106,6 +106,24 @@ describe('OutcomeSpecPanel confirm retry', () => {
     expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull();
     expect(onReconnect).toHaveBeenCalledTimes(1);
   });
+
+  it('shows the updated interrupted message for run_not_active failures', async () => {
+    vi.mocked(apiClient.confirmOutcomeSpec).mockRejectedValue(
+      new ApiError(409, JSON.stringify({ error: 'run_not_active' })),
+    );
+
+    render(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText('This run was interrupted and its state could not be restored. Please start a new task.')).toBeTruthy(),
+    );
+  });
 });
 
 describe('OutcomeSpecPanel clarify dialog', () => {
