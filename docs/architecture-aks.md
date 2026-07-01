@@ -12,6 +12,8 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 
 ## Component diagram
 
+> A simplified block diagram is also available: [aks-architecture-block.excalidraw](../aks-architecture-block.excalidraw) — open at [aka.ms/excalidraw](https://aka.ms/excalidraw).
+
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TB

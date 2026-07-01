@@ -1,0 +1,592 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "claude",
+  "elements": [
+    {
+      "type": "text",
+      "id": "title",
+      "x": 50, "y": 12,
+      "width": 900, "height": 50,
+      "text": "Agentweaver — AKS Architecture (Block Diagram)",
+      "fontSize": 22,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "client_rect",
+      "x": 400, "y": 65,
+      "width": 300, "height": 70,
+      "strokeColor": "#0078D4",
+      "backgroundColor": "#CFE4FA",
+      "fillStyle": "hachure",
+      "strokeWidth": 2,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "client_text"}]
+    },
+    {
+      "type": "text",
+      "id": "client_text",
+      "containerId": "client_rect",
+      "x": 400, "y": 65,
+      "width": 300, "height": 70,
+      "text": "Browser / AI Client\nHTTPS :443",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_c_gw",
+      "x": 550, "y": 135,
+      "width": 0, "height": 30,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "points": [[0, 0], [0, 30]]
+    },
+
+    {
+      "type": "rectangle",
+      "id": "gw_rect",
+      "x": 310, "y": 165,
+      "width": 480, "height": 60,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#F3F2F1",
+      "fillStyle": "hachure",
+      "strokeWidth": 2,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "gw_text"}]
+    },
+    {
+      "type": "text",
+      "id": "gw_text",
+      "containerId": "gw_rect",
+      "x": 310, "y": 165,
+      "width": 480, "height": 60,
+      "text": "Gateway  ·  approuting-istio  ·  TLS :443  ·  DefaultDomainCertificate",
+      "fontSize": 13,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_gw_core",
+      "x": 550, "y": 225,
+      "width": 0, "height": 55,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "points": [[0, 0], [0, 55]]
+    },
+
+    {
+      "type": "rectangle",
+      "id": "aks_container",
+      "x": 30, "y": 280,
+      "width": 1040, "height": 470,
+      "strokeColor": "#0078D4",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roundness": {"type": 3}
+    },
+    {
+      "type": "text",
+      "id": "aks_label",
+      "x": 48, "y": 287,
+      "width": 500, "height": 28,
+      "text": "AKS Cluster  ·  namespace: agentweaver",
+      "fontSize": 13,
+      "fontFamily": 2,
+      "strokeColor": "#0078D4",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "core_container",
+      "x": 60, "y": 318,
+      "width": 980, "height": 155,
+      "strokeColor": "#107C10",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roundness": {"type": 3}
+    },
+    {
+      "type": "text",
+      "id": "core_label",
+      "x": 75, "y": 323,
+      "width": 180, "height": 24,
+      "text": "Core Services",
+      "fontSize": 12,
+      "fontFamily": 2,
+      "strokeColor": "#107C10",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "fe_rect",
+      "x": 80, "y": 350,
+      "width": 200, "height": 108,
+      "strokeColor": "#107C10",
+      "backgroundColor": "#DFF6DD",
+      "fillStyle": "hachure",
+      "strokeWidth": 1,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "fe_text"}]
+    },
+    {
+      "type": "text",
+      "id": "fe_text",
+      "containerId": "fe_rect",
+      "x": 80, "y": 350,
+      "width": 200, "height": 108,
+      "text": "Frontend\n×2 replicas\nReact SPA  :8080",
+      "fontSize": 13,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "api_rect",
+      "x": 315, "y": 350,
+      "width": 200, "height": 108,
+      "strokeColor": "#107C10",
+      "backgroundColor": "#DFF6DD",
+      "fillStyle": "hachure",
+      "strokeWidth": 1,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "api_text"}]
+    },
+    {
+      "type": "text",
+      "id": "api_text",
+      "containerId": "api_rect",
+      "x": 315, "y": 350,
+      "width": 200, "height": 108,
+      "text": "API\n×2 replicas\n.NET 10  :8080",
+      "fontSize": 13,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "worker_rect",
+      "x": 550, "y": 350,
+      "width": 200, "height": 108,
+      "strokeColor": "#107C10",
+      "backgroundColor": "#DFF6DD",
+      "fillStyle": "hachure",
+      "strokeWidth": 1,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "worker_text"}]
+    },
+    {
+      "type": "text",
+      "id": "worker_text",
+      "containerId": "worker_rect",
+      "x": 550, "y": 350,
+      "width": 200, "height": 108,
+      "text": "Worker\n×1 + HPA\n.NET 10",
+      "fontSize": 13,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "mcp_rect",
+      "x": 785, "y": 350,
+      "width": 230, "height": 108,
+      "strokeColor": "#107C10",
+      "backgroundColor": "#DFF6DD",
+      "fillStyle": "hachure",
+      "strokeWidth": 1,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "mcp_text"}]
+    },
+    {
+      "type": "text",
+      "id": "mcp_text",
+      "containerId": "mcp_rect",
+      "x": 785, "y": 350,
+      "width": 230, "height": 108,
+      "text": "MCP\n×1  .NET 10  :8080\nOAuth / MCP protocol",
+      "fontSize": 13,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_core_kata",
+      "x": 260, "y": 473,
+      "width": 0, "height": 47,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "points": [[0, 0], [0, 47]]
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_core_storage",
+      "x": 740, "y": 473,
+      "width": 0, "height": 47,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "points": [[0, 0], [0, 47]]
+    },
+
+    {
+      "type": "rectangle",
+      "id": "kata_container",
+      "x": 60, "y": 520,
+      "width": 450, "height": 115,
+      "strokeColor": "#5C2D91",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roundness": {"type": 3}
+    },
+    {
+      "type": "text",
+      "id": "kata_label",
+      "x": 75, "y": 526,
+      "width": 420, "height": 22,
+      "text": "Kata VM Sandbox Pool  ·  katapool  ·  NoSchedule taint",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#5C2D91",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "type": "rectangle",
+      "id": "ah_rect",
+      "x": 80, "y": 552,
+      "width": 410, "height": 73,
+      "strokeColor": "#5C2D91",
+      "backgroundColor": "#E8DAEF",
+      "fillStyle": "hachure",
+      "strokeWidth": 1,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "ah_text"}]
+    },
+    {
+      "type": "text",
+      "id": "ah_text",
+      "containerId": "ah_rect",
+      "x": 80, "y": 552,
+      "width": 410, "height": 73,
+      "text": "AgentHost Warm Pool  ×2\nstandby → /configure → active  ·  A2A :8088\nworkload identity",
+      "fontSize": 12,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "storage_container",
+      "x": 550, "y": 520,
+      "width": 490, "height": 115,
+      "strokeColor": "#F7630C",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roundness": {"type": 3}
+    },
+    {
+      "type": "text",
+      "id": "storage_label",
+      "x": 565, "y": 526,
+      "width": 200, "height": 22,
+      "text": "Shared Storage",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#F7630C",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "type": "rectangle",
+      "id": "pvc_rect",
+      "x": 570, "y": 552,
+      "width": 200, "height": 73,
+      "strokeColor": "#F7630C",
+      "backgroundColor": "#FFF4CE",
+      "fillStyle": "hachure",
+      "strokeWidth": 1,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "pvc_text"}]
+    },
+    {
+      "type": "text",
+      "id": "pvc_text",
+      "containerId": "pvc_rect",
+      "x": 570, "y": 552,
+      "width": 200, "height": 73,
+      "text": "Workspace PVC\nAzure Files RWX\n/workspace",
+      "fontSize": 12,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "type": "rectangle",
+      "id": "csi_rect",
+      "x": 808, "y": 552,
+      "width": 222, "height": 73,
+      "strokeColor": "#F7630C",
+      "backgroundColor": "#FFF4CE",
+      "fillStyle": "hachure",
+      "strokeWidth": 1,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "csi_text"}]
+    },
+    {
+      "type": "text",
+      "id": "csi_text",
+      "containerId": "csi_rect",
+      "x": 808, "y": 552,
+      "width": 222, "height": 73,
+      "text": "CSI SecretProvider\ngithub-client-id / secret\nmcp-oauth-signing-key",
+      "fontSize": 12,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_api_pg",
+      "x": 415, "y": 458,
+      "width": 295, "height": 312,
+      "strokeColor": "#495057",
+      "strokeWidth": 1,
+      "points": [[0, 0], [-295, 312]]
+    },
+    {
+      "type": "text",
+      "id": "lbl_api_pg",
+      "x": 200, "y": 590,
+      "width": 100, "height": 28,
+      "text": "TLS :5432",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#495057",
+      "textAlign": "center",
+      "verticalAlign": "top"
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_worker_kv",
+      "x": 650, "y": 458,
+      "width": 260, "height": 312,
+      "strokeColor": "#495057",
+      "strokeWidth": 1,
+      "points": [[0, 0], [-260, 312]]
+    },
+    {
+      "type": "text",
+      "id": "lbl_worker_kv",
+      "x": 445, "y": 600,
+      "width": 140, "height": 28,
+      "text": "workload identity",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#495057",
+      "textAlign": "center",
+      "verticalAlign": "top"
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_ah_kv",
+      "x": 285, "y": 625,
+      "width": 105, "height": 145,
+      "strokeColor": "#495057",
+      "strokeWidth": 1,
+      "points": [[0, 0], [105, 145]]
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_core_gh",
+      "x": 870, "y": 458,
+      "width": 20, "height": 312,
+      "strokeColor": "#495057",
+      "strokeWidth": 1,
+      "points": [[0, 0], [20, 312]]
+    },
+    {
+      "type": "text",
+      "id": "lbl_core_gh",
+      "x": 870, "y": 600,
+      "width": 100, "height": 28,
+      "text": "OAuth / REST",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#495057",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+
+    {
+      "type": "arrow",
+      "id": "arr_acr_aks",
+      "x": 630, "y": 770,
+      "width": 0, "height": 45,
+      "strokeColor": "#495057",
+      "strokeWidth": 1,
+      "strokeStyle": "dashed",
+      "points": [[0, 0], [0, -45]]
+    },
+    {
+      "type": "text",
+      "id": "lbl_acr_aks",
+      "x": 638, "y": 735,
+      "width": 90, "height": 24,
+      "text": "image pull",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#495057",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "pg_rect",
+      "x": 30, "y": 770,
+      "width": 210, "height": 80,
+      "strokeColor": "#0078D4",
+      "backgroundColor": "#CFE4FA",
+      "fillStyle": "hachure",
+      "strokeWidth": 2,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "pg_text"}]
+    },
+    {
+      "type": "text",
+      "id": "pg_text",
+      "containerId": "pg_rect",
+      "x": 30, "y": 770,
+      "width": 210, "height": 80,
+      "text": "Azure PostgreSQL\nFlexible Server\nruns · events · projects · memory",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "kv_rect",
+      "x": 290, "y": 770,
+      "width": 210, "height": 80,
+      "strokeColor": "#0078D4",
+      "backgroundColor": "#CFE4FA",
+      "fillStyle": "hachure",
+      "strokeWidth": 2,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "kv_text"}]
+    },
+    {
+      "type": "text",
+      "id": "kv_text",
+      "containerId": "kv_rect",
+      "x": 290, "y": 770,
+      "width": 210, "height": 80,
+      "text": "Azure Key Vault\nagentweaver-kv\nuser tokens · app secrets",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "acr_rect",
+      "x": 540, "y": 770,
+      "width": 210, "height": 80,
+      "strokeColor": "#0078D4",
+      "backgroundColor": "#CFE4FA",
+      "fillStyle": "hachure",
+      "strokeWidth": 2,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "acr_text"}]
+    },
+    {
+      "type": "text",
+      "id": "acr_text",
+      "containerId": "acr_rect",
+      "x": 540, "y": 770,
+      "width": 210, "height": 80,
+      "text": "Azure Container Registry\nagentweaverregistry\n(image pull)",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+
+    {
+      "type": "rectangle",
+      "id": "gh_rect",
+      "x": 800, "y": 770,
+      "width": 210, "height": 80,
+      "strokeColor": "#5C2D91",
+      "backgroundColor": "#E8DAEF",
+      "fillStyle": "hachure",
+      "strokeWidth": 2,
+      "roundness": {"type": 3},
+      "boundElements": [{"type": "text", "id": "gh_text"}]
+    },
+    {
+      "type": "text",
+      "id": "gh_text",
+      "containerId": "gh_rect",
+      "x": 800, "y": 770,
+      "width": 210, "height": 80,
+      "text": "GitHub\nOAuth · REST\napi.github.com · Copilot",
+      "fontSize": 11,
+      "fontFamily": 2,
+      "strokeColor": "#000000",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff"
+  }
+}
