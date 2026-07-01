@@ -112,54 +112,36 @@ bash install.sh --aks --image-tag <git-sha>
 
 ### Block diagram
 
-| External | AKS Cluster | Data / Infra |
-|---|---|---|
-| Client → Gateway | **Core Services**: Frontend ×2 · API ×2 · Worker ×1+HPA · MCP ×1 | PostgreSQL |
-| GitHub | **Kata VM Pool**: AgentHost Warm Pool ×2 | Key Vault |
-| ACR (image registry) | **Shared Storage**: Workspace PVC · CSI SecretProvider | |
-
-### Full component diagram (Mermaid)
-
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    client(["🌐 Browser / AI client<br/>HTTPS :443"])
+block-beta
+  columns 3
 
-    subgraph aks["AKS Cluster — namespace: agentweaver"]
-        gw{{"Gateway<br/>approuting-istio · TLS :443"}}
+  Client(["🌐 Client"])
+  space
+  GitHub(["GitHub"])
 
-        subgraph core["Core services"]
-            fe(["Frontend ×2<br/>React SPA"])
-            api(["API ×2<br/>REST · auth · SSE"])
-            worker(["Worker ×1+HPA<br/>pod-per-run mode"])
-            mcp(["MCP ×1<br/>OAuth · MCP protocol"])
-        end
-
-        subgraph exec["Kata VM sandbox execution"]
-            ahpool(["AgentHost Warm Pool ×2<br/>agentweaver-agent-host<br/>standby → /configure → active<br/>A2A :8088"])
-        end
-
-        ws[("Workspace PVC<br/>Azure Files RWX")]
+  block:aks["AKS Cluster"]:3
+    columns 3
+    block:core["Core Services"]:2
+      columns 2
+      fe["Frontend ×2"]
+      api["API ×2"]
+      worker["Worker ×1+HPA"]
+      mcp["MCP ×1"]
     end
+    block:kata["Kata VM Pool"]:1
+      ah["AgentHost\nWarm Pool ×2"]
+    end
+    block:storage["Shared Storage"]:3
+      columns 2
+      pvc[("Workspace PVC")]
+      csi["CSI SecretProvider"]
+    end
+  end
 
-    kv(["Azure Key Vault<br/>user tokens · app secrets"])
-    pg(["Azure PostgreSQL<br/>runs · RunEvents · memory"])
-    gh(["GitHub<br/>OAuth · api.github.com"])
-
-    client -->|"HTTPS :443"| gw
-    gw -->|"/"| fe
-    gw -->|"/api /auth /stream"| api
-    gw -->|"/mcp"| mcp
-    mcp -->|"API calls :8080"| api
-    api & worker -->|"SandboxClaim + POST /configure"| ahpool
-    api & worker --- ws
-    ahpool --- ws
-    api -->|"RunEvents cursor reads"| pg
-    worker -->|"RunEvents writes"| pg
-    api -->|"workload identity"| kv
-    ahpool -->|"fetch user token"| kv
-    api & mcp -->|"OAuth · REST"| gh
-
+  pg[("PostgreSQL")]
+  kv["Key Vault"]
+  acr["ACR"]
 ```
 
 > Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/guide/architecture-aks.md)

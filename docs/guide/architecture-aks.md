@@ -13,59 +13,38 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 ## Component diagram
 
 ```mermaid
-flowchart TB
-    client[Client]
-    gateway[Gateway]
+block-beta
+  columns 3
 
-    subgraph aks[AKS Cluster]
-        direction TB
+  Client["Client"]
+  space
+  GitHub["GitHub"]
 
-        subgraph core[Core Services]
-            direction LR
-            fe[Frontend ×2]
-            api[API ×2]
-            worker[Worker ×1 + HPA]
-            mcp[MCP ×1]
-        end
-
-        subgraph kata[Kata VM Pool]
-            host[AgentHost Warm Pool ×2]
-        end
-
-        subgraph storage[Shared Storage]
-            direction LR
-            pvc[Workspace PVC]
-            csi[CSI SecretProvider]
-        end
+  block:aks["AKS Cluster"]:3
+    columns 3
+    block:gw["Gateway"]:3
+      gw_svc["approuting-istio · TLS :443"]
     end
+    block:core["Core Services"]:2
+      columns 2
+      fe["Frontend ×2"]
+      api["API ×2"]
+      worker["Worker ×1 + HPA"]
+      mcp["MCP ×1"]
+    end
+    block:kata["Kata VM Pool"]:1
+      host["AgentHost Warm Pool ×2"]
+    end
+    block:storage["Shared Storage"]:3
+      columns 2
+      pvc[("Workspace PVC\nAzure Files RWX")]
+      csi["CSI SecretProvider"]
+    end
+  end
 
-    pg[PostgreSQL]
-    kv[Key Vault]
-    acr[ACR]
-    gh[GitHub]
-
-    client --> gateway
-    gateway --> core
-    core --> host
-    core --- pvc
-    core --- csi
-    api --> pg
-    api --> kv
-    host --> kv
-    core --> gh
-    acr -.-> aks
-
-    classDef edge fill:#E8EEF9,stroke:#0F6CBD,color:#242424
-    classDef service fill:#CFE4FA,stroke:#0F6CBD,color:#242424
-    classDef runtime fill:#DFF6DD,stroke:#107C10,color:#242424
-    classDef storageStyle fill:#FFF4CE,stroke:#C19C00,color:#242424
-    classDef ext fill:#F3F2F1,stroke:#8A8886,color:#242424
-
-    class client,gateway edge
-    class fe,api,worker,mcp service
-    class host runtime
-    class pvc,csi storageStyle
-    class pg,kv,acr,gh ext
+  pg[("PostgreSQL")]
+  kv["Key Vault"]
+  acr["ACR"]
 ```
 
 > Source: [aks-architecture-block.excalidraw](../aks-architecture-block.excalidraw) — open at [aka.ms/excalidraw](https://aka.ms/excalidraw)
