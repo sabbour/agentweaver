@@ -503,7 +503,7 @@ The coordinator assumes in-memory drivers can disappear. Recovery routes by dura
 | WorkPlan with no subtasks | Finalize the coordinator run from the spec status. |
 | `planned` or `dispatching` | Reset in-flight subtasks to pending and re-arm dispatch. |
 | `awaiting_assembly` | Re-arm assembly; the CAS decides the winner. |
-| `assembling` or `in_review` | Reset to `awaiting_assembly` and re-run assembly to recreate in-memory gates. |
+| `assembling` or `in_review` | Reset to `awaiting_assembly` and re-run assembly to recreate the assembly driver and review gate. Deferred review decisions submitted to a non-owner replica are durable and are consumed by the owner driver after the gate is re-armed. |
 | `complete` | Settle the coordinator run as completed if it was still in progress. |
 | blocked/failed/declined assembly states | Settle the coordinator run as failed or declined with the recorded reason. |
 

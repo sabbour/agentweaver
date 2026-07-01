@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
@@ -265,6 +266,7 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
     AssemblyReviewRequest request,
     IRunStore runStore,
     Agentweaver.Api.Coordinator.AssemblyReviewGate reviewGate,
+    IServiceScopeFactory scopeFactory,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -292,6 +294,14 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
         Reviewer: caller.User);
 
     var result = reviewGate.TrySubmit(coordinatorRunId, caller.User, decision, caller.GitHubLogin);
+    if (result == Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.NotArmed
+        && await IsAssemblyReviewPendingAsync(coordinatorRunId, scopeFactory, ct).ConfigureAwait(false))
+    {
+        var deferred = await TryDeferAssemblyReviewDecisionAsync(
+            coordinatorRunId, decision, scopeFactory, logger, CancellationToken.None).ConfigureAwait(false);
+        if (deferred)
+            result = Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted;
+    }
 
     logger.LogInformation(
         "Assembly review decision: {Decision}. RunId={RunId} Reviewer={Reviewer} Result={Result}",
@@ -543,6 +553,57 @@ static void EnumerateAssemblyTree(Tree tree, string prefix, List<WorkspaceNode> 
             nodes.Add(new WorkspaceNode { Path = entryPath, IsFolder = false, Status = null });
         }
     }
+}
+
+static async Task<bool> IsAssemblyReviewPendingAsync(
+    string coordinatorRunId, IServiceScopeFactory scopeFactory, CancellationToken ct)
+{
+    using var scope = scopeFactory.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+    return await db.WorkPlans.AsNoTracking()
+        .AnyAsync(w => w.CoordinatorRunId == coordinatorRunId
+            && w.Status == WorkPlanStatus.InReview
+            && w.AssemblyStage == AssemblyStage.Review, ct)
+        .ConfigureAwait(false);
+}
+
+static async Task<bool> TryDeferAssemblyReviewDecisionAsync(
+    string coordinatorRunId,
+    AssemblyReviewDecision decision,
+    IServiceScopeFactory scopeFactory,
+    ILogger<Program> logger,
+    CancellationToken ct)
+{
+    var json = JsonSerializer.Serialize(decision, JsonDefaults.Options);
+    using var scope = scopeFactory.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+    var existing = await db.DeferredDecisions.AsNoTracking()
+        .FirstOrDefaultAsync(d => d.RunId == coordinatorRunId, ct)
+        .ConfigureAwait(false);
+    if (existing is not null)
+        return true;
+
+    db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+    {
+        RunId = coordinatorRunId,
+        DecisionJson = json,
+        CreatedAt = DateTimeOffset.UtcNow,
+    });
+
+    try
+    {
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+    catch (DbUpdateException)
+    {
+        return true;
+    }
+
+    logger.LogInformation(
+        "Assembly review decision for run {RunId} deferred for owner replica pickup",
+        coordinatorRunId);
+    return true;
 }
 
 // Maps a persisted coordinator OutcomeSpec to the web-client-facing camelCase response.

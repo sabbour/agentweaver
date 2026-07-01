@@ -1,9 +1,11 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
@@ -389,6 +391,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         });
 
         var decisionTask = _reviewGate.ArmAsync(context.CoordinatorRunId, context.SubmittingUser, ct);
+        _ = PollDeferredAssemblyReviewDecisionAsync(context, ct);
         AssemblyReviewDecision decision;
         try
         {
@@ -446,6 +449,58 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     // -----------------------------------------------------------------------
     // Post-approval: ONE merge -> ONE scribe -> complete.
     // -----------------------------------------------------------------------
+
+    private async Task PollDeferredAssemblyReviewDecisionAsync(CoordinatorDispatchContext context, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && _reviewGate.IsArmed(context.CoordinatorRunId))
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            AssemblyReviewDecision? decision;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var row = await db.DeferredDecisions
+                    .FirstOrDefaultAsync(d => d.RunId == context.CoordinatorRunId, ct)
+                    .ConfigureAwait(false);
+                if (row is null)
+                    continue;
+
+                decision = JsonSerializer.Deserialize<AssemblyReviewDecision>(row.DecisionJson, JsonDefaults.Options);
+                var deleted = await db.DeferredDecisions
+                    .Where(d => d.RunId == context.CoordinatorRunId)
+                    .ExecuteDeleteAsync(ct)
+                    .ConfigureAwait(false);
+                if (deleted == 0 || decision is null)
+                    continue;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Collective assembly: error polling deferred review decision for run {RunId}",
+                    context.CoordinatorRunId);
+                continue;
+            }
+
+            var result = _reviewGate.TrySubmit(context.CoordinatorRunId, context.SubmittingUser, decision);
+            _logger.LogInformation(
+                "Collective assembly: deferred review decision for run {RunId} applied with result {Result}",
+                context.CoordinatorRunId, result);
+            return;
+        }
+    }
 
     private async Task CompleteAfterApprovalAsync(
         CoordinatorDispatchContext context,

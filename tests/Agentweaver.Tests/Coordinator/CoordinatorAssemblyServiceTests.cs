@@ -5,9 +5,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Tests.Helpers;
 using Agentweaver.Domain;
@@ -184,6 +186,33 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var state = await _assemblyStore.GetAsync(workPlanId, default);
         state!.Status.Should().Be(WorkPlanStatus.Complete);
         state.AssemblyStage.Should().Be(AssemblyStage.Done);
+    }
+
+    [Fact]
+    public async Task RunAssembly_DeferredReviewDecisionFromAnotherReplica_IsConsumedAndApplied()
+    {
+        const string coordinatorRunId = "coord-deferred-review-1";
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+
+        await SeedDeferredAssemblyDecisionAsync(coordinatorRunId,
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"));
+
+        await run;
+
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewApproved,
+            "the owner replica should poll and apply the deferred review decision");
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Complete);
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.DeferredDecisions.CountAsync(d => d.RunId == coordinatorRunId)).Should().Be(0,
+            "the deferred decision is consumed at most once");
     }
 
     // ── D6 request_changes inference + re-dispatch ──────────────────────────────────────────────
@@ -428,6 +457,19 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Status = "pending",
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedDeferredAssemblyDecisionAsync(string coordinatorRunId, AssemblyReviewDecision decision)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+        {
+            RunId = coordinatorRunId,
+            DecisionJson = System.Text.Json.JsonSerializer.Serialize(decision, JsonDefaults.Options),
+            CreatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
     }
