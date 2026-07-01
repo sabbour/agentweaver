@@ -482,6 +482,9 @@ builder.Services.AddSingleton<PortForwardService>();
 // Kubernetes runtime environment detection (pod name, in-cluster flag).
 builder.Services.AddSingleton<IKubernetesEnvironment, DefaultKubernetesEnvironment>();
 
+// Application version (reads VERSION file at startup).
+builder.Services.AddSingleton<IAppVersionProvider, AppVersionProvider>();
+
 // Authentication
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IGitHubOrgAuthorizationService, GitHubOrgAuthorizationService>();
@@ -773,6 +776,7 @@ else
     app.MapUsageEndpoints();
     app.MapSandboxEndpoints();
     app.MapSystemEndpoints();
+    app.MapVersionEndpoints();
 }
 
 app.Run();

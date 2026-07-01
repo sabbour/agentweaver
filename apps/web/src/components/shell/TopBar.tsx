@@ -2,6 +2,7 @@ import { makeStyles, tokens, Badge } from '@fluentui/react-components';
 import { GitHubSignIn } from '../GitHubSignIn';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
+import { useAppVersion } from '../../hooks/useAppVersion';
 
 // Spec 011 — top bar (FR-011..FR-015). Carries the switch-only project switcher,
 // the API-reachability status dot, and the existing GitHub sign-in. The brand
@@ -49,11 +50,12 @@ export function TopBar({
   onFallbackProjectMissing,
 }: TopBarProps) {
   const styles = useStyles();
+  const version = useAppVersion();
   return (
     <header className={styles.topBar}>
       <div className={styles.left}>
         <Badge appearance="outline" color="warning" title="Agentweaver is alpha software under active development.">
-          Alpha
+          Alpha{version ? ` v${version}` : ''}
         </Badge>
         <ProjectSwitcher
           projectId={projectId}
