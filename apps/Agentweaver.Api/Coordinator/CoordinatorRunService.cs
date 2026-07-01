@@ -815,6 +815,8 @@ public sealed class CoordinatorRunService
                 await FailRunSafeAsync(run.Id.ToString(), entry).ConfigureAwait(false);
             }
         }
+
+        await RecoverMissingFinalScribesAsync(ct).ConfigureAwait(false);
     }
 
     private async Task RecoverOneAsync(Run run, CancellationToken ct)
@@ -891,15 +893,10 @@ public sealed class CoordinatorRunService
                 _logger.LogInformation("Recovered coordinator run {RunId} into collective assembly (awaiting_assembly)", runId);
                 break;
 
-            // (e) Crashed mid-assembly or while parked at the collective human-review gate. The
-            // integration-branch build + RAI + review-gate arming all live in memory and are gone, so
-            // reset the plan back to awaiting_assembly and re-run the (idempotent) assembly core — it
-            // rebuilds the integration branch and re-arms the review gate, identical to a request-changes
-            // wave. This is the only safe way to restore the in-memory review gate the HTTP review
-            // endpoint completes against.
+            // (e) Crashed mid-assembly or while parked at the collective human-review gate.
+            // CoordinatorAssemblyService inspects the persisted work-plan/review state and decides
+            // whether to resume the review gate directly or re-run assembly from awaiting_assembly.
             case CoordinatorRecoveryAction.ReArmAssembly:
-                await _assemblyStore.SetStatusAndStageAsync(
-                    workPlanId!.Value, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
                 _assembly.StartAssembly(context);
                 _logger.LogInformation("Recovered coordinator run {RunId} into collective assembly (re-armed from {Status})", runId, planState.Status);
                 break;
@@ -912,6 +909,11 @@ public sealed class CoordinatorRunService
                 _streamStore.Complete(runId);
                 _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
                 _factory.DeleteCheckpoints(runId);
+                _assembly.EnsureFinalScribe((await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)) ?? run with
+                {
+                    Status = RunStatus.Completed,
+                    Result = "complete",
+                });
                 break;
 
             case CoordinatorRecoveryAction.SettleFailed:
@@ -921,7 +923,36 @@ public sealed class CoordinatorRunService
                 _streamStore.Complete(runId);
                 _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
                 _factory.DeleteCheckpoints(runId);
+                _assembly.EnsureFinalScribe((await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)) ?? run with
+                {
+                    Status = RunStatus.Failed,
+                    Result = run.Result ?? planState.Status,
+                });
                 break;
+        }
+    }
+
+    private async Task RecoverMissingFinalScribesAsync(CancellationToken ct)
+    {
+        var terminalStatuses = new[]
+        {
+            RunStatus.Completed,
+            RunStatus.Declined,
+            RunStatus.Failed,
+            RunStatus.MergeFailed,
+        };
+
+        foreach (var status in terminalStatuses)
+        {
+            var runs = await _runStore.GetByStatusAsync(status, ct).ConfigureAwait(false);
+            foreach (var run in runs)
+            {
+                if (run.ParentRunId is not null
+                    || !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+                    continue;
+
+                _assembly.EnsureFinalScribe(run);
+            }
         }
     }
 

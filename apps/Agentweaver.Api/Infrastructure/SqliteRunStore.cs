@@ -523,6 +523,19 @@ public sealed class SqliteRunStore : IRunStore
         return results;
     }
 
+    public async Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = SelectSql + " WHERE parent_run_id = $parentRunId ORDER BY started_at DESC;";
+        command.Parameters.AddWithValue("$parentRunId", parentRunId);
+        var results = new List<Run>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            results.Add(Map(reader));
+        return results;
+    }
+
     public async Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(
         ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default)
     {

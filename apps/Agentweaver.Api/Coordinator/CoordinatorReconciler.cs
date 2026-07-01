@@ -90,7 +90,8 @@ public sealed class CoordinatorReconciler
                 .AsNoTracking()
                 .Where(w => w.Status == WorkPlanStatus.Dispatching
                          || w.Status == WorkPlanStatus.AwaitingAssembly
-                         || w.Status == WorkPlanStatus.Assembling)
+                         || w.Status == WorkPlanStatus.Assembling
+                         || w.Status == WorkPlanStatus.InReview)
                 .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status, w.CoordinatorPodId, w.UpdatedAt))
                 .ToListAsync(ct).ConfigureAwait(false);
         }
@@ -121,12 +122,13 @@ public sealed class CoordinatorReconciler
                         break;
 
                     case WorkPlanStatus.AwaitingAssembly:
-                        if (await TryReArmAssemblyAsync(plan, resetToAwaitingAssembly: false, ct).ConfigureAwait(false))
+                        if (await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
 
                     case WorkPlanStatus.Assembling:
-                        if (await TryReArmAssemblyAsync(plan, resetToAwaitingAssembly: true, ct).ConfigureAwait(false))
+                    case WorkPlanStatus.InReview:
+                        if (await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
                 }
@@ -163,10 +165,7 @@ public sealed class CoordinatorReconciler
         return true;
     }
 
-    private async Task<bool> TryReArmAssemblyAsync(
-        PlanCandidate plan,
-        bool resetToAwaitingAssembly,
-        CancellationToken ct)
+    private async Task<bool> TryReArmAssemblyAsync(PlanCandidate plan, CancellationToken ct)
     {
         if (_assembly is null)
         {
@@ -179,9 +178,6 @@ public sealed class CoordinatorReconciler
         var context = await TryBuildContextAsync(plan, ct).ConfigureAwait(false);
         if (context is null)
             return false;
-
-        if (resetToAwaitingAssembly)
-            await ResetAssemblyPlanAsync(plan.WorkPlanId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "Coordinator reconciler: re-arming orphaned coordinator assembly for run {RunId} (status was {Status})",

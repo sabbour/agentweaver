@@ -30,6 +30,7 @@ public interface IRunStore
     Task UpdateWorktreeAsync(RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default);
     Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default);
     Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default);
+    Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default);
     Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, bool includeChildren = false, CancellationToken ct = default);
     Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default);
     Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default);

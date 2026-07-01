@@ -321,6 +321,16 @@ public sealed class EfRunStore : IRunStore
         return recs.Select(FromRecord).ToList();
     }
 
+    public async Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var recs = await db.Runs.AsNoTracking()
+            .Where(r => r.ParentRunId == parentRunId)
+            .OrderByDescending(r => r.StartedAt)
+            .ToListAsync(ct);
+        return recs.Select(FromRecord).ToList();
+    }
+
     public async Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(
         ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default)
     {

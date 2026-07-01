@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Diagnostics;
 
 namespace Agentweaver.Api.Memory;
@@ -29,6 +30,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
     public DbSet<HeartbeatStatusRecord> HeartbeatStatuses => Set<HeartbeatStatusRecord>();
     public DbSet<CoordinatorDeferredDecisionRecord> DeferredDecisions => Set<CoordinatorDeferredDecisionRecord>();
+    public DbSet<CoordinatorAssemblyReviewRecord> AssemblyReviews => Set<CoordinatorAssemblyReviewRecord>();
 
     // Shared, concurrency-safe MAF workflow checkpoints (replaces the per-pod file store on Postgres).
     // Postgres-only: local/dev (sqlite) still uses the file-based checkpoint store.
@@ -118,6 +120,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);
         model.Entity<HeartbeatStatusRecord>().HasKey(h => h.PodName);
         model.Entity<CoordinatorDeferredDecisionRecord>().HasIndex(d => d.RunId).IsUnique();
+        model.Entity<CoordinatorAssemblyReviewRecord>().HasIndex(r => r.CoordinatorRunId).IsUnique();
 
         // ── agentweaver.db entities (spec-018 P2) ──────────────────────────────────
         // These entities only exist in the Postgres schema (InitialPostgres migration).

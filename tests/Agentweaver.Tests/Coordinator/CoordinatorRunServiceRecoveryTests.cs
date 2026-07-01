@@ -228,7 +228,7 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             runWorkflowFactory: runWorkflowFactory,
             dispatchService: null!,   // not invoked in ResumeSpecPhase → FailRunSafeAsync path
             assemblyStore: null!,     // not invoked in this path
-            assembly: null!,          // not invoked in this path
+            assembly: new NoOpAssembly(),
             scopeFactory: _scopeFactory,
             runOptions: null!,        // not invoked in this path
             backlogStore: null!,      // not invoked (run.Origin == Interactive)
@@ -274,10 +274,17 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         public Task UpdateWorktreeAsync(RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Run>>(Array.Empty<Run>());
         public Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, bool includeChildren = false, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    private sealed class NoOpAssembly : ICoordinatorAssembly
+    {
+        public void StartAssembly(CoordinatorDispatchContext context) { }
+        public void EnsureFinalScribe(Run coordinatorRun) { }
     }
 
     private sealed class ThrowingWorktreeOps : IWorktreeOperations

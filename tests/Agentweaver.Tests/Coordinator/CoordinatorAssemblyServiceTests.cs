@@ -156,7 +156,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SeedCoordinatorRunAsync(coordinatorRunId);
         await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         _streamStore.Create(coordinatorRunId, "alice");
-        _pipeline.IntegrationBuildThrowsRemaining = 1;
+        _pipeline.IntegrationBuildThrowsRemaining = 3;
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
@@ -173,7 +173,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
-        _pipeline.IntegrationBuilds.Should().Be(2, "send should wake the blocked wait and retry assembly");
+        _pipeline.IntegrationBuilds.Should().Be(4, "send should wake the blocked wait and retry assembly after the initial blocked wave");
         EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyCompleted);
     }
 
@@ -224,7 +224,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task DeferAssemblyReviewDecision_Duplicate_ReturnsFalseAndKeepsFirstDecision()
+    public async Task PersistAssemblyReviewDecision_WritesLatestDecisionToDurableReviewState()
     {
         const string coordinatorRunId = "coord-deferred-duplicate";
         var decision = new AssemblyReviewDecision(
@@ -234,24 +234,21 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             TargetFiles: null,
             Reviewer: "alice");
 
-        var first = await InvokeTryDeferAssemblyReviewDecisionAsync(coordinatorRunId, decision);
-        var duplicate = await InvokeTryDeferAssemblyReviewDecisionAsync(coordinatorRunId, decision with
+        await InvokePersistAssemblyReviewDecisionAsync(coordinatorRunId, decision);
+        await InvokePersistAssemblyReviewDecisionAsync(coordinatorRunId, decision with
         {
             Approved = false,
             Feedback = "duplicate decline",
         });
 
-        first.Should().BeTrue();
-        duplicate.Should().BeFalse(
-            "a duplicate deferred assembly review is ignored and must not be reported as accepted");
-
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var rows = await db.DeferredDecisions.AsNoTracking()
-            .Where(d => d.RunId == coordinatorRunId)
+        var rows = await db.AssemblyReviews.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId)
             .ToListAsync();
         rows.Should().ContainSingle();
-        rows[0].DecisionJson.Should().Contain("\"Approved\":true");
+        rows[0].DecisionJson.Should().Contain("\"Approved\":false");
+        rows[0].DecisionJson.Should().Contain("duplicate decline");
     }
 
     // ── Happy path: event sequence + node-flip ──────────────────────────────────────────────────
@@ -259,9 +256,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     [Fact]
     public async Task RunAssembly_ApprovedReview_EmitsAssemblySequenceInOrder_AndFlipsNodesToLive()
     {
-        const string coordinatorRunId = "coord-happy-1";
+        var coordinatorRunId = RunId.New().ToString();
         var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
         _streamStore.Create(coordinatorRunId, "alice");
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
@@ -296,6 +294,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _pipeline.IntegrationBuilds.Should().Be(1);
         _pipeline.Merges.Should().Be(1);
         _pipeline.Scribes.Should().Be(1);
+        (await _runStore.GetRunsByParentAsync(coordinatorRunId))
+            .Should().ContainSingle(r => r.AgentName == "Scribe" && r.SubtaskId == "assembly-scribe");
 
         // Node-flip: the FIRST coordinator.graph (stage=null) renders assembly nodes planned; the LAST
         // (stage=done) renders them all live — proving the planned→live transition.
@@ -370,8 +370,54 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        (await db.DeferredDecisions.CountAsync(d => d.RunId == coordinatorRunId)).Should().Be(0,
-            "the deferred decision is consumed at most once");
+        (await db.AssemblyReviews.CountAsync(d => d.CoordinatorRunId == coordinatorRunId)).Should().Be(0,
+            "the persisted review state is cleared after merge ownership is durably advanced");
+    }
+
+    [Fact]
+    public async Task RunAssembly_RecoveredInReview_WithPersistedApproval_AdvancesDirectlyToMerge()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SetPlanReviewStateAsync(workPlanId);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree", CancellationToken.None);
+        await SeedDeferredAssemblyDecisionAsync(coordinatorRunId,
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice"));
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.IntegrationBuilds.Should().Be(0, "recovery should not rebuild assembly after approval was already persisted");
+        _pipeline.Merges.Should().Be(1);
+        _pipeline.Scribes.Should().Be(1);
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Complete);
+    }
+
+    [Fact]
+    public async Task RunAssembly_RecoveredInReview_WithoutPersistedApproval_ReArmsGateWithoutRebuilding()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SetPlanReviewStateAsync(workPlanId);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree", CancellationToken.None);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _pipeline.IntegrationBuilds.Should().Be(0, "recovery should re-arm the review gate from persisted state");
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        _pipeline.Merges.Should().Be(1);
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Complete);
     }
 
     // ── D6 request_changes inference + re-dispatch ──────────────────────────────────────────────
@@ -469,6 +515,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
         persisted!.Status.Should().Be(RunStatus.Declined);
         persisted.Result.Should().Be("assembly_declined");
+        (await _runStore.GetRunsByParentAsync(coordinatorRunId))
+            .Should().ContainSingle(r => r.AgentName == "Scribe" && r.SubtaskId == "assembly-scribe");
     }
 
     [Fact]
@@ -609,24 +657,23 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private static string DiffTouching(string path) =>
         $"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1 @@\n+change\n";
 
-    private async Task<bool> InvokeTryDeferAssemblyReviewDecisionAsync(
+    private async Task InvokePersistAssemblyReviewDecisionAsync(
         string coordinatorRunId,
         AssemblyReviewDecision decision)
     {
         var method = typeof(CoordinatorEndpoints).GetMethod(
-            "TryDeferAssemblyReviewDecisionAsync",
+            "PersistAssemblyReviewDecisionAsync",
             BindingFlags.NonPublic | BindingFlags.Static);
-        method.Should().NotBeNull("the endpoint helper owns deferred assembly review persistence");
+        method.Should().NotBeNull("the endpoint helper owns durable assembly review persistence");
 
-        var task = (Task<bool>)method!.Invoke(null,
+        var task = (Task)method!.Invoke(null,
         [
             coordinatorRunId,
             decision,
             _scopeFactory,
-            NullLogger<Program>.Instance,
             CancellationToken.None,
         ])!;
-        return await task.ConfigureAwait(false);
+        await task.ConfigureAwait(false);
     }
 
     private async Task WaitUntilArmedAsync(string coordinatorRunId)
@@ -655,17 +702,22 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await db.SaveChangesAsync();
     }
 
-    private async Task SeedDeferredAssemblyDecisionAsync(string coordinatorRunId, AssemblyReviewDecision decision)
+    private async Task SetPlanReviewStateAsync(int workPlanId)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
-        {
-            RunId = coordinatorRunId,
-            DecisionJson = System.Text.Json.JsonSerializer.Serialize(decision, JsonDefaults.Options),
-            CreatedAt = DateTimeOffset.UtcNow,
-        });
+        var plan = await db.WorkPlans.FirstAsync(p => p.Id == workPlanId);
+        plan.Status = WorkPlanStatus.InReview;
+        plan.AssemblyStage = AssemblyStage.Review;
+        plan.IntegrationBranch = "agentweaver/integration/recover";
+        plan.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
+    }
+
+    private async Task SeedDeferredAssemblyDecisionAsync(string coordinatorRunId, AssemblyReviewDecision decision)
+    {
+        await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
+            _scopeFactory, coordinatorRunId, decision, CancellationToken.None);
     }
 
     private async Task SeedCoordinatorRunAsync(string coordinatorRunId)

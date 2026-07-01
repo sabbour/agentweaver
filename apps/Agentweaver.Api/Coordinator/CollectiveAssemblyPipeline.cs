@@ -160,7 +160,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             RunStartedAt: request.RunStartedAt,
             RepositoryPath: request.RepositoryPath,
             ModelSource: request.ModelSource,
-            ModelId: request.ModelId);
+            ModelId: request.ModelId,
+            TerminalStatus: request.TerminalStatus,
+            MergeResult: request.MergeResult);
 
         await scribe.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
     }

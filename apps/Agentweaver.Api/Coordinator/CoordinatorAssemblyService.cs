@@ -27,6 +27,9 @@ public interface ICoordinatorAssembly
 {
     /// <summary>Launches the collective-assembly pipeline for a coordinator run (fire-and-forget).</summary>
     void StartAssembly(CoordinatorDispatchContext context);
+
+    /// <summary>Ensures the coordinator's final Scribe activity exists and runs for an already-terminal run.</summary>
+    void EnsureFinalScribe(Run coordinatorRun);
 }
 
 /// <summary>
@@ -56,6 +59,7 @@ public interface ICoordinatorAssembly
 /// </summary>
 public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 {
+    private const string AssemblyScribeSubtaskId = "assembly-scribe";
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly CoordinatorAssemblyStore _assemblyStore;
@@ -209,6 +213,30 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }, _appStopping);
     }
 
+    public void EnsureFinalScribe(Run coordinatorRun)
+    {
+        if (coordinatorRun.ParentRunId is not null
+            || !string.Equals(coordinatorRun.AgentName, "Coordinator", StringComparison.Ordinal))
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await EnsureFinalScribeAsync(coordinatorRun, _appStopping).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Coordinator final scribe recovery failed for run {RunId}",
+                    coordinatorRun.Id);
+            }
+        }, _appStopping);
+    }
+
     /// <summary>
     /// Drives the collective pipeline end to end. Exposed (internal) so tests can await the full run
     /// deterministically rather than racing the fire-and-forget background task.
@@ -232,6 +260,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 await WaitForBlockedAssemblySteeringAsync(
                     context, workPlanId, reason: null, edges, ct).ConfigureAwait(false);
                 return;
+            }
+
+            if (planStatus == WorkPlanStatus.InReview)
+            {
+                await ResumeInReviewAsync(context, workPlanId, subtasks, edges, ct).ConfigureAwait(false);
+                return;
+            }
+
+            if (planStatus == WorkPlanStatus.Assembling)
+            {
+                await _assemblyStore.SetStatusAndStageAsync(
+                    workPlanId, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
             }
 
             await RunAssemblyCoreAsync(context, workPlanId, subtasks, edges, ct).ConfigureAwait(false);
@@ -313,31 +353,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
-        // Eligible child branches in dependency (topological) order (D1). Only assemble_ready children
-        // with a worktree branch + changes contribute a branch; no-change completed children are valid
-        // eligible no-ops that contribute nothing to merge.
-        var orderedIds = AssemblyPlanning.TopologicalOrder(subtasks.Select(s => s.Id).ToList(), edges);
-        var childRunBySubtask = subtasks
-            .Where(s => !string.IsNullOrEmpty(s.ChildRunId))
-            .ToDictionary(s => s.Id, s => s.ChildRunId!);
-
-        var branchesInOrder = new List<string>();
-        var touchedFilesBySubtask = new Dictionary<int, IReadOnlySet<string>>();
-        var includedSubtaskIds = new List<int>();
-        foreach (var id in orderedIds)
-        {
-            if (!childRunBySubtask.TryGetValue(id, out var childRunId)) continue;
-            if (!RunId.TryParse(childRunId, out var parsed)) continue;
-            var run = await _runStore.GetAsync(parsed, ct).ConfigureAwait(false);
-            if (run is null) continue;
-            touchedFilesBySubtask[id] = AssemblyPlanning.ExtractTouchedFiles(run.Diff);
-            if (!string.IsNullOrEmpty(run.WorktreeBranch)
-                && !string.IsNullOrEmpty(run.Diff))
-            {
-                branchesInOrder.Add(run.WorktreeBranch);
-                includedSubtaskIds.Add(id);
-            }
-        }
+        var assemblyInputs = await BuildAssemblyInputsAsync(subtasks, edges, ct).ConfigureAwait(false);
+        var branchesInOrder = assemblyInputs.BranchesInOrder;
+        var touchedFilesBySubtask = assemblyInputs.TouchedFilesBySubtask;
+        var includedSubtaskIds = assemblyInputs.IncludedSubtaskIds;
 
         // D1 — build the COMBINED integration branch.
         var integrationRequest = new CollectiveIntegrationRequest(
@@ -421,29 +440,140 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             raiSafetyFlagged = rai.SafetyFlagged,
             hasChanges = integration.HasChanges,
         });
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory,
+            context.CoordinatorRunId,
+            context.SubmittingUser,
+            integrationBranch,
+            aggregateTreeHash,
+            ct).ConfigureAwait(false);
 
+        var decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+        if (decision is null)
+            return;
+
+        await ApplyReviewDecisionAsync(
+            context,
+            workPlanId,
+            edges,
+            integrationBranch,
+            aggregateTreeHash,
+            touchedFilesBySubtask,
+            decision,
+            ct).ConfigureAwait(false);
+    }
+
+    // -----------------------------------------------------------------------
+    // Post-approval: ONE merge -> ONE scribe -> complete.
+    // -----------------------------------------------------------------------
+
+    private async Task<CoordinatorAssemblyInputs> BuildAssemblyInputsAsync(
+        IReadOnlyCollection<Subtask> subtasks,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
+        var orderedIds = AssemblyPlanning.TopologicalOrder(subtasks.Select(s => s.Id).ToList(), edges);
+        var childRunBySubtask = subtasks
+            .Where(s => !string.IsNullOrEmpty(s.ChildRunId))
+            .ToDictionary(s => s.Id, s => s.ChildRunId!);
+
+        var branchesInOrder = new List<string>();
+        var touchedFilesBySubtask = new Dictionary<int, IReadOnlySet<string>>();
+        var includedSubtaskIds = new List<int>();
+        foreach (var id in orderedIds)
+        {
+            if (!childRunBySubtask.TryGetValue(id, out var childRunId)) continue;
+            if (!RunId.TryParse(childRunId, out var parsed)) continue;
+            var run = await _runStore.GetAsync(parsed, ct).ConfigureAwait(false);
+            if (run is null) continue;
+            touchedFilesBySubtask[id] = AssemblyPlanning.ExtractTouchedFiles(run.Diff);
+            if (!string.IsNullOrEmpty(run.WorktreeBranch)
+                && !string.IsNullOrEmpty(run.Diff))
+            {
+                branchesInOrder.Add(run.WorktreeBranch);
+                includedSubtaskIds.Add(id);
+            }
+        }
+
+        return new CoordinatorAssemblyInputs(branchesInOrder, touchedFilesBySubtask, includedSubtaskIds);
+    }
+
+    private async Task ResumeInReviewAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        List<Subtask> subtasks,
+        List<(int, int)> edges,
+        CancellationToken ct)
+    {
+        var persisted = await CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (persisted is null
+            || string.IsNullOrEmpty(persisted.IntegrationBranch)
+            || string.IsNullOrEmpty(persisted.AggregateTreeHash))
+        {
+            await _assemblyStore.SetStatusAndStageAsync(
+                workPlanId, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
+            await RunAssemblyCoreAsync(context, workPlanId, subtasks, edges, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var inputs = await BuildAssemblyInputsAsync(subtasks, edges, ct).ConfigureAwait(false);
+        var decision = string.IsNullOrEmpty(persisted.DecisionJson)
+            ? await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false)
+            : JsonSerializer.Deserialize<AssemblyReviewDecision>(persisted.DecisionJson, JsonDefaults.Options);
+
+        if (decision is null)
+            return;
+
+        await ApplyReviewDecisionAsync(
+            context,
+            workPlanId,
+            edges,
+            persisted.IntegrationBranch,
+            persisted.AggregateTreeHash,
+            inputs.TouchedFilesBySubtask,
+            decision,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<AssemblyReviewDecision?> AwaitReviewDecisionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
         var decisionTask = _reviewGate.ArmAsync(context.CoordinatorRunId, context.SubmittingUser, ct);
         _ = PollDeferredAssemblyReviewDecisionAsync(context, ct);
-        AssemblyReviewDecision decision;
         try
         {
             var completed = await Task.WhenAny(decisionTask, Task.Delay(_reviewTimeout)).ConfigureAwait(false);
             if (completed != decisionTask)
             {
                 await ReviewTimeoutAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
-                return;
+                return null;
             }
 
-            decision = await decisionTask.ConfigureAwait(false);
+            return await decisionTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             _logger.LogInformation(
                 "Collective assembly: review wait cancelled for run {RunId}; leaving in_review",
                 context.CoordinatorRunId);
-            return;
+            return null;
         }
+    }
 
+    private async Task ApplyReviewDecisionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        string integrationBranch,
+        string aggregateTreeHash,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        AssemblyReviewDecision decision,
+        CancellationToken ct)
+    {
         if (decision.Approved)
         {
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new { workPlanId });
@@ -459,10 +589,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
-        // Pure decline (neither approved nor request_changes): terminal assembly_declined.
         const string declineReason = "assembly_declined";
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.AssemblyDeclined, null, ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyDeclined, new
         {
             workPlanId,
@@ -474,13 +605,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Declined, declineReason, ct).ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(context, workPlanId, terminalStatus: RunStatus.Declined.ToApiString(), mergeResult: declineReason, ct)
+            .ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly: run {RunId} declined", context.CoordinatorRunId);
     }
-
-    // -----------------------------------------------------------------------
-    // Post-approval: ONE merge -> ONE scribe -> complete.
-    // -----------------------------------------------------------------------
 
     private async Task PollDeferredAssemblyReviewDecisionAsync(CoordinatorDispatchContext context, CancellationToken ct)
     {
@@ -498,20 +627,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             AssemblyReviewDecision? decision;
             try
             {
-                using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-                var row = await db.DeferredDecisions
-                    .FirstOrDefaultAsync(d => d.RunId == context.CoordinatorRunId, ct)
-                    .ConfigureAwait(false);
-                if (row is null)
+                var row = await CoordinatorAssemblyReviewPersistence.GetAsync(
+                    _scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
+                if (row is null || string.IsNullOrEmpty(row.DecisionJson))
                     continue;
 
                 decision = JsonSerializer.Deserialize<AssemblyReviewDecision>(row.DecisionJson, JsonDefaults.Options);
-                var deleted = await db.DeferredDecisions
-                    .Where(d => d.RunId == context.CoordinatorRunId)
-                    .ExecuteDeleteAsync(ct)
-                    .ConfigureAwait(false);
-                if (deleted == 0 || decision is null)
+                if (decision is null)
                     continue;
             }
             catch (OperationCanceledException)
@@ -534,6 +656,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
     }
 
+    private sealed record CoordinatorAssemblyInputs(
+        List<string> BranchesInOrder,
+        Dictionary<int, IReadOnlySet<string>> TouchedFilesBySubtask,
+        List<int> IncludedSubtaskIds);
+
     private async Task CompleteAfterApprovalAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -545,6 +672,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // in_review -> assembling (during merge/scribe).
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Assembling, AssemblyStage.Merge, ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeStarted, new { workPlanId, integrationBranch });
 
@@ -581,6 +710,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             await TerminalizeCoordinatorRunAsync(
                 context.CoordinatorRunId, RunStatus.MergeFailed, $"assembly_merge_failed: {mergeReason}", ct)
                 .ConfigureAwait(false);
+            await RunCoordinatorScribeAsync(
+                context,
+                workPlanId,
+                terminalStatus: RunStatus.MergeFailed.ToApiString(),
+                mergeResult: mergeReason,
+                ct).ConfigureAwait(false);
             await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
             _logger.LogWarning("Collective assembly: merge failed for run {RunId} ({Reason})",
                 context.CoordinatorRunId, merge.Reason);
@@ -593,38 +728,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             commitHash = merge.CommitHash,
         });
 
-        // ── ONE collective scribe ────────────────────────────────────────────────────────────────
-        await _assemblyStore.SetStageAsync(workPlanId, AssemblyStage.Scribe, ct).ConfigureAwait(false);
-        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeStarted, new { workPlanId });
-
-        var scribeSucceeded = true;
-        try
-        {
-            await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
-                context.CoordinatorRunId,
-                context.ProjectId?.Value.ToString(),
-                AgentName: "coordinator",
-                context.RepositoryPath,
-                ModelSource.GitHubCopilot.ToString(),
-                ModelId: null,
-                RunStartedAt: DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // Scribe is best-effort; a failure must not fail the (already merged) assembly.
-            scribeSucceeded = false;
-            _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
-                context.CoordinatorRunId);
-            Emit(context.CoordinatorRunId, "run.scribe_failed", new
-            {
-                workPlanId,
-                reason = ex.Message,
-            });
-        }
-
-        if (scribeSucceeded)
-            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.Completed.ToApiString(),
+            mergeResult: merge.CommitHash,
+            ct).ConfigureAwait(false);
 
         // ── Coordinator decision promotion ───────────────────────────────────────────────────────
         // The per-run Scribe auto-merges only learning/pattern/update entries; architectural and
@@ -651,6 +760,153 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly complete for run {RunId}", context.CoordinatorRunId);
+    }
+
+    private async Task RunCoordinatorScribeAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        string terminalStatus,
+        string? mergeResult,
+        CancellationToken ct)
+    {
+        await _assemblyStore.SetStageAsync(workPlanId, AssemblyStage.Scribe, ct).ConfigureAwait(false);
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeStarted, new { workPlanId });
+
+        var coordinatorRun = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (coordinatorRun is null)
+            return;
+
+        var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
+            coordinatorRun,
+            terminalStatus,
+            mergeResult,
+            ct).ConfigureAwait(false);
+        if (!shouldExecute || scribeRun is null)
+        {
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+            return;
+        }
+
+        var scribeSucceeded = true;
+        try
+        {
+            await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
+                context.CoordinatorRunId,
+                context.ProjectId?.Value.ToString(),
+                AgentName: "coordinator",
+                context.RepositoryPath,
+                ModelSource.GitHubCopilot.ToString(),
+                ModelId: coordinatorRun.ModelId,
+                RunStartedAt: coordinatorRun.StartedAt,
+                TerminalStatus: terminalStatus,
+                MergeResult: mergeResult), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            scribeSucceeded = false;
+            _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
+                context.CoordinatorRunId);
+            Emit(context.CoordinatorRunId, "run.scribe_failed", new
+            {
+                workPlanId,
+                reason = ex.Message,
+            });
+            await _runStore.TrySetTerminalStatusAsync(
+                scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ex.Message, ct).ConfigureAwait(false);
+        }
+
+        if (scribeSucceeded)
+        {
+            await _runStore.TrySetTerminalStatusAsync(
+                scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, terminalStatus, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+        }
+    }
+
+    private async Task EnsureFinalScribeAsync(Run coordinatorRun, CancellationToken ct)
+    {
+        var context = new CoordinatorDispatchContext(
+            coordinatorRun.Id.ToString(),
+            coordinatorRun.RepositoryPath,
+            coordinatorRun.OriginatingBranch,
+            coordinatorRun.SubmittingUser,
+            coordinatorRun.ProjectId);
+
+        var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
+            coordinatorRun,
+            coordinatorRun.Status.ToApiString(),
+            coordinatorRun.Result,
+            ct).ConfigureAwait(false);
+        if (!shouldExecute || scribeRun is null)
+            return;
+
+        try
+        {
+            await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
+                context.CoordinatorRunId,
+                context.ProjectId?.Value.ToString(),
+                AgentName: "coordinator",
+                context.RepositoryPath,
+                coordinatorRun.ModelSource.ToString(),
+                coordinatorRun.ModelId,
+                RunStartedAt: coordinatorRun.StartedAt,
+                TerminalStatus: coordinatorRun.Status.ToApiString(),
+                MergeResult: coordinatorRun.Result), ct).ConfigureAwait(false);
+
+            await _runStore.TrySetTerminalStatusAsync(
+                scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, coordinatorRun.Result, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Coordinator final scribe failed for run {RunId} (non-fatal)", coordinatorRun.Id);
+            await _runStore.TrySetTerminalStatusAsync(
+                scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ex.Message, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<(Run? Run, bool ShouldExecute)> EnsureScribeActivityAsync(
+        Run coordinatorRun,
+        string terminalStatus,
+        string? mergeResult,
+        CancellationToken ct)
+    {
+        var existingChildren = await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString(), ct).ConfigureAwait(false);
+        var existingCompleted = existingChildren.FirstOrDefault(r =>
+            string.Equals(r.SubtaskId, AssemblyScribeSubtaskId, StringComparison.Ordinal)
+            && string.Equals(r.AgentName, "Scribe", StringComparison.Ordinal)
+            && r.Status == RunStatus.Completed);
+        if (existingCompleted is not null)
+            return (existingCompleted, false);
+
+        var scribeRun = new Run
+        {
+            Id = RunId.New(),
+            RepositoryPath = coordinatorRun.RepositoryPath,
+            OriginatingBranch = coordinatorRun.OriginatingBranch,
+            ModelSource = coordinatorRun.ModelSource,
+            Task = $"Collective assembly scribe for {coordinatorRun.Id} ({terminalStatus})",
+            SubmittingUser = coordinatorRun.SubmittingUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = coordinatorRun.ProjectId,
+            ModelId = coordinatorRun.ModelId,
+            AgentName = "Scribe",
+            ParentRunId = coordinatorRun.Id.ToString(),
+            SubtaskId = AssemblyScribeSubtaskId,
+            Result = mergeResult,
+        };
+
+        await _runStore.InsertAsync(scribeRun, ct).ConfigureAwait(false);
+        return (scribeRun, true);
+    }
+
+    private async Task<Run?> TryGetCoordinatorRunAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var parsedRunId))
+            return null;
+
+        return await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -732,6 +988,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await ResetSubtasksToPendingAsync(rejection.SubtaskIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.Dispatching, edges, ct)
             .ConfigureAwait(false);
@@ -835,6 +1093,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Failed, "rai_blocked", ct).ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.Failed.ToApiString(),
+            mergeResult: "rai_blocked",
+            ct).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogWarning("Collective assembly RAI-blocked run {RunId}", context.CoordinatorRunId);
     }
@@ -857,6 +1121,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Failed, "review_timeout", ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.Failed.ToApiString(),
+            mergeResult: "review_timeout",
+            ct).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogWarning("Collective assembly review timed out for run {RunId}", context.CoordinatorRunId);
     }
@@ -877,6 +1149,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.MergeFailed, $"needs_resolution: {reason}", ct).ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.MergeFailed.ToApiString(),
+            mergeResult: reason,
+            ct).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogWarning("Collective assembly needs resolution for run {RunId}: {Reason}",
             context.CoordinatorRunId, reason);
@@ -919,6 +1197,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
         await TerminalizeCoordinatorRunAsync(context.CoordinatorRunId, RunStatus.Failed, reason, ct)
             .ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.Failed.ToApiString(),
+            mergeResult: reason,
+            ct).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
     }
 

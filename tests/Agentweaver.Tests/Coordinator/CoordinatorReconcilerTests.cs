@@ -367,6 +367,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     {
         public List<CoordinatorDispatchContext> Started { get; } = [];
         public void StartAssembly(CoordinatorDispatchContext context) => Started.Add(context);
+        public void EnsureFinalScribe(Run coordinatorRun) { }
     }
 
     private sealed class RecordingDispatch : ICoordinatorDispatch

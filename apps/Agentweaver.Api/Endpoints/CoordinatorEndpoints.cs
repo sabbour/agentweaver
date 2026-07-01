@@ -291,14 +291,14 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
         TargetFiles: request.TargetFiles,
         Reviewer: caller.User);
 
+    await PersistAssemblyReviewDecisionAsync(
+        coordinatorRunId, decision, scopeFactory, CancellationToken.None).ConfigureAwait(false);
+
     var result = reviewGate.TrySubmit(coordinatorRunId, caller.User, decision, caller.GitHubLogin);
     if (result == Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.NotArmed
         && await IsAssemblyReviewPendingAsync(coordinatorRunId, scopeFactory, ct).ConfigureAwait(false))
     {
-        var deferred = await TryDeferAssemblyReviewDecisionAsync(
-            coordinatorRunId, decision, scopeFactory, logger, CancellationToken.None).ConfigureAwait(false);
-        if (deferred)
-            result = Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted;
+        result = Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted;
     }
 
     logger.LogInformation(
@@ -565,43 +565,14 @@ static async Task<bool> IsAssemblyReviewPendingAsync(
         .ConfigureAwait(false);
 }
 
-static async Task<bool> TryDeferAssemblyReviewDecisionAsync(
+static async Task PersistAssemblyReviewDecisionAsync(
     string coordinatorRunId,
     AssemblyReviewDecision decision,
     IServiceScopeFactory scopeFactory,
-    ILogger<Program> logger,
     CancellationToken ct)
 {
-    var json = JsonSerializer.Serialize(decision, JsonDefaults.Options);
-    using var scope = scopeFactory.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-    var existing = await db.DeferredDecisions.AsNoTracking()
-        .FirstOrDefaultAsync(d => d.RunId == coordinatorRunId, ct)
-        .ConfigureAwait(false);
-    if (existing is not null)
-        return false;
-
-    db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
-    {
-        RunId = coordinatorRunId,
-        DecisionJson = json,
-        CreatedAt = DateTimeOffset.UtcNow,
-    });
-
-    try
-    {
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-    }
-    catch (DbUpdateException)
-    {
-        return false;
-    }
-
-    logger.LogInformation(
-        "Assembly review decision for run {RunId} deferred for owner replica pickup",
-        coordinatorRunId);
-    return true;
+    await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
+        scopeFactory, coordinatorRunId, decision, ct).ConfigureAwait(false);
 }
 
 // Maps a persisted coordinator OutcomeSpec to the web-client-facing camelCase response.

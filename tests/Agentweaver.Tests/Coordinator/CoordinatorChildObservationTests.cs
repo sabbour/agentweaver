@@ -399,6 +399,7 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     {
         public int Started { get; private set; }
         public void StartAssembly(CoordinatorDispatchContext context) => Started++;
+        public void EnsureFinalScribe(Run coordinatorRun) { }
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

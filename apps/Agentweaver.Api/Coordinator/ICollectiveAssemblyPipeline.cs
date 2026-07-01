@@ -83,4 +83,6 @@ public sealed record CollectiveScribeRequest(
     string RepositoryPath,
     string ModelSource,
     string? ModelId,
-    DateTimeOffset RunStartedAt);
+    DateTimeOffset RunStartedAt,
+    string? TerminalStatus = null,
+    string? MergeResult = null);
