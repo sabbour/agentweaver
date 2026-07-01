@@ -723,12 +723,10 @@ public sealed class RunWorkflowFactory
             });
 
         // ----- Coordinator CHILD pipeline (B1) ---------------------------------------------
-        // Trimmed graph: agentInputStorer -> agent -> RAI (+ the existing RAI revise loop),
-        // then EVERY non-revision RAI outcome routes to childAssembleReady instead of the
-        // review gate. No review-gate RequestPort, no MergeExecutor, no ScribeTurnExecutor.
-        // The two edges are mutually exclusive and exhaustive over all RAI outputs, so a child
-        // can never hang: it either loops (revision under cap) or terminalizes assemble-ready
-        // (OK / RED / empty-diff no-op / revise-at-cap).
+        // Trimmed graph: agentInputStorer -> agent -> assemble-ready. Child runs no longer
+        // execute a per-child RaiTurnExecutor or launch a "-rai" sub-stream; the ONLY RAI pass
+        // for coordinator orchestration happens once at collective assembly on the integration
+        // branch. No review-gate RequestPort, no MergeExecutor, no ScribeTurnExecutor.
         //
         // INTENTIONAL DESIGN: child runs bypass the per-child human review gate.
         // Review happens at the aggregate level in CoordinatorAssemblyService (Phase 3), where
@@ -742,14 +740,7 @@ public sealed class RunWorkflowFactory
         {
             var childBuilder = new GraphDescriptorBuilder(agentInputStorer)
                 .AddEdge(agentInputStorer, agentBinding)
-                .AddEdge(agentBinding, raiBinding)
-                // RAI REVISE (iteration < cap) -> revision adapter -> loop back to agent
-                .AddEdge<AgentTurnOutput>(raiBinding, raiRevisionAdapter,
-                    output => output is not null && output.RaiRevisionRequired && output.Iteration < MaxIterations)
-                .AddEdge(raiRevisionAdapter, agentBinding, idempotent: true)
-                // Everything else (OK, RED, empty-diff no-op, revise-at-cap) -> assemble-ready terminal
-                .AddEdge<AgentTurnOutput>(raiBinding, childAssembleReady,
-                    output => output is not null && !(output.RaiRevisionRequired && output.Iteration < MaxIterations))
+                .AddEdge(agentBinding, childAssembleReady)
                 .WithOutputFrom(childAssembleReady);
             var childWf = childBuilder.Build();
             var childDescriptor = childBuilder.BuildDescriptor("agentweaver-workflow-child", "child");
@@ -1222,7 +1213,7 @@ public sealed class RunWorkflowFactory
     /// <summary>
     /// Launches a new streaming workflow run. When <paramref name="isChild"/> is true
     /// (the run carries <c>ParentRunId</c>), the trimmed coordinator CHILD pipeline is used:
-    /// agent + RAI terminating assemble-ready, with no per-child review gate / merge / scribe.
+    /// agent terminating assemble-ready, with no per-child RAI / review gate / merge / scribe.
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false)
     {

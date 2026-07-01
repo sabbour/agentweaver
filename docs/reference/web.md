@@ -161,7 +161,7 @@ The coordinator descriptor may include **loopback back-edges** (`loopback: true`
 
 #### Subtask node expansion
 
-Subtask nodes (`node_type: "subtask"`) are expandable cards. Each shows the assigned agent, selected model, phase, and a status badge. When a subtask has a `child_graph_ref` (i.e. the coordinator has dispatched that subtask to a child run), clicking **Expand pipeline** fetches the child run's `GraphDescriptor` from `GET /api/runs/{childRunId}/graph` and simultaneously subscribes to the child run's live SSE stream. The inline panel then renders the child pipeline as a horizontal row of node cards — one per node in the child descriptor — connected by arrow separators. Each inline card shows the same status badge, elapsed timer, role text, and optional status message as the full workflow graph. If the descriptor is not yet available (fetch in-flight), a hardcoded fallback pipeline (Agent → Rai → Assemble-ready) is shown immediately while the fetch completes.
+Subtask nodes (`node_type: "subtask"`) are expandable cards. Each shows the assigned agent, selected model, phase, and a status badge. When a subtask has a `child_graph_ref` (i.e. the coordinator has dispatched that subtask to a child run), clicking **Expand pipeline** fetches the child run's `GraphDescriptor` from `GET /api/runs/{childRunId}/graph` and simultaneously subscribes to the child run's live SSE stream. The inline panel then renders the child pipeline as a horizontal row of node cards — one per node in the child descriptor — connected by arrow separators. Each inline card shows the same status badge, elapsed timer, role text, and optional status message as the full workflow graph. If the descriptor is not yet available (fetch in-flight), a hardcoded fallback pipeline (Agent → Assemble-ready) is shown immediately while the fetch completes.
 
 The SSE subscription for each inline child graph is scoped to the expansion: it starts when the subtask is expanded and tears down when collapsed. At most one child run is subscribed per open panel; no background subscriptions are held for collapsed subtasks.
 
@@ -235,7 +235,7 @@ The workflow run page (`/projects/:projectId/runs/:runId/workflow`) shows a live
 - An **elapsed timer** that ticks live from the `started` event's `timestamp_utc` until the corresponding `completed`/`failed` event
 - An optional **status message line** — when the backend emits a `workflow.step` event with a `message` field, that text is rendered below the role description in a muted colour. It takes priority over the hardcoded fallback description; omitting `message` restores the default text.
 
-For coordinator child runs (runs with a non-null `parent_run_id`), the page renders a trimmed three-node pipeline: Agent → Rai → Assemble-ready. Human Review, Merge, and Scribe are never shown on a child run — they execute once on the collective output at the coordinator level. This trimming is enforced defensively in two ways: (1) the page renders a **loading spinner** (not any graph) until the run detail resolves and child-ness is known, so a child run never flashes the full Agent → … → Scribe placeholder before the trimmed pipeline is selected; and (2) if a full-variant `GraphDescriptor` somehow arrives for a child run (e.g., a stale cache entry), the page discards it and falls back to the hardcoded child pipeline.
+For coordinator child runs (runs with a non-null `parent_run_id`), the page renders a trimmed two-node pipeline: Agent → Assemble-ready. RAI, Human Review, Merge, and Scribe are never shown on a child run — they execute once on the collective output at the coordinator level. This trimming is enforced defensively in two ways: (1) the page renders a **loading spinner** (not any graph) until the run detail resolves and child-ness is known, so a child run never flashes the full Agent → … → Scribe placeholder before the trimmed pipeline is selected; and (2) if a full-variant `GraphDescriptor` somehow arrives for a child run (e.g., a stale cache entry), the page discards it and falls back to the hardcoded child pipeline.
 
 #### Child run View-run resolution
 
@@ -401,7 +401,7 @@ The `node_type` field on `GraphNode` drives card dimensions and visual shape in 
 
 The `data-node-type` HTML attribute on each rendered card card reflects the node's `node_type` value (or `"default"` when absent), enabling CSS-based targeting in tests and tooling.
 
-**Fallback** — when the descriptor endpoint returns 404 or is unavailable, the page falls back to the hardcoded five-stage pipeline (`Agent → Rai → Review → Merge → Scribe`) for a normal run or the trimmed three-stage pipeline (`Agent → Rai → Assemble-ready`) for a coordinator child run, so nothing regresses until the backend ships.
+**Fallback** — when the descriptor endpoint returns 404 or is unavailable, the page falls back to the hardcoded five-stage pipeline (`Agent → Rai → Review → Merge → Scribe`) for a normal run or the trimmed two-stage pipeline (`Agent → Assemble-ready`) for a coordinator child run, so nothing regresses until the backend ships.
 
 #### Pipeline stages (hardcoded fallback / full variant)
 

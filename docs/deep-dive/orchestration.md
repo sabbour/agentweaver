@@ -165,7 +165,7 @@ Cycle breaking is essential. Model-generated plans can accidentally create circu
 
 The dispatcher repeatedly asks: **which pending subtasks have all dependencies completed?** Those subtasks form the ready frontier.
 
-For each ready subtask, it launches a child run in its own git worktree and branch. Child runs are intentionally trimmed: they perform agent work and safety review, then stop at an assemble-ready boundary. They do not each perform human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
+For each ready subtask, it launches a child run in its own git worktree and branch. Child runs are intentionally trimmed: they perform agent work, then stop at an assemble-ready boundary. They do not each perform RAI, human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
 
 When a child reaches assemble-ready/completed, the dispatcher rebuilds the coordinator integration branch from the successful child branches in dependency order. Dependents are then branched from that integration branch, so they can read files produced by their prerequisites without concurrent siblings sharing one mutable git index.
 
@@ -318,7 +318,7 @@ Agentweaver uses run origin to preserve intent:
 
 - **Manual runs** are user-started and usually go through the full workflow.
 - **Coordinator parent runs** own the team-level plan, assembly, review, merge, and scribe phases.
-- **Coordinator child runs** execute one subtask and stop at the assemble-ready boundary after agent work and safety review.
+- **Coordinator child runs** execute one subtask and stop at the assemble-ready boundary after agent work.
 - **Backlog pickup runs** are coordinator runs created by the heartbeat loop for unattended ready tasks.
 
 The key difference is not the storage shape; it is the responsibility boundary. Child runs should not merge independently because they are fragments of the parent outcome. Parent runs should not redo child work because they coordinate, assemble, and gate the whole result.

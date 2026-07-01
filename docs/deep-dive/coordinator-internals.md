@@ -93,7 +93,7 @@ The durable artifacts are:
 
 - **Intent is confirmed before execution.** The coordinator can draft and revise, but decomposition is authoritative only after confirmation or unattended confirmation.
 - **Plan before dispatch.** Child runs are launched from a persisted WorkPlan, never from transient model text.
-- **One parent owns the combined outcome.** Children do agent work and safety review; the parent owns collective review, merge, and scribe.
+- **One parent owns the combined outcome.** Children do agent work; the parent owns the collective RAI pass, review, merge, and scribe.
 - **The dependency graph is the hard ordering rule.** A subtask can run only when every dependency is satisfied.
 - **`assemble_ready` and `completed` satisfy dependencies.** `failed` and `rai_flagged` do not; their dependents are blocked or failed.
 - **Isolation is advisory.** Child subtasks share the orchestration worktree. File-scope declarations and conservative conflict checks are what reduce clobbering.

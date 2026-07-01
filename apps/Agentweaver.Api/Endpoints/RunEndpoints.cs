@@ -503,7 +503,7 @@ app.MapGet("/api/runs/{id}/stream", async (
 // GET /api/runs/{id}/events — return the persisted RunEvents for a run, ordered by sequence.
 // This is the REST seed the web execution timeline uses to render a finished run's log without
 // holding an SSE connection. For coordinator CHILD runs (Feature 008) the trimmed pipeline's
-// agent + RAI events are persisted at the assemble-ready terminal, so this returns a non-empty,
+// agent events are persisted at the assemble-ready terminal, so this returns a non-empty,
 // replayable log after the in-memory stream entry is evicted. Auth mirrors the other
 // /api/runs endpoints (owner-scoped Bearer key).
 app.MapGet("/api/runs/{id}/events", async (

@@ -117,15 +117,15 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
     // ── Child variant ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void ChildVariant_IsTrimmedAgentRaiAssemble()
+    public void ChildVariant_IsTrimmedAgentAssemble()
     {
         var d = Factory.GetGraphDescriptor(isChild: true);
 
         d.Variant.Should().Be("child");
         d.StartNodeId.Should().Be("agent");
-        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[] { "agent", "rai", "assemble-ready" });
-        // The trimmed child pipeline has no per-child review / merge / scribe.
-        d.Nodes.Select(n => n.Id).Should().NotContain(new[] { "review", "merge", "scribe" });
+        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[] { "agent", "assemble-ready" });
+        // The trimmed child pipeline has no per-child RAI / review / merge / scribe.
+        d.Nodes.Select(n => n.Id).Should().NotContain(new[] { "rai", "review", "merge", "scribe" });
 
         var assemble = d.Nodes.Single(n => n.Id == "assemble-ready");
         assemble.Label.Should().Be("Assemble-ready");
@@ -133,25 +133,20 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
 
         // node_type taxonomy: agent turns are "agent", the assemble-ready checkpoint is "terminal".
         d.Nodes.Single(n => n.Id == "agent").NodeType.Should().Be("agent");
-        d.Nodes.Single(n => n.Id == "rai").NodeType.Should().Be("agent");
         assemble.NodeType.Should().Be("terminal");
     }
 
     [Fact]
-    public void ChildVariant_HasExpectedEdgesWithRaiLoopback()
+    public void ChildVariant_HasExpectedDirectEdgeToAssembleReady()
     {
         var d = Factory.GetGraphDescriptor(isChild: true);
 
         var edges = d.Edges.Select(e => E(e.From, e.To)).ToHashSet();
         edges.Should().BeEquivalentTo(new[]
         {
-            E("agent", "rai"),
-            E("rai", "agent"),            // RAI revise loop
-            E("rai", "assemble-ready"),
+            E("agent", "assemble-ready"),
         });
 
-        Find(d, "rai", "agent")!.Loopback.Should().BeTrue();
-        Find(d, "agent", "rai")!.Loopback.Should().BeFalse();
-        Find(d, "rai", "assemble-ready")!.Loopback.Should().BeFalse();
+        Find(d, "agent", "assemble-ready")!.Loopback.Should().BeFalse();
     }
 }

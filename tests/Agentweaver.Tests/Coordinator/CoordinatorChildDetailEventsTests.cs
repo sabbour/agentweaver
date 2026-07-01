@@ -18,7 +18,7 @@ namespace Agentweaver.Tests.Coordinator;
 /// full 5-stage graph.</item>
 /// <item><c>GET /api/runs/{id}/events</c> must return the persisted RunEvents (ordered by sequence)
 /// for a run, so a finished child's execution log is non-empty and replayable after the in-memory
-/// stream entry is evicted. The assemble-ready terminal persists the child's agent + RAI stream via
+/// stream entry is evicted. The assemble-ready terminal persists the child's agent stream via
 /// <see cref="RunWorkflowFactory.PersistRunEventsAsync"/>; this test drives that exact production
 /// mechanism (real <see cref="RunStreamStore"/> + real <see cref="RunWorkflowFactory"/>) and then
 /// reads the events back through the REST endpoint.</item>
@@ -88,21 +88,20 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
     // GET /api/runs/{id}/events — persisted execution log for a finished child.
     // =========================================================================
     [Fact]
-    public async Task GetEvents_AfterChildAssembleReady_ReturnsPersistedAgentAndRaiEvents()
+    public async Task GetEvents_AfterChildAssembleReady_ReturnsPersistedAgentEvents()
     {
         var parentRunId = RunId.New().ToString();
         var childRunId = await InsertChildRunAsync(CoordinatorWebApplicationFactory.OwnerUser, parentRunId, "3");
 
         // Drive the SAME persistence mechanism the assemble-ready terminal uses
         // (RunWatchLoopService -> RunWorkflowFactory.PersistRunEventsAsync): record the child's
-        // trimmed-pipeline stream (agent + RAI + assemble-ready), complete it, then persist.
+        // trimmed-pipeline stream (agent + assemble-ready), complete it, then persist.
         var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
         var workflowFactory = _factory.Services.GetRequiredService<RunWorkflowFactory>();
 
         var entry = streamStore.Create(childRunId, CoordinatorWebApplicationFactory.OwnerUser);
         entry.RecordNext(EventTypes.RunStarted, new { runId = childRunId });
         entry.RecordNext(EventTypes.AgentMessage, new { messageId = "m1", content = "child agent did the subtask" });
-        entry.RecordNext(EventTypes.RaiVerdict, new { verdict = "green", runId = childRunId });
         entry.RecordNext(EventTypes.RunAssembleReady, new { runId = childRunId, parentRunId, subtaskId = "3" });
         streamStore.Complete(childRunId);
 
@@ -117,8 +116,8 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
         events.Should().BeInAscendingOrder(e => e.Sequence, "events must be ordered by sequence");
         events.Select(e => e.Type).Should().Contain(EventTypes.AgentMessage,
             "the persisted log must include the child's agent events");
-        events.Select(e => e.Type).Should().Contain(EventTypes.RaiVerdict,
-            "the persisted log must include the child's RAI verdict event");
+        events.Select(e => e.Type).Should().NotContain(EventTypes.RaiVerdict,
+            "child runs no longer launch a per-child RAI sub-stream");
         events.Select(e => e.Type).Should().Contain(EventTypes.RunAssembleReady,
             "the persisted log must include the child's assemble-ready terminal");
     }
