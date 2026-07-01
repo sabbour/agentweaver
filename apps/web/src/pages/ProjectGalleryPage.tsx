@@ -577,7 +577,12 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
                 )}
               </div>
               <div className={styles.dialogRightCol}>
-                <BlueprintPicker active={d.open} value={d.blueprint} onChange={d.setBlueprint} />
+                <BlueprintPicker
+                  active={d.open}
+                  value={d.blueprint}
+                  onChange={d.setBlueprint}
+                  targetRepository={d.sourceRepository}
+                />
               </div>
             </div>
           </DialogContent>

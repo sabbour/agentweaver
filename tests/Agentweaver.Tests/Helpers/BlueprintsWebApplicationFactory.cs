@@ -129,6 +129,15 @@ public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Prog
 public sealed class StubBlueprintGenerator : IBlueprintGenerator
 {
     public string Response { get; set; } = "{}";
+    public string? LastTargetRepository { get; private set; }
 
-    public Task<string> GenerateRawAsync(string description, CancellationToken ct, string? userId = null) => Task.FromResult(Response);
+    public Task<string> GenerateRawAsync(
+        string description,
+        CancellationToken ct,
+        string? userId = null,
+        string? targetRepository = null)
+    {
+        LastTargetRepository = targetRepository;
+        return Task.FromResult(Response);
+    }
 }

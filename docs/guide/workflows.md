@@ -74,7 +74,7 @@ Choose **Visual editor** to build a workflow as a node graph. Drag roles onto th
 
 ### Generate from description
 
-Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit.
+Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL — generation keeps that target repository in the prompt context so the draft acts against the intended repo.
 
 ```mermaid
 flowchart LR

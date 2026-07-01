@@ -20,7 +20,8 @@ This document covers the server-side generation capability behind
 | `WorkflowDefinitionEndpoints` | Hosts the `POST .../workflows/generate` endpoint; resolves the project's cast roles and maps results/errors to HTTP. |
 
 All prompt construction, schema context, and LLM invocation live **server-side**
-(FR-057). The client only sends a description and renders the returned YAML.
+(FR-057). The client sends a description plus project target-repository context
+when available, then renders the returned YAML.
 
 ## Endpoint
 
@@ -35,6 +36,8 @@ Body: { "description": "string" }
 
 The response YAML is a draft — identical content is returned to the MCP server and
 the Web UI (FR-059). The model provider is fixed to GitHub Copilot (Principle II).
+For GitHub-backed projects, the server also passes the project's source repository
+into the generation prompt so generated node prompts keep acting against that repo.
 
 ## Prompt design (FR-057)
 
@@ -59,10 +62,14 @@ contains:
    `software-delivery`, `bug-fix`, and `agent-evaluation` patterns (read from
    `packages/Agentweaver.Squad/Catalog/Resources/workflows/`). These demonstrate
    correct structure, gate routing, and complete verdict branching.
-6. **The user's description** — fenced as untrusted data (`<<<DESCRIPTION>>>` …
+6. **Target repository context** — fenced as untrusted data
+   (`<<<TARGET_REPOSITORY>>>` … `<<<END_TARGET_REPOSITORY>>>`). The generator
+   receives the project source repository and also extracts GitHub URLs from the
+   description so workflows keep repository/issue targets instead of dropping them.
+7. **The user's description** — fenced as untrusted data (`<<<DESCRIPTION>>>` …
    `<<<END_DESCRIPTION>>>`) with an instruction to treat it as data, never as
    instructions to follow (prompt-injection hardening).
-7. **Output instruction** — "Return ONLY valid YAML for a WorkflowDefinition. No
+8. **Output instruction** — "Return ONLY valid YAML for a WorkflowDefinition. No
    markdown fences. No commentary."
 
 ## Correction pass (FR-060)

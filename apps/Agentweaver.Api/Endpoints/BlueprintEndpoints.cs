@@ -32,7 +32,8 @@ public static class BlueprintEndpoints
                 return Results.BadRequest(new { error = "description is required." });
 
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            var result = await blueprints.GenerateAsync(request.Description!, ct, caller.User);
+            var result = await blueprints.GenerateAsync(
+                request.Description!, ct, caller.User, request.TargetRepository);
             if (!result.Succeeded)
                 return Results.UnprocessableEntity(new
                 {
