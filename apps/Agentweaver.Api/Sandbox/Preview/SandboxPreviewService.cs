@@ -42,6 +42,11 @@ public interface ISandboxPreviewService
     /// </summary>
     Task<PreviewSession> StartPreviewAsync(string runId, int targetPort, string ownerUserId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Lists active previews for <paramref name="runId"/> from HTTPRoute annotations. Replica-safe.
+    /// </summary>
+    Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default);
+
     /// <summary>Bumps the preview's idle expiry to now + IdleTimeoutMinutes. Idempotent (404 ignored).</summary>
     Task KeepAliveAsync(string token, CancellationToken ct = default);
 
@@ -111,6 +116,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 "SandboxClaim reports a bound pod (status.phase=Bound).");
 
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        await EnforcePreviewLimitsAsync(sanitizedRun, ct).ConfigureAwait(false);
+
         var token = PreviewToken.Generate();
         var now = _clock.GetUtcNow();
         var serviceName = PreviewReaper.ServiceName(token);
@@ -168,7 +175,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         // e. HTTPRoute (gateway.networking.k8s.io/v1) attaching to the shared preview Gateway.
         var expiresAt = now.AddMinutes(_options.IdleTimeoutMinutes);
         var maxUntil = now.AddHours(_options.MaxLifetimeHours);
-        var httpRoute = BuildHttpRoute(token, sanitizedRun, ownerUserId, hostname, serviceName, expiresAt, maxUntil);
+        var httpRoute = BuildHttpRoute(
+            token, sanitizedRun, ownerUserId, podName, targetPort, hostname, serviceName, now, expiresAt, maxUntil);
 
         try
         {
@@ -229,6 +237,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 "SandboxPreviewService: keepalive bumped preview {Fingerprint} idle expiry to {ExpiresAt}",
                 Fingerprint(token), Rfc3339(expiresAt));
         }
+
         catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             _logger.LogInformation(
@@ -240,6 +249,27 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         // seam (KubernetesSandboxExecutor claim retention) exposes a per-run renew hook. Today the
         // claim TTL is set at creation; the annotation bump above keeps the preview route alive and
         // the reaper's orphan check covers the pod-gone case, so keepalive never blocks on this.
+    }
+
+    public async Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default)
+    {
+        EnsureReady();
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        var raw = await _client!.CustomObjects.ListNamespacedCustomObjectAsync(
+            HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural,
+            labelSelector: $"{PreviewReaper.LabelPartOf}={PreviewReaper.LabelPartOfValue}",
+            cancellationToken: ct).ConfigureAwait(false);
+
+        return ParsePreviewRoutes(raw)
+            .Where(r => string.Equals(r.SanitizedRun, sanitizedRun, StringComparison.Ordinal))
+            .Select(r => new PreviewSession(
+                r.Token,
+                runId,
+                r.PodName ?? "",
+                r.TargetPort ?? 0,
+                $"https://{PreviewToken.HostLabel(r.Token)}.{_options.ZoneSuffix}",
+                PreviewReaper.ParseTimestamp(r.StartedAt) ?? DateTimeOffset.MinValue))
+            .ToList();
     }
 
     public async Task StopPreviewAsync(string token, CancellationToken ct = default)
@@ -435,9 +465,36 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             : null;
     }
 
+    private async Task EnforcePreviewLimitsAsync(string sanitizedRun, CancellationToken ct)
+    {
+        object raw;
+        try
+        {
+            raw = await _client!.CustomObjects.ListNamespacedCustomObjectAsync(
+                HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural,
+                labelSelector: $"{PreviewReaper.LabelPartOf}={PreviewReaper.LabelPartOfValue}",
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        var routes = ParsePreviewRoutes(raw);
+
+        var maxPerRun = Math.Max(1, _options.MaxConcurrentSessionsPerRun);
+        var globalMax = Math.Max(1, _options.MaxConcurrentSessionsGlobal);
+        if (routes.Count(r => string.Equals(r.SanitizedRun, sanitizedRun, StringComparison.Ordinal)) >= maxPerRun)
+            throw new PortForwardLimitExceededException(
+                $"Port-forward session limit exceeded for run {sanitizedRun}. Limit: {maxPerRun}.");
+        if (routes.Count >= globalMax)
+            throw new PortForwardLimitExceededException(
+                $"Global port-forward session limit exceeded. Limit: {globalMax}.");
+    }
+
     private object BuildHttpRoute(
-        string token, string sanitizedRun, string ownerUserId, string hostname,
-        string serviceName, DateTimeOffset expiresAt, DateTimeOffset maxUntil) => new
+        string token, string sanitizedRun, string ownerUserId, string podName, int targetPort, string hostname,
+        string serviceName, DateTimeOffset startedAt, DateTimeOffset expiresAt, DateTimeOffset maxUntil) => new
     {
         apiVersion = $"{HttpRouteGroup}/{HttpRouteVersion}",
         kind = "HTTPRoute",
@@ -457,6 +514,9 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 [PreviewReaper.AnnotationRun] = sanitizedRun,
                 [PreviewReaper.AnnotationToken] = token,
                 [PreviewReaper.AnnotationOwner] = ownerUserId ?? "",
+                [PreviewReaper.AnnotationPod] = podName,
+                [PreviewReaper.AnnotationTargetPort] = targetPort.ToString(CultureInfo.InvariantCulture),
+                [PreviewReaper.AnnotationStartedAt] = Rfc3339(startedAt),
             },
         },
         spec = new
@@ -577,7 +637,10 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 token,
                 GetString(ann, PreviewReaper.AnnotationRun) ?? "",
                 GetString(ann, PreviewReaper.AnnotationExpiresAt),
-                GetString(ann, PreviewReaper.AnnotationMaxUntil)));
+                GetString(ann, PreviewReaper.AnnotationMaxUntil),
+                GetString(ann, PreviewReaper.AnnotationPod),
+                TryParseInt(GetString(ann, PreviewReaper.AnnotationTargetPort)),
+                GetString(ann, PreviewReaper.AnnotationStartedAt)));
         }
 
         return result;
@@ -613,6 +676,11 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             ? v.GetString()
             : null;
 
+    private static int? TryParseInt(string? value) =>
+        int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+
     private static string Rfc3339(DateTimeOffset value) =>
         value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
@@ -626,5 +694,12 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 
-    private sealed record PreviewRouteInfo(string Token, string SanitizedRun, string? ExpiresAt, string? MaxUntil);
+    private sealed record PreviewRouteInfo(
+        string Token,
+        string SanitizedRun,
+        string? ExpiresAt,
+        string? MaxUntil,
+        string? PodName,
+        int? TargetPort,
+        string? StartedAt);
 }

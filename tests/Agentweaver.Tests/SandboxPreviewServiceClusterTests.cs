@@ -90,6 +90,57 @@ public sealed class SandboxPreviewServiceClusterTests
     }
 
     [Fact]
+    public async Task ListForRun_returns_preview_sessions_from_httproute_annotations()
+    {
+        const string runId = "run-list-previews";
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[{\"metadata\":{\"name\":\"preview-x\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-1\"," +
+            "\"agentweaver.dev/preview-target-port\":\"5173\"," +
+            "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:00:00Z\"}}}]}");
+
+        var svc = NewService(handler);
+
+        var sessions = await svc.ListForRunAsync(runId);
+
+        sessions.Should().ContainSingle();
+        sessions[0].Token.Should().Be(token);
+        sessions[0].RunId.Should().Be(runId);
+        sessions[0].PodName.Should().Be("agenthost-pod-1");
+        sessions[0].TargetPort.Should().Be(5173);
+        sessions[0].PreviewUrl.Should().Be($"https://{PreviewToken.HostLabel(token)}.6a3de4fe.westus2.staging.aksapp.io");
+    }
+
+    [Fact]
+    public async Task StartPreview_enforces_per_run_limit_from_httproute_state()
+    {
+        const string runId = "run-limit";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[" +
+            RouteJson("t1", sanitizedRun) + "," +
+            RouteJson("t2", sanitizedRun) + "," +
+            RouteJson("t3", sanitizedRun) + "]}");
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agenthost-pod-zzz"}}}""");
+
+        var svc = NewService(handler);
+
+        var act = async () => await svc.StartPreviewAsync(runId, 3000, "user-1");
+        await act.Should().ThrowAsync<PortForwardLimitExceededException>();
+    }
+
+    [Fact]
     public void Service_no_longer_depends_on_the_in_memory_pod_registry()
     {
         // The replica-safety fix removes the IPodNameRegistry constructor dependency entirely.
@@ -98,6 +149,11 @@ public sealed class SandboxPreviewServiceClusterTests
             p => p.ParameterType == typeof(IPodNameRegistry),
             "preview start must resolve pods from cluster state, not per-process memory");
     }
+
+    private static string RouteJson(string token, string sanitizedRun) =>
+        "{\"metadata\":{\"annotations\":{" +
+        "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
+        "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"}}}";
 
     // ── S1: orphan ClusterIP sweep ───────────────────────────────────────────────
 
