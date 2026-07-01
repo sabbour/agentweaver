@@ -67,9 +67,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly IKubernetesEnvironment? _k8sEnv;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
+    private readonly CoordinatorSteeringWaitRegistry _steeringWaits;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
+    private readonly TimeSpan _steeringWaitTimeout;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
 
@@ -84,6 +86,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IHostApplicationLifetime lifetime,
         ILogger<CoordinatorAssemblyService> logger,
         IConfiguration? configuration = null,
+        CoordinatorSteeringWaitRegistry? steeringWaits = null,
         IPodNameRegistry? podRegistry = null,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
@@ -100,10 +103,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _k8sEnv = k8sEnv;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
+        _steeringWaits = steeringWaits ?? new CoordinatorSteeringWaitRegistry();
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
         _reviewTimeout = TimeSpan.FromMinutes(Math.Max(1.0, reviewTimeoutMinutes));
+        var steeringWaitMinutes = configuration?.GetValue("Coordinator:AssemblyBlockedSteeringTimeoutMinutes", 10.0) ?? 10.0;
+        _steeringWaitTimeout = TimeSpan.FromMinutes(Math.Max(0.1, steeringWaitMinutes));
     }
 
     /// <summary>The integration branch name (D1) derived from the coordinator run id.</summary>
@@ -217,10 +223,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
-        var (workPlanId, subtasks, edges) = plan.Value;
+        var (workPlanId, planStatus, subtasks, edges) = plan.Value;
 
         try
         {
+            if (planStatus == WorkPlanStatus.AssemblyBlocked)
+            {
+                await WaitForBlockedAssemblySteeringAsync(
+                    context, workPlanId, reason: null, edges, ct).ConfigureAwait(false);
+                return;
+            }
+
             await RunAssemblyCoreAsync(context, workPlanId, subtasks, edges, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -740,10 +753,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyBlocked, edges, ct)
             .ConfigureAwait(false);
-        await TerminalizeCoordinatorRunAsync(
-            context.CoordinatorRunId, RunStatus.Failed, $"assembly_blocked: {reason}", ct).ConfigureAwait(false);
-        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
-        _logger.LogWarning("Collective assembly blocked for run {RunId}: {Reason}", context.CoordinatorRunId, reason);
+        _logger.LogWarning(
+            "Collective assembly blocked for run {RunId}: {Reason}. Waiting for steering input.",
+            context.CoordinatorRunId, reason);
+
+        await WaitForBlockedAssemblySteeringAsync(context, workPlanId, reason, edges, ct).ConfigureAwait(false);
     }
 
     private async Task RaiBlockAsync(
@@ -1037,7 +1051,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         "Context: The collective assembly reviewer requested changes to your output. " +
         "Re-do this work against the latest repository state and address the feedback above.";
 
-    private async Task<(int WorkPlanId, List<Subtask> Subtasks, List<(int, int)> Edges)?> LoadPlanAsync(
+    private async Task<(int WorkPlanId, string Status, List<Subtask> Subtasks, List<(int, int)> Edges)?> LoadPlanAsync(
         string coordinatorRunId, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -1059,7 +1073,139 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
             .ToList();
 
-        return (workPlan.Id, subtasks, edges);
+        return (workPlan.Id, workPlan.Status, subtasks, edges);
+    }
+
+    private enum BlockedAssemblyOutcome
+    {
+        Terminalized,
+        DispatchResumed,
+        RetryAssembly,
+    }
+
+    private async Task WaitForBlockedAssemblySteeringAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        string? reason,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
+        var outcome = await WaitForBlockedAssemblyOutcomeAsync(
+            context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+
+        switch (outcome)
+        {
+            case BlockedAssemblyOutcome.RetryAssembly:
+                await _assemblyStore.SetStatusAndStageAsync(
+                    workPlanId, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorRecovered, new
+                {
+                    reason = "assembly_blocked_send",
+                    workPlanId,
+                });
+                var retrySubtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+                await RunAssemblyCoreAsync(context, workPlanId, retrySubtasks, edges.ToList(), ct).ConfigureAwait(false);
+                return;
+
+            case BlockedAssemblyOutcome.DispatchResumed:
+                _logger.LogInformation(
+                    "Collective assembly wait exited for run {RunId}: steering resumed dispatch",
+                    context.CoordinatorRunId);
+                return;
+
+            default:
+                await TerminalizeCoordinatorRunAsync(
+                    context.CoordinatorRunId,
+                    RunStatus.Failed,
+                    $"assembly_blocked: {reason ?? "awaiting_steering_timeout"}",
+                    ct).ConfigureAwait(false);
+                await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
+                return;
+        }
+    }
+
+    private async Task<BlockedAssemblyOutcome> WaitForBlockedAssemblyOutcomeAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        CancellationToken ct)
+    {
+        var waitUntil = DateTimeOffset.UtcNow + _steeringWaitTimeout;
+        var lastDirectiveId = await GetLatestSteeringDirectiveIdAsync(coordinatorRunId, ct).ConfigureAwait(false);
+        var waitVersion = _steeringWaits.GetVersion(coordinatorRunId);
+
+        while (!ct.IsCancellationRequested)
+        {
+            var runStatus = await GetCoordinatorRunStatusAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            if (runStatus is RunStatus.Completed or RunStatus.Failed or RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed)
+                return BlockedAssemblyOutcome.Terminalized;
+
+            var planStatus = await GetWorkPlanStatusAsync(workPlanId, ct).ConfigureAwait(false);
+            if (planStatus != WorkPlanStatus.AssemblyBlocked)
+                return BlockedAssemblyOutcome.DispatchResumed;
+
+            var directives = await GetSteeringDirectivesAfterAsync(coordinatorRunId, lastDirectiveId, ct).ConfigureAwait(false);
+            if (directives.Count > 0)
+            {
+                lastDirectiveId = directives[^1].Id;
+                if (directives.Any(d => d.Kind == SteeringKind.Send))
+                    return BlockedAssemblyOutcome.RetryAssembly;
+            }
+
+            var remaining = waitUntil - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                return BlockedAssemblyOutcome.Terminalized;
+
+            waitVersion = await _steeringWaits.WaitForSignalAsync(
+                coordinatorRunId,
+                waitVersion,
+                remaining < TimeSpan.FromSeconds(1) ? remaining : TimeSpan.FromSeconds(1),
+                ct).ConfigureAwait(false);
+        }
+
+        throw new OperationCanceledException(ct);
+    }
+
+    private async Task<int> GetLatestSteeringDirectiveIdAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId)
+            .OrderByDescending(d => d.Id)
+            .Select(d => d.Id)
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<List<SteeringDirective>> GetSteeringDirectivesAfterAsync(
+        string coordinatorRunId,
+        int lastDirectiveId,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId && d.Id > lastDirectiveId)
+            .OrderBy(d => d.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<string?> GetWorkPlanStatusAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.Status)
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<RunStatus?> GetCoordinatorRunStatusAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return null;
+
+        var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        return run?.Status;
     }
 
     private async Task<List<Subtask>> ReloadSubtasksAsync(int workPlanId, CancellationToken ct)

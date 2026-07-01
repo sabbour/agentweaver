@@ -1117,6 +1117,7 @@ export function CoordinatorRunPage() {
   const [childrenData, setChildrenData] = useState<CoordinatorChildResponse[]>([]);
   const [coordUsage, setCoordUsage] = useState<TokenUsageSummary | null>(null);
   const [childUsageByRun, setChildUsageByRun] = useState<Record<string, TokenUsageSummary>>({});
+  const [blockedSteerPending, setBlockedSteerPending] = useState(false);
 
   useEffect(() => {
     if (!runId) return;
@@ -1153,7 +1154,7 @@ export function CoordinatorRunPage() {
     // lifecycle. The plan does not exist yet; SSE events (coordinator.graph) update the topology
     // live, and a page refresh will re-seed from REST when the plan is available.
     let wpEverMissing = false;
-    const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
+    const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'declined']);
     // Run-level terminal statuses stop polling even when coordinator_status is absent (e.g., a
     // run interrupted before the coordinator emitted a terminal orchestration status).
     const RUN_LEVEL_TERMINAL = new Set<RunStatus>(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
@@ -1238,6 +1239,9 @@ export function CoordinatorRunPage() {
     () => deriveOrchState(events, coordStatusField, coordStatusReason, workPlanStatus),
     [events, coordStatusField, coordStatusReason, workPlanStatus],
   );
+  useEffect(() => {
+    if (orch.phase !== 'blocked') setBlockedSteerPending(false);
+  }, [orch.phase]);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase);
@@ -2249,7 +2253,19 @@ export function CoordinatorRunPage() {
               <Text className={styles.hint}>
                 Use the controls below to redirect the coordinator with an instruction, or stop the run.
               </Text>
-              <SteerPanel runId={runId} blockReason={orch.reason} />
+              {blockedSteerPending && (
+                <MessageBar intent="info">
+                  <MessageBarBody>Message sent — waiting for coordinator response.</MessageBarBody>
+                </MessageBar>
+              )}
+              <SteerPanel
+                runId={runId}
+                blockReason={orch.reason}
+                onSteered={({ kind }) => {
+                  reconnectStream();
+                  setBlockedSteerPending(kind !== 'stop');
+                }}
+              />
             </div>
           )}
 

@@ -53,7 +53,7 @@ public static class CoordinatorRecoveryRouter
             WorkPlanStatus.Assembling => CoordinatorRecoveryAction.ReArmAssembly,
             WorkPlanStatus.InReview => CoordinatorRecoveryAction.ReArmAssembly,
             WorkPlanStatus.Complete => CoordinatorRecoveryAction.SettleComplete,
-            WorkPlanStatus.AssemblyBlocked => CoordinatorRecoveryAction.SettleFailed,
+            WorkPlanStatus.AssemblyBlocked => CoordinatorRecoveryAction.Assemble,
             WorkPlanStatus.AssemblyFailed => CoordinatorRecoveryAction.SettleFailed,
             WorkPlanStatus.AssemblyDeclined => CoordinatorRecoveryAction.SettleFailed,
             // Unknown/forward-incompatible status: re-arm dispatch defensively rather than stranding the run.

@@ -33,12 +33,14 @@ function buildSteerPayload(
 }
 
 // Maps a successful steer response status to a user-facing message.
-function successMessage(status: string): string {
+function successMessage(kind: SteerKind, status: string): string {
+  if (kind === 'send')
+    return 'Message sent — waiting for coordinator response.';
   if (status === 'applied')
-    return 'Coordinator resumed — re-running the affected work with your guidance.';
+    return 'Coordinator resumed — waiting for updated progress.';
   if (status === 'queued')
-    return 'Directive queued — it will apply at the next step.';
-  return 'Steering directive sent.';
+    return 'Directive queued — waiting for the coordinator to reach the next step.';
+  return 'Steering request sent — waiting for coordinator response.';
 }
 
 // Maps API error body to a user-facing message.
@@ -107,7 +109,7 @@ export interface SteerPanelProps {
    */
   canSteer?: boolean;
   /** Called after a successful steer submission (e.g. to trigger a board refresh). */
-  onSteered?: () => void;
+  onSteered?: (result: { kind: SteerKind; status: string }) => void;
 }
 
 type SteerState = 'idle' | 'pending' | 'success' | 'error';
@@ -133,9 +135,9 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
     try {
       const res = await apiClient.steerCoordinator(runId, buildSteerPayload(kind, text, target));
       setSteerState('success');
-      setStatusMessage(successMessage(res.status));
+      setStatusMessage(successMessage(kind, res.status));
       setInstruction('');
-      onSteered?.();
+      onSteered?.({ kind, status: res.status });
     } catch (err) {
       setErrorMessage(
         err instanceof ApiError

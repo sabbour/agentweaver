@@ -39,24 +39,27 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private readonly CoordinatorAssemblyStore _assemblyStore;
     private readonly FakePipeline _pipeline = new();
     private readonly FakeDispatch _dispatch = new();
+    private readonly CoordinatorSteeringWaitRegistry _steeringWaits = new();
     private readonly CoordinatorAssemblyService _sut;
+    private readonly CoordinatorSteeringService _steering;
 
     public CoordinatorAssemblyServiceTests()
     {
         _memoryConn = new SqliteConnection("DataSource=:memory:");
         _memoryConn.Open();
+        _runDb = TestSqliteDb.CreateAsync().GetAwaiter().GetResult();
+        _runStore = new SqliteRunStore(_runDb.Db);
 
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
         services.AddSingleton<ICoordinatorDispatch>(_dispatch);
+        services.AddSingleton<IRunStore>(_runStore);
         _provider = services.BuildServiceProvider();
 
         using (var scope = _provider.CreateScope())
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
 
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
-        _runDb = TestSqliteDb.CreateAsync().GetAwaiter().GetResult();
-        _runStore = new SqliteRunStore(_runDb.Db);
         _assemblyStore = new CoordinatorAssemblyStore(_scopeFactory);
 
         _sut = new CoordinatorAssemblyService(
@@ -68,20 +71,31 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             _scopeFactory,
             _provider,
             new TestHostApplicationLifetime(),
-            NullLogger<CoordinatorAssemblyService>.Instance);
+            NullLogger<CoordinatorAssemblyService>.Instance,
+            steeringWaits: _steeringWaits);
+        _steering = new CoordinatorSteeringService(
+            _streamStore,
+            new RunWorkflowRegistry(),
+            _scopeFactory,
+            NullLogger<CoordinatorSteeringService>.Instance,
+            waitRegistry: _steeringWaits,
+            runStore: _runStore);
     }
 
     // ── D2 eligibility gate ─────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task RunAssembly_BlocksAndStops_WhenASubtaskIsIneligible()
+    public async Task RunAssembly_BlocksAndWaitsForSteering_WhenASubtaskIsIneligible()
     {
-        const string coordinatorRunId = "coord-block-1";
+        var coordinatorRunId = RunId.New().ToString();
         var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
         _streamStore.Create(coordinatorRunId, "alice");
+        await SeedCoordinatorRunAsync(coordinatorRunId);
 
-        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
 
         var types = EventTypes_(coordinatorRunId);
         types.Should().Contain(EventTypes.CoordinatorAssemblyBlocked);
@@ -91,7 +105,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var state = await _assemblyStore.GetAsync(workPlanId, default);
         state!.Status.Should().Be(WorkPlanStatus.AssemblyBlocked);
-        _streamStore.Get(coordinatorRunId)!.IsCompleted.Should().BeTrue("a blocked assembly stream is terminal");
+        _streamStore.Get(coordinatorRunId)!.IsCompleted.Should().BeFalse("assembly_blocked now pauses for steering");
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.InProgress, "the coordinator remains live while awaiting steering");
 
         // The blocked subtask is the second one (status "failed"); the first is "completed".
         var blockedId = subtaskIds[1];
@@ -112,7 +128,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         entry["status"]!.GetValue<string>().Should().Be("failed");
         entry["agent"]!.GetValue<string>().Should().Be("morpheus");
 
-        // The block event is PERSISTED to RunEvents so a page reload replays the same detail.
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
+        await run;
+
+        // The block event is persisted when the paused stream eventually completes.
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var persisted = await db.RunEvents
@@ -127,6 +146,56 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         persistedEntry.GetProperty("title").GetString().Should().Be("t1");
         persistedEntry.GetProperty("status").GetString().Should().Be("failed");
         persistedEntry.GetProperty("agent").GetString().Should().Be("morpheus");
+    }
+
+    [Fact]
+    public async Task RunAssembly_BlockedSend_RetriesAssembly_AndContinues()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.IntegrationBuildThrowsRemaining = 1;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+
+        var send = await _steering.SteerAsync(
+            coordinatorRunId, "send", null, "Retry assembly with the updated context.", "alice", default);
+        send.Status.Should().Be(SteeringStatus.Applied);
+
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        _pipeline.IntegrationBuilds.Should().Be(2, "send should wake the blocked wait and retry assembly");
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyCompleted);
+    }
+
+    [Fact]
+    public async Task RunAssembly_BlockedRedirect_ReEntersDispatch()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+
+        var redirect = await _steering.SteerAsync(
+            coordinatorRunId, "redirect", null, "Re-run the failed subtask against the latest base.", "alice", default);
+        redirect.Status.Should().Be(SteeringStatus.Applied);
+        await run;
+
+        _dispatch.StartDispatchCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Dispatching);
     }
 
     [Fact]
@@ -305,18 +374,22 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     // ── Terminal coordinator-run status + reason (so the UI never shows a bare "Failed") ──────────
 
     [Fact]
-    public async Task RunAssembly_Blocked_TerminalizesCoordinatorRun_Failed_WithReason()
+    public async Task RunAssembly_BlockedStop_TerminalizesCoordinatorRun_Failed_WithReason()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
         await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
         _streamStore.Create(coordinatorRunId, "alice");
 
-        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var runTask = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
+        await runTask;
 
         var run = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
         run!.Status.Should().Be(RunStatus.Failed);
-        run.Result.Should().StartWith("assembly_blocked:");
+        run.Result.Should().Be("steering_stop");
     }
 
     [Fact]
@@ -461,6 +534,17 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
     private List<string> EventTypes_(string coordinatorRunId) =>
         _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events.Select(e => e.Type).ToList();
+
+    private async Task WaitForEventAsync(string runId, string eventType, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            if (_streamStore.Get(runId)?.GetSnapshotSince(0).Events.Any(e => e.Type == eventType) == true)
+                return;
+
+            await Task.Delay(25, ct);
+        }
+    }
 
     private static string NodeKind(GraphDescriptor graph, string nodeId) =>
         graph.Nodes.Single(n => n.Id == nodeId).Kind;
@@ -633,6 +717,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public int IntegrationBuilds;
         public int Merges;
         public int Scribes;
+        public int IntegrationBuildThrowsRemaining;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
         public CollectiveMergeResult? MergeOverride;
@@ -643,6 +728,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public IntegrationBranchResult BuildIntegrationBranch(CollectiveIntegrationRequest request)
         {
             IntegrationBuilds++;
+            if (IntegrationBuildThrowsRemaining > 0)
+            {
+                IntegrationBuildThrowsRemaining--;
+                throw new InvalidOperationException("boom in integration");
+            }
             return IntegrationBranchResult.Success(request.IntegrationBranch, "agg-tree", "aggregate diff");
         }
 

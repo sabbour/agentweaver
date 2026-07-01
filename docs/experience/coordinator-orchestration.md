@@ -258,7 +258,7 @@ The graph toolbar shows **Steer coordinator:** followed by an input and the acti
 
 Subtask cards can also show **Stop**, **Redirect**, and **Amend** when the subtask is active and has a child run. Those actions target that specific child run. The dialog title names the action and target, asks for an **Instruction** when required, and disables **Send** until required guidance is present.
 
-Blocked and failed assembly states surface a recovery panel. The panel explains why assembly stopped, lists blocking subtasks or conflicting files when available, and offers guidance: use the controls to redirect the coordinator with an instruction, or stop the run. The recovery-focused **SteerPanel** can use a suggested default instruction when the user leaves the field blank.
+Blocked assembly is a recoverable pause, not a dead end. The recovery panel stays live, explains why assembly paused, lists blocking subtasks or conflicting files when available, and lets the user **Send**, **Redirect**, **Amend**, or **Stop** without reloading the page. After the user sends steering, the panel immediately shows that the message was sent and the coordinator is being resumed. If no steering arrives before the blocked-wait timeout (currently 10 minutes by default), the coordinator settles as failed just as it did before.
 
 ### Steering over MCP
 
@@ -273,12 +273,12 @@ The steering verbs are:
 
 | Verb | User intent | Timing |
 | --- | --- | --- |
+| `send` | Add context or a note for the coordinator without changing the chosen direction. | Immediate. If assembly is blocked, this wakes the coordinator and retries assembly with the new context. |
 | `stop` | Cancel active subagents now and stop further work for the target scope. | Immediate cancellation of active subagents. |
-| `redirect` | Point the target at a changed direction. | Injected at the targeted subagent's next turn boundary. |
-| `amend` | Add guidance without discarding the whole in-flight context. | Injected at the targeted subagent's next turn boundary. |
-| `recover` and other recovery verbs | Reset blocked, failed, or parked subtasks and resume dispatch. | Applied to persisted orchestration state, then the dispatch loop resumes. |
+| `redirect` | Point the target at a changed direction. | Injected at the targeted subagent's next turn boundary, or immediately resumes a blocked coordinator by re-entering dispatch. |
+| `amend` | Add guidance without discarding the whole in-flight context. | Injected at the targeted subagent's next turn boundary, or immediately resumes a blocked coordinator when there is a recoverable gate to unblock. |
 
-Omitting `target_child_run_id` broadcasts the directive to every active child. Supplying it targets the one child run behind a specific subtask. `redirect` and `amend` need an instruction because the coordinator must know what guidance to relay. `stop` and recovery verbs can work without instruction, though a short reason is still useful for the human timeline.
+Omitting `target_child_run_id` broadcasts the directive to every active child. Supplying it targets the one child run behind a specific subtask. `redirect` and `amend` need an instruction because the coordinator must know what guidance to relay. `send` and `stop` can work without instruction, though a short reason is still useful for the human timeline.
 
 Pause is not supported.
 
@@ -286,7 +286,7 @@ Pause is not supported.
 
 A steering directive appears as `coordinator.steering` on the coordinator stream. The topology reducer attaches targeted directives to the matching subtask node by child run id. Broadcast directives attach to the coordinator node. The graph then shows a steering note with the verb and directive status, such as **Redirect · queued**.
 
-The UX intentionally distinguishes immediate stop from next-boundary guidance. `stop` cancels active subagents now. `redirect` and `amend` are queued until the target reaches a turn boundary; they do not interrupt an in-flight model turn mid-token. Recovery verbs act on persisted coordinator state, resetting eligible blocked/failed/parked subtasks and re-arming the dispatch loop.
+The UX intentionally distinguishes immediate stop from next-boundary guidance. `stop` cancels active subagents now. `redirect` and `amend` are queued until the target reaches a turn boundary when work is already in flight; they do not interrupt an in-flight model turn mid-token. When collective assembly is blocked, the coordinator stays observable on the live stream and the same steering verbs resume it: `send` retries assembly with added context, while `redirect` and `amend` reset eligible blocked work and re-arm dispatch.
 
 ## Orchestrations list page
 
@@ -411,4 +411,3 @@ Steer means the user intervenes while the orchestration is alive or parked. Stop
 The experience keeps the user oriented at every scale. At the start, the user sees one understandable contract: the OutcomeSpec. In the middle, the user sees a topology: who is doing what, what is blocked, and which dependencies matter. At intervention time, the user has steering verbs that match intent: stop, redirect, amend, recover. At the end, the user reviews one assembled outcome.
 
 The web UI makes that lifecycle visual and action-oriented. MCP makes the same lifecycle scriptable and composable. Both surfaces preserve the same product promise: the coordinator can run a team, but the user confirms intent before work starts and retains control while the team executes.
-

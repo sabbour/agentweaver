@@ -27,6 +27,7 @@ vi.mock('../api/apiClient', () => ({
     getRun: vi.fn(),
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
+    getRunUsage: vi.fn().mockResolvedValue({ input_tokens: 0, output_tokens: 0, total_tokens: 0, total_nano_aiu: 0, by_model: [] }),
     setAutopilot: vi.fn(),
     setAutoApprove: vi.fn(),
     retryRun: vi.fn(),
@@ -79,6 +80,7 @@ beforeEach(() => {
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.getRunUsage).mockResolvedValue({ input_tokens: 0, output_tokens: 0, total_tokens: 0, total_nano_aiu: 0, by_model: [] });
   vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
   vi.mocked(apiClient.answerQuestion).mockResolvedValue({ run_id: 'child-run-2', request_id: 'q-1', answered: true });
@@ -346,6 +348,30 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     const text = document.body.textContent ?? '';
     // The panel still renders with the steer controls and does not crash.
     expect(text).toContain('Use the controls below to redirect the coordinator');
+  });
+
+  it('shows an immediate waiting indicator after sending steering from the blocked panel', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.assembly_blocked',
+        payload: { reason: 'integration_conflict', conflictingFiles: ['src/a.txt'] },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('could not be combined automatically'),
+      { timeout: 4000 },
+    );
+
+    fireEvent.click(document.body.querySelector('[data-testid="steer-panel-send"]') as Element);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Message sent — waiting for coordinator response.'),
+      { timeout: 4000 },
+    );
   });
 
   it('shows a live count-up timer on the Merge stage once it has started', async () => {
