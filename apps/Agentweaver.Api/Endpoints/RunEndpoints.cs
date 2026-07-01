@@ -706,6 +706,7 @@ app.MapPost("/api/runs/{id}/review", async (
     RunStreamStore streamStore,
     RunWorkflowRegistry workflowRegistry,
     PendingRequestStore pendingStore,
+    IServiceScopeFactory scopeFactory,
     IWorktreeOperations worktreeOps,
     IMergeCoordinator mergeCoordinator,
     RunWorkflowFactory workflowFactory,
@@ -740,6 +741,39 @@ app.MapPost("/api/runs/{id}/review", async (
     var streamingRunForReview = workflowRegistry.Get(id);
     if (streamingRunForReview is not null && await pendingStore.GetAsync(id, ct) is null)
         return Results.StatusCode(StatusCodes.Status409Conflict);
+
+    var decision = new WorkflowReviewDecision(
+        Approved: request.Approved,
+        RequestChanges: request.RequestChanges,
+        Feedback: request.Feedback,
+        ReviewedBy: caller.User);
+
+    if (streamingRunForReview is null && await pendingStore.GetAsync(id, ct) is { } pendingForDefer)
+    {
+        if (!caller.Owns(pendingForDefer.OwnerUser))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+        if (!await DeferReviewDecisionAsync(id, decision, scopeFactory, logger, CancellationToken.None)
+            .ConfigureAwait(false))
+            return Results.StatusCode(StatusCodes.Status409Conflict);
+
+        if (request.RequestChanges)
+        {
+            var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, CancellationToken.None);
+            if (!transitioned)
+                return Results.StatusCode(StatusCodes.Status409Conflict);
+        }
+        else if (!request.Approved)
+        {
+            var declined = await runStore.TryTransitionReviewAsync(
+                runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, caller.User, CancellationToken.None);
+            if (!declined)
+                return Results.StatusCode(StatusCodes.Status409Conflict);
+        }
+
+        var deferredStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+        return Results.Json(new ReviewResponse { RunId = id, Status = deferredStatus, MergeResult = null });
+    }
 
     if (request.Approved)
     {
@@ -827,11 +861,6 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Create the response and send it to the workflow to resume.
-    var decision = new WorkflowReviewDecision(
-        Approved: request.Approved,
-        RequestChanges: request.RequestChanges,
-        Feedback: request.Feedback,
-        ReviewedBy: caller.User);
     var externalResponse = pendingEntry.Request.CreateResponse(decision);
     try
     {
@@ -2228,6 +2257,42 @@ static async Task<IResult> ExecuteDirectReviewAsync(
         default:
             throw new InvalidOperationException($"Unexpected merge execution outcome: {mergeExecResult.Outcome}");
     }
+}
+
+static async Task<bool> DeferReviewDecisionAsync(
+    string runId,
+    WorkflowReviewDecision decision,
+    IServiceScopeFactory scopeFactory,
+    ILogger<Program> logger,
+    CancellationToken ct)
+{
+    var json = System.Text.Json.JsonSerializer.Serialize(decision, JsonDefaults.Options);
+    using var scope = scopeFactory.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+    var existing = await db.DeferredDecisions
+        .FirstOrDefaultAsync(d => d.RunId == runId, ct)
+        .ConfigureAwait(false);
+    if (existing is not null)
+        return false;
+
+    db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+    {
+        RunId = runId,
+        DecisionJson = json,
+        CreatedAt = DateTimeOffset.UtcNow,
+    });
+
+    try
+    {
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+    catch (DbUpdateException)
+    {
+        return false;
+    }
+    logger.LogInformation("Review decision for run {RunId} deferred for owner replica pickup", runId);
+    return true;
 }
 
 /// <summary>
