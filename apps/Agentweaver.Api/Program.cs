@@ -148,11 +148,13 @@ if (string.Equals(tokenStoreProvider, "keyvault", StringComparison.OrdinalIgnore
     var cachedTokenStore = new CachingGitHubTokenStore(kvTokenStore);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
     builder.Services.AddSingleton<IGitHubTokenStore>(cachedTokenStore);
+    builder.Services.AddSingleton<IGitHubDeviceFlowStore>(new SecretStoreGitHubDeviceFlowStore(kvSecretStore));
     builder.Services.AddSingleton(secretClient); // exposed for SPC startup re-sync
 }
 else
 {
     builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
+    builder.Services.AddSingleton<IGitHubDeviceFlowStore, InMemoryGitHubDeviceFlowStore>();
 }
 var scopeProviderName = builder.Configuration["Auth:GitHub:ScopeProvider"] ?? "caller";
 if (string.Equals(scopeProviderName, "installation", StringComparison.OrdinalIgnoreCase))
