@@ -205,15 +205,22 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   const [decomposeError, setDecomposeError] = useState<string | null>(null);
   const [decomposeSuccess, setDecomposeSuccess] = useState(false);
 
+  // Tracks whether the most recent getOutcomeSpec call returned 404 (spec not yet created).
+  // When true, the streamStatus=done refresh is skipped — the SSE stream will deliver
+  // coordinator.outcome_spec when the spec is ready, making repeated REST retries unnecessary.
+  const specNotFoundRef = useRef(false);
+
   const fetchSpec = useCallback(async () => {
     try {
       const spec = await apiClient.getOutcomeSpec(runId);
       setSpecFromApi(spec);
       setLoadError(null);
+      specNotFoundRef.current = false;
     } catch (err) {
       // A 404 before the coordinator drafts is expected — the stream will fill in.
       if (err instanceof ApiError && err.status === 404) {
         setLoadError(null);
+        specNotFoundRef.current = true;
       } else {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
@@ -222,6 +229,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
 
   useEffect(() => {
     if (!runId) return;
+    specNotFoundRef.current = false; // Reset for each new run.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchSpec();
   }, [runId, fetchSpec]);
@@ -229,8 +237,10 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   // When the SSE stream closes (server ends it at review gate), refresh the spec from the
   // REST API so the confirmed/awaiting-confirmation state is always current — even when
   // events were missed due to a different API replica serving the stream.
+  // Skip the refresh if the last fetch was a 404 (spec not yet created); the SSE stream
+  // delivers coordinator.outcome_spec when it exists, so repeated 404 calls add noise.
   useEffect(() => {
-    if (streamStatus === 'done') {
+    if (streamStatus === 'done' && !specNotFoundRef.current) {
       void fetchSpec();
     }
   }, [streamStatus, fetchSpec]);

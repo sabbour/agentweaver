@@ -1152,6 +1152,10 @@ export function CoordinatorRunPage() {
     if (!runId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Once the work-plan returns 404, we stop calling the endpoint for the rest of this page
+    // lifecycle. The plan does not exist yet; SSE events (coordinator.graph) update the topology
+    // live, and a page refresh will re-seed from REST when the plan is available.
+    let wpEverMissing = false;
     const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
     // Run-level terminal statuses stop polling even when coordinator_status is absent (e.g., a
     // run interrupted before the coordinator emitted a terminal orchestration status).
@@ -1163,21 +1167,20 @@ export function CoordinatorRunPage() {
       // work-plan or outcome-spec. Skip coordinator-only artifact fetches to avoid 404 noise.
       const childRun = detail?.parent_run_id != null;
       if (childRun) setIsChildRun(true);
-      // Fetch the work-plan separately so we can distinguish "no plan yet" (404) from a
-      // transient failure. A 404 must NOT be retried on the tight 4s cadence — that spams
-      // the endpoint for early/stuck runs that have no plan. We flag it and back off.
+      // Fetch work-plan only when it has not already returned 404 and the run is not a child.
+      // wpEverMissing persists across ticks so a single 404 stops all further attempts;
+      // repeated calls would produce repeated browser network errors with no benefit.
       let wp: WorkPlanResponse | null = null;
-      let wpMissing = false;
-      if (!childRun) {
+      if (!childRun && !wpEverMissing) {
         try {
           wp = await apiClient.getWorkPlan(runId);
         } catch (err) {
-          if (err instanceof ApiError && err.status === 404) wpMissing = true;
+          if (err instanceof ApiError && err.status === 404) wpEverMissing = true;
           wp = null;
         }
       }
       if (cancelled) return;
-      setNoWorkPlan(wpMissing);
+      setNoWorkPlan(wpEverMissing);
       const statusField = detail?.coordinator_status ?? undefined;
       const reasonField = detail?.coordinator_status_reason ?? undefined;
       const wpStatus = wp?.status ?? undefined;
@@ -1199,10 +1202,7 @@ export function CoordinatorRunPage() {
         ? normalizePhase(statusField)
         : normalizePhase(wpStatus);
       if (!TERMINAL.has(phase)) {
-        // Back off substantially while the work plan is absent (404) so we stop hammering
-        // the endpoint on a tight loop; resume the normal cadence once a plan exists.
-        const delay = wpMissing ? 30000 : 4000;
-        timer = setTimeout(() => { void tick(); }, delay);
+        timer = setTimeout(() => { void tick(); }, 4000);
       }
     };
 

@@ -296,7 +296,7 @@ describe('CoordinatorRunPage — graph during outcome-spec drafting', () => {
 });
 
 describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () => {
-  it('renders a graceful empty state and does not hammer the 404 work-plan endpoint', async () => {
+  it('renders a graceful empty state and does not call the 404 work-plan endpoint again', async () => {
     // No graph descriptor and a 404 work-plan: a stuck/early run with no plan.
     vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
@@ -312,11 +312,35 @@ describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () =>
     // The graceful state renders instead of an indefinite "Waiting for coordinator graph...".
     expect(document.body.textContent).toContain('No work plan available yet.');
 
-    // A 404 must NOT trigger a tight retry loop: the lifecycle poll backs off to 30s, so within
-    // a short window the work-plan endpoint is hit only a handful of times (seed + first poll),
-    // not dozens of times.
+    // After the first 404 the work-plan endpoint is not called again — wpEverMissing stops
+    // further fetches for the lifetime of the page, so the total call count stays very low.
     const calls = vi.mocked(apiClient.getWorkPlan).mock.calls.length;
-    expect(calls).toBeLessThan(5);
+    expect(calls).toBeLessThan(3);
+  });
+
+  it('does not call getWorkPlan again after the first 404 even as the poll continues', async () => {
+    // Coordinator run: work-plan returns 404, but run is still in_progress.
+    // The poll must keep running (to track coordinator_status) but skip getWorkPlan.
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+    vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'in_progress' } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    // Wait for the first poll tick to fire and record the 404.
+    await waitFor(
+      () => expect(vi.mocked(apiClient.getRun)).toHaveBeenCalled(),
+      { timeout: 2000 },
+    );
+
+    const afterFirstTick = vi.mocked(apiClient.getWorkPlan).mock.calls.length;
+
+    // Advance time past one poll interval to confirm no additional getWorkPlan calls.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const afterDelay = vi.mocked(apiClient.getWorkPlan).mock.calls.length;
+
+    // getWorkPlan call count must not increase after the first 404.
+    expect(afterDelay).toBe(afterFirstTick);
   });
 });
 
