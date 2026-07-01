@@ -54,7 +54,7 @@ export default withMermaid({
           items: [
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Deploy to AKS', link: '/guide/deployment-aks' },
-            { text: 'AKS Architecture', link: '/architecture-aks' },
+            { text: 'AKS Architecture', link: '/guide/architecture-aks' },
           ],
         },
         {

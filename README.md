@@ -112,61 +112,11 @@ bash install.sh --aks --image-tag <git-sha>
 
 ### Block diagram
 
-```mermaid
-flowchart TB
-    client[Client]
-    gateway[Gateway]
-
-    subgraph aks[AKS Cluster]
-        direction TB
-
-        subgraph core[Core Services]
-            direction LR
-            fe[Frontend ×2]
-            api[API ×2]
-            worker[Worker ×1 + HPA]
-            mcp[MCP ×1]
-        end
-
-        subgraph kata[Kata VM Pool]
-            host[AgentHost Warm Pool ×2]
-        end
-
-        subgraph storage[Shared Storage]
-            direction LR
-            pvc[Workspace PVC]
-            csi[CSI SecretProvider]
-        end
-    end
-
-    pg[PostgreSQL]
-    kv[Key Vault]
-    acr[ACR]
-    gh[GitHub]
-
-    client --> gateway
-    gateway --> core
-    core --> host
-    core --- pvc
-    core --- csi
-    api --> pg
-    api --> kv
-    host --> kv
-    core --> gh
-    acr -.-> aks
-
-    classDef edge fill:#E8EEF9,stroke:#0F6CBD,color:#242424
-    classDef service fill:#CFE4FA,stroke:#0F6CBD,color:#242424
-    classDef runtime fill:#DFF6DD,stroke:#107C10,color:#242424
-    classDef storageStyle fill:#FFF4CE,stroke:#C19C00,color:#242424
-    classDef ext fill:#F3F2F1,stroke:#8A8886,color:#242424
-
-    class client,gateway edge
-    class fe,api,worker,mcp service
-    class host runtime
-    class pvc,csi storageStyle
-    class pg,kv,acr,gh ext
-```
+| External | AKS Cluster | Data / Infra |
+|---|---|---|
+| Client → Gateway | **Core Services**: Frontend ×2 · API ×2 · Worker ×1+HPA · MCP ×1 | PostgreSQL |
+| GitHub | **Kata VM Pool**: AgentHost Warm Pool ×2 | Key Vault |
+| ACR (image registry) | **Shared Storage**: Workspace PVC · CSI SecretProvider | |
 
 ### Full component diagram (Mermaid)
 
@@ -210,26 +160,13 @@ flowchart TB
     ahpool -->|"fetch user token"| kv
     api & mcp -->|"OAuth · REST"| gh
 
-    classDef svc fill:#F3F2F1,stroke:#8A8886,color:#242424
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424
-    classDef worker fill:#D9EFD9,stroke:#107C10,stroke-width:2px,color:#242424
-    classDef runtime fill:#DDF3DD,stroke:#107C10,color:#242424
-    classDef data fill:#FFF4CE,stroke:#C19C00,color:#242424
-    classDef ext fill:#F0E8F8,stroke:#8764B8,color:#242424
-
-    class gw,fe,mcp svc
-    class api core
-    class worker worker
-    class ahpool runtime
-    class ws data
-    class kv,pg,gh ext
 ```
 
-> Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/architecture-aks.md)
+> Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/guide/architecture-aks.md)
 
 ## Key docs
 
 - [Getting started](docs/guide/getting-started.md)
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
-- [AKS architecture](docs/architecture-aks.md)
+- [AKS architecture](docs/guide/architecture-aks.md)

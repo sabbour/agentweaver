@@ -25,12 +25,6 @@ Agentweaver is broader in scope. It couples orchestration to sandboxed git works
 
 ## Running Agentweaver on top of AX
 
-TODO: Document what an Agentweaver-on-AX deployment model would look like, including controller boundaries, workspace ownership, and where review/merge state would live.
-
----
-
-## Running Agentweaver on top of AX
-
 [Agent eXecutor (AX)](https://github.com/google/ax) is Google's open-source distributed agent harness runtime (Go, Apache 2.0). It provides a single-writer session controller, an append-only event log, resumable gRPC streams, and a pluggable, compute-agnostic actor model. This section analyzes what it would take to run Agentweaver's child-agent runtime *on top of* AX, what maps cleanly, what must be built, and whether the trade is worth it today.
 
 ### Why you might want to
