@@ -106,3 +106,23 @@ describe('OutcomeSpecPanel clarify dialog', () => {
     expect(composed).toContain('A: Keep it as-is');
   });
 });
+
+describe('OutcomeSpecPanel — 404 suppression', () => {
+  it('treats a 404 for getOutcomeSpec as expected absence and surfaces no error to the user', async () => {
+    // A 404 before the coordinator drafts the spec is expected — the stream will fill in later.
+    // The component must not display an error message for this case.
+    vi.mocked(apiClient.getOutcomeSpec).mockRejectedValue(new ApiError(404, 'not found'));
+
+    const { queryByText } = render(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalled());
+
+    // No API error text should appear in the UI — 404 is a silent expected absence.
+    expect(queryByText(/API error/i)).toBeNull();
+    expect(queryByText(/404/)).toBeNull();
+  });
+});
