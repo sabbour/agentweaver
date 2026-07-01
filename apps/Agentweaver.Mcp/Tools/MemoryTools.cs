@@ -9,6 +9,54 @@ public sealed class MemoryTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
+    private static string FormatFailure(string toolName, Exception ex) =>
+        ex is McpApiException apiEx
+            ? $"{toolName} failed: HTTP {apiEx.StatusCode} — {apiEx.Message}"
+            : $"{toolName} failed: {ex.Message}";
+
+    private static string SerializeResult<T>(T result) => JsonSerializer.Serialize(result, JsonOpts);
+
+    private static async Task<string> ExecuteJsonAsync<T>(
+        string toolName,
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await action(ct);
+            return SerializeResult(result);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return FormatFailure(toolName, ex);
+        }
+    }
+
+    private static async Task<string> ExecuteMessageAsync(
+        string toolName,
+        Func<CancellationToken, Task> action,
+        string successMessage,
+        CancellationToken ct)
+    {
+        try
+        {
+            await action(ct);
+            return successMessage;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return FormatFailure(toolName, ex);
+        }
+    }
+
     private static string BuildQs(params (string key, string? value)[] pairs)
     {
         var parts = pairs
@@ -31,10 +79,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Optional rationale")] string? rationale = null,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox",
-            new { agent_name, slug, type, title, content, rationale }, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "decision_inbox_submit",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox",
+                new { agent_name, slug, type, title, content, rationale }, token),
+            ct);
     }
 
     [McpServerTool(Name = "decision_inbox_list"), Description("List inbox entries for a project.")]
@@ -45,9 +95,11 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Filter by status: pending | merged | rejected (default: pending)")] string? status = null,
         CancellationToken ct = default)
     {
-        var result = await api.GetAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox{BuildQs(("agent", agent), ("type", type), ("status", status))}", ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "decision_inbox_list",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox{BuildQs(("agent", agent), ("type", type), ("status", status))}", token),
+            ct);
     }
 
     [McpServerTool(Name = "decision_inbox_merge"), Description("Merge a pending inbox entry into team decisions.")]
@@ -56,8 +108,13 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Inbox entry ID")] string entry_id,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>($"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox/{Uri.EscapeDataString(entry_id)}/merge", null, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "decision_inbox_merge",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox/{Uri.EscapeDataString(entry_id)}/merge",
+                null,
+                token),
+            ct);
     }
 
     [McpServerTool(Name = "decision_inbox_reject"), Description("Reject a pending inbox entry.")]
@@ -66,8 +123,14 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Inbox entry ID")] string entry_id,
         CancellationToken ct = default)
     {
-        await api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox/{Uri.EscapeDataString(entry_id)}/reject", null, ct);
-        return "rejected";
+        return await ExecuteMessageAsync(
+            "decision_inbox_reject",
+            token => api.PostAsync(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox/{Uri.EscapeDataString(entry_id)}/reject",
+                null,
+                token),
+            "rejected",
+            ct);
     }
 
     // ── Decisions ────────────────────────────────────────────────────────────
@@ -82,10 +145,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Optional rationale")] string? rationale = null,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions",
-            new { agent_name, type, title, content, rationale }, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "decision_create",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions",
+                new { agent_name, type, title, content, rationale }, token),
+            ct);
     }
 
     [McpServerTool(Name = "squad_decide"), Description("Submit a team decision to the decision inbox from a squad agent.")]
@@ -99,10 +164,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Optional rationale")] string? rationale = null,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox",
-            new { agent_name, slug, type, title, content, rationale }, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "squad_decide",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/inbox",
+                new { agent_name, slug, type, title, content, rationale }, token),
+            ct);
     }
 
     [McpServerTool(Name = "decision_list"), Description("List team decisions for a project.")]
@@ -112,9 +179,11 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Filter by agent")] string? agent = null,
         CancellationToken ct = default)
     {
-        var result = await api.GetAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions{BuildQs(("type", type), ("agent", agent))}", ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "decision_list",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions{BuildQs(("type", type), ("agent", agent))}", token),
+            ct);
     }
 
     [McpServerTool(Name = "decision_update"), Description("Update a decision's status, content, or rationale.")]
@@ -127,10 +196,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Decision ID that supersedes this one")] int? superseded_by_id = null,
         CancellationToken ct = default)
     {
-        var result = await api.PutAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/{Uri.EscapeDataString(decision_id)}",
-            new { status, content, rationale, superseded_by_id }, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "decision_update",
+            token => api.PutAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/{Uri.EscapeDataString(decision_id)}",
+                new { status, content, rationale, superseded_by_id }, token),
+            ct);
     }
 
     // ── Agent Memory ─────────────────────────────────────────────────────────
@@ -146,10 +217,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Related session ID")] string? session_id = null,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory",
-            new { session_id, type, content, importance, tags }, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "memory_record",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory",
+                new { session_id, type, content, importance, tags }, token),
+            ct);
     }
 
     [McpServerTool(Name = "memory_list"), Description("List memory entries for a specific agent.")]
@@ -160,9 +233,11 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Filter by importance")] string? importance = null,
         CancellationToken ct = default)
     {
-        var result = await api.GetAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory{BuildQs(("type", type), ("importance", importance))}", ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "memory_list",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory{BuildQs(("type", type), ("importance", importance))}", token),
+            ct);
     }
 
     [McpServerTool(Name = "memory_get"), Description("Get a single memory entry.")]
@@ -172,9 +247,11 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Memory entry ID")] string memory_id,
         CancellationToken ct = default)
     {
-        var result = await api.GetAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory/{Uri.EscapeDataString(memory_id)}", ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "memory_get",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory/{Uri.EscapeDataString(memory_id)}", token),
+            ct);
     }
 
     [McpServerTool(Name = "memory_search"), Description("Cross-agent memory search across the whole project.")]
@@ -184,9 +261,11 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Comma-separated tags to filter by (OR semantics)")] string? tags = null,
         CancellationToken ct = default)
     {
-        var result = await api.GetAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/memory{BuildQs(("type", type), ("tags", tags))}", ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "memory_search",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/memory{BuildQs(("type", type), ("tags", tags))}", token),
+            ct);
     }
 
     // ── Sessions ─────────────────────────────────────────────────────────────
@@ -201,10 +280,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Serialized session state")] string? serialized_state = null,
         CancellationToken ct = default)
     {
-        var result = await api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/sessions",
-            new { session_id, focus_area, active_issues, summary, serialized_state }, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "session_start",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/sessions",
+                new { session_id, focus_area, active_issues, summary, serialized_state }, token),
+            ct);
     }
 
     [McpServerTool(Name = "session_current"), Description("Get the current open session for a project.")]
@@ -212,8 +293,10 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         CancellationToken ct = default)
     {
-        var result = await api.GetAsync<object>($"api/projects/{Uri.EscapeDataString(project_id)}/sessions/current", ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "session_current",
+            token => api.GetAsync<object>($"api/projects/{Uri.EscapeDataString(project_id)}/sessions/current", token),
+            ct);
     }
 
     [McpServerTool(Name = "session_update"), Description("Update the current session's focus, summary, or end it.")]
@@ -226,10 +309,12 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Set true to end the session")] bool end = false,
         CancellationToken ct = default)
     {
-        var result = await api.PutAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/sessions/current",
-            new { focus_area, active_issues, summary, serialized_state, end }, ct);
-        return JsonSerializer.Serialize(result, JsonOpts);
+        return await ExecuteJsonAsync(
+            "session_update",
+            token => api.PutAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/sessions/current",
+                new { focus_area, active_issues, summary, serialized_state, end }, token),
+            ct);
     }
 
     // ── Export / Import ───────────────────────────────────────────────────────
@@ -239,8 +324,11 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         CancellationToken ct = default)
     {
-        await api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/memory/export", null, ct);
-        return "exported";
+        return await ExecuteMessageAsync(
+            "memory_export",
+            token => api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/memory/export", null, token),
+            "exported",
+            ct);
     }
 
     [McpServerTool(Name = "memory_import"), Description("Import .squad/decisions/inbox/*.md files into the project memory DB.")]
@@ -248,7 +336,10 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         CancellationToken ct = default)
     {
-        await api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/memory/import", null, ct);
-        return "imported";
+        return await ExecuteMessageAsync(
+            "memory_import",
+            token => api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/memory/import", null, token),
+            "imported",
+            ct);
     }
 }
