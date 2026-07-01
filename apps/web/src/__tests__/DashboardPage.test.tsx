@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, within } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, within, fireEvent } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { ProjectDashboardDto } from '../api/types';
@@ -75,7 +75,9 @@ beforeEach(() => {
     by_model: [],
   });
 });
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+});
 
 describe('DashboardPage', () => {
   it('renders summary cards, throughput, and the agent leaderboard', async () => {
@@ -153,5 +155,36 @@ describe('DashboardPage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText(/API error 404/)).toBeDefined());
+  });
+
+  it('uses the same range for dashboard and usage queries', async () => {
+    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue(dto);
+
+    renderPage();
+
+    await waitFor(() => expect(apiClient.getProjectDashboard).toHaveBeenCalled());
+    await waitFor(() => expect(apiClient.getProjectUsage).toHaveBeenCalled());
+
+    const initialDashboardArgs = vi.mocked(apiClient.getProjectDashboard).mock.calls.at(-1)!;
+    const initialUsageArgs = vi.mocked(apiClient.getProjectUsage).mock.calls.at(-1)!;
+
+    expect(initialDashboardArgs[0]).toBe('p1');
+    expect(initialUsageArgs[0]).toBe('p1');
+    expect(initialDashboardArgs[1]).toBe(initialUsageArgs[1]);
+    expect(initialDashboardArgs[2]).toBe(initialUsageArgs[2]);
+
+    fireEvent.change(screen.getByLabelText('Time range'), { target: { value: '7d' } });
+
+    await waitFor(() => expect(vi.mocked(apiClient.getProjectDashboard).mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(vi.mocked(apiClient.getProjectUsage).mock.calls.length).toBeGreaterThan(1));
+
+    const updatedDashboardArgs = vi.mocked(apiClient.getProjectDashboard).mock.calls.at(-1)!;
+    const updatedUsageArgs = vi.mocked(apiClient.getProjectUsage).mock.calls.at(-1)!;
+
+    expect(updatedDashboardArgs[0]).toBe('p1');
+    expect(updatedUsageArgs[0]).toBe('p1');
+    expect(updatedDashboardArgs[1]).toBe(updatedUsageArgs[1]);
+    expect(updatedDashboardArgs[2]).toBe(updatedUsageArgs[2]);
+    expect(updatedDashboardArgs[1]).not.toBe(initialDashboardArgs[1]);
   });
 });

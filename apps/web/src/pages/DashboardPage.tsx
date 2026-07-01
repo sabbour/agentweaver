@@ -242,10 +242,11 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [usageRange, setUsageRange] = useState<TimeRange>('30d');
+  const [selectedRange, setSelectedRange] = useState<TimeRange>('30d');
   const [filteredUsage, setFilteredUsage] = useState<TokenUsageSummary | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [agentCosts, setAgentCosts] = useState<Record<string, AgentCost>>({});
+  const rangeDates = useMemo(() => timeRangeDates(selectedRange), [selectedRange]);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -257,7 +258,7 @@ export function DashboardPage() {
   const load = useCallback(async (signal: { cancelled: boolean }) => {
     if (!projectId) return;
     try {
-      const dto = await apiClient.getProjectDashboard(projectId);
+      const dto = await apiClient.getProjectDashboard(projectId, rangeDates.from, rangeDates.to);
       if (!signal.cancelled) {
         setData(dto);
         setError(null);
@@ -267,7 +268,7 @@ export function DashboardPage() {
     } finally {
       if (!signal.cancelled) setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, rangeDates.from, rangeDates.to]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -281,11 +282,11 @@ export function DashboardPage() {
     };
   }, [projectId, load]);
 
-  const loadProjectUsage = useCallback(async (range: TimeRange) => {
+  const loadProjectUsage = useCallback(async () => {
     if (!projectId) return;
     setUsageLoading(true);
     try {
-      const { from, to } = timeRangeDates(range);
+      const { from, to } = rangeDates;
       const usage = await apiClient.getProjectUsage(projectId, from, to);
       setFilteredUsage(usage);
 
@@ -319,11 +320,11 @@ export function DashboardPage() {
     } finally {
       setUsageLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, rangeDates]);
 
   useEffect(() => {
-    void loadProjectUsage(usageRange);
-  }, [usageRange, loadProjectUsage]);
+    void loadProjectUsage();
+  }, [loadProjectUsage]);
 
   const cards = useMemo(() => {
     if (!data) return [];
@@ -422,8 +423,8 @@ export function DashboardPage() {
             <div className={styles.filterGroup}>
               <Text className={styles.metricNote}>Range</Text>
               <Select
-                value={usageRange}
-                onChange={(_e, d) => setUsageRange(d.value as TimeRange)}
+                value={selectedRange}
+                onChange={(_e, d) => setSelectedRange(d.value as TimeRange)}
                 aria-label="Time range"
                 size="small"
                 style={{ width: '120px' }}

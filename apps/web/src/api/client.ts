@@ -714,8 +714,12 @@ export class AgentweaverApiClient {
   }
 
   // Metrics (web IA reorg) — per-project dashboard + global "Now" overview.
-  getProjectDashboard(projectId: string): Promise<import('./types').ProjectDashboardDto> {
-    return this.request<import('./types').ProjectDashboardDto>('GET', `/projects/${encodeURIComponent(projectId)}/dashboard`);
+  getProjectDashboard(projectId: string, from?: string, to?: string): Promise<import('./types').ProjectDashboardDto> {
+    const query = new URLSearchParams();
+    if (from) query.set('from', from);
+    if (to) query.set('to', to);
+    const qs = query.toString();
+    return this.request<import('./types').ProjectDashboardDto>('GET', `/projects/${encodeURIComponent(projectId)}/dashboard${qs ? `?${qs}` : ''}`);
   }
 
   getOverview(): Promise<import('./types').OverviewDto> {
