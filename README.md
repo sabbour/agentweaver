@@ -173,3 +173,27 @@ flowchart TB
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
 - [AKS architecture](docs/architecture-aks.md)
+
+## Reference
+
+This section places Agentweaver alongside Agent eXecutor (AX) and Agent Substrate so the scope and tradeoffs of each project are easy to compare.
+
+| Dimension | Agent eXecutor (AX) | Agent Substrate | Agentweaver |
+| --- | --- | --- | --- |
+| What it is | Google open-source distributed harness runtime | Kubernetes-native compute multiplexing layer | Full-stack agent orchestration system |
+| Layer | Agent runtime / harness | Infrastructure / compute substrate | Orchestration runtime + workspace + review stack |
+| Language | Go | Go | C#, TypeScript |
+| Execution model | Single-writer controller with append-only event log; sessions identified by `conversationId`; resumable gRPC streams | Maps many actor sessions onto pre-warmed gVisor workers with sub-second suspend/resume to object storage | Coordinator expands an OutcomeSpec into a WorkPlan DAG and runs child tasks in parallel git worktrees on AgentHost pods |
+| Isolation | Compute-agnostic; relies on Agent Substrate (gVisor) or custom compute; no built-in VM isolation | gVisor syscall-level isolation in pre-warmed pods | Kata VM hardware-level isolation per AgentHost pod with layered network controls |
+| Human-in-the-loop | Roadmap only: tool-call approvals are planned, not implemented | Not applicable | First-class review gates with approve / request-changes / decline and PostgreSQL-serialized merge |
+| Streaming | Resumable gRPC streams, OpenTelemetry telemetry, event-log sequence cursors | Infra-focused suspend/resume and routing layer, not an end-user run stream | SSE event stream, durable RunEvents in PostgreSQL, real-time topology graph |
+| Git/Workspace | No git or workspace concept | No git or workspace concept | Per-run git worktree + branch with auto-conflict-resolve and merge serialization |
+| MCP | No built-in MCP surface | No | Yes; MCP server exposes runs as tools |
+| Steering | No steering / redirect concept | No steering | Mid-run coordinator steering |
+| Status | Open-source runtime | Open-source infrastructure layer | Alpha software |
+| License | Apache 2.0 | Apache 2.0 | MIT |
+| Links | [github.com/google/ax](https://github.com/google/ax)<br>[Google Cloud blog](https://cloud.google.com/blog/products/ai-machine-learning/agent-executor-googles-distributed-agent-runtime) | [github.com/agent-substrate/substrate](https://github.com/agent-substrate/substrate)<br>[learn.agentsubstrate.dev](https://learn.agentsubstrate.dev) | [github.com/sabbour/agentweaver](https://github.com/sabbour/agentweaver)<br>[sabbour.me/agentweaver](https://sabbour.me/agentweaver/) |
+
+AX and Agentweaver overlap most at the orchestration layer, but they optimize for different boundaries. AX is a framework-agnostic distributed harness runtime with resumable streams and a durable append-only event log, while Agentweaver couples orchestration to git worktrees, review gates, and merge flow. AX is stronger if the goal is a general controller that can sit over different compute backends at scale without prescribing developer workflow. Agentweaver is broader in scope because it also owns the workspace, human approval path, and run-to-merge lifecycle.
+
+Agent Substrate and Agentweaver sit at different layers, even though both care about safe execution. Substrate is an infrastructure system for packing many logical agent sessions onto pre-warmed gVisor workers with fast suspend/resume, which makes it stronger for compute multiplexing and framework-agnostic scale. Agentweaver instead assumes responsibility for orchestration semantics, per-run git state, event streaming, and human review, and it uses Kata VM-backed AgentHost pods rather than a shared gVisor worker model. In practice, Substrate is best read as a substrate that other runtimes can build on, whereas Agentweaver is an opinionated end-to-end system.
