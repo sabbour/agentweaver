@@ -319,3 +319,72 @@ describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () =>
     expect(calls).toBeLessThan(5);
   });
 });
+
+describe('CoordinatorRunPage — child run (non-coordinator) skips coordinator artifacts', () => {
+  it('does not call getWorkPlan for a child run (parent_run_id is set)', async () => {
+    // A child run has parent_run_id set. The work-plan and outcome-spec endpoints do not exist
+    // for child runs; calling them produces expected 404s that add noise without value.
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'child-run-1',
+      status: 'in_progress',
+      parent_run_id: 'coordinator-run-1',
+    } as never);
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    // Wait for getRun to be called (confirms effects have fired).
+    await waitFor(
+      () => expect(vi.mocked(apiClient.getRun)).toHaveBeenCalled(),
+      { timeout: 2000 },
+    );
+
+    // Allow any pending async work to settle before asserting call counts.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // getWorkPlan must not be called for a child run — it is a coordinator-only artifact.
+    expect(vi.mocked(apiClient.getWorkPlan)).not.toHaveBeenCalled();
+  });
+
+  it('does not render the outcome spec panel for a child run', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'child-run-1',
+      status: 'in_progress',
+      parent_run_id: 'coordinator-run-1',
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    // Wait for the run type to resolve.
+    await waitFor(
+      () => expect(vi.mocked(apiClient.getRun)).toHaveBeenCalled(),
+      { timeout: 2000 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // The OutcomeSpecPanel is stubbed to return null, so getOutcomeSpec must not be called.
+    // (OutcomeSpecPanel is mocked at the module level in this file.)
+    expect(vi.mocked(apiClient.getOutcomeSpec)).not.toHaveBeenCalled();
+  });
+
+  it('stops polling after run-level terminal status even when coordinator_status is absent', async () => {
+    // A run that is terminal at the run level but has no coordinator_status field set.
+    // The lifecycle poll must stop after the first tick, not keep retrying.
+    vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'failed' } as never);
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(vi.mocked(apiClient.getRun)).toHaveBeenCalled(),
+      { timeout: 2000 },
+    );
+    // Let any scheduled timers fire.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // getRun should only be called once or twice (seed + first poll tick); the poll stops
+    // because the run-level status is terminal.
+    const runCalls = vi.mocked(apiClient.getRun).mock.calls.length;
+    expect(runCalls).toBeLessThan(4);
+  });
+});

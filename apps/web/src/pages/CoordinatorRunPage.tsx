@@ -1057,8 +1057,15 @@ export function CoordinatorRunPage() {
       .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
       .catch(() => {});
 
-    // Fetch work plan + children for topology status seed + AgentRail.
+    // Fetch work plan + children for topology status seed + AgentRail. Skip for child runs —
+    // work-plan is a coordinator-only artifact and child runs will never have one.
     void (async () => {
+      const runDetail = await apiClient.getRun(runId).catch(() => null);
+      if (cancelled) return;
+      if (runDetail?.parent_run_id != null) {
+        setIsChildRun(true);
+        return;
+      }
       const [workPlan, children] = await Promise.all([
         apiClient.getWorkPlan(runId).catch(() => null),
         apiClient.getCoordinatorChildren(runId).catch(() => null),
@@ -1127,6 +1134,9 @@ export function CoordinatorRunPage() {
   // Used to render a graceful empty state and to back off the lifecycle poll so the page
   // doesn't hammer the 404 endpoint on a tight loop.
   const [noWorkPlan, setNoWorkPlan] = useState(false);
+  // True when the run detail confirms this is a child run (parent_run_id non-null). Child runs
+  // never have a work-plan or outcome-spec; skip coordinator-only artifact fetches entirely.
+  const [isChildRun, setIsChildRun] = useState(false);
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -1143,19 +1153,28 @@ export function CoordinatorRunPage() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
+    // Run-level terminal statuses stop polling even when coordinator_status is absent (e.g., a
+    // run interrupted before the coordinator emitted a terminal orchestration status).
+    const RUN_LEVEL_TERMINAL = new Set<RunStatus>(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
 
     const tick = async () => {
       const detail = await apiClient.getRun(runId).catch(() => null);
+      // Child runs (parent_run_id non-null) are not coordinator runs and will never have a
+      // work-plan or outcome-spec. Skip coordinator-only artifact fetches to avoid 404 noise.
+      const childRun = detail?.parent_run_id != null;
+      if (childRun) setIsChildRun(true);
       // Fetch the work-plan separately so we can distinguish "no plan yet" (404) from a
       // transient failure. A 404 must NOT be retried on the tight 4s cadence — that spams
       // the endpoint for early/stuck runs that have no plan. We flag it and back off.
       let wp: WorkPlanResponse | null = null;
       let wpMissing = false;
-      try {
-        wp = await apiClient.getWorkPlan(runId);
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 404) wpMissing = true;
-        wp = null;
+      if (!childRun) {
+        try {
+          wp = await apiClient.getWorkPlan(runId);
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) wpMissing = true;
+          wp = null;
+        }
       }
       if (cancelled) return;
       setNoWorkPlan(wpMissing);
@@ -1173,6 +1192,9 @@ export function CoordinatorRunPage() {
         setAutoApprove(Boolean(detail.auto_approve_tools));
         seededToggles.current = true;
       }
+      // Stop polling when the run-level status is already terminal even if the orchestration
+      // coordinator_status field is absent (e.g., a run interrupted before emitting a terminal status).
+      if (detail?.status && RUN_LEVEL_TERMINAL.has(detail.status)) return;
       const phase = normalizePhase(statusField) !== 'unknown'
         ? normalizePhase(statusField)
         : normalizePhase(wpStatus);
@@ -2106,8 +2128,8 @@ export function CoordinatorRunPage() {
             ? styles.twoColSessionCollapsed
             : styles.twoCol
       }>
-        {/* COL 1 — outcome spec, collapsible to a thin left rail. */}
-        {outcomeCollapsed ? (
+        {/* COL 1 — outcome spec, collapsible to a thin left rail. Hidden for child runs. */}
+        {!isChildRun && (outcomeCollapsed ? (
           <div className={styles.outcomeRail}>
             <Button
               appearance="subtle"
@@ -2122,7 +2144,7 @@ export function CoordinatorRunPage() {
           <div className={styles.leftCol}>
             <OutcomeSpecPanel runId={runId} projectId={projectId ?? undefined} events={events} streamStatus={streamStatus} onCollapse={() => setOutcomeCollapsed(true)} onReconnect={reconnectStream} />
           </div>
-        )}
+        ))}
 
         {/* COL 2 — coordinator session: automation/actions controls, the rich run view, and steering.
             Collapsible to a thin right rail (mirrors the outcome rail) to give the outcome panel the
