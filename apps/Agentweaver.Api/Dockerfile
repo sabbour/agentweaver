@@ -74,6 +74,7 @@ RUN getent group 1000 || groupadd --gid 1000 appgroup; \
 RUN mkdir -p /data /app/logs && chown -R 1000:1000 /data /app
 
 COPY --from=build --chown=1000:1000 /app/publish .
+COPY --chown=1000:1000 VERSION ./
 
 USER 1000
 
