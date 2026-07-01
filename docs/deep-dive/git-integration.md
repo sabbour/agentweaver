@@ -245,7 +245,7 @@ A token scope provider decides whether credentials are installation-wide or call
 - installation scope is used only when `Auth:GitHub:ScopeProvider` is explicitly set to `installation`;
 - background work without a caller can fall back to installation scope.
 
-Before consumers use GitHub, they ask `IGitHubAccessTokenProvider` for a valid token. The refresh service returns non-expiring tokens as-is, refreshes near-expiry tokens with the stored refresh token, serializes refreshes per scope, and signs the scope out if refresh cannot succeed.
+Before consumers use GitHub, they ask `IGitHubAccessTokenProvider` for a valid token. The refresh service returns non-expiring tokens as-is, refreshes near-expiry tokens with the stored refresh token, serializes refreshes per scope, and signs the scope out if refresh cannot succeed. With the Key Vault token store, the refresh serialization is a short-lived distributed lease so concurrent requests on different API replicas wait for and reuse the replica that wins token rotation; local stores use an in-process gate.
 
 ```mermaid
 flowchart TD
