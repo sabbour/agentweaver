@@ -64,7 +64,8 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
         _sut = new CoordinatorSteeringService(
             _streamStore, new RunWorkflowRegistry(),
-            _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance);
+            _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            runStore: _runStore);
     }
 
     [Fact]
@@ -254,6 +255,67 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Stop_OnNonOwnerReplica_TerminalizesTargetChildDurably()
+    {
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.InProgress, "");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.Dispatching, new[] { SubtaskStatus.Running });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = true;
+
+        var childRunId = (await GetSubtaskAsync(ids[0])).ChildRunId!;
+        await SeedChildRunAsync(childRunId, coord, ids[0]);
+
+        var view = await _sut.SteerAsync(coord, "stop", childRunId, "stop the stuck child", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+        var child = await _runStore.GetAsync(RunId.Parse(childRunId));
+        child!.Status.Should().Be(RunStatus.Failed,
+            "a non-owner replica must persist terminal state instead of relying on local RunWorkflowRegistry");
+        child.Result.Should().Be("steering_stop");
+
+        var repeated = await _sut.SteerAsync(coord, "stop", childRunId, "stop the stuck child", "owner", default);
+        repeated.Status.Should().Be(SteeringStatus.Applied, "repeated stops are idempotent from the caller perspective");
+        (await _runStore.GetAsync(RunId.Parse(childRunId)))!.Status.Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
+    public async Task Stop_Broadcast_OnNonOwnerReplica_TerminalizesAllActiveChildrenDurably()
+    {
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.InProgress, "");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.Dispatching, new[]
+        {
+            SubtaskStatus.Running,
+            SubtaskStatus.Running,
+        });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = true;
+
+        var childRunIds = new[]
+        {
+            (await GetSubtaskAsync(ids[0])).ChildRunId!,
+            (await GetSubtaskAsync(ids[1])).ChildRunId!,
+        };
+        await SeedChildRunAsync(childRunIds[0], coord, ids[0]);
+        await SeedChildRunAsync(childRunIds[1], coord, ids[1]);
+
+        var view = await _sut.SteerAsync(coord, "stop", targetChildRunId: null, "stop all", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+        foreach (var childRunId in childRunIds)
+        {
+            var child = await _runStore.GetAsync(RunId.Parse(childRunId));
+            child!.Status.Should().Be(RunStatus.Failed);
+            child.Result.Should().Be("steering_stop");
+        }
+
+        var coordinator = await _runStore.GetAsync(RunId.Parse(coord));
+        coordinator!.Status.Should().Be(RunStatus.Failed, "broadcast stop also terminalizes the coordinator run");
+        coordinator.Result.Should().Be("steering_stop");
+    }
+
+    [Fact]
     public async Task Redirect_WithSpecificChildTarget_ForceCompletesChildStream()
     {
         // Redirect targeting a specific in-progress child must force-complete that child's stream
@@ -298,6 +360,23 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         await _runStore.InsertAsync(run);
         if (status != RunStatus.InProgress)
             await _runStore.UpdateResultAsync(run.Id, status, result, DateTimeOffset.UtcNow);
+    }
+
+    private async Task SeedChildRunAsync(string childRunId, string coordinatorRunId, int subtaskId)
+    {
+        await _runStore.InsertAsync(new Run
+        {
+            Id = RunId.Parse(childRunId),
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "child task",
+            SubmittingUser = "owner",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ParentRunId = coordinatorRunId,
+            SubtaskId = subtaskId.ToString(),
+        });
     }
 
     private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(

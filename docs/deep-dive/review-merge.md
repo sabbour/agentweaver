@@ -42,7 +42,7 @@ These invariants define the subsystem:
 - **Review decisions are at-most-once.** Pending review requests are consumed atomically, and run-status compare-and-swap operations ensure only one approve, decline, request-changes, commit, or merge path wins.
 - **Request changes loops back to work.** A reviewer can send feedback to the producer instead of choosing between blind approval and terminal rejection.
 - **Automated review is policy, not authority by itself.** RAI and rubberduck gates can pass, request revision, or fail/route the graph, but the human-review gate is the explicit human-oversight point for irreversible actions in the default runtime path.
-- **Merge is repository-serialized.** Even after approval, repository-level merge locks and run-status CAS guards prevent two merges from racing the same base checkout.
+- **Merge is repository-serialized.** Even after approval, repository-level merge locks and run-status CAS guards prevent two merges from racing the same base checkout. PostgreSQL deployments use session advisory locks so this guard spans API replicas; SQLite/local development uses a process-wide semaphore.
 - **Coordinator children do not merge.** Child runs produce assemble-ready branches. The parent coordinator assembles, reviews, merges, and records the integrated outcome.
 - **Fail closed on unbound policy.** A policy step that cannot be safely bound to a runtime executor should prevent execution rather than silently weakening review.
 
@@ -263,7 +263,7 @@ For coordinator assembly, the merge target is the integration branch. A successf
 ```mermaid
 flowchart TD
     Approved[Approved reviewed tree]
-    Lock{Repository lock?}
+    Lock{Repository lock?<br/>Postgres advisory or local semaphore}
     Cas{CAS to merging?}
     GitMerge[Git merge]
     Success[Merged]
@@ -357,7 +357,7 @@ If you were rebuilding this subsystem from scratch, implement these pieces in or
 5. Make request-changes feed sanitized reviewer feedback back into the producer and clear stale approvals/checkpoints.
 6. Implement review policies as named, server-loaded, server-validated project configuration.
 7. Compose policy gates before merge, absorbing existing compatible gates and failing closed on unsupported bindings.
-8. Implement merge with both a repository lock and run-status CAS.
+8. Implement merge with both a repository lock and run-status CAS; use a distributed lock when multiple API replicas can serve the same project workspace.
 9. Preserve conflict details and recoverable blocked states distinctly.
 10. Trim coordinator child runs so they produce assemble-ready output only.
 11. Implement coordinator assembly as one integration branch, one aggregate RAI pass, one human review, one merge, and one Scribe pass.

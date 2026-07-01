@@ -33,6 +33,9 @@ public static class PreviewReaper
     public const string AnnotationRun = "agentweaver.dev/preview-run";
     public const string AnnotationToken = "agentweaver.dev/preview-token";
     public const string AnnotationOwner = "agentweaver.dev/preview-owner";
+    public const string AnnotationPod = "agentweaver.dev/preview-pod";
+    public const string AnnotationTargetPort = "agentweaver.dev/preview-target-port";
+    public const string AnnotationStartedAt = "agentweaver.dev/preview-started-at";
 
     public const string LabelPartOf = "app.kubernetes.io/part-of";
     public const string LabelPartOfValue = "agentweaver";

@@ -237,6 +237,7 @@ public sealed class CoordinatorSteeringService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RunWorkflowFactory? _runWorkflowFactory;
     private readonly IRunStore? _runStore;
+    private readonly IRunEventStream? _eventStream;
     private readonly ILogger<CoordinatorSteeringService> _logger;
 
     public CoordinatorSteeringService(
@@ -245,12 +246,14 @@ public sealed class CoordinatorSteeringService
         IServiceScopeFactory scopeFactory,
         ILogger<CoordinatorSteeringService> logger,
         RunWorkflowFactory? runWorkflowFactory = null,
-        IRunStore? runStore = null)
+        IRunStore? runStore = null,
+        IRunEventStream? eventStream = null)
     {
         _streamStore = streamStore;
         _registry = registry;
         _scopeFactory = scopeFactory;
         _runStore = runStore;
+        _eventStream = eventStream;
         _logger = logger;
         _runWorkflowFactory = runWorkflowFactory;
     }
@@ -381,29 +384,17 @@ public sealed class CoordinatorSteeringService
             if (!abandoned)
             {
                 _logger.LogInformation(
-                    "Steering stop: child {ChildRunId} was not active (already terminal); nothing to cancel", childRunId);
-                continue;
+                    "Steering stop: child {ChildRunId} was not active in this replica; applying durable stop state",
+                    childRunId);
             }
 
-            // Emit a terminal run.cancelled so the dispatch observer resolves and the dispatch loop
-            // (single writer of subtask rows) transitions the affected subtask to failed. The watch
-            // loop swallows the cancellation as an abandon and emits nothing, so this is authoritative.
-            var childEntry = _streamStore.Get(childRunId);
-            if (childEntry is not null)
-            {
-                childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop" });
-                _streamStore.Complete(childRunId);
-                // Persist the child run's accumulated events so the timeline survives stream eviction.
-                // The watch loop's abandon path emits nothing; this is the only persist for stopped children.
-                if (_runWorkflowFactory is not null)
-                    _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
-            }
+            await EmitChildCancelledAsync(childRunId, CancellationToken.None).ConfigureAwait(false);
 
-            // Terminalize the child run row in the DB so it no longer shows InProgress forever.
-            // The stream-level run.cancelled above unblocks the dispatch loop, but the run store row
-            // is never updated without this call — leaving the child stuck InProgress in the DB.
+            // Terminalize the child run row even when the request landed on a non-owner replica.
+            // The owning watch loop polls this durable marker and abandons its local token.
             if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
-                _ = _runStore.TrySetTerminalStatusAsync(childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None);
+                await _runStore.TrySetTerminalStatusAsync(
+                    childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None).ConfigureAwait(false);
         }
 
         var relayedAt = DateTimeOffset.UtcNow;
@@ -429,6 +420,32 @@ public sealed class CoordinatorSteeringService
     // -----------------------------------------------------------------------
     // redirect / amend — queue for the child's next turn boundary.
     // -----------------------------------------------------------------------
+
+    private async Task EmitChildCancelledAsync(string childRunId, CancellationToken ct)
+    {
+        // Emit a terminal run.cancelled so observers resolve the child as failed. If this replica owns
+        // the in-memory stream, record there so local subscribers wake; otherwise append directly to
+        // the durable event stream so reconnect/replay and non-owner stops still expose the terminal.
+        var childEntry = _streamStore.Get(childRunId);
+        if (childEntry is not null)
+        {
+            if (!childEntry.HasEventType(EventTypes.RunCancelled))
+                childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop" });
+            _streamStore.Complete(childRunId);
+            if (_runWorkflowFactory is not null)
+                _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
+            return;
+        }
+
+        if (_eventStream is not null)
+        {
+            await _eventStream.AppendAsync(
+                childRunId,
+                new RunEvent(0, EventTypes.RunCancelled, new { reason = "steering_stop" }),
+                ct).ConfigureAwait(false);
+            await _eventStream.CompleteAsync(childRunId, ct).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>
     /// Terminates the coordinator run row as Failed/stopped. Called by <see cref="ApplyStopAsync"/>

@@ -181,6 +181,7 @@ public static class SandboxEndpoints
             HttpContext httpContext,
             string runId,
             PortForwardService portForwardService,
+            ISandboxPreviewService previewService,
             IRunStore runStore,
             CancellationToken ct) =>
         {
@@ -192,8 +193,16 @@ public static class SandboxEndpoints
             if (!EndpointHelpers.IsOwner(httpContext, run))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-            var sessions = portForwardService.ListForRun(runId)
-                .Select(s => new
+            var sessions = previewService.Enabled
+                ? (await previewService.ListForRunAsync(runId, ct)).Select(s => new
+                {
+                    session_id  = s.Token,
+                    local_port  = 0,
+                    target_port = s.TargetPort,
+                    pod_name    = s.PodName,
+                    started_at  = s.StartedAt,
+                })
+                : portForwardService.ListForRun(runId).Select(s => new
                 {
                     session_id  = s.SessionId,
                     local_port  = s.LocalPort,
@@ -254,6 +263,11 @@ public static class SandboxEndpoints
                     preview_url   = preview.PreviewUrl,
                     keepalive_url = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive",
                 });
+            }
+            catch (PortForwardLimitExceededException ex)
+            {
+                logger.LogWarning(ex, "Preview session limit exceeded for run {RunId}", runId);
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status429TooManyRequests);
             }
             catch (InvalidOperationException ex)
             {
