@@ -1400,6 +1400,8 @@ A `stop` takes effect immediately: it cancels the targeted child run's in-flight
 
 The ONE collective human-review gate for Phase 3 collective assembly (Feature 008). After every child subtask finishes, the coordinator builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs a collective RAI pass over the aggregate diff, then suspends here for one human decision over the **combined** output of all agents. Mirrors `POST /api/runs/{id}/review` (owner-scoped, at-most-once) but `{id}` is the **coordinator** run id, and the decision is delivered to the service-driven gate the collective pipeline is awaiting. Owner-scoped.
 
+In multi-replica deployments, the reviewer may submit this request to any API replica. If the receiving replica does not own the in-memory assembly pipeline but the durable work plan is still `in_review` at assembly stage `review`, the decision is stored as a deferred decision for the owner replica to pick up and apply to the armed gate. A duplicate submit while that deferred decision exists returns the same accepted response rather than replacing the original decision.
+
 Request:
 
 ```json
@@ -1435,7 +1437,7 @@ Response `200 OK`:
 `400 Bad Request` when `id` is not a valid run id.
 `403 Forbidden` when the caller does not own the run, or does not own the pending review request.
 `404 Not Found` when the run does not exist.
-`409 Conflict` with `error: "no_assembly_review_pending"` when no collective review is currently awaited for the run (the pipeline has not reached the gate yet, or the decision was already consumed by a concurrent POST).
+`409 Conflict` with `error: "no_assembly_review_pending"` when no collective review is currently awaited for the run (the pipeline has not reached the gate yet, or the decision was already consumed and the work plan has left `in_review`).
 
 ### GET /api/runs/{id}/assembly/files
 
