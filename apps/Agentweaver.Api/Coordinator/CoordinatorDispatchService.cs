@@ -372,7 +372,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 await ApplyStallFailureAsync(
                     context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
                 await PropagateBlockedDependentsAsync(
-                    context, workPlanId.Value, result.SubtaskId, "dependency_stalled", statusById, edges, seq, ct)
+                    context, workPlanId.Value, result.SubtaskId, "dependency_stalled", SubtaskStatus.Blocked, statusById, edges, seq, ct)
                     .ConfigureAwait(false);
                 continue;
             }
@@ -633,7 +633,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         {
             var reason = status == SubtaskStatus.RaiFlagged ? "dependency_rai_flagged" : "dependency_failed";
             await PropagateBlockedDependentsAsync(
-                context, workPlanId, result.SubtaskId, reason, statusById, edges, seq, ct).ConfigureAwait(false);
+                context, workPlanId, result.SubtaskId, reason, SubtaskStatus.Failed, statusById, edges, seq, ct).ConfigureAwait(false);
         }
     }
 
@@ -694,16 +694,43 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
 
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
-        var result = _worktreeManager.BuildIntegrationBranch(
-            context.RepositoryPath, context.OriginatingBranch, integrationBranch, branches);
 
-        if (result.Outcome == IntegrationBranchOutcome.Conflict)
+        // Retry up to 3 times on lock contention: a stale .lock file from a crashed prior process
+        // causes LibGit2Sharp.LockedFileException. Clean the stale lock and retry with backoff.
+        // The whole method is best-effort — failure here must never crash the dispatch loop.
+        const int MaxLockRetries = 3;
+        for (var attempt = 1; attempt <= MaxLockRetries; attempt++)
         {
-            _logger.LogWarning(
-                "Coordinator dispatch: dependency-base merge for run {RunId} conflicted while adding {Branch}; final assembly will require resolution. Files: {Files}",
-                context.CoordinatorRunId,
-                result.ConflictingBranch,
-                string.Join(", ", result.ConflictingFiles ?? []));
+            try
+            {
+                var result = _worktreeManager.BuildIntegrationBranch(
+                    context.RepositoryPath, context.OriginatingBranch, integrationBranch, branches);
+
+                if (result.Outcome == IntegrationBranchOutcome.Conflict)
+                {
+                    _logger.LogWarning(
+                        "Coordinator dispatch: dependency-base merge for run {RunId} conflicted while adding {Branch}; final assembly will require resolution. Files: {Files}",
+                        context.CoordinatorRunId,
+                        result.ConflictingBranch,
+                        string.Join(", ", result.ConflictingFiles ?? []));
+                }
+                return;
+            }
+            catch (LibGit2Sharp.LockedFileException ex) when (attempt < MaxLockRetries)
+            {
+                _logger.LogWarning(ex,
+                    "Coordinator dispatch: integration branch lock contention (attempt {Attempt}/{Max}) for run {RunId}; cleaning stale lock files and retrying",
+                    attempt, MaxLockRetries, context.CoordinatorRunId);
+                _worktreeManager.TryCleanIntegrationLockFiles(context.RepositoryPath, integrationBranch);
+                await Task.Delay(TimeSpan.FromMilliseconds(200 * attempt), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Coordinator dispatch: dependency-base integration branch build failed for run {RunId} (best-effort; dispatch continues without dependency base update)",
+                    context.CoordinatorRunId);
+                return;
+            }
         }
     }
 
@@ -712,6 +739,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         int workPlanId,
         int failedDependencyId,
         string reason,
+        string targetStatus,
         Dictionary<int, string> statusById,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         SeqCounter seq,
@@ -739,7 +767,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == dependentId, ct).ConfigureAwait(false);
                 if (row is not null && row.Status == SubtaskStatus.Pending)
                 {
-                    row.Status = SubtaskStatus.Failed;
+                    row.Status = targetStatus;
                     row.RecoveryGuidance =
                         $"Skipped by coordinator: dependency subtask {failedDependencyId} ended with {reason}.";
                     row.UpdatedAt = DateTimeOffset.UtcNow;
@@ -749,7 +777,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 }
             }
 
-            statusById[dependentId] = SubtaskStatus.Failed;
+            statusById[dependentId] = targetStatus;
             if (updated is not null)
                 EmitSubtask(context, workPlanId, updated, EventTypes.SubtaskFailed, seq.Next());
 
@@ -947,7 +975,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             await FailSubtaskCapacityUnavailableAsync(
                 context, workPlanId, subtaskId, statusById, seq, ct).ConfigureAwait(false);
             await PropagateBlockedDependentsAsync(
-                context, workPlanId, subtaskId, "dependency_failed", statusById, edges, seq, ct)
+                context, workPlanId, subtaskId, "dependency_failed", SubtaskStatus.Failed, statusById, edges, seq, ct)
                 .ConfigureAwait(false);
             return;
         }
@@ -1208,8 +1236,20 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 // Stall TTL expired: child emitted no event within the configured window.
                 _logger.LogWarning(
                     "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) emitted no event " +
-                    "within the stall TTL ({Timeout}); treating as stalled",
-                    childRunId, subtaskId, _stallTimeout);
+                    "within the stall TTL ({Timeout}); last event sequence {LastSeq}; treating as stalled",
+                    childRunId, subtaskId, _stallTimeout, lastSeq);
+
+                // Emit a structured stall event on the coordinator stream for actionable diagnostics.
+                var coordEntry = _streamStore.Get(coordinatorRunId);
+                coordEntry?.RecordNext(EventTypes.CoordinatorChildStallDetected, new
+                {
+                    childRunId,
+                    subtaskId,
+                    staleSinceUtc = DateTimeOffset.UtcNow.ToString("O"),
+                    stallTimeoutMinutes = _stallTimeout.TotalMinutes,
+                    lastEventSequence = lastSeq,
+                });
+
                 await PersistPartialOutputCheckpointAsync(
                     childRunId, subtaskId, lastSeq, lastPartialOutput, "event_stream_stalled", ct)
                     .ConfigureAwait(false);

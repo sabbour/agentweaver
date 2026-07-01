@@ -427,6 +427,53 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
+    /// Deletes stale git ref lock files for <paramref name="integrationBranch"/>. A lock file is
+    /// left behind when a previous process died mid-ref-write; LibGit2Sharp's next write attempt
+    /// throws <see cref="LibGit2Sharp.LockedFileException"/> ("failed to create locked file ...
+    /// .lock: File exists"). This method removes:
+    /// <list type="bullet">
+    /// <item><c>.git/refs/heads/&lt;branch&gt;.lock</c> — the per-ref lock file.</item>
+    /// <item><c>.git/packed-refs.lock</c> — the shared packed-refs lock file.</item>
+    /// </list>
+    /// Best-effort: logs on failure and never throws. Intended to be called before a retry of
+    /// <see cref="BuildIntegrationBranch"/> after a <see cref="LibGit2Sharp.LockedFileException"/>.
+    /// </summary>
+    internal void TryCleanIntegrationLockFiles(string repositoryPath, string integrationBranch)
+    {
+        try
+        {
+            var gitDir = Path.Combine(repositoryPath, ".git");
+
+            // Per-ref lock file: .git/refs/heads/<branch>.lock
+            var refRelPath = integrationBranch.Replace('/', Path.DirectorySeparatorChar);
+            var refLockPath = Path.Combine(gitDir, "refs", "heads", refRelPath) + ".lock";
+            if (File.Exists(refLockPath))
+            {
+                File.Delete(refLockPath);
+                _logger.LogInformation(
+                    "WorktreeManager: deleted stale ref lock file for integration branch {Branch}",
+                    integrationBranch);
+            }
+
+            // Packed-refs lock (shared across all refs): .git/packed-refs.lock
+            var packedRefsLock = Path.Combine(gitDir, "packed-refs.lock");
+            if (File.Exists(packedRefsLock))
+            {
+                File.Delete(packedRefsLock);
+                _logger.LogInformation(
+                    "WorktreeManager: deleted stale packed-refs lock file in repository {Path}",
+                    repositoryPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: failed to clean stale git lock files for integration branch {Branch} in {Path} (best-effort)",
+                integrationBranch, repositoryPath);
+        }
+    }
+
+    /// <summary>
     /// Prunes the linked-worktree admin entry with the given <paramref name="worktreeName"/>
     /// (the label stored in <c>.git/worktrees/&lt;worktreeName&gt;/</c>) without requiring the
     /// physical worktree directory to exist. This is the correct variant to call during restart
