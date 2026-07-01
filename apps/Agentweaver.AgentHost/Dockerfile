@@ -39,6 +39,11 @@ RUN mkdir -p /app/publish/runtimes/linux-x64/native && \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
+ARG IMAGE_TAG=dev
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.version="${IMAGE_TAG}"
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
+
 # git/libgit2 for workspace operations; ca-certificates for the Copilot HTTP SDK (CopilotClient).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

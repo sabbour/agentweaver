@@ -52,6 +52,11 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 ARG KUBECTL_VERSION=v1.33.1
 WORKDIR /app
 
+ARG IMAGE_TAG=dev
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.version="${IMAGE_TAG}"
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \

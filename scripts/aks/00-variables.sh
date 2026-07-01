@@ -20,19 +20,40 @@ APP_POOL_NAME="${APP_POOL_NAME:-apppool}"
 
 # -- Image parameters ---------------------------------------------------------
 if [[ -z "${IMAGE_TAG:-}" ]]; then
+  VARIABLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${VARIABLES_DIR}/../.." && pwd)"
   if command -v git >/dev/null 2>&1; then
-    VARIABLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    REPO_ROOT="$(cd "${VARIABLES_DIR}/../.." && pwd)"
     IMAGE_TAG="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || true)"
   fi
+  # Fallback: read VERSION file when not in a git context (e.g. inside a container)
+  if [[ -z "${IMAGE_TAG:-}" && -f "${REPO_ROOT}/VERSION" ]]; then
+    IMAGE_TAG="v$(cat "${REPO_ROOT}/VERSION" | tr -d '[:space:]')"
+  fi
   if [[ -z "${IMAGE_TAG:-}" ]]; then
-    echo "ERROR: IMAGE_TAG is not set and git rev-parse failed." >&2
+    echo "ERROR: IMAGE_TAG is not set, git rev-parse failed, and no VERSION file found." >&2
     return 1 2>/dev/null || exit 1
   fi
 fi
-if [[ "${IMAGE_TAG}" == "latest" || "${AGENTHOST_IMAGE_TAG:-}" == "latest" ]]; then
-  echo "ERROR: IMAGE_TAG/AGENTHOST_IMAGE_TAG must be immutable; do not use 'latest'." >&2
-  return 1 2>/dev/null || exit 1
+
+# Validate tag: must not be 'latest', and must be either a git short SHA
+# (7-12 hex chars) or a semver tag prefixed with 'v' (e.g. v1.2.3).
+_validate_image_tag() {
+  local tag="$1"
+  local name="$2"
+  if [[ "${tag}" == "latest" || "${tag}" == "latest-release" ]]; then
+    echo "ERROR: ${name} must be immutable; do not use '${tag}'." >&2
+    return 1
+  fi
+  # Accept: short SHA (hex, 7-40 chars) OR vMAJOR.MINOR.PATCH[-prerelease][+build]
+  if [[ "${tag}" =~ ^[0-9a-f]{7,40}$ ]] || [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9] ]]; then
+    return 0
+  fi
+  echo "ERROR: ${name}='${tag}' is not a valid tag (expected git SHA or vX.Y.Z semver)." >&2
+  return 1
+}
+_validate_image_tag "${IMAGE_TAG}" "IMAGE_TAG" || { return 1 2>/dev/null || exit 1; }
+if [[ -n "${AGENTHOST_IMAGE_TAG:-}" ]]; then
+  _validate_image_tag "${AGENTHOST_IMAGE_TAG}" "AGENTHOST_IMAGE_TAG" || { return 1 2>/dev/null || exit 1; }
 fi
 ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
 
