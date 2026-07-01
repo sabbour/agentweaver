@@ -284,8 +284,12 @@ builder.Services.AddHostedService<TokenUsageProjectionService>();
 // Agent runtime
 builder.Services.AddAgentRuntime();
 builder.Services.AddSingleton<DurableRunControlState>();
+builder.Services.AddSingleton<DurableShellApprovalStore>();
+builder.Services.AddSingleton<IShellApprovalStore>(sp => sp.GetRequiredService<DurableShellApprovalStore>());
 builder.Services.AddSingleton<DurableToolApprovalGate>();
 builder.Services.AddSingleton<IToolApprovalGate>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
+builder.Services.AddSingleton<DurableQuestionGate>();
+builder.Services.AddSingleton<IQuestionGate>(sp => sp.GetRequiredService<DurableQuestionGate>());
 builder.Services.AddSingleton<DurableRunOptionsStore>();
 builder.Services.AddSingleton<IRunOptionsStore>(sp => sp.GetRequiredService<DurableRunOptionsStore>());
 
