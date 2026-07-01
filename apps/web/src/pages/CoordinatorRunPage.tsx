@@ -30,6 +30,7 @@ import {
   ChevronRightRegular,
   DismissRegular,
   EditRegular,
+  OpenRegular,
   SendRegular,
   StopRegular,
 } from '@fluentui/react-icons';
@@ -47,7 +48,7 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, TokenUsageSummary } from '../api/types';
+import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, TokenUsageSummary, PortForwardSessionDto } from '../api/types';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
@@ -1119,6 +1120,14 @@ export function CoordinatorRunPage() {
   const [childUsageByRun, setChildUsageByRun] = useState<Record<string, TokenUsageSummary>>({});
   const [blockedSteerPending, setBlockedSteerPending] = useState(false);
 
+  // Sandbox preview port-forward state.
+  const [sandboxBackend,    setSandboxBackend]    = useState<string | undefined>(undefined);
+  const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
+  const [previewTargetPort, setPreviewTargetPort] = useState('3000');
+  const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
+  const [previewBusy,       setPreviewBusy]       = useState(false);
+  const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
+
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
@@ -1242,6 +1251,16 @@ export function CoordinatorRunPage() {
   useEffect(() => {
     if (orch.phase !== 'blocked') setBlockedSteerPending(false);
   }, [orch.phase]);
+
+  // Derive sandbox backend from sandbox.selected events for the Preview Sandbox button.
+  useEffect(() => {
+    for (const evt of events) {
+      if (evt.type === 'sandbox.selected') {
+        const backend = evt.payload['backend'] ?? evt.payload['Backend'];
+        if (backend) { setSandboxBackend(String(backend)); break; }
+      }
+    }
+  }, [events]);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase);
@@ -1862,6 +1881,42 @@ export function CoordinatorRunPage() {
     }
   }, [runId, projectId, retrying, navigate]);
 
+  const startPreview = () => {
+    const port = parseInt(previewTargetPort, 10);
+    if (isNaN(port) || port <= 0 || port > 65535) {
+      setPreviewError('Enter a valid port number (1–65535).');
+      return;
+    }
+    if (!runId) return;
+    setPreviewBusy(true);
+    setPreviewError(undefined);
+    apiClient.startPortForward(runId, port)
+      .then((session) => setPreviewSession(session))
+      .catch((err) => setPreviewError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setPreviewBusy(false));
+  };
+
+  const stopPreview = () => {
+    if (!runId || !previewSession) return;
+    setPreviewBusy(true);
+    apiClient.stopPortForward(runId, previewSession.session_id)
+      .then(() => setPreviewSession(undefined))
+      .catch(() => { /* ignore stop errors */ })
+      .finally(() => setPreviewBusy(false));
+  };
+
+  const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
+  const previewUrl = previewSession?.preview_url ?? previewSession?.previewUrl ?? null;
+  const keepaliveUrl = previewSession?.keepalive_url ?? previewSession?.keepaliveUrl ?? null;
+
+  useEffect(() => {
+    if (!keepaliveUrl) return;
+    const id = setInterval(() => {
+      apiClient.pingKeepalive(keepaliveUrl).catch(() => { /* ignore keepalive errors */ });
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [keepaliveUrl]);
+
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
   }
@@ -1964,6 +2019,16 @@ export function CoordinatorRunPage() {
             data-testid="coordinator-retry-button"
           >
             Retry
+          </Button>
+        )}
+        {isKubernetesSandbox && (
+          <Button
+            appearance="secondary"
+            size="small"
+            icon={<OpenRegular />}
+            onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}
+          >
+            Preview Sandbox
           </Button>
         )}
         {retriedFromShort && (
@@ -2435,6 +2500,93 @@ export function CoordinatorRunPage() {
                 {busy ? 'Sending' : steerReq?.kind === 'stop' ? 'Stop' : 'Send'}
               </Button>
               {busy && <Spinner size="extra-tiny" aria-hidden="true" />}
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Sandbox preview port-forward dialog */}
+      <Dialog open={previewDialogOpen} onOpenChange={(_, d) => { if (!d.open) setPreviewDialogOpen(false); }}>
+        <DialogSurface style={{ maxWidth: previewUrl ? '900px' : '480px' }}>
+          <DialogBody>
+            <DialogTitle
+              action={
+                <Button
+                  appearance="subtle"
+                  aria-label="Close"
+                  icon={<DismissRegular />}
+                  onClick={() => setPreviewDialogOpen(false)}
+                />
+              }
+            >
+              Sandbox Preview
+            </DialogTitle>
+            <DialogContent style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM }}>
+              {!previewSession ? (
+                <>
+                  <Text>
+                    Preview traffic is proxied through the Agentweaver API server.
+                    Enter the port your app is listening on inside the sandbox.
+                  </Text>
+                  <Field label="Target port (inside sandbox)" validationMessage={previewError} validationState={previewError ? 'error' : 'none'}>
+                    <Input
+                      type="number"
+                      value={previewTargetPort}
+                      onChange={(_, d) => setPreviewTargetPort(d.value)}
+                      disabled={previewBusy}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Text>
+                    Preview active for port {previewSession.target_port} on pod <code>{previewSession.pod_name}</code>.
+                    {previewUrl ? ' The proxied preview is shown below.' : ' The API server did not return a proxied preview URL.'}
+                  </Text>
+                  {previewUrl && (
+                    <iframe
+                      title="Sandbox preview"
+                      src={previewUrl}
+                      referrerPolicy="no-referrer"
+                      style={{ width: '100%', minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}
+                    />
+                  )}
+                  <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                    Session ID: {previewSession.session_id}
+                  </Text>
+                </>
+              )}
+            </DialogContent>
+            <DialogActions>
+              {!previewSession ? (
+                <>
+                  {previewUrl && (
+                    <Button appearance="primary" icon={<OpenRegular />} onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}>
+                      Open preview
+                    </Button>
+                  )}
+                  <Button
+                    appearance="primary"
+                    onClick={startPreview}
+                    disabled={previewBusy}
+                    icon={previewBusy ? <Spinner size="extra-tiny" /> : undefined}
+                  >
+                    Start
+                  </Button>
+                  <Button appearance="secondary" onClick={() => setPreviewDialogOpen(false)}>Cancel</Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    appearance="secondary"
+                    onClick={stopPreview}
+                    disabled={previewBusy}
+                  >
+                    Stop
+                  </Button>
+                  <Button appearance="secondary" onClick={() => setPreviewDialogOpen(false)}>Close</Button>
+                </>
+              )}
             </DialogActions>
           </DialogBody>
         </DialogSurface>

@@ -848,6 +848,7 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
                 icon={<CheckmarkRegular />}
                 aria-label="Commit and merge to originating branch"
                 style={{ width: '100%', whiteSpace: 'nowrap' }}
+                disabled={commitPending || reviewPending || requestChangesPending}
                 onClick={() => void commitRun()}
               >
                 Commit and Merge
@@ -859,6 +860,7 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
                   icon={<CommentRegular />}
                   aria-label="Request change"
                   style={{ flex: 1, whiteSpace: 'nowrap' }}
+                  disabled={commitPending || reviewPending || requestChangesPending}
                   onClick={() => {
                     setRequestChangesOpen((open) => !open);
                     setRequestChangesComment('');
@@ -873,6 +875,7 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
                   aria-label="Decline run"
                   style={{ flex: 1, whiteSpace: 'nowrap' }}
                   className={styles.reviewBarDecline}
+                  disabled={commitPending || reviewPending || requestChangesPending}
                   onClick={() => void submitReview(false)}
                 >
                   Decline

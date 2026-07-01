@@ -27,6 +27,8 @@ import {
   ArrowSyncRegular,
   BotRegular,
   CheckmarkCircleRegular,
+  ChevronLeftRegular,
+  ChevronRightRegular,
   CircleRegular,
   ClockRegular,
   DismissCircleRegular,
@@ -206,6 +208,14 @@ const useStyles = makeStyles({
     minWidth: '52px',
     fontVariantNumeric: 'tabular-nums',
   },
+  navSeparator: {
+    height: '1px',
+    backgroundColor: tokens.colorNeutralStroke2,
+    marginTop: '2px',
+    marginBottom: '2px',
+    marginLeft: '4px',
+    marginRight: '4px',
+  },
   dialogFields: {
     display: 'flex',
     flexDirection: 'column',
@@ -384,17 +394,50 @@ function topoEdge(source: string, target: string): Edge {
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 const ZOOM_DURATION = 200;
+const NAV_ZOOM = 0.85;
+const NAV_DURATION = 350;
 const FIT_VIEW_OPTIONS = { padding: 0.15, maxZoom: 1.1, duration: ZOOM_DURATION };
 
 // Always-visible zoom/pan control cluster. Rendered inside <ReactFlow> as a Panel so
 // it shares the flow store context (useReactFlow / useStore). Buttons are the reliable,
 // discoverable path to zoom; wheel-zoom is gated behind Ctrl/Cmd so the graph never
 // hijacks normal page scroll. Exported for isolated testing.
-export function GraphControls() {
+
+interface GraphControlsProps {
+  /** Pipeline-ordered node IDs used for Prev/Next card navigation. */
+  orderedNodeIds?: string[];
+}
+
+export function GraphControls({ orderedNodeIds = [] }: GraphControlsProps) {
   const styles = useStyles();
-  const { zoomIn, zoomOut, zoomTo, fitView } = useReactFlow();
+  const { zoomIn, zoomOut, zoomTo, fitView, setCenter, getNode } = useReactFlow();
   const zoom = useStore((s) => s.transform[2]);
   const zoomPercent = `${Math.round((zoom ?? 1) * 100)}%`;
+
+  const [currentIdx, setCurrentIdx] = useState(0);
+
+  const navigateTo = useCallback((idx: number) => {
+    const nodeId = orderedNodeIds[idx];
+    if (!nodeId) return;
+    const node = getNode(nodeId);
+    if (!node) return;
+    const cx = node.position.x + (node.measured?.width ?? NODE_W) / 2;
+    const cy = node.position.y + (node.measured?.height ?? RENDERED_TOPOLOGY_NODE_H) / 2;
+    setCenter(cx, cy, { zoom: NAV_ZOOM, duration: NAV_DURATION });
+    setCurrentIdx(idx);
+  }, [orderedNodeIds, getNode, setCenter]);
+
+  const goNext = useCallback(() => {
+    if (!orderedNodeIds.length) return;
+    navigateTo((currentIdx + 1) % orderedNodeIds.length);
+  }, [currentIdx, orderedNodeIds, navigateTo]);
+
+  const goPrev = useCallback(() => {
+    if (!orderedNodeIds.length) return;
+    navigateTo((currentIdx - 1 + orderedNodeIds.length) % orderedNodeIds.length);
+  }, [currentIdx, orderedNodeIds, navigateTo]);
+
+  const hasNav = orderedNodeIds.length > 1;
 
   return (
     <div className={styles.zoomCluster} role="group" aria-label="Graph zoom controls">
@@ -436,6 +479,40 @@ export function GraphControls() {
           onClick={() => void fitView(FIT_VIEW_OPTIONS)}
         />
       </Tooltip>
+      <Tooltip content="Zoom to readable (85%)" relationship="label" withArrow>
+        <Button
+          appearance="subtle"
+          size="small"
+          className={styles.zoomLevel}
+          aria-label="Zoom to readable"
+          onClick={() => void zoomTo(NAV_ZOOM, { duration: NAV_DURATION })}
+        >
+          85%
+        </Button>
+      </Tooltip>
+      {hasNav && (
+        <>
+          <div className={styles.navSeparator} aria-hidden="true" />
+          <Tooltip content="Previous card" relationship="label" withArrow>
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ChevronLeftRegular />}
+              aria-label="Previous card"
+              onClick={goPrev}
+            />
+          </Tooltip>
+          <Tooltip content="Next card" relationship="label" withArrow>
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ChevronRightRegular />}
+              aria-label="Next card"
+              onClick={goNext}
+            />
+          </Tooltip>
+        </>
+      )}
     </div>
   );
 }
@@ -521,6 +598,15 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
     return layoutDag(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
   }, [nodes, projectId, rfEdges]);
 
+  // Pipeline order: left-to-right by layout x-position.
+  const orderedNodeIds = useMemo(
+    () => [...rfNodes].sort((a, b) => a.position.x - b.position.x).map((n) => n.id),
+    [rfNodes],
+  );
+
+  // Show scroll hint overlay when there are multiple nodes (hints at off-screen content).
+  const hasScrollHint = rfNodes.length > 1;
+
   const needsInstruction = steerReq?.kind === 'redirect' || steerReq?.kind === 'amend';
 
   return (
@@ -548,9 +634,26 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
             proOptions={{ hideAttribution: true }}
           >
             <Panel position="top-right">
-              <GraphControls />
+              <GraphControls orderedNodeIds={orderedNodeIds} />
             </Panel>
           </ReactFlow>
+          {hasScrollHint && (
+            <div
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: '48px',
+                height: '100%',
+                background: 'linear-gradient(to right, transparent, var(--colorNeutralBackground1))',
+                pointerEvents: 'none',
+                borderTopRightRadius: '8px',
+                borderBottomRightRadius: '8px',
+                zIndex: 5,
+              }}
+            />
+          )}
         </div>
       </SteerContext.Provider>
 
