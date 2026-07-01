@@ -220,3 +220,23 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull();
   });
 });
+
+describe('LifecycleEventCard — coordinator.integration_conflict_auto_resolved', () => {
+  it('renders a neutral informational summary for auto-resolved merge conflicts', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.integration_conflict_auto_resolved', {
+            conflictingBranch: 'agentweaver/child-b',
+            conflictingFiles: ['shared.txt', 'docs/notes.md'],
+            strategy: 'accept_child',
+          })}
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('auto-resolved merge conflict')).toBeDefined();
+    expect(screen.getByText(/Accepted changes from agentweaver\/child-b/)).toBeDefined();
+    expect(screen.getByText(/shared\.txt, docs\/notes\.md/)).toBeDefined();
+  });
+});

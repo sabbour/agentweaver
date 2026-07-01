@@ -282,6 +282,13 @@ public static class EventTypes
     /// Payload: { workPlanId, integrationBranch }.</summary>
     public const string CoordinatorAssemblyStarted = "coordinator.assembly_started";
 
+    /// <summary>
+    /// Emitted when the coordinator auto-resolved one or more merge conflicts during
+    /// integration branch building by accepting the child branch's changes.
+    /// Payload: { workPlanId, conflictingBranch, conflictingFiles: string[], strategy: "accept_child" }.
+    /// </summary>
+    public const string CoordinatorIntegrationConflictAutoResolved = "coordinator.integration_conflict_auto_resolved";
+
     /// <summary>Collective RAI review of the aggregate diff began. Payload: { workPlanId }.</summary>
     public const string CoordinatorAssemblyRaiStarted = "coordinator.assembly_rai_started";
 

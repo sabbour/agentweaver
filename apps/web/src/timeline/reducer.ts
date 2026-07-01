@@ -438,6 +438,7 @@ function processEvent(
     case 'coordinator.children_complete':
     case 'coordinator.steering':
     case 'coordinator.assembly_started':
+    case 'coordinator.integration_conflict_auto_resolved':
     case 'coordinator.assembly_rai_started':
     case 'coordinator.assembly_rai_completed':
     case 'coordinator.assembly_review_requested':

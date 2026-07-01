@@ -96,7 +96,7 @@ The durable artifacts are:
 - **One parent owns the combined outcome.** Children do agent work and safety review; the parent owns collective review, merge, and scribe.
 - **The dependency graph is the hard ordering rule.** A subtask can run only when every dependency is satisfied.
 - **`assemble_ready` and `completed` satisfy dependencies.** `failed` and `rai_flagged` do not; their dependents are blocked or failed.
-- **Isolation is advisory.** Child subtasks share the orchestration worktree. File-scope declarations and conservative conflict checks are what reduce clobbering.
+- **Isolation is advisory.** Child subtasks share the orchestration worktree. File-scope declarations reduce clobbering, but the coordinator may still reconcile overlapping edits during collective assembly.
 - **Dispatch is single-writer.** The dispatch loop owns subtask status mutation while active.
 - **Assembly is exactly-once by database compare-and-swap.** In-memory guards are helpful but not authoritative.
 - **Recovery starts from persisted state.** Restart logic routes by WorkPlan status, not by reconstructing chat history.
@@ -433,8 +433,7 @@ flowchart TD
     Claim -- won --> Eligible
     Eligible -- no --> Blocked
     Eligible -- yes --> Order --> Integration
-    Integration -- conflict --> Blocked
-    Integration -- ok --> Rai --> RaiFlag
+    Integration -- auto-resolve / ok --> Rai --> RaiFlag
     RaiFlag -- yes --> Blocked
     RaiFlag -- no --> Review --> Decision
     Decision -- approve --> Merge
@@ -471,7 +470,7 @@ The coordinator does no partial assembly. Every subtask must be `assemble_ready`
 
 ### Integration branch
 
-Eligible child branches are merged into one integration branch in dependency order. Completed no-op children are eligible but contribute no branch. If child branch integration conflicts, the coordinator stops before collective review or merge and records a needs-resolution style terminal/parked state.
+Eligible child branches are merged into one integration branch in dependency order. Completed no-op children are eligible but contribute no branch. If a merge conflict appears while adding one child branch, the coordinator currently auto-resolves it by accepting that child's version for every conflicting path, emits `coordinator.integration_conflict_auto_resolved`, and continues with the remaining children. This means an agent modifying a file outside its primary output scope is acceptable: the parent coordinator reconciles the overlap with a child-wins strategy rather than blocking assembly. A future follow-up should distinguish this safe case from true sibling-vs-sibling conflicts and surface those as `needs_resolution`.
 
 ### Collective RAI
 

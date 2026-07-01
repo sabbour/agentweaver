@@ -113,6 +113,7 @@ export type EventType =
   | 'coordinator.graph'
   | 'coordinator.children_complete'
   | 'coordinator.assembly_started'
+  | 'coordinator.integration_conflict_auto_resolved'
   | 'coordinator.assembly_rai_started'
   | 'coordinator.assembly_rai_completed'
   | 'coordinator.assembly_review_requested'

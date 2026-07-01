@@ -358,6 +358,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
+        foreach (var (branch, files) in integration.AutoResolutions)
+        {
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorIntegrationConflictAutoResolved, new
+            {
+                workPlanId,
+                conflictingBranch = branch,
+                conflictingFiles = files,
+                strategy = "accept_child",
+            });
+        }
+
         var aggregateDiff = integration.Diff ?? string.Empty;
         var aggregateTreeHash = integration.TreeHash ?? string.Empty;
 

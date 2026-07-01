@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -219,6 +220,38 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var state = await _assemblyStore.GetAsync(workPlanId, default);
         state!.Status.Should().Be(WorkPlanStatus.Complete);
         state.AssemblyStage.Should().Be(AssemblyStage.Done);
+    }
+
+    [Fact]
+    public async Task RunAssembly_AutoResolvedIntegrationConflict_EmitsCoordinatorEvent()
+    {
+        const string coordinatorRunId = "coord-auto-resolve-1";
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.IntegrationResult = IntegrationBranchResult.Success(
+            CoordinatorAssemblyService.IntegrationBranchName(coordinatorRunId),
+            "agg-tree",
+            "aggregate diff",
+            [("agentweaver/child-b", new[] { "shared.txt", "docs\\note.md" })]);
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+
+        await run;
+
+        var evt = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.CoordinatorIntegrationConflictAutoResolved);
+        var payload = JsonSerializer.SerializeToNode(evt.Payload)!.AsObject();
+        payload["workPlanId"]!.GetValue<int>().Should().Be(workPlanId);
+        payload["conflictingBranch"]!.GetValue<string>().Should().Be("agentweaver/child-b");
+        payload["strategy"]!.GetValue<string>().Should().Be("accept_child");
+        payload["conflictingFiles"]!.AsArray().Select(x => x!.GetValue<string>())
+            .Should().ContainInOrder("shared.txt", "docs\\note.md");
     }
 
     [Fact]
@@ -633,6 +666,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public int IntegrationBuilds;
         public int Merges;
         public int Scribes;
+        public IntegrationBranchResult? IntegrationResult;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
         public CollectiveMergeResult? MergeOverride;
@@ -643,7 +677,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public IntegrationBranchResult BuildIntegrationBranch(CollectiveIntegrationRequest request)
         {
             IntegrationBuilds++;
-            return IntegrationBranchResult.Success(request.IntegrationBranch, "agg-tree", "aggregate diff");
+            return IntegrationResult
+                ?? IntegrationBranchResult.Success(request.IntegrationBranch, "agg-tree", "aggregate diff");
         }
 
         public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct) =>

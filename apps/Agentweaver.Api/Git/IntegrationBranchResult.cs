@@ -21,6 +21,9 @@ public sealed record IntegrationBranchResult
     /// <summary>Whether the aggregate has any changes vs the originating branch (success only).</summary>
     public bool HasChanges { get; private init; }
 
+    /// <summary>Files auto-resolved by accepting the child branch version during integration build.</summary>
+    public IReadOnlyList<(string Branch, IReadOnlyList<string> Files)> AutoResolutions { get; private init; } = [];
+
     /// <summary>The child branch that conflicted while merging (conflict only).</summary>
     public string? ConflictingBranch { get; private init; }
 
@@ -30,13 +33,18 @@ public sealed record IntegrationBranchResult
     /// <summary>Human-readable reason (conflict/error only; sanitized of absolute paths by callers/logging).</summary>
     public string? Reason { get; private init; }
 
-    public static IntegrationBranchResult Success(string integrationBranch, string treeHash, string diff) => new()
+    public static IntegrationBranchResult Success(
+        string integrationBranch,
+        string treeHash,
+        string diff,
+        IReadOnlyList<(string Branch, IReadOnlyList<string> Files)>? autoResolutions = null) => new()
     {
         Outcome = IntegrationBranchOutcome.Built,
         IntegrationBranch = integrationBranch,
         TreeHash = treeHash,
         Diff = diff,
         HasChanges = !string.IsNullOrEmpty(diff),
+        AutoResolutions = autoResolutions ?? [],
     };
 
     public static IntegrationBranchResult Conflict(

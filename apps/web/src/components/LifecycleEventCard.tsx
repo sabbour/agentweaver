@@ -429,6 +429,17 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         summary: `Collective assembly started${p['integrationBranch'] ? ` on ${String(p['integrationBranch'])}` : ''}`,
         badgeColor: 'informative',
       };
+    case 'coordinator.integration_conflict_auto_resolved': {
+      const files = Array.isArray(p['conflictingFiles'])
+        ? (p['conflictingFiles'] as unknown[]).map((file) => String(file)).join(', ')
+        : '';
+      return {
+        icon: <BranchRegular aria-hidden="true" />,
+        label: 'auto-resolved merge conflict',
+        summary: `Accepted changes from ${String(p['conflictingBranch'] ?? 'child branch')}${files ? ` for files: ${files}` : ''}`,
+        badgeColor: 'informative',
+      };
+    }
     case 'coordinator.assembly_rai_started':
       return {
         icon: <ShieldRegular aria-hidden="true" />,
