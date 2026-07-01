@@ -178,6 +178,30 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_RetriesTransientIntegrationBuildFailures_AndContinues()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.IntegrationBuildThrowsRemaining = 2;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        _pipeline.IntegrationBuilds.Should().Be(3);
+        _pipeline.IntegrationRetryPreparations.Should().Be(2);
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyCompleted);
+    }
+
+    [Fact]
     public async Task RunAssembly_BlockedRedirect_ReEntersDispatch()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -748,6 +772,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private sealed class FakePipeline : ICollectiveAssemblyPipeline
     {
         public int IntegrationBuilds;
+        public int IntegrationRetryPreparations;
         public int Merges;
         public int Scribes;
         public IntegrationBranchResult? IntegrationResult;
@@ -770,6 +795,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             return IntegrationResult
                 ?? IntegrationBranchResult.Success(request.IntegrationBranch, "agg-tree", "aggregate diff");
         }
+
+        public void PrepareIntegrationBranchRetry(CollectiveIntegrationRequest request) =>
+            IntegrationRetryPreparations++;
 
         public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct) =>
             Task.FromResult(new CollectiveRaiResult(SafetyFlagged: false));

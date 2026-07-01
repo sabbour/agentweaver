@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
@@ -523,6 +524,80 @@ public sealed class WorktreeManager
             _logger.LogWarning(ex,
                 "WorktreeManager: failed to clean stale git lock files for integration branch {Branch} in {Path} (best-effort)",
                 integrationBranch, repositoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort retry preparation for integration-branch writes: remove stale git lock files,
+    /// prune any linked worktree checked out on the integration branch, and run
+    /// <c>git worktree prune</c> against the repository to drop stale admin entries.
+    /// Never throws.
+    /// </summary>
+    internal void TryCleanIntegrationRetryArtifacts(string repositoryPath, string integrationBranch)
+    {
+        TryCleanIntegrationLockFiles(repositoryPath, integrationBranch);
+        TryCleanRepositoryIndexLock(repositoryPath);
+        PruneWorktreesCheckedOutOnBranch(repositoryPath, integrationBranch);
+        TryRunGitWorktreePrune(repositoryPath);
+    }
+
+    private void TryCleanRepositoryIndexLock(string repositoryPath)
+    {
+        try
+        {
+            var indexLockPath = Path.Combine(repositoryPath, ".git", "index.lock");
+            if (!File.Exists(indexLockPath))
+                return;
+
+            File.Delete(indexLockPath);
+            _logger.LogWarning(
+                "WorktreeManager: deleted stale index lock file in repository {Path}",
+                repositoryPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: failed to clean stale index lock file in repository {Path} (best-effort)",
+                repositoryPath);
+        }
+    }
+
+    private void TryRunGitWorktreePrune(string repositoryPath)
+    {
+        try
+        {
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = repositoryPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            process.StartInfo.ArgumentList.Add("worktree");
+            process.StartInfo.ArgumentList.Add("prune");
+
+            process.Start();
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            if (process.ExitCode == 0)
+                return;
+
+            var detail = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            _logger.LogWarning(
+                "WorktreeManager: git worktree prune failed in repository {Path} with exit code {ExitCode}: {Message}",
+                repositoryPath,
+                process.ExitCode,
+                detail.Trim());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: git worktree prune failed in repository {Path} (best-effort)",
+                repositoryPath);
         }
     }
 

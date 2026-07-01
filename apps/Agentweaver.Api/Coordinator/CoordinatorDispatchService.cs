@@ -724,7 +724,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 _logger.LogWarning(ex,
                     "Coordinator dispatch: integration branch lock contention (attempt {Attempt}/{Max}) for run {RunId}; cleaning stale lock files and retrying",
                     attempt, MaxLockRetries, context.CoordinatorRunId);
-                _worktreeManager.TryCleanIntegrationLockFiles(context.RepositoryPath, integrationBranch);
+                _worktreeManager.TryCleanIntegrationRetryArtifacts(context.RepositoryPath, integrationBranch);
                 await Task.Delay(TimeSpan.FromMilliseconds(200 * attempt), ct).ConfigureAwait(false);
             }
             catch (Exception ex)

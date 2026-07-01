@@ -340,11 +340,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         // D1 — build the COMBINED integration branch.
+        var integrationRequest = new CollectiveIntegrationRequest(
+            context.RepositoryPath, context.OriginatingBranch, integrationBranch, branchesInOrder);
         IntegrationBranchResult integration;
         try
         {
-            integration = _pipeline.BuildIntegrationBranch(new CollectiveIntegrationRequest(
-                context.RepositoryPath, context.OriginatingBranch, integrationBranch, branchesInOrder));
+            integration = await BuildIntegrationBranchWithRetryAsync(
+                context, integrationRequest, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -749,6 +751,46 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    private async Task<IntegrationBranchResult> BuildIntegrationBranchWithRetryAsync(
+        CoordinatorDispatchContext context,
+        CollectiveIntegrationRequest request,
+        CancellationToken ct)
+    {
+        const int MaxAttempts = 3;
+        var delay = TimeSpan.FromSeconds(1);
+
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            try
+            {
+                return _pipeline.BuildIntegrationBranch(request);
+            }
+            catch (Exception ex) when (attempt < MaxAttempts)
+            {
+                var delayMs = (int)delay.TotalMilliseconds;
+                _logger.LogWarning(
+                    "Assembly git operation failed (attempt {Attempt}/3), retrying after {DelayMs}ms: {Message}",
+                    attempt, delayMs, ex.Message);
+                _pipeline.PrepareIntegrationBranchRetry(request);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+                delay = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * 2);
+            }
+            catch (Exception ex)
+            {
+                var wrapped = new InvalidOperationException(
+                    $"Assembly integration branch build failed after {attempt} attempts for run {context.CoordinatorRunId}: {ex.Message}",
+                    ex);
+                _logger.LogError(wrapped,
+                    "Collective assembly: integration branch build failed after {AttemptCount} attempts for run {RunId}",
+                    attempt, context.CoordinatorRunId);
+                throw wrapped;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Assembly integration branch build failed after {MaxAttempts} attempts for run {context.CoordinatorRunId}.");
+    }
 
     private async Task BlockAsync(
         CoordinatorDispatchContext context,

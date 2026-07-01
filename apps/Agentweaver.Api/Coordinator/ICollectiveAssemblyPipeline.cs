@@ -17,6 +17,9 @@ public interface ICollectiveAssemblyPipeline
     /// <summary>Builds the COMBINED integration branch (D1) — pure git, no agent.</summary>
     IntegrationBranchResult BuildIntegrationBranch(CollectiveIntegrationRequest request);
 
+    /// <summary>Best-effort retry preparation for a failed integration-branch build.</summary>
+    void PrepareIntegrationBranchRetry(CollectiveIntegrationRequest request);
+
     /// <summary>Runs the collective RAI review over the aggregate diff. Returns whether RAI flagged a
     /// safety concern (advisory — never hard-blocks; it informs the human reviewer).</summary>
     Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct);

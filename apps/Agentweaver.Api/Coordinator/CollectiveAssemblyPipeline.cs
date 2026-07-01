@@ -72,6 +72,11 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             request.IntegrationBranch,
             request.ChildBranchesInOrder);
 
+    public void PrepareIntegrationBranchRetry(CollectiveIntegrationRequest request) =>
+        _worktreeManager.TryCleanIntegrationRetryArtifacts(
+            request.RepositoryPath,
+            request.IntegrationBranch);
+
     public async Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(request.AggregateDiff))
