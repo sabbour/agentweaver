@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
@@ -21,15 +20,14 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
     private readonly string? _clientId;
     private readonly string _scopes;
     private readonly IGitHubTokenStore _tokenStore;
+    private readonly IGitHubDeviceFlowStore _flowStore;
     private readonly HttpClient _http;
     private readonly ILogger<GitHubDeviceFlowAuthService> _logger;
-
-    // Server-side device code storage, keyed by scope key
-    private readonly ConcurrentDictionary<string, InFlightFlow> _inFlightFlows = new();
 
     public GitHubDeviceFlowAuthService(
         IConfiguration configuration,
         IGitHubTokenStore tokenStore,
+        IGitHubDeviceFlowStore flowStore,
         HttpClient http,
         ILogger<GitHubDeviceFlowAuthService> logger)
     {
@@ -37,6 +35,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
         _clientId = configuration["Auth:GitHub:ClientId"];
         _scopes = configuration["Auth:GitHub:Scopes"] ?? DefaultScopes;
         _tokenStore = tokenStore;
+        _flowStore = flowStore;
         _http = http;
         _logger = logger;
     }
@@ -69,11 +68,12 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
         if (string.IsNullOrWhiteSpace(body.DeviceCode))
             throw new InvalidOperationException("GitHub did not return a device_code.");
 
-        // Store the device_code server-side; return only what the user needs
-        _inFlightFlows[scope.Key] = new InFlightFlow(
+        // Store the device_code server-side; return only what the user needs.
+        await _flowStore.SetAsync(scope, new GitHubDeviceFlowState(
             body.DeviceCode!,
             body.Interval > 0 ? body.Interval : 5,
-            DateTimeOffset.UtcNow.AddSeconds(body.ExpiresIn > 0 ? body.ExpiresIn : 900));
+            DateTimeOffset.UtcNow.AddSeconds(body.ExpiresIn > 0 ? body.ExpiresIn : 900)), ct)
+            .ConfigureAwait(false);
 
         return new GitHubDeviceFlowStart(
             body.UserCode ?? string.Empty,
@@ -85,12 +85,13 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
     public async Task<GitHubDeviceFlowPollResponse> PollDeviceFlowAsync(
         GitHubTokenScope scope, CancellationToken ct = default)
     {
-        if (!_inFlightFlows.TryGetValue(scope.Key, out var flow))
+        var flow = await _flowStore.GetAsync(scope, ct).ConfigureAwait(false);
+        if (flow is null)
             return new GitHubDeviceFlowPollResponse(GitHubDeviceFlowPollResult.Expired, null);
 
         if (DateTimeOffset.UtcNow > flow.ExpiresAt)
         {
-            _inFlightFlows.TryRemove(scope.Key, out _);
+            await _flowStore.DeleteAsync(scope, ct).ConfigureAwait(false);
             return new GitHubDeviceFlowPollResponse(GitHubDeviceFlowPollResult.Expired, null);
         }
 
@@ -117,8 +118,10 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
             {
                 "authorization_pending" or "slow_down" =>
                     new GitHubDeviceFlowPollResponse(GitHubDeviceFlowPollResult.Pending, null),
-                "access_denied" => new GitHubDeviceFlowPollResponse(GitHubDeviceFlowPollResult.Denied, null),
-                _ => new GitHubDeviceFlowPollResponse(GitHubDeviceFlowPollResult.Expired, null)
+                "access_denied" => await CompleteTerminalPollAsync(scope, GitHubDeviceFlowPollResult.Denied, ct)
+                    .ConfigureAwait(false),
+                _ => await CompleteTerminalPollAsync(scope, GitHubDeviceFlowPollResult.Expired, ct)
+                    .ConfigureAwait(false)
             };
         }
 
@@ -137,7 +140,7 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
             (_scopes ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
         await _tokenStore.SetAsync(scope, token, ct).ConfigureAwait(false);
-        _inFlightFlows.TryRemove(scope.Key, out _);
+        await _flowStore.DeleteAsync(scope, ct).ConfigureAwait(false);
 
         _logger.LogInformation("GitHub device flow completed for scope {Scope}, login {Login}",
             scope.Key, login);
@@ -147,6 +150,15 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
 
     public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
         _tokenStore.SignOutAsync(scope, ct);
+
+    private async Task<GitHubDeviceFlowPollResponse> CompleteTerminalPollAsync(
+        GitHubTokenScope scope,
+        GitHubDeviceFlowPollResult result,
+        CancellationToken ct)
+    {
+        await _flowStore.DeleteAsync(scope, ct).ConfigureAwait(false);
+        return new GitHubDeviceFlowPollResponse(result, null);
+    }
 
     private async Task<(string Login, string? AvatarUrl)> FetchUserAsync(string accessToken, CancellationToken ct)
     {
@@ -158,8 +170,6 @@ public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
         var body = await response.Content.ReadFromJsonAsync<GitHubUserResponse>(ct).ConfigureAwait(false);
         return (body?.Login ?? "unknown", body?.AvatarUrl);
     }
-
-    private sealed record InFlightFlow(string DeviceCode, int Interval, DateTimeOffset ExpiresAt);
 
     private sealed class DeviceCodeResponse
     {

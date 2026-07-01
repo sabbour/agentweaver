@@ -55,6 +55,29 @@ public sealed class GitHubDeviceFlowTests
         pollResult.Result.Should().Be(GitHubDeviceFlowPollResult.Pending);
     }
 
+    [Fact]
+    public async Task StartOnOneReplica_PollOnAnotherReplica_UsesSharedFlowStore()
+    {
+        var tokenStore = new InMemoryGitHubTokenStore();
+        var flowStore = new InMemoryGitHubDeviceFlowStore();
+        var scope = GitHubTokenScope.Installation;
+
+        var (replicaA, _) = BuildService(tokenStore, new Queue<string>(new[]
+        {
+            """{"device_code":"dc_shared","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}""",
+        }), flowStore);
+        var (replicaB, _) = BuildService(tokenStore, new Queue<string>(new[]
+        {
+            """{"error":"authorization_pending"}""",
+        }), flowStore);
+
+        await replicaA.StartDeviceFlowAsync(scope);
+        var pollResult = await replicaB.PollDeviceFlowAsync(scope);
+
+        pollResult.Result.Should().Be(GitHubDeviceFlowPollResult.Pending,
+            "a poll routed to another API replica must read the in-flight device code from shared state");
+    }
+
     // =========================================================================
     // DFT-03: Start -> Poll with slow_down -> treated as Pending
     // =========================================================================
@@ -190,7 +213,7 @@ public sealed class GitHubDeviceFlowTests
             .Build();
 
         var service = new GitHubDeviceFlowAuthService(
-            config, tokenStore, http,
+            config, tokenStore, new InMemoryGitHubDeviceFlowStore(), http,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubDeviceFlowAuthService>.Instance);
 
         await service.StartDeviceFlowAsync(scope);
@@ -209,7 +232,9 @@ public sealed class GitHubDeviceFlowTests
     // =========================================================================
 
     private static (GitHubDeviceFlowAuthService Service, FakeHttpMessageHandler Handler) BuildService(
-        IGitHubTokenStore tokenStore, Queue<string>? responses = null)
+        IGitHubTokenStore tokenStore,
+        Queue<string>? responses = null,
+        IGitHubDeviceFlowStore? flowStore = null)
     {
         var handler = new FakeHttpMessageHandler(responses ?? new Queue<string>());
         var http    = new HttpClient(handler);
@@ -224,7 +249,7 @@ public sealed class GitHubDeviceFlowTests
             .Build();
 
         var service = new GitHubDeviceFlowAuthService(
-            config, tokenStore, http,
+            config, tokenStore, flowStore ?? new InMemoryGitHubDeviceFlowStore(), http,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubDeviceFlowAuthService>.Instance);
 
         return (service, handler);
