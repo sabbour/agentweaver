@@ -52,6 +52,7 @@ import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/da
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
+import { PodIndicator } from '../components/PodIndicator';
 import { CostChip } from '../components/CostChip';
 import { AgentRail } from '../components/AgentRail';
 import { SteerPanel } from '../components/SteerPanel';
@@ -63,6 +64,7 @@ import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { Timeline } from '../components/Timeline';
+import { useRuntimeInfo } from '../hooks/useRuntimeInfo';
 import { useTimelineItems } from '../timeline/useTimelineItems';
 import { stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
 import { RunLayout } from '../components/RunLayout';
@@ -326,6 +328,12 @@ function readStr(p: Record<string, unknown>, keys: string[]): string | undefined
   return undefined;
 }
 
+function readChildRunId(node: GraphDescriptor['nodes'][number]): string | undefined {
+  return node.child_run_id
+    ?? readStr(node.data ?? {}, ['child_run_id', 'childRunId'])
+    ?? (node.child_graph_ref?.startsWith('run:') ? node.child_graph_ref.slice(4) : undefined);
+}
+
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
 function deriveOrchState(
   events: RunStreamEvent[],
@@ -461,6 +469,7 @@ interface SubtaskNodeData extends Record<string, unknown> {
   completedAt?: number;
   totalNanoAiu?: number | null;
   totalTokens?: number | null;
+  executionPodName?: string | null;
   /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
   dir?: 'LR' | 'TB';
 }
@@ -561,6 +570,8 @@ function SubtaskNode({ id, data }: NodeProps) {
   const d = data as SubtaskNodeData;
   const expandCtx = useContext(CoordExpandContext);
   const viewRun = useContext(CoordViewRunContext);
+  const { podName: globalPodName } = useRuntimeInfo();
+  const resolvedPodName = (d.executionPodName as string | null | undefined) ?? globalPodName;
   const expanded = expandCtx?.expanded.has(id) ?? false;
   const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
@@ -627,12 +638,14 @@ function SubtaskNode({ id, data }: NodeProps) {
   const statusLabel = topoStatusToLabel(d.topoStatus as string);
 
   return (
-    <div
-      className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}`}
-      data-node-type="subtask"
-      role="article"
-      aria-label={`${d.label as string}: ${d.topoStatus as string}`}
-    >
+    <>
+      <PodIndicator podName={resolvedPodName} />
+      <div
+        className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}`}
+        data-node-type="subtask"
+        role="article"
+        aria-label={`${d.label as string}: ${d.topoStatus as string}`}
+      >
       <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
       <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
 
@@ -715,6 +728,7 @@ function SubtaskNode({ id, data }: NodeProps) {
         </div>
       ))}
     </div>
+    </>
   );
 }
 
@@ -1109,23 +1123,6 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [runId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const childIds = childrenData.map((c) => c.childRunId).filter(Boolean);
-    if (childIds.length === 0) { setChildUsageByRun({}); return; }
-    void Promise.all(childIds.map(async (id) => {
-      try {
-        const usage = await apiClient.getRunUsage(id);
-        return [id, usage] as const;
-      } catch {
-        return null;
-      }
-    })).then((entries) => {
-      if (cancelled) return;
-      setChildUsageByRun(Object.fromEntries(entries.filter((x): x is readonly [string, TokenUsageSummary] => x !== null)));
-    });
-    return () => { cancelled = true; };
-  }, [childrenData]);
   // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
   // Used to render a graceful empty state and to back off the lifecycle poll so the page
   // doesn't hammer the 404 endpoint on a tight loop.
@@ -1335,6 +1332,38 @@ export function CoordinatorRunPage() {
     [events, topoSeed],
   );
 
+  const childUsageRunIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const child of childrenData) {
+      if (child.childRunId) ids.add(child.childRunId);
+    }
+    for (const node of effectiveDescriptor?.nodes ?? []) {
+      const id = readChildRunId(node);
+      if (id) ids.add(id);
+    }
+    for (const node of Object.values(topology.nodes)) {
+      if (node.childRunId) ids.add(node.childRunId);
+    }
+    return [...ids].sort();
+  }, [childrenData, effectiveDescriptor, topology]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (childUsageRunIds.length === 0) { setChildUsageByRun({}); return; }
+    void Promise.all(childUsageRunIds.map(async (id) => {
+      try {
+        const usage = await apiClient.getRunUsage(id);
+        return [id, usage] as const;
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setChildUsageByRun(Object.fromEntries(entries.filter((x): x is readonly [string, TokenUsageSummary] => x !== null)));
+    });
+    return () => { cancelled = true; };
+  }, [childUsageRunIds]);
+
   // Per-subtask elapsed timing, derived from the subtask.* coordinator events (which carry a
   // timestamp_utc). Keyed by the raw subtaskId string. startedAt = first dispatched/running;
   // completedAt = first terminal (completed/failed/assemble_ready/rai_flagged). Drives a live counter
@@ -1503,7 +1532,7 @@ export function CoordinatorRunPage() {
         const agentField  = node.agent  ?? (node.data?.['agent']  as string | undefined) ?? topoNode?.assignedAgent;
         const modelField  = node.model  ?? (node.data?.['model']  as string | undefined) ?? topoNode?.selectedModelId;
         const phaseField  = node.phase  ?? (node.data?.['phase']  as string | undefined);
-        const childRunId  = node.child_run_id ?? (node.data?.['child_run_id'] as string | undefined) ?? topoNode?.childRunId;
+        const childRunId  = readChildRunId(node) ?? topoNode?.childRunId;
         // node.id is "plan:subtask-{id}"; the subtask.* timing map is keyed by the raw "{id}".
         const subtaskKey  = node.id.replace(/^plan:/, '').replace(/^subtask-/, '');
         const timing      = subtaskTiming[subtaskKey];
@@ -1526,6 +1555,7 @@ export function CoordinatorRunPage() {
             completedAt:   timing?.completedAt,
             totalNanoAiu:  childRunId ? childUsageByRun[childRunId]?.total_nano_aiu : undefined,
             totalTokens:   childRunId ? childUsageByRun[childRunId]?.total_tokens : undefined,
+            executionPodName: topoNode?.executionPodName ?? null,
             dir:           'LR',
           } as SubtaskNodeData,
           position: { x: 0, y: 0 },

@@ -18,6 +18,7 @@ vi.mock('../api/apiClient', () => ({
     getRunGraph: vi.fn(),
     getWorkPlan: vi.fn(),
     getCoordinatorChildren: vi.fn(),
+    getRunUsage: vi.fn(),
     steerCoordinator: vi.fn(),
     reviewAssembly: vi.fn(),
     getRun: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock('../components/OutcomeSpecPanel', () => ({
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
+import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
 import { COORDINATOR_GRAPH_DESCRIPTOR, CHILD_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -62,9 +64,12 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetRuntimeInfoCache();
+  vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: false, podName: null });
   vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR);
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.getRunUsage).mockResolvedValue({ input_tokens: 0, output_tokens: 0, total_tokens: 0, total_nano_aiu: 0, by_model: [] });
   vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
 });
@@ -133,6 +138,25 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     // Both subtasks in the fixture have child_graph_ref → both should have expand buttons.
     const text = document.body.textContent ?? '';
     expect(text).toContain('Expand pipeline');
+  });
+
+  it('renders child usage and sandbox pod pills on subtask nodes', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
+    vi.mocked(apiClient.getRunUsage).mockImplementation(async (id: string) => {
+      if (id === 'child-run-1') {
+        return { input_tokens: 800, output_tokens: 434, total_tokens: 1234, total_nano_aiu: 0, by_model: [] };
+      }
+      return { input_tokens: 0, output_tokens: 0, total_tokens: 0, total_nano_aiu: 0, by_model: [] };
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('1.2K tok'),
+      { timeout: 4000 },
+    );
+
+    expect(document.body.textContent).toContain('agentweaver-api-pod-1');
   });
 
   it('shows the steering bar with Send, Redirect, Amend, and Stop verbs', async () => {
