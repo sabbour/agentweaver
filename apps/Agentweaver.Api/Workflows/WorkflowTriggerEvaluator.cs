@@ -4,6 +4,8 @@ namespace Agentweaver.Api.Workflows;
 /// How a coordinator run was invoked, used to decide which workflow triggers are eligible for it.
 /// A run is either started explicitly by a person (<see cref="Manual"/>) or picked up automatically by
 /// the coordinator heartbeat from the project's Ready bucket (<see cref="Heartbeat"/>).
+/// Schedule-trigger dispatch is handled by trigger-task automation, not by these existing invocation
+/// kinds.
 /// </summary>
 public enum WorkflowInvocationKind
 {
@@ -27,6 +29,8 @@ public enum WorkflowInvocationKind
 /// workflows (FR-021: periodic pickup) AND <see cref="WorkflowTriggerType.Event"/> workflows whose
 /// event is <see cref="WorkflowEventType.TaskAddedToReady"/> (FR-022): a task entering Ready and being
 /// picked up by the heartbeat IS the "task added to Ready" event.</item>
+/// <item><see cref="WorkflowTriggerType.Schedule"/> definitions carry cadence metadata for scheduled
+/// trigger tasks and are not selected by manual/backlog-pickup invocations.</item>
 /// </list>
 /// </summary>
 public static class WorkflowTriggerEvaluator

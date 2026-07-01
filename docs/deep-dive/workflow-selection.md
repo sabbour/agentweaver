@@ -84,6 +84,10 @@ Before any override check or LLM call, the candidate set is filtered by trigger 
 | `Manual` (explicit start, including dialog) | `Manual` only |
 | `Heartbeat` (backlog pickup) | `Heartbeat` or `Event` (`TaskAddedToReady`) |
 
+`Schedule` triggers are valid workflow metadata and carry a cadence string such as
+`weekly:monday`. They are intentionally not selected by the manual/backlog-pickup paths; scheduled
+trigger-task automation owns firing them.
+
 `ResolveInvocationKindAsync` maps `RunOrigin.BacklogPickup` → `Heartbeat`; every other origin → `Manual`. Any failure during lookup defaults to `Manual`.
 
 The dropdown in the **Start task** dialog shows only `Manual`-trigger workflows (`apps/web/src/components/StartOrchestrationDialog.tsx:52`), so a user can never select a heartbeat-only workflow from the UI.

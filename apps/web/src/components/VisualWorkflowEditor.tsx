@@ -464,6 +464,7 @@ export function VisualWorkflowEditor({
             >
               <Option value="manual">manual</Option>
               <Option value="heartbeat">heartbeat</Option>
+              <Option value="schedule">schedule</Option>
               <Option value="event">event</Option>
             </Dropdown>
           </Field>

@@ -61,11 +61,12 @@ public static class WorkflowDefinitionLoader
 
         // Trigger (FR-020/021/022/024).
         if (dto.Trigger is null || string.IsNullOrWhiteSpace(dto.Trigger.Type))
-            return Fail(source, "missing required 'trigger.type' (manual | heartbeat | event).", out error);
+            return Fail(source, "missing required 'trigger.type' (manual | heartbeat | schedule | event).", out error);
         if (!TryParseTriggerType(dto.Trigger.Type, out var triggerType))
-            return Fail(source, $"unsupported trigger type '{dto.Trigger.Type}' (expected manual | heartbeat | event).", out error);
+            return Fail(source, $"unsupported trigger type '{dto.Trigger.Type}' (expected manual | heartbeat | schedule | event).", out error);
 
         WorkflowEventType? eventType = null;
+        string? schedule = null;
         if (triggerType == WorkflowTriggerType.Event)
         {
             if (string.IsNullOrWhiteSpace(dto.Trigger.Event))
@@ -73,6 +74,12 @@ public static class WorkflowDefinitionLoader
             if (!TryParseEventType(dto.Trigger.Event, out var ev))
                 return Fail(source, $"unsupported event '{dto.Trigger.Event}' (only 'task-added-to-ready' is supported this iteration).", out error);
             eventType = ev;
+        }
+        else if (triggerType == WorkflowTriggerType.Schedule)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Trigger.Schedule))
+                return Fail(source, "a schedule trigger requires 'trigger.schedule' (for example 'weekly:monday').", out error);
+            schedule = dto.Trigger.Schedule.Trim();
         }
 
         // Nodes.
@@ -203,7 +210,7 @@ public static class WorkflowDefinitionLoader
             Name = dto.Name!,
             Description = dto.Description,
             Version = string.IsNullOrWhiteSpace(dto.Version) ? null : dto.Version.Trim(),
-            Trigger = new WorkflowTrigger { Type = triggerType, Event = eventType },
+            Trigger = new WorkflowTrigger { Type = triggerType, Event = eventType, Schedule = schedule },
             Start = dto.Start!,
             Nodes = nodes,
             Edges = edges,
@@ -231,8 +238,8 @@ public static class WorkflowDefinitionLoader
         {
             case "manual": type = WorkflowTriggerType.Manual; return true;
             case "heartbeat":
-            case "heartbeat_schedule":
-            case "schedule": type = WorkflowTriggerType.Heartbeat; return true;
+            case "heartbeat_schedule": type = WorkflowTriggerType.Heartbeat; return true;
+            case "schedule": type = WorkflowTriggerType.Schedule; return true;
             case "event": type = WorkflowTriggerType.Event; return true;
             default: type = default; return false;
         }
@@ -287,6 +294,7 @@ internal sealed class TriggerYamlDto
 {
     public string? Type { get; set; }
     public string? Event { get; set; }
+    public string? Schedule { get; set; }
 }
 
 internal sealed class NodeYamlDto

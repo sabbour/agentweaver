@@ -1011,6 +1011,7 @@ export interface HeartbeatStatusDto {
 export interface WorkflowTriggerDto {
   type: string;
   event?: string | null;
+  schedule?: string | null;
 }
 
 // Response body for GET raw YAML content of a project workflow file (US7).

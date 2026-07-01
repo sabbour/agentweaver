@@ -7,6 +7,7 @@ public sealed record WorkflowTriggerDto
 {
     [JsonPropertyName("type")] public required string Type { get; init; }
     [JsonPropertyName("event")] public string? Event { get; init; }
+    [JsonPropertyName("schedule")] public string? Schedule { get; init; }
 }
 
 /// <summary>A workflow in a list response: identity, trigger, and validation status (FR-002/039/040).</summary>
@@ -154,6 +155,7 @@ public static class WorkflowDtoMapper
     {
         WorkflowTriggerType.Manual => "manual",
         WorkflowTriggerType.Heartbeat => "heartbeat",
+        WorkflowTriggerType.Schedule => "schedule",
         WorkflowTriggerType.Event => "event",
         _ => "manual",
     };
@@ -183,6 +185,7 @@ public static class WorkflowDtoMapper
     {
         Type = TriggerTypeToApi(trigger.Type),
         Event = trigger.Event is null ? null : EventTypeToApi(trigger.Event.Value),
+        Schedule = trigger.Schedule,
     };
 
     public static WorkflowSummaryDto ToSummary(WorkflowLoadResult result, string effectiveDefaultId)

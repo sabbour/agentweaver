@@ -171,6 +171,7 @@ const useStyles = makeStyles({
 function describeTrigger(workflow: WorkflowSummaryDto): string {
   const trigger = workflow.trigger;
   if (!trigger) return 'Trigger: unknown';
+  if (trigger.schedule) return `Trigger: ${trigger.type} (${trigger.schedule})`;
   if (trigger.event) return `Trigger: ${trigger.type} (${trigger.event})`;
   return `Trigger: ${trigger.type}`;
 }
