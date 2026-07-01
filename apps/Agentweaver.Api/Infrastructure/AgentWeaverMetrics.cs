@@ -19,9 +19,9 @@ public static class AgentWeaverMetrics
     public static readonly Counter<long> RunsCompleted =
         Meter.CreateCounter<long>("agentweaver.run.completed", "runs", "Runs completed by status");
 
-    /// <summary>Token usage by agent and model.</summary>
+    /// <summary>AI credit usage (nano AIU) tagged by agent and model.</summary>
     public static readonly Counter<long> TokenUsage =
-        Meter.CreateCounter<long>("agentweaver.token.usage", "tokens", "Token usage by agent and model");
+        Meter.CreateCounter<long>("agentweaver.token.usage", "nano_aiu", "AI credit usage by agent and model");
 
     /// <summary>Run duration in milliseconds.</summary>
     public static readonly Histogram<double> RunDuration =

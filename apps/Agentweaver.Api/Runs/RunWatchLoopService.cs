@@ -467,16 +467,19 @@ public sealed class RunWatchLoopService
             }
         }
 
+        var now = DateTimeOffset.UtcNow;
+        var currentRun = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
+
         if (woe.Is<MergeOutput>(out var mergeOutput))
         {
             if (mergeOutput.Status == "merged")
             {
                 // Guardrail 3: conditional update — skip if already terminal.
-                await _runStore.TrySetTerminalStatusAsync(
-                    parsedRunId, RunStatus.Merged, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
+                var changed = await _runStore.TrySetTerminalStatusAsync(
+                    parsedRunId, RunStatus.Merged, now, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
-                AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "succeeded"));
-                entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
+                EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
+                entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
                 entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
 
@@ -499,10 +502,10 @@ public sealed class RunWatchLoopService
 
             if (mergeOutput.Status == "completed")
             {
-                await _runStore.TrySetTerminalStatusAsync(
-                    parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, mergeOutput.MergeResult ?? "completed", CancellationToken.None).ConfigureAwait(false);
+                var changed = await _runStore.TrySetTerminalStatusAsync(
+                    parsedRunId, RunStatus.Completed, now, mergeOutput.MergeResult ?? "completed", CancellationToken.None).ConfigureAwait(false);
 
-                AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "succeeded"));
+                EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
                 entry.RecordNext(EventTypes.RunCompleted, new { result = mergeOutput.MergeResult ?? "completed" });
 
                 _streamStore.Complete(runId);
@@ -512,11 +515,11 @@ public sealed class RunWatchLoopService
             }
 
             // merge_failed (conflict, lock failure, internal error)
-            await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
+            var mergeFailedChanged = await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.MergeFailed, now, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
 
-            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
-            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
+            EmitTerminalMetrics(currentRun, now, "failed", "merge_failed", mergeFailedChanged);
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
             entry.RecordNext(EventTypes.ReviewApproved, new { });
             entry.RecordNext(EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult });
 
@@ -532,10 +535,10 @@ public sealed class RunWatchLoopService
             // Cleanup before status update ensures pollers see a clean directory.
             await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
-            await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Completed, DateTimeOffset.UtcNow, "no_changes", CancellationToken.None).ConfigureAwait(false);
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.Completed, now, "no_changes", CancellationToken.None).ConfigureAwait(false);
 
-            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "succeeded"));
+            EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
             entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
 
             _streamStore.Complete(runId);
@@ -551,14 +554,15 @@ public sealed class RunWatchLoopService
         // coordinator can collect/assemble it in Phase 3. No scribe, no merge, no cleanup.
         if (woe.Is<AssembleReadyOutput>(out var assembleReady))
         {
-            await _runStore.SetAssembleReadyAsync(
+            var changed = await _runStore.SetAssembleReadyAsync(
                 parsedRunId,
                 assembleReady.TreeHash ?? string.Empty,
                 assembleReady.WorktreeBranch ?? string.Empty,
                 assembleReady.Diff ?? string.Empty,
                 assembleReady.StepCount,
-                DateTimeOffset.UtcNow,
+                now,
                 CancellationToken.None).ConfigureAwait(false);
+            EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
 
             var child = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
             entry.RecordNext(EventTypes.RunAssembleReady, new
@@ -594,12 +598,12 @@ public sealed class RunWatchLoopService
 
         if (woe.Is<DeclinedOutput>())
         {
-            await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Declined, DateTimeOffset.UtcNow, null, CancellationToken.None).ConfigureAwait(false);
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.Declined, now, null, CancellationToken.None).ConfigureAwait(false);
 
-            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
-            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
-            entry.RecordNext(EventTypes.WorkflowStep, new { step = "merge", status = "skipped", label = "Merge", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
+            EmitTerminalMetrics(currentRun, now, "failed", "declined", changed);
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = now.ToString("O") });
+            entry.RecordNext(EventTypes.WorkflowStep, new { step = "merge", status = "skipped", label = "Merge", timestamp_utc = now.ToString("O") });
             entry.RecordNext(EventTypes.ReviewDeclined, new { });
 
             _streamStore.Complete(runId);
@@ -615,10 +619,10 @@ public sealed class RunWatchLoopService
             // that detects the terminal status observes a clean worktree directory.
             await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
-            await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "content_safety", CancellationToken.None).ConfigureAwait(false);
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.Failed, now, "content_safety", CancellationToken.None).ConfigureAwait(false);
 
-            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
+            EmitTerminalMetrics(currentRun, now, "failed", "content_safety", changed);
             entry.RecordNext(EventTypes.RunFailed, new { reason = "content_safety" });
 
             _streamStore.Complete(runId);
@@ -682,10 +686,12 @@ public sealed class RunWatchLoopService
 
         try
         {
-            await _runStore.TrySetTerminalStatusAsync(
-                RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, reason, CancellationToken.None).ConfigureAwait(false);
+            var failedAt = DateTimeOffset.UtcNow;
+            var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                RunId.Parse(runId), RunStatus.Failed, failedAt, reason, CancellationToken.None).ConfigureAwait(false);
 
-            AgentWeaverMetrics.RunsCompleted.Add(1, new KeyValuePair<string, object?>("status", "failed"));
+            EmitTerminalMetrics(run, failedAt, "failed", reason, changed);
             entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
@@ -730,5 +736,45 @@ public sealed class RunWatchLoopService
         }
 
         return Task.CompletedTask;
+    }
+
+    private static void EmitTerminalMetrics(
+        Agentweaver.Domain.Run? run,
+        DateTimeOffset endedAt,
+        string status,
+        string? errorType = null,
+        bool changed = true)
+    {
+        if (!changed || run is null)
+            return;
+
+        var tags = BuildRunTags(run, ("status", status));
+        AgentWeaverMetrics.RunsCompleted.Add(1, tags);
+        AgentWeaverMetrics.ActiveRuns.Add(-1, BuildRunTags(run));
+
+        if (run.StartedAt != default)
+        {
+            var durationMs = Math.Max(0d, (endedAt - run.StartedAt).TotalMilliseconds);
+            AgentWeaverMetrics.RunDuration.Record(durationMs, BuildRunTags(run, ("status", status)));
+        }
+
+        if (string.Equals(status, "failed", StringComparison.Ordinal))
+            AgentWeaverMetrics.RunErrors.Add(1, BuildRunTags(run, ("error_type", errorType ?? "failed")));
+    }
+
+    private static KeyValuePair<string, object?>[] BuildRunTags(
+        Agentweaver.Domain.Run run,
+        params (string Key, object? Value)[] extraTags)
+    {
+        var tags = new List<KeyValuePair<string, object?>>
+        {
+            new("agent_name", run.AgentName ?? "unknown"),
+            new("run_type", string.IsNullOrEmpty(run.ParentRunId) ? "coordinator" : "child"),
+        };
+        if (run.ProjectId is { } projectId)
+            tags.Add(new("project.id", projectId.ToString()));
+        foreach (var (key, value) in extraTags)
+            tags.Add(new(key, value));
+        return tags.ToArray();
     }
 }

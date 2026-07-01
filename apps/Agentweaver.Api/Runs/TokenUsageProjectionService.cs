@@ -139,17 +139,19 @@ public sealed class TokenUsageProjectionService : BackgroundService
         // Resolve WorkflowRunId and ProjectId from the run store.
         string? workflowRunId = null;
         string? projectId = null;
+        Run? run = null;
         try
         {
             if (RunId.TryParse(runId, out var parsedRunId))
             {
-                var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+                run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
                 if (run is not null)
                 {
                     workflowRunId = run.WorkflowRunId;
                     projectId = run.ProjectId?.ToString();
                 }
             }
+
         }
         catch (Exception ex)
         {
@@ -171,6 +173,9 @@ public sealed class TokenUsageProjectionService : BackgroundService
         };
 
         await _usageStore.RecordAsync(record, ct).ConfigureAwait(false);
+        // TODO(issue-107): if dashboard cost semantics change away from nano AIU, update this
+        // emission site at the same time the App Insights metrics proxy query is revised.
+        AgentWeaverMetrics.TokenUsage.Add(totalNanoAiu, BuildUsageTags(run, projectId, modelId));
     }
 
     private static bool TryExtractUsage(
@@ -213,5 +218,18 @@ public sealed class TokenUsageProjectionService : BackgroundService
         }
 
         return true;
+    }
+
+    private static KeyValuePair<string, object?>[] BuildUsageTags(Run? run, string? projectId, string modelId)
+    {
+        var tags = new List<KeyValuePair<string, object?>>
+        {
+            new("model_id", modelId),
+            new("agent_name", run?.AgentName ?? "unknown"),
+            new("run_type", string.IsNullOrEmpty(run?.ParentRunId) ? "coordinator" : "child"),
+        };
+        if (!string.IsNullOrWhiteSpace(projectId))
+            tags.Add(new("project.id", projectId));
+        return tags.ToArray();
     }
 }

@@ -12,6 +12,9 @@ internal static class AzureMonitorBootstrap
 {
     internal static void Configure(IServiceCollection services)
     {
-        services.AddOpenTelemetry().UseAzureMonitor();
+        services.AddOpenTelemetry()
+            .UseAzureMonitor()
+            .WithMetrics(metrics => metrics.AddMeter("Agentweaver"))
+            .WithTracing(tracing => tracing.AddSource("Agentweaver"));
     }
 }

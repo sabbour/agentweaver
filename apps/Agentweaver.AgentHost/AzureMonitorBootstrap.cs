@@ -17,8 +17,16 @@ internal static class AzureMonitorBootstrap
     {
         services.AddOpenTelemetry()
             .ConfigureResource(r => r.AddService("agentweaver-agent-host"))
-            .WithTracing(t => t.AddSource("*").AddAzureMonitorTraceExporter())
-            .WithMetrics(m => m.AddMeter("*").AddAzureMonitorMetricExporter());
+            .WithTracing(t => t
+                .AddSource("Microsoft.Extensions.AI")
+                .AddSource("OpenAI")
+                .AddSource("Azure.AI.OpenAI")
+                .AddAzureMonitorTraceExporter())
+            .WithMetrics(m => m
+                .AddMeter("Microsoft.Extensions.AI")
+                .AddMeter("OpenAI")
+                .AddMeter("Azure.AI.OpenAI")
+                .AddAzureMonitorMetricExporter());
         logging.AddOpenTelemetry(o => o.AddAzureMonitorLogExporter());
     }
 }

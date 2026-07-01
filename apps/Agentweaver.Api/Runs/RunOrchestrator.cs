@@ -124,7 +124,7 @@ public sealed class RunOrchestrator
         try
         {
             await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
-            AgentWeaverMetrics.RunsCreated.Add(1, new KeyValuePair<string, object?>("agent_name", run.AgentName ?? "unknown"));
+            EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
             var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
@@ -215,7 +215,7 @@ public sealed class RunOrchestrator
         try
         {
             await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
-            AgentWeaverMetrics.RunsCreated.Add(1, new KeyValuePair<string, object?>("agent_name", run.AgentName ?? "unknown"));
+            EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
             var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
@@ -304,6 +304,7 @@ public sealed class RunOrchestrator
                 WorktreeBranch = worktreeInfo.BranchName,
                 AgentCharter = !string.IsNullOrEmpty(run.AgentCharter) ? run.AgentCharter : ResolveAgentCharter(run),
             };
+            EmitRunStartedMetrics(started);
 
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
 
@@ -434,9 +435,11 @@ public sealed class RunOrchestrator
             var result = $"policy_hook_failed: {ex.Code}: {ex.Message}";
             try
             {
-                await _runStore.TrySetTerminalStatusAsync(
+                var changed = await _runStore.TrySetTerminalStatusAsync(
                     runId, RunStatus.Failed, DateTimeOffset.UtcNow, result, CancellationToken.None)
                     .ConfigureAwait(false);
+                if (changed)
+                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "policy_hook_failed");
                 entry.RecordNext(EventTypes.RunFailed, new
                 {
                     reason = "policy_hook_failed",
@@ -458,9 +461,11 @@ public sealed class RunOrchestrator
             var detail = RedactFailureReason(ex);
             try
             {
-                await _runStore.TrySetTerminalStatusAsync(
+                var changed = await _runStore.TrySetTerminalStatusAsync(
                     runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
                     .ConfigureAwait(false);
+                if (changed)
+                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
                 entry.RecordNext(EventTypes.RunFailed, new
                 {
                     reason = "workflow_start_failed",
@@ -620,6 +625,45 @@ public sealed class RunOrchestrator
             ? WorkerMemoryProtocol
             : systemPromptContext + "\n\n---\n\n" + WorkerMemoryProtocol;
 
+    private static void EmitRunStartedMetrics(Run run)
+    {
+        var tags = BuildRunTags(run);
+        AgentWeaverMetrics.RunsCreated.Add(1, tags);
+        AgentWeaverMetrics.ActiveRuns.Add(1, tags);
+    }
+
+    private static void EmitLaunchFailureMetrics(Run? run, string errorType)
+    {
+        if (run is null)
+            return;
+
+        EmitCompletedMetric(run, "failed");
+        EmitErrorMetric(run, errorType);
+        AgentWeaverMetrics.ActiveRuns.Add(-1, BuildRunTags(run));
+    }
+
+    private static void EmitCompletedMetric(Run run, string status) =>
+        AgentWeaverMetrics.RunsCompleted.Add(1, BuildRunTags(run, ("status", status)));
+
+    private static void EmitErrorMetric(Run run, string errorType) =>
+        AgentWeaverMetrics.RunErrors.Add(1, BuildRunTags(run, ("error_type", errorType)));
+
+    private static KeyValuePair<string, object?>[] BuildRunTags(
+        Run run,
+        params (string Key, object? Value)[] extraTags)
+    {
+        var tags = new List<KeyValuePair<string, object?>>
+        {
+            new("agent_name", run.AgentName ?? "unknown"),
+            new("run_type", string.IsNullOrEmpty(run.ParentRunId) ? "coordinator" : "child"),
+        };
+        if (run.ProjectId is { } projectId)
+            tags.Add(new("project.id", projectId.ToString()));
+        foreach (var (key, value) in extraTags)
+            tags.Add(new(key, value));
+        return tags.ToArray();
+    }
+
     /// <summary>
     /// Builds the LEAN system prompt for a coordinator CHILD run: the agent <paramref name="charter"/>
     /// EXACTLY ONCE (when present), followed by any active architectural/scope <paramref name="decisions"/>
@@ -691,11 +735,19 @@ public sealed class RunOrchestrator
             try
             {
                 await _runStore.InsertAsync(failedRow, ct).ConfigureAwait(false);
+                EmitCompletedMetric(failedRow, "failed");
+                EmitErrorMetric(failedRow, "child_launch_failed");
             }
             catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
             {
-                await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, now, reason, ct)
+                var changed = await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, now, reason, ct)
                     .ConfigureAwait(false);
+                if (changed)
+                {
+                    var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
+                    EmitCompletedMetric(stored ?? failedRow, "failed");
+                    EmitErrorMetric(stored ?? failedRow, "child_launch_failed");
+                }
             }
 
             // Ensure a stream entry exists so the RunFailed event has somewhere to land, then record it
