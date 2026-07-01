@@ -601,7 +601,7 @@ A workflow is selected at the point where a run needs an execution process. Diff
 - **Scheduled trigger-task run** — uses schedule workflows whose trigger carries a cadence such as
   `weekly:monday`.
 - **Coordinator parent run** — owns planning, assembly, review, merge, and scribe for coordinated work.
-- **Coordinator child run** — uses a trimmed child pipeline: agent work plus RAI, terminating at assemble-ready. It does not perform human review, merge, or scribe independently.
+- **Coordinator child run** — uses a trimmed child pipeline in an isolated child worktree: agent work plus RAI, terminating at assemble-ready. It does not perform human review, merge, or scribe independently. Dependency outputs are merged forward through the coordinator integration branch before dependent children launch.
 
 The important boundary is that workflows govern run gates, while the coordinator owns intent, decomposition, dependency frontiers, and assembly. A child run can produce a safe piece of work; the parent workflow decides how the assembled result is reviewed and merged.
 

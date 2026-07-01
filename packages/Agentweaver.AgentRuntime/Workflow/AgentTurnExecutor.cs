@@ -132,9 +132,20 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 Iteration: input.Iteration);
         }
 
-        string treeHash = _worktreeOps.CommitChanges(input.WorktreePath, input.RunId);
-        string diff = _worktreeOps.GetDiff(input.RepositoryPath, input.OriginatingBranch, input.WorktreeBranch);
-        int stepCount = _worktreeOps.GetStepCount(input.RunId);
+        string treeHash;
+        string diff;
+        int stepCount;
+        try
+        {
+            treeHash = _worktreeOps.CommitChanges(input.WorktreePath, input.RunId);
+            diff = _worktreeOps.GetDiff(input.RepositoryPath, input.OriginatingBranch, input.WorktreeBranch);
+            stepCount = _worktreeOps.GetStepCount(input.RunId);
+        }
+        catch
+        {
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
+            throw;
+        }
 
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "completed", DisplayLabel,
             agentName: input.AgentName);

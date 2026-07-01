@@ -165,7 +165,9 @@ Cycle breaking is essential. Model-generated plans can accidentally create circu
 
 The dispatcher repeatedly asks: **which pending subtasks have all dependencies completed?** Those subtasks form the ready frontier.
 
-For each ready subtask, it launches a child run. Child runs are intentionally trimmed: they perform agent work and safety review, then stop at an assemble-ready boundary. They do not each perform human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
+For each ready subtask, it launches a child run in its own git worktree and branch. Child runs are intentionally trimmed: they perform agent work and safety review, then stop at an assemble-ready boundary. They do not each perform human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
+
+When a child reaches assemble-ready/completed, the dispatcher rebuilds the coordinator integration branch from the successful child branches in dependency order. Dependents are then branched from that integration branch, so they can read files produced by their prerequisites without concurrent siblings sharing one mutable git index.
 
 ```mermaid
 flowchart TD
@@ -174,12 +176,13 @@ flowchart TD
     Launch[Launch child runs]
     Safety[Child safety gate]
     AssembleReady[Assemble-ready child outputs]
+    Integration[Rebuild integration branch]
     AllSettled{All subtasks settled?}
     Assembly[Parent assembly]
     ParentReview[Parent review and merge]
 
-    Pending --> Frontier --> Launch --> Safety --> AssembleReady --> AllSettled
-    AllSettled -- no --> Pending
+    Pending --> Frontier --> Launch --> Safety --> AssembleReady --> Integration --> AllSettled
+    AllSettled -- no / dependents branch from integration --> Pending
     AllSettled -- yes --> Assembly --> ParentReview
 ```
 

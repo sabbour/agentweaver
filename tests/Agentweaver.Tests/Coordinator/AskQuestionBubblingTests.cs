@@ -171,6 +171,7 @@ public sealed class AskQuestionBubblingTests : IDisposable
             runStore: null!,
             streamStore,
             orchestrator: null!,
+            worktreeManager: null!,
             steering: null!,
             assembly: null!,
             scopeFactory: null!,

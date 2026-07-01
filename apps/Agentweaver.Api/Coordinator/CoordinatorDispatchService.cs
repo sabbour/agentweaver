@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
@@ -69,6 +70,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunOrchestrator _orchestrator;
+    private readonly WorktreeManager? _worktreeManager;
     private readonly CoordinatorSteeringQueue _steering;
     private readonly ICoordinatorAssembly _assembly;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -107,6 +109,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IRunStore runStore,
         RunStreamStore streamStore,
         RunOrchestrator orchestrator,
+        WorktreeManager? worktreeManager,
         CoordinatorSteeringQueue steering,
         ICoordinatorAssembly assembly,
         IServiceScopeFactory scopeFactory,
@@ -124,6 +127,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _runStore = runStore;
         _streamStore = streamStore;
         _orchestrator = orchestrator;
+        _worktreeManager = worktreeManager;
         _steering = steering;
         _assembly = assembly;
         _scopeFactory = scopeFactory;
@@ -288,7 +292,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     continue;
 
                 var dispatched = await DispatchOneAsync(
-                    context, workPlanId.Value, subtaskId, statusById, seq, ct).ConfigureAwait(false);
+                    context, workPlanId.Value, subtaskId, statusById, edges, seq, ct).ConfigureAwait(false);
 
                 if (dispatched is { } childRunId)
                 {
@@ -433,6 +437,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         int workPlanId,
         int subtaskId,
         Dictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         SeqCounter seq,
         CancellationToken ct)
     {
@@ -471,11 +476,14 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var childTask = await ComposeChildTaskAsync(context, workPlanId, subtask, ct).ConfigureAwait(false);
 
+        var childBaseBranch = await ResolveChildBaseBranchAsync(context, subtaskId, edges, ct)
+            .ConfigureAwait(false);
+
         var childRun = new Run
         {
             Id = childRunId,
             RepositoryPath = context.RepositoryPath,
-            OriginatingBranch = context.OriginatingBranch,
+            OriginatingBranch = childBaseBranch,
             ModelSource = ModelSource.GitHubCopilot,
             Task = childTask,
             SubmittingUser = context.SubmittingUser,
@@ -557,11 +565,84 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (subtask is not null)
             EmitSubtask(context, workPlanId, subtask, eventType, seq.Next());
 
+        if (status is SubtaskStatus.AssembleReady or SubtaskStatus.Completed)
+            await RebuildDependencyBaseBranchAsync(context, workPlanId, statusById, edges, ct).ConfigureAwait(false);
+
         if (status is SubtaskStatus.Failed or SubtaskStatus.RaiFlagged)
         {
             var reason = status == SubtaskStatus.RaiFlagged ? "dependency_rai_flagged" : "dependency_failed";
             await PropagateBlockedDependentsAsync(
                 context, workPlanId, result.SubtaskId, reason, statusById, edges, seq, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<string> ResolveChildBaseBranchAsync(
+        CoordinatorDispatchContext context,
+        int subtaskId,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
+        CancellationToken ct)
+    {
+        if (!edges.Any(e => e.SubtaskId == subtaskId))
+            return context.OriginatingBranch;
+        if (_worktreeManager is null)
+            return context.OriginatingBranch;
+
+        var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
+        try
+        {
+            return _worktreeManager.BranchExists(context.RepositoryPath, integrationBranch)
+                ? integrationBranch
+                : context.OriginatingBranch;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Coordinator dispatch: could not inspect integration branch {IntegrationBranch} for subtask {SubtaskId}; using origin {Origin}",
+                integrationBranch, subtaskId, context.OriginatingBranch);
+            return context.OriginatingBranch;
+        }
+    }
+
+    private async Task RebuildDependencyBaseBranchAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyDictionary<int, string> statusById,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
+        if (_worktreeManager is null)
+            return;
+
+        var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+        var orderedIds = AssemblyPlanning.TopologicalOrder(subtasks.Select(s => s.Id).ToList(), edges);
+        var subtasksById = subtasks.ToDictionary(s => s.Id);
+
+        var branches = new List<string>();
+        foreach (var id in orderedIds)
+        {
+            if (!statusById.TryGetValue(id, out var status) || !SubtaskStatus.Satisfies(status))
+                continue;
+            if (!subtasksById.TryGetValue(id, out var subtask) ||
+                string.IsNullOrEmpty(subtask.ChildRunId) ||
+                !RunId.TryParse(subtask.ChildRunId, out var childRunId))
+                continue;
+
+            var run = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(run?.WorktreeBranch) && !string.IsNullOrEmpty(run.Diff))
+                branches.Add(run.WorktreeBranch);
+        }
+
+        var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
+        var result = _worktreeManager.BuildIntegrationBranch(
+            context.RepositoryPath, context.OriginatingBranch, integrationBranch, branches);
+
+        if (result.Outcome == IntegrationBranchOutcome.Conflict)
+        {
+            _logger.LogWarning(
+                "Coordinator dispatch: dependency-base merge for run {RunId} conflicted while adding {Branch}; final assembly will require resolution. Files: {Files}",
+                context.CoordinatorRunId,
+                result.ConflictingBranch,
+                string.Join(", ", result.ConflictingFiles ?? []));
         }
     }
 

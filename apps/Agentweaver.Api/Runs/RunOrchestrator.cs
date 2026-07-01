@@ -174,9 +174,9 @@ public sealed class RunOrchestrator
     /// <see cref="StartRunAsync"/> except:
     /// 1. The workflow is built with the TRIMMED child pipeline (<c>isChild: true</c>): agent + RAI
     ///    terminating assemble-ready, with no per-child review gate, merge, or scribe.
-    /// 2. The child shares the coordinator's single provisioned worktree (sandbox-cross-worktree-access):
-    ///    instead of creating a per-child git worktree, the coordinator's worktree is reused as both the
-    ///    working directory and sandbox root, so Agent B can read files produced by Agent A.
+    /// 2. The child gets its own git worktree/branch. The dispatch loop advances a coordinator
+    ///    integration branch at dependency boundaries so dependent children can still see committed
+    ///    outputs from their prerequisites without concurrent siblings sharing one git index.
     /// The supplied <paramref name="run"/> MUST carry <see cref="Run.ParentRunId"/> (the coordinator
     /// run id) and <see cref="Run.SubtaskId"/>.
     /// </summary>
@@ -185,16 +185,17 @@ public sealed class RunOrchestrator
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
-        // Reuse the coordinator's shared worktree instead of provisioning a per-child worktree.
+        // Provision a per-child worktree. For dependent subtasks the dispatch loop sets
+        // OriginatingBranch to the coordinator integration branch, which already contains completed
+        // dependency outputs; independent siblings never share a mutable git index.
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = await GetOrProvisionOrchestrationWorktreeAsync(
-                run.ParentRunId, run.RepositoryPath, run.OriginatingBranch, ct).ConfigureAwait(false);
+            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to provision orchestration worktree for child run {RunId} (coordinator {CoordinatorRunId})", run.Id, run.ParentRunId);
+            _logger.LogError(ex, "Failed to provision child worktree for run {RunId} (coordinator {CoordinatorRunId})", run.Id, run.ParentRunId);
             throw;
         }
 

@@ -46,6 +46,7 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
             runStore: null!,
             _streamStore,
             orchestrator: null!,
+            worktreeManager: null!,
             steering: null!,
             _assembly,
             _scopeFactory,
