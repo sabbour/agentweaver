@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Projects;
 
@@ -38,7 +39,7 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     [Fact]
     public async Task Local_ResolveWorkingDirectory_ReturnsCanonicalPath()
     {
-        var provider = new LocalFilesystemWorkspaceProvider();
+        var provider = TestWorkspaceProviders.CreateLocal(_testRoot);
         var dir      = NewDir();
 
         var resolved = await provider.ResolveWorkingDirectoryAsync(ProjectId.New(), dir);
@@ -52,7 +53,7 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     [Fact]
     public async Task Local_EnsureWorkspace_CreatesDirectory()
     {
-        var provider = new LocalFilesystemWorkspaceProvider();
+        var provider = TestWorkspaceProviders.CreateLocal(_testRoot);
         var dir      = NewDir(create: false);
 
         await provider.EnsureWorkspaceAsync(ProjectId.New(), dir);
@@ -66,7 +67,7 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     [Fact]
     public void Local_IsAvailable_TrueForExistingDirectory()
     {
-        var provider = new LocalFilesystemWorkspaceProvider();
+        var provider = TestWorkspaceProviders.CreateLocal(_testRoot);
         var dir      = NewDir(create: true);
 
         provider.IsAvailable(dir).Should().BeTrue();
@@ -78,7 +79,7 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     [Fact]
     public void Local_IsAvailable_FalseForMissingDirectory()
     {
-        var provider = new LocalFilesystemWorkspaceProvider();
+        var provider = TestWorkspaceProviders.CreateLocal(_testRoot);
         var missing  = NewDir(create: false);
 
         provider.IsAvailable(missing).Should().BeFalse();
@@ -90,7 +91,7 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     [Fact]
     public async Task Local_Release_IsNoOp()
     {
-        var provider = new LocalFilesystemWorkspaceProvider();
+        var provider = TestWorkspaceProviders.CreateLocal(_testRoot);
         var dir      = NewDir(create: true);
 
         var act = async () => await provider.ReleaseAsync(ProjectId.New(), dir);
@@ -128,19 +129,19 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     }
 
     // =========================================================================
-    // Persistent volume: WP-08 — EnsureWorkspaceAsync throws when path missing
+    // Persistent volume: WP-08 — EnsureWorkspaceAsync creates the project directory
     // =========================================================================
     [Fact]
-    public async Task PersistentVolume_EnsureWorkspace_ThrowsWhenPathMissing()
+    public async Task PersistentVolume_EnsureWorkspace_CreatesProjectDirectory()
     {
         var mountRoot  = NewDir(create: true);
         var provider   = BuildPersistentVolumeProvider(mountRoot);
         var projectId  = ProjectId.New();
-        var missingDir = NewDir(create: false);
+        var workingDir = Path.Combine(mountRoot, projectId.ToString());
 
-        var act = async () => await provider.EnsureWorkspaceAsync(projectId, missingDir);
+        await provider.EnsureWorkspaceAsync(projectId, workingDir);
 
-        await act.Should().ThrowAsync<WorkspaceUnavailableException>();
+        Directory.Exists(workingDir).Should().BeTrue();
     }
 
     // =========================================================================
@@ -188,7 +189,7 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     [Fact]
     public void Local_IsMountRootHealthy_AlwaysTrue()
     {
-        var provider = new LocalFilesystemWorkspaceProvider();
+        var provider = TestWorkspaceProviders.CreateLocal(_testRoot);
 
         provider.IsMountRootHealthy().Should().BeTrue();
     }
@@ -199,7 +200,7 @@ public sealed class WorkspaceProviderTests : IAsyncDisposable
     [Fact]
     public void Local_AutoAssignsPath_IsFalse()
     {
-        var provider = new LocalFilesystemWorkspaceProvider();
+        var provider = TestWorkspaceProviders.CreateLocal(_testRoot);
 
         provider.AutoAssignsPath.Should().BeFalse();
     }

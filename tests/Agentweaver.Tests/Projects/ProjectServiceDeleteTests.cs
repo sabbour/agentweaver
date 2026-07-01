@@ -45,7 +45,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         IProjectStore store,
         IProjectWorkspaceProvider? workspace = null)
     {
-        workspace ??= new LocalFilesystemWorkspaceProvider();
+        workspace ??= TestWorkspaceProviders.CreateLocal();
         return new ProjectService(
             store, workspace, new NoOpGitInitializer(),
             new InMemoryGitHubTokenStore(), new FixedInstallationScopeProvider(),
