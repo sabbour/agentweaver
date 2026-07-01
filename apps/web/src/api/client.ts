@@ -89,6 +89,10 @@ export class AgentweaverApiClient {
     return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
   }
 
+  getRunTokenBreakdown(runId: string): Promise<import('./types').RunAgentTokenBreakdownDto> {
+    return this.request<import('./types').RunAgentTokenBreakdownDto>('GET', `/runs/${encodeURIComponent(runId)}/token-breakdown`);
+  }
+
   getSandboxPolicy(repositoryPath: string): Promise<SandboxPolicy> {
     const encoded = encodeURIComponent(repositoryPath);
     return this.request<SandboxPolicy>('GET', `/sandbox-policy?repository_path=${encoded}`);
@@ -778,8 +782,16 @@ export class AgentweaverApiClient {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
 
-    const text = await response.text();
+    const text = typeof response.text === 'function' ? await response.text() : '';
     if (!response.ok) throw new ApiError(response.status, text);
-    return (text ? JSON.parse(text) : null) as T;
+    if (text) return JSON.parse(text) as T;
+    if (typeof response.json === 'function') {
+      try {
+        return await response.json() as T;
+      } catch {
+        // fall through to null
+      }
+    }
+    return null as T;
   }
 }

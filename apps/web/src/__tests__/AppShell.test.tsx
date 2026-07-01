@@ -116,6 +116,8 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/projects/p1/team', 'p1')).toBe('agents');
     expect(resolveActiveKey('/projects/p1/team/cast', 'p1')).toBe('agents');
     expect(resolveActiveKey('/projects/p1/memories', 'p1')).toBe('memories');
+    expect(resolveActiveKey('/projects/p1/observability', 'p1')).toBe('observability');
+    expect(resolveActiveKey('/projects/p1/observability/traces', 'p1')).toBe('observability');
     expect(resolveActiveKey('/projects/p1/workflows', 'p1')).toBe('workflows');
     expect(resolveActiveKey('/projects/p1/settings', 'p1')).toBe('settings');
     // Deep run pages fall back to the Board; orchestration detail keeps Orchestrations active.

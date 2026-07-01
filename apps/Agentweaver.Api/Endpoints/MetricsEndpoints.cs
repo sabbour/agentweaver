@@ -1,4 +1,6 @@
 using Agentweaver.Api.Metrics;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 
@@ -27,12 +29,20 @@ public static class MetricsEndpoints
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (!caller.Owns(project.Owner)) return Results.Forbid();
 
+            var metricsFrom = ParseDateTimeOffset(from);
+            var metricsTo = ParseDateTimeOffset(to);
             var summary = await dashboard.GetProjectDashboardAsync(project, ct).ConfigureAwait(false);
             var metricDto = await metrics.GetProjectMetricsAsync(
                 projectId.ToString(),
-                ParseDateTimeOffset(from),
-                ParseDateTimeOffset(to),
+                metricsFrom,
+                metricsTo,
                 ct).ConfigureAwait(false);
+            var fallbackUsage = await dashboard.GetProjectUsageFallbackAsync(
+                projectId.ToString(),
+                metricsFrom ?? DateTimeOffset.UtcNow.AddDays(-30),
+                metricsTo ?? DateTimeOffset.UtcNow,
+                ct).ConfigureAwait(false);
+            metricDto = MergeProjectMetrics(metricDto, fallbackUsage.ModelUsage, fallbackUsage.AgentBreakdown);
 
             return Results.Ok(summary with
             {
@@ -57,6 +67,7 @@ public static class MetricsEndpoints
             string? from,
             string? to,
             AppInsightsMetricsService metrics,
+            DashboardReadService dashboard,
             IProjectStore projectStore,
             CancellationToken ct) =>
         {
@@ -69,11 +80,19 @@ public static class MetricsEndpoints
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (!caller.Owns(project.Owner)) return Results.Forbid();
 
-            return Results.Ok(await metrics.GetProjectMetricsAsync(
+            var metricsFrom = ParseDateTimeOffset(from);
+            var metricsTo = ParseDateTimeOffset(to);
+            var metricDto = await metrics.GetProjectMetricsAsync(
                 projectId.ToString(),
-                ParseDateTimeOffset(from),
-                ParseDateTimeOffset(to),
-                ct).ConfigureAwait(false));
+                metricsFrom,
+                metricsTo,
+                ct).ConfigureAwait(false);
+            var fallbackUsage = await dashboard.GetProjectUsageFallbackAsync(
+                projectId.ToString(),
+                metricsFrom ?? DateTimeOffset.UtcNow.AddDays(-30),
+                metricsTo ?? DateTimeOffset.UtcNow,
+                ct).ConfigureAwait(false);
+            return Results.Ok(MergeProjectMetrics(metricDto, fallbackUsage.ModelUsage, fallbackUsage.AgentBreakdown));
         });
 
         app.MapGet("/api/overview", async (
@@ -83,6 +102,29 @@ public static class MetricsEndpoints
         {
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             return Results.Ok(await dashboard.GetOverviewAsync(caller, ct).ConfigureAwait(false));
+        });
+
+        app.MapGet("/api/runs/{id}/token-breakdown", async (
+            HttpContext httpContext,
+            string id,
+            IRunStore runStore,
+            AppInsightsMetricsService metrics,
+            DashboardReadService dashboard,
+            CancellationToken ct) =>
+        {
+            if (!RunId.TryParse(id, out var runId))
+                return Results.BadRequest(new { error = "Invalid run id." });
+
+            var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+            if (run is null) return Results.NotFound();
+            if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+            var projectId = run.ProjectId?.ToString();
+            var appInsights = await metrics.GetRunAgentTokenBreakdownAsync(id, projectId, ct).ConfigureAwait(false);
+            if (appInsights.HasAgentData)
+                return Results.Ok(appInsights);
+
+            return Results.Ok(await dashboard.GetRunAgentTokenBreakdownFallbackAsync(id, ct).ConfigureAwait(false));
         });
     }
 
@@ -94,4 +136,20 @@ public static class MetricsEndpoints
             ? result
             : null;
     }
+
+    private static ProjectMetricsDto MergeProjectMetrics(
+        ProjectMetricsDto metrics,
+        IReadOnlyList<ModelUsageBreakdownDto> fallbackModelUsage,
+        IReadOnlyList<AgentUsageBreakdownDto> fallbackAgentBreakdown) =>
+        metrics with
+        {
+            ModelUsage = HasMeaningfulModelUsage(metrics.ModelUsage) ? metrics.ModelUsage : fallbackModelUsage,
+            AgentBreakdown = HasMeaningfulAgentBreakdown(metrics.AgentBreakdown) ? metrics.AgentBreakdown : fallbackAgentBreakdown,
+        };
+
+    private static bool HasMeaningfulModelUsage(IReadOnlyList<ModelUsageBreakdownDto> entries) =>
+        entries.Any(entry => !string.Equals(entry.Model, "unknown", StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasMeaningfulAgentBreakdown(IReadOnlyList<AgentUsageBreakdownDto> entries) =>
+        entries.Any(entry => !string.Equals(entry.AgentName, "unknown", StringComparison.OrdinalIgnoreCase));
 }

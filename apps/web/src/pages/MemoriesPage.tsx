@@ -332,7 +332,8 @@ export function MemoriesPage() {
                   <section className={styles.proposedSection} aria-label="Proposed decisions awaiting Coordinator">
                     <span className={styles.proposedHeading}>Proposed — awaiting Coordinator</span>
                     <Text className={styles.proposedCaption}>
-                      Review pending proposals and merge, promote, or reject them.
+                      Review pending proposals and merge, promote, or reject them. Approving a proposal
+                      promotes these proposals into active Team Memory.
                     </Text>
                     {pending.map(e => (
                       <div key={e.id} className={styles.proposedItem}>

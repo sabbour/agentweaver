@@ -48,13 +48,14 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto } from '../api/types';
+import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { PodIndicator } from '../components/PodIndicator';
 import { CostChip } from '../components/CostChip';
+import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { AgentRail } from '../components/AgentRail';
 import { SteerPanel } from '../components/SteerPanel';
 import { AutomationToggle } from '../components/AutomationToggle';
@@ -65,6 +66,7 @@ import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { Timeline } from '../components/Timeline';
+import { TransactionTracePanel } from '../components/runs/TransactionTracePanel';
 import { useTimelineItems } from '../timeline/useTimelineItems';
 import { stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
 import { RunLayout } from '../components/RunLayout';
@@ -852,6 +854,12 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalL,
     minWidth: 0,
   },
+  observabilityGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'start',
+  },
   sectionTitleRow: {
     display: 'flex',
     alignItems: 'center',
@@ -1079,6 +1087,25 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [runId]);
 
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    const loadBreakdown = async () => {
+      try {
+        const next = await apiClient.getRunTokenBreakdown(runId);
+        if (!cancelled) setTokenBreakdown(next);
+      } catch {
+        if (!cancelled) setTokenBreakdown(null);
+      }
+    };
+    void loadBreakdown();
+    const handle = setInterval(() => { void loadBreakdown(); }, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [runId]);
+
 
   // Fetch the project team once to resolve each assigned agent's role title for the subtask cards.
   useEffect(() => {
@@ -1142,6 +1169,7 @@ export function CoordinatorRunPage() {
   const [autoApprove, setAutoApprove] = useState(false);
   const [autopilotBusy, setAutopilotBusy] = useState(false);
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
+  const [tokenBreakdown, setTokenBreakdown] = useState<RunAgentTokenBreakdownDto | null>(null);
   const seededToggles = useRef(false);
 
   useEffect(() => {
@@ -2292,6 +2320,15 @@ export function CoordinatorRunPage() {
               <MessageBarBody>Orchestration complete.</MessageBarBody>
             </MessageBar>
           )}
+
+          <div className={styles.observabilityGrid}>
+            <AgentTokenBreakdown data={tokenBreakdown} />
+            <TransactionTracePanel
+              runId={runId ?? ''}
+              events={events}
+              children={childrenData}
+            />
+          </div>
 
           {/* Session controls — compact automation toolbar + bubbled child actions. */}
           <div className={styles.sessionToolbar}>

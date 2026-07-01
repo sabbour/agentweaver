@@ -26,6 +26,10 @@ import { FlowPage } from './pages/FlowPage';
 import { OrchestrationsPage } from './pages/OrchestrationsPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { OverviewPage } from './pages/OverviewPage';
+import { ObservabilityAgentsPage } from './pages/observability/ObservabilityAgentsPage';
+import { ObservabilityOverviewPage } from './pages/observability/ObservabilityOverviewPage';
+import { ObservabilityRedirectPage } from './pages/observability/ObservabilityRedirectPage';
+import { ObservabilityTracesPage } from './pages/observability/ObservabilityTracesPage';
 import { AppShell } from './components/shell/AppShell';
 import { apiClient } from './api/apiClient';
 import { bindSessionLogin, captureSessionAuthFromUrl, clearSessionAuth, getSessionLogin, getSessionToken } from './config';
@@ -38,6 +42,9 @@ function Shell() {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/projects" element={<ProjectGalleryPage />} />
+        <Route path="/observability" element={<ObservabilityRedirectPage />} />
+        <Route path="/observability/traces" element={<ObservabilityRedirectPage suffix="/traces" />} />
+        <Route path="/observability/agents" element={<ObservabilityRedirectPage suffix="/agents" />} />
 
         {/* Project-scoped */}
         <Route path="/projects/:projectId" element={<DashboardPage />} />
@@ -49,6 +56,9 @@ function Shell() {
         <Route path="/projects/:projectId/team" element={<TeamPage />} />
         <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
         <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
+        <Route path="/projects/:projectId/observability" element={<ObservabilityOverviewPage />} />
+        <Route path="/projects/:projectId/observability/traces" element={<ObservabilityTracesPage />} />
+        <Route path="/projects/:projectId/observability/agents" element={<ObservabilityAgentsPage />} />
         <Route path="/projects/:projectId/workflows" element={<WorkflowsPage />} />
         <Route path="/projects/:projectId/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/projects/:projectId/heartbeat" element={<HeartbeatPage />} />

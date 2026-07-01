@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react';
 import {
-  Pulse24Regular,
   Apps24Regular,
   DataPie24Regular,
+  Pulse24Regular,
   Board24Regular,
   People24Regular,
   Flow24Regular,
@@ -88,6 +88,12 @@ export const NAV_SECTIONS: NavSectionDef[] = [
       // Workflows (formerly the "Flow" item) — route unchanged at /workflows.
       { key: 'workflows', label: 'Workflows', icon: <Flowchart24Regular />, segment: 'workflows' },
       { key: 'settings', label: 'Settings', icon: <Settings24Regular />, segment: 'settings' },
+    ],
+  },
+  {
+    heading: 'OBSERVABILITY',
+    items: [
+      { key: 'observability', label: 'Observability', icon: <Pulse24Regular />, segment: 'observability' },
     ],
   },
   {
