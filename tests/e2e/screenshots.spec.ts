@@ -471,6 +471,21 @@ test.describe('User Guide · Operations (spec-006)', () => {
 });
 
 // ============================================================================
+// coordinator-orchestration.md — pod chip topology screenshot (issue-77 fix)
+// ============================================================================
+test.describe('User Guide · Coordinator orchestration — pod chips', () => {
+  test('coordinator-topology-pod-chips.png', async ({ page }) => {
+    test.skip(!PROJECT_ID || !RUN_ID, 'Set PROJECT_ID and RUN_ID (a coordinator run on k8s) to capture this screenshot.');
+    await captureAt(page, projectRoute(`/orchestrations/${RUN_ID}`), async () => {
+      // Wait for the coordinator node and at least one dispatched subtask to render.
+      await page.getByText('Coordinator').first().waitFor().catch(() => undefined);
+      // Wait for at least one pod chip to appear (coordinator node has its pod when on k8s).
+      await page.locator('[role="status"][aria-label^="Executing in pod"]').first().waitFor({ timeout: 10000 }).catch(() => undefined);
+    }, 'coordinator-topology-pod-chips');
+  });
+});
+
+// ============================================================================
 // token-usage-monitoring.md — token usage screenshots (spec-019 additions)
 // ============================================================================
 test.describe('User Guide · Token usage monitoring (spec-019)', () => {

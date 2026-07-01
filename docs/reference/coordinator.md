@@ -185,6 +185,12 @@ The coordinator observes each child through its read-only run timeline and proje
 - `subtask.*` events — the granular per-subtask lifecycle (`subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status`).
 - `coordinator.topology` events — the orchestration graph. A `version: 1` snapshot (`seq: 0`) carries every node (one coordinator node plus one per subtask) and the dependency edges; deltas (`seq > 0`) carry only the changed node(s). Edge direction is always dependency to dependent, and edges never change after the snapshot.
 
+  Each node carries an `executionPodName` field:
+  - **Coordinator node** — the Kubernetes pod name of the API process, or `null` outside Kubernetes.
+  - **Subtask node** — the pod name of the child run's bound AgentHost pod (from `IPodNameRegistry` keyed by `childRunId`), or `null` when the subtask has not been dispatched or the pod has not been bound yet.
+
+  A `null` `executionPodName` means no execution pod is assigned to that node. The UI shows a pod chip only when the value is non-null; it does not fall back to the API pod name for child or intermediate nodes.
+
 Because these events ride the coordinator run's ordinary event stream, the live graph is fully reconstructable from a single stream. Over MCP, point `run_watch` at the coordinator run id; there is no separate streaming tool. `orchestration_topology` (or the work-plan plus children endpoints) gives a one-shot snapshot when a point-in-time view is enough.
 
 ### Steering verbs

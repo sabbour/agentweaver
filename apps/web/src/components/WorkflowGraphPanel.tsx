@@ -52,7 +52,6 @@ import { apiClient } from '../api/apiClient';
 import { AgentAvatar } from './AgentAvatar';
 import { PodIndicator } from './PodIndicator';
 import { CostChip } from './CostChip';
-import { useRuntimeInfo } from '../hooks/useRuntimeInfo';
 import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
 import { DAG_NODE_SEP, NODE_W, NODE_H, NODE_TYPE_W, layoutDag, workflowNodeSizeHint } from '../utils/dagLayout';
 
@@ -519,9 +518,6 @@ export function WorkflowNode({ data }: NodeProps) {
     totalTokens,
     executionPodName: nodeExecutionPodName,
   } = data as WorkflowNodeData;
-  const { podName: globalPodName } = useRuntimeInfo();
-  // Per-node pod name takes priority; fall back to the global API pod when on k8s.
-  const resolvedPodName = (nodeExecutionPodName as string | null | undefined) ?? globalPodName;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
 
@@ -570,7 +566,7 @@ export function WorkflowNode({ data }: NodeProps) {
 
   return (
     <>
-      <PodIndicator podName={resolvedPodName} />
+      <PodIndicator podName={nodeExecutionPodName as string | null | undefined} />
       <div
         className={cardClass}
         role="article"

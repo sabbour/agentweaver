@@ -64,6 +64,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IServiceProvider _serviceProvider;
     private readonly IPodNameRegistry? _podRegistry;
+    private readonly IKubernetesEnvironment? _k8sEnv;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
@@ -85,7 +86,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IConfiguration? configuration = null,
         IPodNameRegistry? podRegistry = null,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        IKubernetesEnvironment? k8sEnv = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -95,6 +97,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _scopeFactory = scopeFactory;
         _serviceProvider = serviceProvider;
         _podRegistry = podRegistry;
+        _k8sEnv = k8sEnv;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
@@ -1002,7 +1005,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
         entry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
-            coordinatorRunId, workPlanId, status, subtasks, edges, 0));
+            coordinatorRunId, workPlanId, status, subtasks, edges, 0, _podRegistry, _k8sEnv?.PodName));
     }
 
     private async Task ResetSubtasksToPendingAsync(IReadOnlyCollection<int> subtaskIds, string feedback, CancellationToken ct)

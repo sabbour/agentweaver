@@ -64,7 +64,6 @@ import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { Timeline } from '../components/Timeline';
-import { useRuntimeInfo } from '../hooks/useRuntimeInfo';
 import { useTimelineItems } from '../timeline/useTimelineItems';
 import { stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
 import { RunLayout } from '../components/RunLayout';
@@ -570,8 +569,6 @@ function SubtaskNode({ id, data }: NodeProps) {
   const d = data as SubtaskNodeData;
   const expandCtx = useContext(CoordExpandContext);
   const viewRun = useContext(CoordViewRunContext);
-  const { podName: globalPodName } = useRuntimeInfo();
-  const resolvedPodName = (d.executionPodName as string | null | undefined) ?? globalPodName;
   const expanded = expandCtx?.expanded.has(id) ?? false;
   const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
@@ -639,7 +636,7 @@ function SubtaskNode({ id, data }: NodeProps) {
 
   return (
     <>
-      <PodIndicator podName={resolvedPodName} />
+      <PodIndicator podName={d.executionPodName as string | null | undefined} />
       <div
         className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}`}
         data-node-type="subtask"

@@ -124,7 +124,9 @@ function Wrapper({ nodes }: { nodes: Node[] }) {
 }
 
 describe('WorkflowNode — pod indicator via useRuntimeInfo', () => {
-  it('shows global pod name when kubernetes=true and no per-node override', async () => {
+  it('does NOT show pod chip when executionPodName is absent, even when API pod is available', async () => {
+    // Global API pod exists but there is no per-node executionPodName.
+    // After the fallback removal, the chip must not appear.
     vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
       kubernetes: true,
       podName: 'api-pod-abc123',
@@ -133,9 +135,12 @@ describe('WorkflowNode — pod indicator via useRuntimeInfo', () => {
     render(<Wrapper nodes={makeNode()} />);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('api-pod-abc123'),
+      () => expect(document.body.textContent).toContain('Agent'),
       { timeout: 4000 },
     );
+    // No chip — the API pod must not appear as a fallback
+    expect(document.body.querySelector('[aria-label^="Executing in pod"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('api-pod-abc123');
   });
 
   it('does NOT show pod indicator when kubernetes=false', async () => {
@@ -198,8 +203,8 @@ describe('WorkflowNode — pod indicator via useRuntimeInfo', () => {
     expect(document.body.textContent).not.toContain('api-pod-global');
   });
 
-  it('per-node executionPodName=null falls back to global pod name', async () => {
-    // Node explicitly has null (today's default) — should fall through to global
+  it('null executionPodName shows no chip even when API pod is available (no fallback)', async () => {
+    // Node explicitly has null executionPodName — must not fall through to the global API pod.
     vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
       kubernetes: true,
       podName: 'api-pod-global',
@@ -208,8 +213,26 @@ describe('WorkflowNode — pod indicator via useRuntimeInfo', () => {
     render(<Wrapper nodes={makeNode({ executionPodName: null })} />);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('api-pod-global'),
+      () => expect(document.body.textContent).toContain('Agent'),
       { timeout: 4000 },
     );
+    expect(document.body.querySelector('[aria-label^="Executing in pod"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('api-pod-global');
+  });
+
+  it('set executionPodName renders chip with that value and does not show API pod', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
+      kubernetes: true,
+      podName: 'api-pod-global',
+    });
+
+    render(<Wrapper nodes={makeNode({ executionPodName: 'agent-host-xyz' })} />);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('agent-host-xyz'),
+      { timeout: 4000 },
+    );
+    expect(document.body.querySelector('[aria-label="Executing in pod agent-host-xyz"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('api-pod-global');
   });
 });

@@ -200,6 +200,13 @@ The live stream events that matter are:
 
 `coordinator.topology` carries a versioned graph. The initial snapshot includes one coordinator node, one node per subtask, and dependency edges. Later deltas carry changed nodes. Edges are stable after the snapshot because the dependency structure does not change casually while work is running.
 
+Each node in the topology carries an `executionPodName` field. The UI renders a compact pod chip above the card when this field is non-null and non-empty:
+
+- **Coordinator node** — shows the API pod name when the coordinator process is running inside Kubernetes; null otherwise.
+- **Subtask node** — shows the pod name of the child run's bound AgentHost pod, populated by the backend from the pod registry (`IPodNameRegistry`) once the child run is dispatched. `null` before dispatch or on non-Kubernetes deployments.
+
+A node with no assigned pod shows no chip. The chip never falls back to the API pod for child or intermediate nodes.
+
 The UI also seeds the graph from `coordinator_work_plan_get` and `coordinator_children_get` equivalents so a finished run or a stream that connected after the first snapshot still renders immediately. Stream deltas reconcile on top of that seed.
 
 ### Topology over MCP

@@ -140,7 +140,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(text).toContain('Expand pipeline');
   });
 
-  it('renders child usage and sandbox pod pills on subtask nodes', async () => {
+  it('renders child usage on subtask nodes without showing API pod chip when no executionPodName is set', async () => {
     vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
     vi.mocked(apiClient.getRunUsage).mockImplementation(async (id: string) => {
       if (id === 'child-run-1') {
@@ -156,7 +156,8 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
 
-    expect(document.body.textContent).toContain('agentweaver-api-pod-1');
+    // Nodes with no executionPodName must NOT show the API pod chip (no fallback).
+    expect(document.body.querySelector('[aria-label^="Executing in pod agentweaver-api-pod-1"]')).toBeNull();
   });
 
   it('shows the steering bar with Send, Redirect, Amend, and Stop verbs', async () => {

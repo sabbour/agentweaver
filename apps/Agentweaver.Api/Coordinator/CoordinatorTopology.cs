@@ -25,6 +25,9 @@ public static class CoordinatorTopology
     /// <summary>
     /// Builds the FULL plan-time snapshot. <paramref name="seq"/> is the monotonic topology
     /// sequence number (0 for the snapshot, then incremented per delta).
+    /// <paramref name="coordinatorPodName"/> is the Kubernetes pod name of the API/coordinator
+    /// process itself; when provided, the coordinator node carries its own <c>executionPodName</c>
+    /// so the frontend can show the chip without a client-side fallback.
     /// </summary>
     public static object BuildSnapshot(
         string coordinatorRunId,
@@ -33,7 +36,8 @@ public static class CoordinatorTopology
         IReadOnlyList<Subtask> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         long seq,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null,
+        string? coordinatorPodName = null)
     {
         var nodes = new List<object>(subtasks.Count + 1)
         {
@@ -49,7 +53,7 @@ public static class CoordinatorTopology
                 childRunId = (string?)null,
                 phase = (string?)null,
                 isolation = (string?)null,
-                executionPodName = (string?)null,
+                executionPodName = coordinatorPodName,
             },
         };
 
@@ -127,7 +131,7 @@ public static class CoordinatorTopology
     };
 
     /// <summary>Changed-node shape for the coordinator node when the work-plan status transitions.</summary>
-    public static object CoordinatorNode(string workPlanStatus) => new
+    public static object CoordinatorNode(string workPlanStatus, string? executionPodName = null) => new
     {
         id = CoordinatorNodeId,
         kind = "coordinator",
@@ -136,6 +140,6 @@ public static class CoordinatorTopology
         agent = (string?)null,
         model = (string?)null,
         childRunId = (string?)null,
-        executionPodName = (string?)null,
+        executionPodName = executionPodName,
     };
 }
