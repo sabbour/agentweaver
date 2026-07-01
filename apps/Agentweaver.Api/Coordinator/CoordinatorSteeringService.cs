@@ -112,6 +112,78 @@ public static class CoordinatorSteeringEvent
 }
 
 /// <summary>
+/// Lightweight per-run wakeup registry used by the collective-assembly blocked wait loop.
+/// The steering endpoint signals the affected coordinator run after persisting a directive so
+/// an assembly-blocked wait can wake immediately instead of waiting for its next poll tick.
+/// Polling still remains the durable fallback when steering lands on another replica.
+/// </summary>
+public sealed class CoordinatorSteeringWaitRegistry
+{
+    private sealed record WaitState(long Version, TaskCompletionSource<long> Signal);
+
+    private readonly Dictionary<string, WaitState> _states = [];
+    private readonly Lock _lock = new();
+
+    public long GetVersion(string coordinatorRunId)
+    {
+        lock (_lock)
+            return GetOrCreateLocked(coordinatorRunId).Version;
+    }
+
+    public void Signal(string coordinatorRunId)
+    {
+        TaskCompletionSource<long>? signal = null;
+        long nextVersion = 0;
+        lock (_lock)
+        {
+            var current = GetOrCreateLocked(coordinatorRunId);
+            nextVersion = current.Version + 1;
+            signal = current.Signal;
+            _states[coordinatorRunId] = new WaitState(
+                nextVersion,
+                new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+
+        signal.TrySetResult(nextVersion);
+    }
+
+    public async Task<long> WaitForSignalAsync(
+        string coordinatorRunId,
+        long lastSeenVersion,
+        TimeSpan maxWait,
+        CancellationToken ct)
+    {
+        Task<long>? signalTask;
+        lock (_lock)
+        {
+            var state = GetOrCreateLocked(coordinatorRunId);
+            if (state.Version > lastSeenVersion)
+                return state.Version;
+            signalTask = state.Signal.Task;
+        }
+
+        var timeoutTask = Task.Delay(maxWait, ct);
+        var completed = await Task.WhenAny(signalTask, timeoutTask).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        return completed == signalTask
+            ? await signalTask.ConfigureAwait(false)
+            : lastSeenVersion;
+    }
+
+    private WaitState GetOrCreateLocked(string coordinatorRunId)
+    {
+        if (_states.TryGetValue(coordinatorRunId, out var state))
+            return state;
+
+        state = new WaitState(
+            0,
+            new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously));
+        _states[coordinatorRunId] = state;
+        return state;
+    }
+}
+
+/// <summary>
 /// Cross-pod seam between the steering surface (an HTTP-thread call to
 /// <see cref="CoordinatorSteeringService.SteerAsync"/>) and the dispatch loop that owns child-run
 /// control. A <c>redirect</c>/<c>amend</c> directive is persisted as a <c>queued</c>
@@ -235,6 +307,7 @@ public sealed class CoordinatorSteeringService
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly CoordinatorSteeringWaitRegistry _waitRegistry;
     private readonly RunWorkflowFactory? _runWorkflowFactory;
     private readonly IRunStore? _runStore;
     private readonly IRunEventStream? _eventStream;
@@ -245,6 +318,7 @@ public sealed class CoordinatorSteeringService
         RunWorkflowRegistry registry,
         IServiceScopeFactory scopeFactory,
         ILogger<CoordinatorSteeringService> logger,
+        CoordinatorSteeringWaitRegistry? waitRegistry = null,
         RunWorkflowFactory? runWorkflowFactory = null,
         IRunStore? runStore = null,
         IRunEventStream? eventStream = null)
@@ -252,6 +326,7 @@ public sealed class CoordinatorSteeringService
         _streamStore = streamStore;
         _registry = registry;
         _scopeFactory = scopeFactory;
+        _waitRegistry = waitRegistry ?? new CoordinatorSteeringWaitRegistry();
         _runStore = runStore;
         _eventStream = eventStream;
         _logger = logger;
@@ -339,7 +414,8 @@ public sealed class CoordinatorSteeringService
     }
 
     // -----------------------------------------------------------------------
-    // send — informational nudge, applied immediately, no plan/dispatch change.
+    // send — informational nudge, applied immediately. When the coordinator is parked at an
+    // assembly_blocked pause, the blocked-wait loop wakes and may re-run assembly.
     // -----------------------------------------------------------------------
 
     /// <summary>
@@ -355,6 +431,7 @@ public sealed class CoordinatorSteeringService
         var relayedAt = DateTimeOffset.UtcNow;
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
         EmitSteering(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId: null, SteeringStatus.Applied, instruction);
+        _waitRegistry.Signal(coordinatorRunId);
 
         _logger.LogInformation(
             "Steering send applied for coordinator {RunId} (directive {DirectiveId}); informational nudge delivered",
@@ -400,6 +477,7 @@ public sealed class CoordinatorSteeringService
         var relayedAt = DateTimeOffset.UtcNow;
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
         EmitSteering(coordinatorRunId, directiveId, SteeringKind.Stop, targetChildRunId, SteeringStatus.Applied, instruction);
+        _waitRegistry.Signal(coordinatorRunId);
 
         // For a broadcast stop (no specific child target) also terminalize the coordinator run itself.
         // Without this the coordinator's dispatch loop continues, dead-ends at assembly_blocked, and
@@ -472,6 +550,7 @@ public sealed class CoordinatorSteeringService
         // child's next turn boundary (replica-safe — no in-memory hand-off that a second pod misses).
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Queued, relayedAt: null, ct).ConfigureAwait(false);
         EmitSteering(coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Queued, instruction);
+        _waitRegistry.Signal(coordinatorRunId);
 
         // For redirect targeting a specific in-progress child: force-complete that child's stream so
         // the active dispatch loop immediately processes a failure and applies this queued directive
@@ -681,6 +760,7 @@ public sealed class CoordinatorSteeringService
         // directive: collapse to applied (the resume took effect immediately, like stop).
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, now, ct).ConfigureAwait(false);
         EmitSteering(coordinatorRunId, directiveId, kind, targetChildRunId: null, SteeringStatus.Applied, instruction);
+        _waitRegistry.Signal(coordinatorRunId);
 
         // Re-arm dispatch (idempotent). The loop re-dispatches the reset frontier; when those children
         // finish it returns to awaiting_assembly and re-triggers assembly (DB CAS guards exactly-once).

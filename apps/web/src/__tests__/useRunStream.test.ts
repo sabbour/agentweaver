@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { useRunStream } from '../api/sse';
 
 describe('useRunStream — AbortController lifecycle', () => {
@@ -27,5 +27,28 @@ describe('useRunStream — AbortController lifecycle', () => {
     // Exactly one abort: the cleanup of the first effect.
     // (The second effect's controller has not yet been cleaned up.)
     expect(abortSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mark the stream done on coordinator.assembly_blocked without a done frame', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'id: 1\nevent: coordinator.assembly_blocked\ndata: {"reason":"integration_conflict"}\n\n',
+        ));
+      },
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(stream, { status: 200 }));
+
+    const { result, unmount } = renderHook(() =>
+      useRunStream('run-1', 'http://localhost'),
+    );
+
+    await waitFor(() =>
+      expect(result.current.events.some((evt) => evt.type === 'coordinator.assembly_blocked')).toBe(true),
+    );
+    expect(result.current.status).toBe('streaming');
+
+    unmount();
   });
 });
