@@ -128,7 +128,9 @@ As work runs, the graph animates:
   stream.
 - When a child needs a clarifying answer or a tool approval, the request surfaces
   **on the coordinator**, not on a sibling. You answer once, in one place, and the
-  answer routes back to the child that asked.
+  answer routes back to the child that asked. Tool approvals and run-level
+  automation options are durable, so a different API replica can receive the
+  click and the child worker still resumes with the same decision.
 
 The arrows only ever point **up to the coordinator and back down to a child** —
 never sideways between children. That is the visual proof that children don't chat

@@ -195,7 +195,7 @@ sequenceDiagram
    `kubectl` fallback otherwise — and returns `preview_url`.
 
 > **Design note.** The agent tool is a synchronous HTTP callback that must return a URL, so it uses the
-> per-tool `IToolApprovalGate` (which resolves in-process and returns a bool) rather than the MAF
+> per-tool `IToolApprovalGate` (which persists context/decisions and returns a bool) rather than the MAF
 > `RequestPort` workflow primitive — `RequestPort` suspends/checkpoints the whole workflow and resumes via a
 > separately-posted decision, which cannot satisfy a synchronous tool callback.
 
@@ -230,7 +230,7 @@ governs unattended runs; production stays human-gated.
 | `start_preview` agent tool (run-scoped HTTP callback) | `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs` |
 | `start_preview` MCP tool (run_id + port, same endpoint) | `apps/Agentweaver.Mcp/Tools/RunTools.cs` |
 | Owner-or-agent-callback authorization helper | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
-| HITL approval primitive (shared with `web_fetch`) | `packages/Agentweaver.AgentRuntime/InMemoryToolApprovalGate.cs` |
+| HITL approval primitive (shared with `web_fetch`) | `apps/Agentweaver.Api/Runs/DurableToolApprovalGate.cs` |
 | Agent capability note injection | `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` |
 | Shared preview Gateway | `k8s/gateway-preview.yaml` |
 | Sandbox NetworkPolicy (preview ingress range) | `k8s/networkpolicy-sandbox.yaml` |

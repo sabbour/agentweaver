@@ -283,6 +283,11 @@ builder.Services.AddHostedService<TokenUsageProjectionService>();
 
 // Agent runtime
 builder.Services.AddAgentRuntime();
+builder.Services.AddSingleton<DurableRunControlState>();
+builder.Services.AddSingleton<DurableToolApprovalGate>();
+builder.Services.AddSingleton<IToolApprovalGate>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
+builder.Services.AddSingleton<DurableRunOptionsStore>();
+builder.Services.AddSingleton<IRunOptionsStore>(sp => sp.GetRequiredService<DurableRunOptionsStore>());
 
 // ISandboxExecutorRouter (017-US2): explicit router replaces fragile last-registration-wins pattern.
 // Overrides the ISandboxExecutor registered by AddAgentRuntime() — last registration wins.
