@@ -38,22 +38,39 @@ public sealed record ThroughputPointDto
 /// <summary>Per-agent activity and quality on a single project, sourced from Application Insights.</summary>
 public sealed record AgentLeaderboardEntryDto
 {
-    [JsonPropertyName("agentName")]     public required string AgentName     { get; init; }
-    [JsonPropertyName("role")]          public string?         Role          { get; init; }
-    [JsonPropertyName("runsThisWeek")]  public required int    RunsThisWeek  { get; init; }
-    [JsonPropertyName("runsTotal")]     public required int    RunsTotal     { get; init; }
-    [JsonPropertyName("successRate")]   public required int    SuccessRate   { get; init; }
-    [JsonPropertyName("avgDurationMs")] public long?           AvgDurationMs { get; init; }
-    [JsonPropertyName("costAic")]       public decimal         CostAic       { get; init; }
+    [JsonPropertyName("agentName")]      public required string AgentName      { get; init; }
+    [JsonPropertyName("role")]           public string?         Role           { get; init; }
+    [JsonPropertyName("runsThisWeek")]   public required int    RunsThisWeek   { get; init; }
+    [JsonPropertyName("runsTotal")]      public required int    RunsTotal      { get; init; }
+    [JsonPropertyName("successRate")]    public required int    SuccessRate    { get; init; }
+    [JsonPropertyName("successfulRuns")] public required int    SuccessfulRuns { get; init; }
+    [JsonPropertyName("terminalRuns")]   public required int    TerminalRuns   { get; init; }
+    [JsonPropertyName("avgDurationMs")]  public long?           AvgDurationMs  { get; init; }
+    [JsonPropertyName("costAic")]        public decimal         CostAic        { get; init; }
+}
+
+/// <summary>Legacy dashboard leaderboard shape preserved on /dashboard for compatibility.</summary>
+public sealed record DashboardAgentLeaderboardEntryDto
+{
+    [JsonPropertyName("agent")]           public required string  Agent          { get; init; }
+    [JsonPropertyName("role_title")]      public string?          RoleTitle      { get; init; }
+    [JsonPropertyName("runs_this_week")]  public required int     RunsThisWeek   { get; init; }
+    [JsonPropertyName("runs_total")]      public required int     RunsTotal      { get; init; }
+    [JsonPropertyName("success_rate")]    public required double  SuccessRate    { get; init; }
+    [JsonPropertyName("successful_runs")] public required int     SuccessfulRuns { get; init; }
+    [JsonPropertyName("terminal_runs")]   public required int     TerminalRuns   { get; init; }
+    [JsonPropertyName("avg_duration_ms")] public required double? AvgDurationMs  { get; init; }
 }
 
 /// <summary>Per-project dashboard response.</summary>
 public sealed record ProjectDashboardDto
 {
-    [JsonPropertyName("project_id")]    public required string              ProjectId    { get; init; }
-    [JsonPropertyName("project_name")]  public required string              ProjectName  { get; init; }
-    [JsonPropertyName("generated_utc")] public required DateTimeOffset      GeneratedUtc { get; init; }
-    [JsonPropertyName("summary")]       public required DashboardSummaryDto Summary      { get; init; }
+    [JsonPropertyName("project_id")]        public required string                                       ProjectId        { get; init; }
+    [JsonPropertyName("project_name")]      public required string                                       ProjectName      { get; init; }
+    [JsonPropertyName("generated_utc")]     public required DateTimeOffset                               GeneratedUtc     { get; init; }
+    [JsonPropertyName("summary")]           public required DashboardSummaryDto                          Summary          { get; init; }
+    [JsonPropertyName("throughput")]        public required IReadOnlyList<ThroughputPointDto>            Throughput       { get; init; }
+    [JsonPropertyName("agent_leaderboard")] public required IReadOnlyList<DashboardAgentLeaderboardEntryDto> AgentLeaderboard { get; init; }
 }
 
 /// <summary>Per-project dashboard widgets sourced from Application Insights.</summary>

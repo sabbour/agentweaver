@@ -229,8 +229,9 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `GET` | `/api/projects/{id}/workspace/refs` | List workspace refs |
 | `GET` | `/api/projects/{id}/workspace` | List project workspace files |
 | `GET` | `/api/projects/{id}/workspace/files/{**path}` | Read a project workspace file |
-| `GET` | `/api/projects/{id}/dashboard` | Get project dashboard metrics (includes `token_usage` field) |
-| `GET` | `/api/overview` | Get global overview metrics (includes `token_usage` field for admins) |
+| `GET` | `/api/projects/{id}/dashboard` | Get project dashboard summary plus compatibility throughput / leaderboard fields |
+| `GET` | `/api/projects/{id}/metrics` | Get App Insights-backed throughput and leaderboard widgets |
+| `GET` | `/api/overview` | Get global overview metrics |
 | `GET` | `/api/runs/{id}/usage` | Get token usage summary for a run |
 | `GET` | `/api/workflow-runs/{id}/usage` | Get token usage summary for a workflow-run envelope |
 | `GET` | `/api/projects/{id}/usage` | Get project token usage, time-ranged (default: last 30 days) |

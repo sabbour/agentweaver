@@ -12,6 +12,9 @@ public static class MetricsEndpoints
             HttpContext httpContext,
             string id,
             DashboardReadService dashboard,
+            AppInsightsMetricsService metrics,
+            string? from,
+            string? to,
             IProjectStore projectStore,
             CancellationToken ct) =>
         {
@@ -24,7 +27,28 @@ public static class MetricsEndpoints
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (!caller.Owns(project.Owner)) return Results.Forbid();
 
-            return Results.Ok(await dashboard.GetProjectDashboardAsync(project, ct).ConfigureAwait(false));
+            var summary = await dashboard.GetProjectDashboardAsync(project, ct).ConfigureAwait(false);
+            var metricDto = await metrics.GetProjectMetricsAsync(
+                projectId.ToString(),
+                ParseDateTimeOffset(from),
+                ParseDateTimeOffset(to),
+                ct).ConfigureAwait(false);
+
+            return Results.Ok(summary with
+            {
+                Throughput = metricDto.Throughput,
+                AgentLeaderboard = metricDto.Leaderboard.Select(entry => new DashboardAgentLeaderboardEntryDto
+                {
+                    Agent = entry.AgentName,
+                    RoleTitle = entry.Role,
+                    RunsThisWeek = entry.RunsThisWeek,
+                    RunsTotal = entry.RunsTotal,
+                    SuccessRate = entry.TerminalRuns > 0 ? entry.SuccessfulRuns / (double)entry.TerminalRuns : 0d,
+                    SuccessfulRuns = entry.SuccessfulRuns,
+                    TerminalRuns = entry.TerminalRuns,
+                    AvgDurationMs = entry.AvgDurationMs,
+                }).ToList(),
+            });
         });
 
         app.MapGet("/api/projects/{id}/metrics", async (
@@ -46,14 +70,20 @@ public static class MetricsEndpoints
             if (!caller.Owns(project.Owner)) return Results.Forbid();
 
             return Results.Ok(await metrics.GetProjectMetricsAsync(
-                id,
+                projectId.ToString(),
                 ParseDateTimeOffset(from),
                 ParseDateTimeOffset(to),
                 ct).ConfigureAwait(false));
         });
 
-        app.MapGet("/api/overview", async (DashboardReadService dashboard, CancellationToken ct) =>
-            Results.Ok(await dashboard.GetOverviewAsync(ct).ConfigureAwait(false)));
+        app.MapGet("/api/overview", async (
+            HttpContext httpContext,
+            DashboardReadService dashboard,
+            CancellationToken ct) =>
+        {
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            return Results.Ok(await dashboard.GetOverviewAsync(caller, ct).ConfigureAwait(false));
+        });
     }
 
     private static DateTimeOffset? ParseDateTimeOffset(string? value)

@@ -143,23 +143,4 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "get_project_usage"), Description("Get token and AI Credit usage for a project over a time range (default: last 30 days).")]
-    public async Task<string> GetProjectUsageAsync(
-        [Description("Project ID")] string project_id,
-        [Description("Start of the time range in ISO 8601 format (optional, default: 30 days ago)")] string? from,
-        [Description("End of the time range in ISO 8601 format (optional, default: now)")] string? to,
-        CancellationToken ct)
-    {
-        try
-        {
-            var query = new System.Text.StringBuilder($"/api/projects/{project_id}/usage");
-            var sep = '?';
-            if (!string.IsNullOrWhiteSpace(from))  { query.Append($"{sep}from={Uri.EscapeDataString(from)}");  sep = '&'; }
-            if (!string.IsNullOrWhiteSpace(to))    { query.Append($"{sep}to={Uri.EscapeDataString(to)}");      sep = '&'; }
-            var result = await api.GetAsync<JsonElement>(query.ToString(), ct);
-            return JsonSerializer.Serialize(result, JsonOpts);
-        }
-        catch (McpApiException) { throw; }
-        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
-    }
 }

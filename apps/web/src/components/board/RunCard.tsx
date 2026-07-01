@@ -6,7 +6,6 @@ import type { RunCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import { AgentAvatar } from '../AgentAvatar';
-import { CostChip } from '../CostChip';
 
 const useStyles = makeStyles({
   card: {
@@ -141,7 +140,6 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
               Approval needed
             </Badge>
           )}
-          <CostChip totalNanoAiu={card.total_nano_aiu} totalTokens={card.total_tokens} />
           <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
           <Button
             appearance="subtle"

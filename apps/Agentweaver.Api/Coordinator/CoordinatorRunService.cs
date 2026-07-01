@@ -1253,10 +1253,28 @@ public sealed class CoordinatorRunService
                 child?.Status.ToString(),
                 child?.WorktreeBranch,
                 child?.TreeHash,
-                child?.StepCount ?? 0));
+                await ResolveStepCountAsync(s.ChildRunId!, child, ct).ConfigureAwait(false)));
         }
 
         return children;
+    }
+
+    private async Task<int> ResolveStepCountAsync(string runId, Run? child, CancellationToken ct)
+    {
+        if (child is { StepCount: > 0 })
+            return child.StepCount;
+
+        var entry = _streamStore.Get(runId);
+        var liveCount = entry?.GetSnapshotSince(0).Events.Count(e => e.Type == EventTypes.ToolCall) ?? 0;
+        if (liveCount > 0)
+            return liveCount;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.RunEvents
+            .Where(e => e.RunId == runId && e.EventType == EventTypes.ToolCall)
+            .CountAsync(ct)
+            .ConfigureAwait(false);
     }
 
     private async Task FinalizeRunAsync(string runId, CoordinatorOutcome outcome, RunStreamEntry entry)

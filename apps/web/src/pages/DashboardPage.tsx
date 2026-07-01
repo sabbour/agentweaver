@@ -40,9 +40,10 @@ type TimeRange = '7d' | '30d' | '90d';
 function timeRangeDates(range: TimeRange): { from: string; to: string } {
   const to = new Date();
   const from = new Date(to);
-  if (range === '7d') from.setDate(from.getDate() - 7);
-  else if (range === '30d') from.setDate(from.getDate() - 30);
-  else from.setDate(from.getDate() - 90);
+  if (range === '7d') from.setDate(from.getDate() - 6);
+  else if (range === '30d') from.setDate(from.getDate() - 29);
+  else from.setDate(from.getDate() - 89);
+  from.setUTCHours(0, 0, 0, 0);
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
@@ -241,8 +242,6 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [selectedRange, setSelectedRange] = useState<TimeRange>('30d');
-  const rangeDates = useMemo(() => timeRangeDates(selectedRange), [selectedRange]);
-
   const formatError = (err: unknown): string =>
     err instanceof ApiError
       ? `API error ${err.status}: ${err.body}`
@@ -252,6 +251,7 @@ export function DashboardPage() {
 
   const load = useCallback(async (signal: { cancelled: boolean }) => {
     if (!projectId) return;
+    const rangeDates = timeRangeDates(selectedRange);
     try {
       const [dashboardDto, metricsDto] = await Promise.all([
         apiClient.getProjectDashboard(projectId),
@@ -267,7 +267,7 @@ export function DashboardPage() {
     } finally {
       if (!signal.cancelled) setLoading(false);
     }
-  }, [projectId, rangeDates.from, rangeDates.to]);
+  }, [projectId, selectedRange]);
 
   useEffect(() => {
     if (!projectId) return;

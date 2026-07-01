@@ -30,7 +30,7 @@ public sealed class AppInsightsMetricsService
         var workspaceId = ResolveWorkspaceId(connectionString);
         if (string.IsNullOrWhiteSpace(workspaceId))
         {
-            _logger.LogDebug("Project metrics disabled because no Application Insights workspace id was configured.");
+            _logger.LogWarning("Project metrics disabled because no Application Insights workspace id was configured.");
             return Empty();
         }
 
@@ -62,7 +62,7 @@ public sealed class AppInsightsMetricsService
             customMetrics
             | where name in ("agentweaver.run.created", "agentweaver.run.completed")
             | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where isempty(customDimensions["project.id"]) or tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
             | summarize total = sum(value) by bin(timestamp, 1d), name
             | order by timestamp asc
             """;
@@ -110,7 +110,7 @@ public sealed class AppInsightsMetricsService
             let leaderboard = dependencies
             | where isnotempty(customDimensions["gen_ai.agent.name"])
             | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where isempty(customDimensions["project.id"]) or tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
             | summarize
                 runs_total = count(),
                 runs_this_week = countif(timestamp > ago(7d)),
@@ -121,12 +121,13 @@ public sealed class AppInsightsMetricsService
             let costs = customMetrics
             | where name == "agentweaver.token.usage"
             | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where isempty(customDimensions["project.id"]) or tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
             | summarize cost_aic = sum(value) / 1000000000.0 by agent_name = tostring(customDimensions["gen_ai.agent.name"]);
             leaderboard
             | join kind=leftouter costs on agent_name
             | extend success_rate = iff(runs_total == 0, 0.0, round(100.0 * success_count / runs_total, 0))
-            | project agent_name, role, runs_this_week, runs_total, success_rate, avg_duration_ms, cost_aic
+            | extend terminal_runs = runs_total
+            | project agent_name, role, runs_this_week, runs_total, success_rate, success_count, terminal_runs, avg_duration_ms, cost_aic
             | order by runs_total desc, agent_name asc
             """;
 
@@ -140,8 +141,10 @@ public sealed class AppInsightsMetricsService
             RunsThisWeek = Convert.ToInt32(row[2] ?? 0),
             RunsTotal = Convert.ToInt32(row[3] ?? 0),
             SuccessRate = Convert.ToInt32(row[4] ?? 0),
-            AvgDurationMs = row[5] is null ? null : Convert.ToInt64(row[5]),
-            CostAic = row[6] is null ? 0m : Convert.ToDecimal(row[6]),
+            SuccessfulRuns = Convert.ToInt32(row[5] ?? 0),
+            TerminalRuns = Convert.ToInt32(row[6] ?? 0),
+            AvgDurationMs = row[7] is null ? null : Convert.ToInt64(row[7]),
+            CostAic = row[8] is null ? 0m : Convert.ToDecimal(row[8]),
         }).ToList();
     }
 

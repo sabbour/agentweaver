@@ -2,6 +2,7 @@ using System.Globalization;
 using Agentweaver.Api.Diagnostics;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
 
@@ -76,6 +77,8 @@ public sealed class DashboardReadService
             ProjectId = pid,
             ProjectName = project.Name,
             GeneratedUtc = now,
+            Throughput = [],
+            AgentLeaderboard = [],
             Summary = new DashboardSummaryDto
             {
                 RunsThisWeek = runsThisWeek,
@@ -87,16 +90,23 @@ public sealed class DashboardReadService
         };
     }
 
-    public async Task<OverviewDto> GetOverviewAsync(CancellationToken ct = default)
+    public async Task<OverviewDto> GetOverviewAsync(CallerContext caller, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
         var todayUtc = now.UtcDateTime.Date;
 
-        var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
+        var projects = (await _projectStore.ListAsync(ct).ConfigureAwait(false))
+            .Where(project => caller.Owns(project.Owner))
+            .ToList();
         var names = projects.ToDictionary(p => p.Id.ToString(), p => p.Name, StringComparer.Ordinal);
+        var visibleProjectIds = names.Keys.ToHashSet(StringComparer.Ordinal);
 
-        var runs = await LoadRunsAsync(null, ct).ConfigureAwait(false);
-        var readyProjectIds = await LoadReadyBacklogProjectIdsAsync(ct).ConfigureAwait(false);
+        var runs = (await LoadRunsAsync(null, ct).ConfigureAwait(false))
+            .Where(run => run.ProjectId is not null && visibleProjectIds.Contains(run.ProjectId))
+            .ToList();
+        var readyProjectIds = (await LoadReadyBacklogProjectIdsAsync(ct).ConfigureAwait(false))
+            .Where(visibleProjectIds.Contains)
+            .ToList();
 
         return new OverviewDto
         {

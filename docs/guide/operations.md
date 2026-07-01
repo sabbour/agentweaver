@@ -132,7 +132,8 @@ FORCE_REBUILD=true bash scripts/aks/20-build-push-images.sh
 
 - Token and AIC usage data now lives in **Application Insights / Azure Monitor**, not in the application database.
 - The project dashboard throughput chart and agent leaderboard read from `GET /api/projects/{id}/metrics`, which proxies App Insights KQL.
-- If `APPLICATIONINSIGHTS_CONNECTION_STRING` is not configured, the metrics endpoint returns empty arrays so the dashboard degrades gracefully.
+- Configure `APPLICATIONINSIGHTS_CONNECTION_STRING` **and** a Log Analytics workspace id (`APPLICATIONINSIGHTS_WORKSPACE_ID` or `ApplicationInsights:WorkspaceId`) unless your connection string already embeds `WorkspaceId`.
+- If App Insights is not configured, or no workspace id can be resolved, the metrics endpoint returns empty arrays so the dashboard degrades gracefully.
 
 ## Related scripts
 
