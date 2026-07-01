@@ -125,4 +125,33 @@ describe('OutcomeSpecPanel — 404 suppression', () => {
     expect(queryByText(/API error/i)).toBeNull();
     expect(queryByText(/404/)).toBeNull();
   });
+
+  it('does not retry getOutcomeSpec when streamStatus becomes done after a 404', async () => {
+    // If the initial fetch returned 404, the component must not re-fetch when the SSE stream
+    // closes (streamStatus=done). Repeated fetches would produce repeated 404 network errors
+    // in the browser console without delivering any new information.
+    vi.mocked(apiClient.getOutcomeSpec).mockRejectedValue(new ApiError(404, 'not found'));
+
+    const { rerender } = render(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    // Wait for the initial mount fetch to complete.
+    await waitFor(() => expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalledTimes(1));
+
+    // Simulate the SSE stream closing (streamStatus changes to 'done').
+    rerender(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="done" />
+      </Wrapper>,
+    );
+
+    // Allow any pending effects to settle.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // getOutcomeSpec must NOT be called again — the 404 flag prevents the streamStatus=done retry.
+    expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalledTimes(1);
+  });
 });
