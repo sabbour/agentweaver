@@ -198,6 +198,7 @@ export interface ListBlueprintsResponse {
 
 export interface GenerateBlueprintRequest {
   description: string;
+  target_repository?: string | null;
 }
 
 export interface GenerateBlueprintResponse {

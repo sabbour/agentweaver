@@ -104,9 +104,10 @@ interface BlueprintPickerProps {
   active: boolean;
   value: BlueprintSelection;
   onChange: (selection: BlueprintSelection) => void;
+  targetRepository?: string | null;
 }
 
-export function BlueprintPicker({ active, value, onChange }: BlueprintPickerProps) {
+export function BlueprintPicker({ active, value, onChange, targetRepository }: BlueprintPickerProps) {
   const styles = useStyles();
 
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
@@ -166,7 +167,7 @@ export function BlueprintPicker({ active, value, onChange }: BlueprintPickerProp
     setGenerating(true);
     setGenError(null);
     try {
-      const res = await apiClient.generateBlueprint(description.trim());
+      const res = await apiClient.generateBlueprint(description.trim(), targetRepository);
       setGenerated({ blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml });
       // Auto-apply the freshly generated blueprint.
       onChange({ kind: 'generated', blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml });

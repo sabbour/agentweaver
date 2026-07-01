@@ -118,6 +118,32 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task PromptIncludesTargetRepositoryContext_FromExplicitTarget()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Every Monday: triage GitHub issues",
+            TargetRepository: "Azure/aks"));
+
+        runner.LastTask.Should().Contain("<<<TARGET_REPOSITORY>>>");
+        runner.LastTask.Should().Contain("Azure/aks");
+    }
+
+    [Fact]
+    public async Task PromptExtractsTargetRepositoryContext_FromDescriptionUrl()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Every Monday: triage github issues (http://github.com/Azure/aks/issues)"));
+
+        runner.LastTask.Should().Contain("Azure/aks");
+    }
+
+    [Fact]
     public async Task MissingId_IsDerivedFromDescriptionSlug()
     {
         // Same valid workflow body but without an `id:` line; the generator injects a slug from the
@@ -225,6 +251,7 @@ public sealed class WorkflowGeneratorTests
     {
         private readonly Queue<string> _responses;
         public int CallCount { get; private set; }
+        public string? LastTask { get; private set; }
 
         public ScriptedAgentRunner(params string[] responses) => _responses = new Queue<string>(responses);
 
@@ -234,6 +261,7 @@ public sealed class WorkflowGeneratorTests
             string? systemPromptContext = null, string? userId = null)
         {
             CallCount++;
+            LastTask = task;
             var next = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;
             return Task.FromResult(next);
         }

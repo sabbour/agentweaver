@@ -82,6 +82,7 @@ public sealed record ListBlueprintsResponse
 public sealed record GenerateBlueprintRequest
 {
     [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("target_repository")] public string? TargetRepository { get; init; }
 }
 
 public sealed record GenerateBlueprintResponse

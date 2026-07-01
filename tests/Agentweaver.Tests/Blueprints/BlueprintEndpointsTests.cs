@@ -333,6 +333,33 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
+    public async Task GenerateBlueprint_ForwardsTargetRepositoryToGenerator()
+    {
+        _factory.Generator.Response = """
+            {
+              "id": "blueprint-generated-triage",
+              "name": "Generated Triage Team",
+              "description": "A repository triage team.",
+              "roster": ["backend-engineer"],
+              "workflows": ["software-delivery"],
+              "review_policy": "default",
+              "sandbox_profile": "restricted"
+            }
+            """;
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/blueprints/generate",
+            new GenerateBlueprintRequest
+            {
+                Description = "Every Monday: triage GitHub issues",
+                TargetRepository = "Azure/aks",
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        _factory.Generator.LastTargetRepository.Should().Be("Azure/aks");
+    }
+
+    [Fact]
     public async Task GenerateBlueprint_BespokeRoleMissingFromRoster_IsAutoRostered_ReturnsBlueprint()
     {
         // Mirrors the live staging bug: the LLM declared 'job-match-analyst' in bespoke_roles but

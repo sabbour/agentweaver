@@ -168,8 +168,11 @@ export class AgentweaverApiClient {
       .then(normalizeBlueprintList);
   }
 
-  generateBlueprint(description: string): Promise<GenerateBlueprintResponse> {
-    return this.request<GenerateBlueprintResponse>('POST', '/blueprints/generate', { description });
+  generateBlueprint(description: string, targetRepository?: string | null): Promise<GenerateBlueprintResponse> {
+    return this.request<GenerateBlueprintResponse>('POST', '/blueprints/generate', {
+      description,
+      target_repository: targetRepository || undefined,
+    });
   }
 
   renameProject(projectId: string, name: string): Promise<void> {

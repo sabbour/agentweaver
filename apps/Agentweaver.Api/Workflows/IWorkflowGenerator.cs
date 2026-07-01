@@ -25,7 +25,8 @@ public record WorkflowGenerationRequest(
     string Description,
     string? ProjectId = null,              // for role context
     IReadOnlyList<string>? TeamRoles = null, // cast roles available in the project
-    string? UserId = null                  // submitting user — required for Copilot token resolution
+    string? UserId = null,                 // submitting user — required for Copilot token resolution
+    string? TargetRepository = null        // owner/repo or URL the workflow should operate against
 );
 
 /// <summary>The outcome of a successful generation: a validated draft plus the YAML used to render it.</summary>

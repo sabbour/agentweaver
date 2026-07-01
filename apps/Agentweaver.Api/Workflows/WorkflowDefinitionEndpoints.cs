@@ -332,7 +332,13 @@ public static class WorkflowDefinitionEndpoints
             try
             {
                 var result = await generator.GenerateAsync(
-                    new WorkflowGenerationRequest(request.Description, project!.Id.ToString(), teamRoles, UserId: caller.User), ct);
+                    new WorkflowGenerationRequest(
+                        request.Description,
+                        project!.Id.ToString(),
+                        teamRoles,
+                        UserId: caller.User,
+                        TargetRepository: project.Origin.SourceRepository),
+                    ct);
 
                 return Results.Ok(new GenerateWorkflowResponse
                 {
