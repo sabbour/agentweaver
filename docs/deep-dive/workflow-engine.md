@@ -237,7 +237,7 @@ For a project, `WorkflowRegistry.Build` assembles a `ProjectWorkflowSet` from:
 2. catalog library workflows embedded in the Squad catalog (`CatalogReader.LoadAllWorkflowYamls`, loaded with `isBuiltIn: true`),
 3. project-authored `.yaml` / `.yml` files under `.agentweaver/workflows/` (`WorkflowRegistry.WorkflowsRelativePath`).
 
-The result is cached per project in `WorkflowRegistry.GetOrLoad`; `WorkflowRegistry.Sync` is the only refresh path and rebuilds from disk (a sync that finds validation errors keeps the previous cache). Invalid workflows remain visible in `ProjectWorkflowSet.Results` with their errors, but `ProjectWorkflowSet.Available` excludes them.
+The result is cached per project in `WorkflowRegistry.GetOrLoad`. Each cache entry is keyed by a signature of the project's top-level workflow YAML files plus the project's allowed workflow id set, so a replica refreshes its local cache when shared project files or blueprint restrictions change. `WorkflowRegistry.Sync` still provides the explicit user-facing refresh path and rebuilds from disk; validation errors are cached as registry results for replica coherence. Invalid workflows remain visible in `ProjectWorkflowSet.Results` with their errors, but `ProjectWorkflowSet.Available` excludes them.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -269,6 +269,8 @@ flowchart TD
 ```
 
 The built-in default is always available. Catalog workflows are available without project-local files. A blueprint may restrict the allowed workflow ids for a project via `Project.AllowedWorkflowIds`; `WorkflowRegistry.FilterByAllowedSet` keeps only allowed ids **plus** the built-in `default`, which is always retained so a project never has zero workflows. An empty/absent allowed set means all workflows are returned (backward compatible).
+
+Review policies use the same coherence pattern. `ReviewPolicyRegistry.GetOrLoad` caches a project's `.agentweaver/review-policies/` results with a signature of the top-level policy YAML files, and `ReviewPolicyRegistry.Sync` replaces that cache after an explicit policy refresh. Because workflow and policy files live in the shared project workspace, one API replica can sync a change and another replica will observe the changed signature on the next registry read rather than serving a stale process graph indefinitely.
 
 Reserved ids are protected: `WorkflowRegistry.Build` adds the built-in `default` and every catalog id to a reserved set, so project files cannot override a built-in or catalog id (such a file becomes an invalid result). Duplicate ids are resolved deterministically in `WorkflowRegistry.AddResult`: among built-in/catalog collisions the higher semantic `Version` wins (ties keep the first-loaded source); among project files the first valid file wins and later duplicates are surfaced as invalid load errors rather than silently replacing a definition.
 
@@ -607,7 +609,7 @@ See [orchestration.md](orchestration.md) for the broader run lifecycle and coord
 - **Role metadata can be misleading.** Distinguish render lanes from concrete catalog agent ids and inline charters.
 - **Peer review must be verdict-routed.** A `peer_review` node needs verdict-labeled outgoing edges; otherwise bindability validation rejects it instead of guessing how to route it.
 - **Terminal nodes are resolved by incoming semantics.** Renaming `done` is fine; losing the scribe-sourced or verdict-sourced incoming edge is not.
-- **Registry sync matters.** Saving a file is not enough if the cached project workflow set is not refreshed.
+- **Registry sync matters.** Saving a file should be followed by an explicit sync for immediate feedback; other replicas refresh when they observe the changed shared-file signature.
 - **Review policy composition can change the effective graph.** The workflow a user sees and the workflow that runs may differ by required injected gates.
 - **Selection is advisory until binding.** A selected workflow still must resolve, compose, and bind at run start.
 
@@ -618,7 +620,7 @@ If you were rebuilding the workflow engine from scratch, implement it in this or
 1. Define the workflow schema: trigger, start, typed nodes, edges, branches, and metadata.
 2. Write a loader that returns valid and invalid load results without crashing the whole set.
 3. Embed a built-in default workflow and parse it through the same loader as user files.
-4. Build a registry that discovers built-in, catalog, and project workflows, caches per project, and syncs explicitly.
+4. Build a registry that discovers built-in, catalog, and project workflows, caches per project with a shared-file signature, and syncs explicitly.
 5. Add trigger evaluation and make it the first candidate filter.
 6. Add bindability validation that rejects unsupported node types and transitions before runtime.
 7. Implement node classification by type and gate kind, never by fixed ids.

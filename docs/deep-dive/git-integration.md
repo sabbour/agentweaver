@@ -168,7 +168,7 @@ Merging is guarded in two layers.
 
 The database layer controls state transitions. A run must move through compare-and-set style states such as `awaiting_review -> merging` or `awaiting_review -> committing -> merging`. This prevents two approvals, commits, declines, or request-changes operations from winning the same run.
 
-The repository layer uses a process-wide per-repository semaphore. That serializes approvals for the same repository and closes timing windows where two runs could both inspect the same target branch tip and then race to update it.
+The repository layer uses a per-repository merge lock. In PostgreSQL deployments, the lock is a session advisory lock keyed by canonical repository path so it spans API replicas. In SQLite/local development, the lock falls back to a process-wide semaphore. That serializes approvals for the same repository and closes timing windows where two runs could both inspect the same target branch tip and then race to update it.
 
 The merge algorithm then checks:
 
@@ -245,7 +245,7 @@ A token scope provider decides whether credentials are installation-wide or call
 - installation scope is used only when `Auth:GitHub:ScopeProvider` is explicitly set to `installation`;
 - background work without a caller can fall back to installation scope.
 
-Before consumers use GitHub, they ask `IGitHubAccessTokenProvider` for a valid token. The refresh service returns non-expiring tokens as-is, refreshes near-expiry tokens with the stored refresh token, serializes refreshes per scope, and signs the scope out if refresh cannot succeed.
+Before consumers use GitHub, they ask `IGitHubAccessTokenProvider` for a valid token. The refresh service returns non-expiring tokens as-is, refreshes near-expiry tokens with the stored refresh token, serializes refreshes per scope, and signs the scope out if refresh cannot succeed. With the Key Vault token store, the refresh serialization is a short-lived distributed lease so concurrent requests on different API replicas wait for and reuse the replica that wins token rotation; local stores use an in-process gate.
 
 ```mermaid
 flowchart TD

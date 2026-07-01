@@ -101,3 +101,5 @@ The shipped **default** policy is `rai` + `human-review`, mirroring the default 
 ::: tip Human review is always present
 The human review step is mandatory and cannot be disabled. The platform enforces it regardless of review policy settings.
 :::
+
+Review policies are loaded from the shared project workspace. When policy YAML changes, API replicas refresh their per-project policy cache the next time they read the registry, so a policy saved through one replica is observed by the rest of the deployment without pod restarts.
