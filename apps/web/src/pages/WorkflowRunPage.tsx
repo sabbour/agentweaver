@@ -833,7 +833,7 @@ export function WorkflowRunPage() {
             labelPosition="before"
           />
         )}
-        {isKubernetesSandbox && (runActive || !!previewSession) && (
+        {isKubernetesSandbox && (
           <Button
             appearance="secondary"
             size="small"
