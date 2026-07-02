@@ -703,6 +703,25 @@ describe('CoordinatorRunPage — outcome spec side panel (#164)', () => {
   });
 });
 
+describe('CoordinatorRunPage — artifacts file browser side panel (#165)', () => {
+  it('renders an Artifacts link that opens the workspace file browser panel', async () => {
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const artifactsBtn = await waitFor(() => {
+      const btn = container.querySelector('[data-testid="open-artifacts-panel"]') as HTMLButtonElement | null;
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }, { timeout: 4000 });
+
+    fireEvent.click(artifactsBtn);
+
+    await waitFor(
+      () => expect(container.querySelector('[data-testid="coord-artifacts-panel"]')).toBeTruthy(),
+      { timeout: 4000 },
+    );
+  });
+});
+
 describe('CoordinatorRunPage — steering chat side panel (#163)', () => {
   it('opens the steering chat panel with a message input, Send, and Stop', async () => {
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);

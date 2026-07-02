@@ -26,6 +26,7 @@ import {
   ChatRegular,
   DismissRegular,
   DocumentRegular,
+  FolderRegular,
   OpenRegular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
@@ -55,6 +56,7 @@ import { AgentRail } from '../components/AgentRail';
 import { SteerPanel } from '../components/SteerPanel';
 import { SlidePanel } from '../components/SlidePanel';
 import { SteerChatPanel } from '../components/SteerChatPanel';
+import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { AutomationToggle } from '../components/AutomationToggle';
 import { AUTOMATION_HELP } from '../components/automationHelp';
 import { deriveAgentQueues } from '../api/agentQueues';
@@ -843,6 +845,12 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
   },
+  coordCardLinks: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalXS,
+  },
   viewRunSurface: {
     maxWidth: '92vw',
     width: '1200px',
@@ -1571,6 +1579,7 @@ export function CoordinatorRunPage() {
 
   const [steerPanelOpen, setSteerPanelOpen] = useState(false);
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
+  const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Session panel anchor — the coordinator node's "View session" scrolls here.
@@ -1834,6 +1843,20 @@ export function CoordinatorRunPage() {
           Live view of the coordinator and its subtasks. Use the Steer button to send a
           course-correction to the coordinator or stop the orchestration.
         </Text>
+
+        {!isChildRun && (
+          <div className={styles.coordCardLinks}>
+            <Button
+              appearance="transparent"
+              size="small"
+              icon={<FolderRegular />}
+              onClick={() => setArtifactsPanelOpen(true)}
+              data-testid="open-artifacts-panel"
+            >
+              Artifacts
+            </Button>
+          </div>
+        )}
 
         {(!isChildRun || coordActive) && (
           <div className={styles.coordControls}>
@@ -2192,6 +2215,18 @@ export function CoordinatorRunPage() {
           onCollapse={() => setSpecPanelOpen(false)}
           onReconnect={reconnectStream}
         />
+      </SlidePanel>
+
+      {/* Workspace file browser side panel (#165) */}
+      <SlidePanel
+        open={artifactsPanelOpen}
+        onClose={() => setArtifactsPanelOpen(false)}
+        title="Artifacts"
+        width="min(760px, 96vw)"
+      >
+        {artifactsPanelOpen && runId && (
+          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
+        )}
       </SlidePanel>
 
       {/* Sandbox preview port-forward dialog */}
