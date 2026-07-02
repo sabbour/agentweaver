@@ -56,7 +56,7 @@ public sealed class RunOrchestrator
     /// prompts ONLY when Sandbox:Preview:Enabled=true. This is deliberately forceful: earlier passive
     /// wording ("if you start a server…") was routinely ignored, so the agent is now given explicit,
     /// numbered, non-optional steps to launch, test, and preview its output before finishing. It calls
-    /// the run-scoped <c>start_preview(PORT)</c> tool once the server is actually listening. Wording
+    /// the run-scoped <c>start_preview(port=PORT)</c> tool once the server is actually listening. Wording
     /// matches the real contract built on feat/sandbox-preview-proxy: Gateway -> per-preview HTTPRoute
     /// -> per-run ClusterIP Service (port 80 -> the pod's listening port) -> sandbox pod; the URL is an
     /// unguessable capability host kept alive while viewed (idle ~30 min, hard max ~8 h).
@@ -77,15 +77,20 @@ public sealed class RunOrchestrator
              - Static site / files -> `python -m http.server PORT` from the output directory.
              - API / backend        -> run the server binary or `uvicorn`/`node server.js`/etc.
            Bind to ALL interfaces (host 0.0.0.0), NOT just 127.0.0.1, on a port you choose (e.g. 3000).
-        2. TEST that it is actually serving. Confirm the port is accepting connections and returns a
-           real response, e.g. `curl -sSf http://localhost:PORT/` — fix errors until it responds.
-        3. REGISTER the preview: call start_preview(PORT) with the exact port your server listens on.
-           Only call it AFTER the server is up and responding to requests.
+        2. VERIFY the port is live BEFORE registering it. You MUST confirm the server is actually
+           accepting connections and returning a real response with `curl` (or `wget`), e.g.
+           `curl -sSf http://localhost:PORT/` — fix errors and retry until it responds. Do NOT call
+           start_preview against a port you have not just verified with curl/wget.
+        3. REGISTER the preview by calling the MCP tool `start_preview(port=PORT)` with the exact port
+           your server listens on (the same port you just verified in step 2). Only call it AFTER curl/wget
+           confirmed the server is up and responding.
         4. WAIT for the preview to be confirmed. If approved, the tool returns the public HTTPS URL —
            share that URL with the user as part of your final summary.
 
-        Do NOT complete the task and stop without a running, tested, previewed server. If you cannot
-        start a preview (e.g. the task produces no runnable server), say so explicitly and explain why.
+        DO NOT finish the task, and DO NOT report it as done, without calling `start_preview(port=PORT)`
+        for a running, curl/wget-verified server. The only exception is a task that genuinely produces no
+        runnable server (e.g. a pure code review or a library with no entry point) — in that case say so
+        explicitly and explain why there is nothing to preview.
         The resulting URL is an unguessable capability link kept alive while it is viewed (idle timeout
         ~30 minutes, hard maximum ~8 hours).
         """;

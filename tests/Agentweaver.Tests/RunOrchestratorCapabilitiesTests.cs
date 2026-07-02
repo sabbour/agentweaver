@@ -52,7 +52,7 @@ public sealed class RunOrchestratorCapabilitiesTests
         result.Should().Contain("public HTTPS URL");
         result.Should().Contain("0.0.0.0");
         result.Should().Contain("unguessable");
-        result.Should().Contain("start_preview(PORT)");
+        result.Should().Contain("start_preview(port=PORT)");
     }
 
     [Fact]
