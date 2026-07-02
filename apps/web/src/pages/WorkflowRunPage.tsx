@@ -13,6 +13,7 @@ import {
   Spinner,
   Text,
   Title2,
+  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -263,6 +264,7 @@ export function WorkflowRunPage() {
 
   // Sandbox preview port-forward state.
   const [sandboxBackend,      setSandboxBackend]      = useState<string | undefined>(undefined);
+  const [sandboxPhase,        setSandboxPhase]        = useState<string | null>(null);
   const [previewDialogOpen,   setPreviewDialogOpen]   = useState(false);
   const [previewTargetPort,   setPreviewTargetPort]   = useState('3000');
   const [previewSession,      setPreviewSession]      = useState<PortForwardSessionDto | undefined>(undefined);
@@ -404,6 +406,28 @@ export function WorkflowRunPage() {
       }
     }
   }, [events]);
+
+  // Auto-poll the run detail every 4 s while the run is active and the Kubernetes sandbox
+  // backend is selected, so the Preview button enables automatically once the pod binds.
+  // Stopped once the run is no longer active (pod stays Bound until the claim is deleted).
+  useEffect(() => {
+    if (!executionId || sandboxBackend !== 'kubernetes-sandbox-claim') return;
+    // Only poll while the run is active; once terminal the phase won't change.
+    const active = runStatus !== undefined && !SEED_STATUSES.has(runStatus);
+    if (!active) return;
+
+    let cancelled = false;
+    const poll = () => {
+      apiClient.getRun(executionId)
+        .then((detail) => {
+          if (!cancelled && detail.sandbox?.phase) setSandboxPhase(detail.sandbox.phase);
+        })
+        .catch(() => { /* ignore — phase stays null → button remains enabled for compat */ });
+    };
+    poll();
+    const timerId = setInterval(poll, 4_000);
+    return () => { cancelled = true; clearInterval(timerId); };
+  }, [executionId, sandboxBackend, runStatus]);
 
   // Bubbled questions (agent.question_asked / agent.question_answered). Pair by requestId so an
   // unanswered question renders a prominent answer box and an answered one collapses to a muted
@@ -819,14 +843,21 @@ export function WorkflowRunPage() {
           />
         )}
         {isKubernetesSandbox && (
-          <Button
-            appearance="secondary"
-            size="small"
-            icon={<OpenRegular />}
-            onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}
+          <Tooltip
+            content="Waiting for sandbox pod to start..."
+            relationship="label"
+            visible={sandboxPhase === 'Pending'}
           >
-            Preview
-          </Button>
+            <Button
+              appearance="secondary"
+              size="small"
+              icon={<OpenRegular />}
+              onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}
+              disabled={sandboxPhase === 'Pending'}
+            >
+              Preview
+            </Button>
+          </Tooltip>
         )}
       </div>
 
