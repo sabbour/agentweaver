@@ -14,6 +14,7 @@ import {
   MessageBar,
   MessageBarBody,
   Option,
+  Select,
   Spinner,
   Text,
   Textarea,
@@ -24,7 +25,7 @@ import {
 import { FlowRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { Project } from '../api/types';
+import type { Project, WorkflowSummaryDto } from '../api/types';
 
 // Global floating action button to start an orchestration from any page, with a
 // project selector so the user can choose the target project regardless of the
@@ -62,6 +63,8 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
   const [goal, setGoal] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
+  const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
 
   // Load the project list once the dialog is opened, and default the project
   // selection to the active project at open-time (the FAB lives in AppShell and
@@ -85,11 +88,38 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
     };
   }, [open, currentProjectId]);
 
+  // Load the selected project's workflows so the user can pick one (matching the
+  // Orchestrations-page Start task dialog). Any valid workflow with an id is
+  // selectable — including the project's active workflow and event/heartbeat
+  // catalog workflows; "Auto" leaves the choice to the coordinator.
+  useEffect(() => {
+    if (!open || !selectedProjectId) {
+      setSelectableWorkflows([]);
+      return;
+    }
+    let cancelled = false;
+    setWorkflowOverride(null);
+    apiClient
+      .listWorkflows(selectedProjectId)
+      .then((res) => {
+        if (cancelled) return;
+        setSelectableWorkflows(res.workflows.filter((w) => w.id && w.valid));
+      })
+      .catch(() => {
+        if (!cancelled) setSelectableWorkflows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, selectedProjectId]);
+
   const reset = () => {
     setGoal('');
     setError(null);
     setSaving(false);
     setSelectedProjectId(currentProjectId);
+    setWorkflowOverride(null);
+    setSelectableWorkflows([]);
   };
 
   const selectedProject = projects.find((p) => p.project_id === selectedProjectId) ?? null;
@@ -99,7 +129,9 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
     setSaving(true);
     setError(null);
     try {
-      const result = await apiClient.startOrchestration(selectedProjectId, goal.trim());
+      const result = workflowOverride
+        ? await apiClient.startOrchestration(selectedProjectId, goal.trim(), workflowOverride)
+        : await apiClient.startOrchestration(selectedProjectId, goal.trim());
       setOpen(false);
       reset();
       navigate(`/projects/${selectedProjectId}/orchestrations/${result.runId}`);
@@ -198,6 +230,20 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
                   disabled={noProjects}
                 />
               </Field>
+              {selectableWorkflows.length > 0 && (
+                <Field label="Workflow">
+                  <Select
+                    value={workflowOverride ?? ''}
+                    onChange={(_, d) => setWorkflowOverride(d.value || null)}
+                    disabled={noProjects}
+                  >
+                    <option value="">Auto (coordinator picks)</option>
+                    {selectableWorkflows.map((w) => (
+                      <option key={w.id} value={w.id!}>{w.name ?? w.id}</option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
               {error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{error}</MessageBarBody>

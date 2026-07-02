@@ -14,6 +14,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     listProjects: vi.fn(),
     startOrchestration: vi.fn(),
+    listWorkflows: vi.fn(() => Promise.resolve({ default_workflow_id: 'default', workflows: [] })),
   },
 }));
 
@@ -193,5 +194,37 @@ describe('StartOrchestrationFab', () => {
 
     expect(await screen.findByText(/Create a project first/)).toBeDefined();
     expect(screen.getByRole('button', { name: 'Start' })).toHaveProperty('disabled', true);
+  });
+
+  it('shows a workflow dropdown and passes the selected workflow override', async () => {
+    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('proj-a', 'Alpha')]);
+    vi.mocked(apiClient.startOrchestration).mockResolvedValue({ runId: 'run-42' } as never);
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({
+      default_workflow_id: 'software-delivery',
+      workflows: [
+        { id: 'software-delivery', name: 'Software Delivery', valid: true, source: 'catalog', is_built_in: true, is_default: true, warnings: [] },
+        { id: 'default', name: 'Default Run Workflow', valid: true, source: 'built-in', is_built_in: true, is_default: false, warnings: [] },
+      ],
+    } as never);
+
+    render(
+      <Wrapper>
+        <StartOrchestrationFab currentProjectId="proj-a" />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+
+    const workflow = await screen.findByRole('combobox', { name: 'Workflow' });
+    fireEvent.change(workflow, { target: { value: 'software-delivery' } });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
+      target: { value: 'Ship a feature' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+
+    await waitFor(() =>
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-a', 'Ship a feature', 'software-delivery'),
+    );
   });
 });
