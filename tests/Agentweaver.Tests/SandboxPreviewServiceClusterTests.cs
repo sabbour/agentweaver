@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
@@ -40,12 +41,16 @@ public sealed class SandboxPreviewServiceClusterTests
     {
         const string runId = "run-abc-123";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        using var listener = StartListener(out var targetPort);
 
         var handler = new FakeKubeHandler();
         // GET SandboxClaim -> Ready condition True, pod resolved from status.sandbox.name.
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
             """{"apiVersion":"extensions.agents.x-k8s.io/v1beta1","kind":"SandboxClaim","metadata":{"name":"c"},"status":{"conditions":[{"type":"Ready","status":"True","reason":"Bound","message":"sandbox ready","lastTransitionTime":"2026-06-28T06:00:00Z"}],"sandbox":{"name":"agenthost-pod-zzz"}}}""");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-zzz",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-zzz"},"status":{"podIP":"127.0.0.1"}}""");
         // Pod patch, Service create, HTTPRoute create all succeed (echoed).
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/", """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-zzz"}}""");
         handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
@@ -53,7 +58,7 @@ public sealed class SandboxPreviewServiceClusterTests
 
         var svc = NewService(handler);
 
-        var session = await svc.StartPreviewAsync(runId, 3000, "user-1");
+        var session = await svc.StartPreviewAsync(runId, targetPort, "user-1");
 
         session.PodName.Should().Be("agenthost-pod-zzz", "pod must come from the claim status, not a registry");
         session.PreviewUrl.Should().StartWith("https://").And.Contain("-preview.");
@@ -95,6 +100,7 @@ public sealed class SandboxPreviewServiceClusterTests
         const string runId = "run-list-previews";
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        using var listener = StartListener(out var targetPort);
 
         var handler = new FakeKubeHandler();
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
@@ -102,8 +108,11 @@ public sealed class SandboxPreviewServiceClusterTests
             "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
             "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
             "\"agentweaver.dev/preview-pod\":\"agenthost-pod-1\"," +
-            "\"agentweaver.dev/preview-target-port\":\"5173\"," +
+            "\"agentweaver.dev/preview-target-port\":\"" + targetPort + "\"," +
             "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:00:00Z\"}}}]}");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-1",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-1"},"status":{"podIP":"127.0.0.1"}}""");
 
         var svc = NewService(handler);
 
@@ -113,8 +122,74 @@ public sealed class SandboxPreviewServiceClusterTests
         sessions[0].Token.Should().Be(token);
         sessions[0].RunId.Should().Be(runId);
         sessions[0].PodName.Should().Be("agenthost-pod-1");
-        sessions[0].TargetPort.Should().Be(5173);
+        sessions[0].TargetPort.Should().Be(targetPort);
         sessions[0].PreviewUrl.Should().Be($"https://{PreviewToken.HostLabel(token)}.6a3de4fe.westus2.staging.aksapp.io");
+    }
+
+    [Fact]
+    public async Task StartPreview_rejects_preview_when_nothing_is_listening_on_the_target_port()
+    {
+        const string runId = "run-dead-port";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var deadPort = ReserveUnusedLocalPort();
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agenthost-pod-dead"}}}""");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-dead",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-dead"},"status":{"podIP":"127.0.0.1"}}""");
+
+        var svc = NewService(handler);
+
+        var act = async () => await svc.StartPreviewAsync(runId, deadPort, "user-1");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Nothing is listening*");
+        handler.Requests.Should().NotContain(r => r.Method == "POST" && r.Path.EndsWith("/services"),
+            "the preview must fail before advertising an inactive port");
+    }
+
+    [Fact]
+    public async Task ListForRun_filters_out_routes_whose_target_port_is_not_listening()
+    {
+        const string runId = "run-filter-dead-preview";
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        const string liveToken = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        const string deadToken = "calm-otter-cobalt-k7m2q9x4n8b3r6t5w1z0c2";
+        using var listener = StartListener(out var livePort);
+        var deadPort = ReserveUnusedLocalPort();
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[" +
+            "{\"metadata\":{\"name\":\"preview-live\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + liveToken + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-live\"," +
+            "\"agentweaver.dev/preview-target-port\":\"" + livePort + "\"," +
+            "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:00:00Z\"}}}," +
+            "{\"metadata\":{\"name\":\"preview-dead\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + deadToken + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-dead\"," +
+            "\"agentweaver.dev/preview-target-port\":\"" + deadPort + "\"," +
+            "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:05:00Z\"}}}]}");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-live",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-live"},"status":{"podIP":"127.0.0.1"}}""");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-dead",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-dead"},"status":{"podIP":"127.0.0.1"}}""");
+
+        var svc = NewService(handler);
+
+        var sessions = await svc.ListForRunAsync(runId);
+
+        sessions.Should().ContainSingle();
+        sessions[0].Token.Should().Be(liveToken);
+        sessions[0].TargetPort.Should().Be(livePort);
     }
 
     [Fact]
@@ -123,6 +198,7 @@ public sealed class SandboxPreviewServiceClusterTests
         const string runId = "run-limit";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        using var listener = StartListener(out var targetPort);
 
         var handler = new FakeKubeHandler();
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
@@ -133,10 +209,13 @@ public sealed class SandboxPreviewServiceClusterTests
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
             """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agenthost-pod-zzz"}}}""");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-zzz",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-zzz"},"status":{"podIP":"127.0.0.1"}}""");
 
         var svc = NewService(handler);
 
-        var act = async () => await svc.StartPreviewAsync(runId, 3000, "user-1");
+        var act = async () => await svc.StartPreviewAsync(runId, targetPort, "user-1");
         await act.Should().ThrowAsync<PortForwardLimitExceededException>();
     }
 
@@ -154,6 +233,20 @@ public sealed class SandboxPreviewServiceClusterTests
         "{\"metadata\":{\"annotations\":{" +
         "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
         "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"}}}";
+
+    private static TcpListener StartListener(out int port)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        return listener;
+    }
+
+    private static int ReserveUnusedLocalPort()
+    {
+        using var listener = StartListener(out var port);
+        return port;
+    }
 
     // ── S1: orphan ClusterIP sweep ───────────────────────────────────────────────
 

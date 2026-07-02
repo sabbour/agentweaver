@@ -24,16 +24,18 @@ public sealed class RunOrchestratorCapabilitiesTests
     }
 
     [Fact]
-    public void Enabled_appends_browser_preview_block()
+    public void Enabled_prepends_browser_preview_block()
     {
         const string prompt = "You are a coding agent.";
         var result = RunOrchestrator.ComposeCapabilities(prompt, previewEnabled: true);
 
-        result.Should().StartWith(prompt);
+        result.Should().StartWith("## Browser Preview");
+        result.Should().Contain(prompt);
         result.Should().Contain("## Browser Preview");
         result.Should().Contain("public HTTPS URL");
         result.Should().Contain("0.0.0.0");
         result.Should().Contain("unguessable");
+        result.Should().Contain("start_preview(PORT)");
     }
 
     [Fact]
