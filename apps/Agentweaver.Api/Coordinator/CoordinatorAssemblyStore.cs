@@ -43,6 +43,51 @@ public sealed class CoordinatorAssemblyStore
         return rows > 0;
     }
 
+    /// <summary>
+    /// Cross-pod idempotency guard for the reset path. An <c>assembling</c> plan is normally owned by a
+    /// LIVE assembly loop on some replica. This reclaims it back to <c>awaiting_assembly</c> ONLY when
+    /// the claim is stale — <see cref="WorkPlan.AssemblyStartedAt"/> is null or older than
+    /// <paramref name="staleBefore"/> (the owning pod likely died). A FRESH claim (another replica is
+    /// actively building the integration branch right now) is left untouched, so two pods never run the
+    /// git integration merge concurrently and race each other's ref-lock files. Returns <c>true</c> only
+    /// for the single caller that reclaimed the stale plan; that caller then re-runs assembly (whose
+    /// <see cref="TryStartAssemblyAsync"/> CAS re-establishes the exactly-once claim).
+    /// </summary>
+    public async Task<bool> TryReclaimStaleAssemblyAsync(int workPlanId, DateTimeOffset staleBefore, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+
+        // SQLite's ExecuteUpdate cannot translate a DateTimeOffset comparison in the WHERE clause
+        // (same limitation worked around in CoordinatorReconciler.TryClaimCoordinatorPodAsync), so use
+        // a raw interpolated UPDATE there and the LINQ form everywhere else.
+        if (db.Database.IsSqlite())
+        {
+            var rows = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE "WorkPlans"
+                   SET "Status" = {WorkPlanStatus.AwaitingAssembly},
+                       "AssemblyStage" = NULL,
+                       "UpdatedAt" = {now}
+                 WHERE "Id" = {workPlanId}
+                   AND "Status" = {WorkPlanStatus.Assembling}
+                   AND ("AssemblyStartedAt" IS NULL OR "AssemblyStartedAt" < {staleBefore})
+                """, ct).ConfigureAwait(false);
+            return rows > 0;
+        }
+
+        var updated = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.Assembling
+                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return updated > 0;
+    }
+
     /// <summary>Sets the work-plan <see cref="WorkPlan.Status"/> (e.g. in_review, complete, assembly_*).</summary>
     public async Task SetStatusAsync(int workPlanId, string status, CancellationToken ct)
     {

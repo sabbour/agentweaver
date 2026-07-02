@@ -101,6 +101,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
     private readonly TimeSpan _steeringWaitTimeout;
+    private readonly TimeSpan _assemblyLeaseStaleTtl;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
 
@@ -139,6 +140,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _reviewTimeout = TimeSpan.FromMinutes(Math.Max(1.0, reviewTimeoutMinutes));
         var steeringWaitMinutes = configuration?.GetValue("Coordinator:AssemblyBlockedSteeringTimeoutMinutes", 10.0) ?? 10.0;
         _steeringWaitTimeout = TimeSpan.FromMinutes(Math.Max(0.1, steeringWaitMinutes));
+        // How long an `assembling` claim is considered fresh (owner alive). A second replica only
+        // reclaims a stuck assembly after the owner has been silent this long — must comfortably exceed
+        // a normal integration-branch build so a live merge is never stolen mid-flight (default 120 s).
+        var assemblyLeaseSecs = configuration?.GetValue("Coordinator:AssemblyLeaseStaleTtlSeconds", 120) ?? 120;
+        _assemblyLeaseStaleTtl = TimeSpan.FromSeconds(Math.Max(10, assemblyLeaseSecs));
     }
 
     /// <summary>The integration branch name (D1) derived from the coordinator run id.</summary>
@@ -443,8 +449,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
             if (planStatus == WorkPlanStatus.Assembling)
             {
-                await _assemblyStore.SetStatusAndStageAsync(
-                    workPlanId, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
+                // Cross-pod idempotency guard for the git integration merge. An `assembling` plan is
+                // normally owned by a LIVE assembly loop; reclaim it here ONLY if the claim is stale
+                // (owner likely dead). If it is fresh, another replica is actively building the
+                // integration branch right now — bail so two pods never race the ref-lock files.
+                var staleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
+                if (!await _assemblyStore.TryReclaimStaleAssemblyAsync(workPlanId, staleBefore, ct).ConfigureAwait(false))
+                {
+                    _logger.LogInformation(
+                        "Collective assembly: run {RunId} is already being assembled by a live owner (fresh claim); skipping to avoid a concurrent git merge",
+                        context.CoordinatorRunId);
+                    return;
+                }
             }
 
             await RunAssemblyCoreAsync(context, workPlanId, subtasks, edges, ct).ConfigureAwait(false);

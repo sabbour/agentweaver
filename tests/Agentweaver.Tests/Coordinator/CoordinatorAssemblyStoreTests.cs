@@ -78,7 +78,73 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
         results.Count(won => won).Should().Be(1, "exactly one caller may claim the assembly");
     }
 
-    private async Task<int> SeedPlanAsync(string status)
+    [Fact]
+    public async Task TryReclaimStaleAssembly_FreshClaim_ReturnsFalse_LeavesAssembling()
+    {
+        // A fresh claim = another replica is actively building the integration branch right now.
+        // Reclaiming would let a second pod race the git merge, so it must be refused.
+        var workPlanId = await SeedPlanAsync(
+            WorkPlanStatus.Assembling, assemblyStartedAt: DateTimeOffset.UtcNow);
+
+        var reclaimed = await _sut.TryReclaimStaleAssemblyAsync(
+            workPlanId, staleBefore: DateTimeOffset.UtcNow.AddSeconds(-120), default);
+
+        reclaimed.Should().BeFalse("a fresh assembling claim is owned by a live loop");
+        (await _sut.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Assembling);
+    }
+
+    [Fact]
+    public async Task TryReclaimStaleAssembly_StaleClaim_ReturnsTrue_ResetsToAwaiting()
+    {
+        var workPlanId = await SeedPlanAsync(
+            WorkPlanStatus.Assembling, assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        var reclaimed = await _sut.TryReclaimStaleAssemblyAsync(
+            workPlanId, staleBefore: DateTimeOffset.UtcNow.AddSeconds(-120), default);
+
+        reclaimed.Should().BeTrue("a stale assembling claim (owner likely dead) is reclaimable");
+        (await _sut.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.AwaitingAssembly);
+    }
+
+    [Fact]
+    public async Task TryReclaimStaleAssembly_NullStartedAt_ReturnsTrue()
+    {
+        var workPlanId = await SeedPlanAsync(WorkPlanStatus.Assembling, assemblyStartedAt: null);
+
+        var reclaimed = await _sut.TryReclaimStaleAssemblyAsync(
+            workPlanId, staleBefore: DateTimeOffset.UtcNow.AddSeconds(-120), default);
+
+        reclaimed.Should().BeTrue("a missing AssemblyStartedAt is treated as stale/reclaimable");
+    }
+
+    [Fact]
+    public async Task TryReclaimStaleAssembly_NotAssembling_ReturnsFalse()
+    {
+        var workPlanId = await SeedPlanAsync(
+            WorkPlanStatus.InReview, assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        var reclaimed = await _sut.TryReclaimStaleAssemblyAsync(
+            workPlanId, staleBefore: DateTimeOffset.UtcNow.AddSeconds(-120), default);
+
+        reclaimed.Should().BeFalse("only an assembling plan is reclaimable");
+    }
+
+    [Fact]
+    public async Task TryReclaimStaleAssembly_ConcurrentCallers_ExactlyOneReclaims()
+    {
+        var workPlanId = await SeedPlanAsync(
+            WorkPlanStatus.Assembling, assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(() => _sut.TryReclaimStaleAssemblyAsync(
+                workPlanId, DateTimeOffset.UtcNow.AddSeconds(-120), default)))
+            .ToArray();
+        var results = await Task.WhenAll(tasks);
+
+        results.Count(won => won).Should().Be(1, "exactly one caller may reclaim the stale assembly");
+    }
+
+    private async Task<int> SeedPlanAsync(string status, DateTimeOffset? assemblyStartedAt = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -104,6 +170,7 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
             ProjectId = "proj-1",
             CoordinatorRunId = spec.CoordinatorRunId,
             Status = status,
+            AssemblyStartedAt = assemblyStartedAt,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

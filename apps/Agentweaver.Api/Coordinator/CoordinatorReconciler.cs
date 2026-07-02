@@ -202,9 +202,15 @@ public sealed class CoordinatorReconciler
                         break;
 
                     case WorkPlanStatus.Assembling:
-                        // assembling is a transient active state; if a loop already owns it, skip
-                        // (same infinite-loop guard). Otherwise re-arm the orphaned assembly.
+                        // assembling is a transient active state. If a loop already owns it in THIS pod,
+                        // skip (same-pod fast path). A FRESH assembling plan is being actively built by a
+                        // live loop (possibly on ANOTHER replica) — re-arming it would drive a second pod
+                        // into the git integration merge (the ref-lock race) and burn the re-arm cap on a
+                        // healthy run, so skip while the lease is fresh. Only a STALE assembling plan
+                        // (owner likely dead) is a genuine orphan to re-arm.
                         if (IsAssemblyActive(plan))
+                            continue;
+                        if ((DateTimeOffset.UtcNow - plan.UpdatedAt) < _staleLeaseTtl)
                             continue;
                         if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;

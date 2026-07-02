@@ -307,6 +307,49 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Sweep_AssemblingPlan_FreshLease_DoesNotReArm()
+    {
+        // A fresh `assembling` plan is being actively built by a live loop (possibly on another
+        // replica). Re-arming it would drive a second pod into the git integration merge (the ref-lock
+        // race). It must be skipped while the lease is fresh — and NOT counted toward the re-arm cap.
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.Assembling, updatedAt: DateTimeOffset.UtcNow);
+        // assembly NOT marked active in THIS pod (simulate cross-pod) but the lease is fresh
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        for (var i = 0; i < CoordinatorReconciler.MaxAssemblyReArmAttempts + 2; i++)
+            (await reconciler.SweepAsync(default)).Should().Be(0);
+
+        _assembly.Started.Should().BeEmpty("a fresh assembling plan is owned by a live loop, not orphaned");
+        _assembly.Failed.Should().BeEmpty("a healthy live assembly must never be failed by the reconciler");
+    }
+
+    [Fact]
+    public async Task Sweep_AssemblingPlan_StaleLease_ReArms()
+    {
+        // A stale `assembling` plan (owner silent well past the lease TTL) is a genuine orphan — the
+        // owning pod likely died mid-assembly. Re-arm so recovery can resume.
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.Assembling, updatedAt: DateTimeOffset.UtcNow.AddMinutes(-10));
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        var reArmed = await reconciler.SweepAsync(default);
+
+        reArmed.Should().Be(1);
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+    }
+
+    [Fact]
     public async Task Sweep_OrphanedAwaitingAssembly_ReArmsUpToCap_ThenFailsRun()
     {
         var coord = RunId.New().ToString();
