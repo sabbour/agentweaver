@@ -127,25 +127,65 @@ interface PipelineStep {
 }
 
 /**
- * Slide-in detail for a pipeline step (#160). Shows the step's status, role and agent, plus a
- * link to open the step's underlying execution. Enriched in #161 with the nested subtask/agent
- * list and the live session event stream + produced files.
+ * Slide-in detail for a pipeline step (#160/#161).
+ * Left: the step's subtasks/agents with status indicators.
+ * Right: the live session event stream + any files produced by this step.
  */
 function StepDetailPanel({ step, onViewRun }: { step: PipelineStep; onViewRun: (id: string) => void }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="step-detail-panel">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <StatusBadge status={step.status} isPlanned={step.planned} label={step.statusLabel} />
-        <span>{roleDescForRole(step.role)}</span>
+    <div
+      style={{ display: 'flex', gap: 16, minHeight: 0, height: '100%' }}
+      data-testid="step-detail-panel"
+    >
+      {/* Left — nested subtasks / agents with status indicators */}
+      <div
+        style={{ flex: '0 0 240px', display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}
+        data-testid="step-detail-agents"
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <StatusBadge status={step.status} isPlanned={step.planned} label={step.statusLabel} />
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--colorNeutralForeground3)' }}>
+          {roleDescForRole(step.role)}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 10px',
+            borderRadius: 6,
+            border: '1px solid var(--colorNeutralStroke2)',
+          }}
+        >
+          <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {step.agent ?? step.label}
+          </span>
+          {step.model && (
+            <span style={{ fontSize: 11, color: 'var(--colorNeutralForeground3)' }}>
+              {formatModelLabel(step.model)}
+            </span>
+          )}
+        </div>
+        {step.childRunId && (
+          <Button appearance="secondary" size="small" onClick={() => onViewRun(step.childRunId!)}>
+            View execution
+          </Button>
+        )}
       </div>
-      {step.agent && (
-        <div>Agent: {step.agent}{step.model ? ` · ${formatModelLabel(step.model)}` : ''}</div>
-      )}
-      {step.childRunId && (
-        <Button appearance="secondary" size="small" onClick={() => onViewRun(step.childRunId!)}>
-          View execution
-        </Button>
-      )}
+
+      {/* Right — live session event stream + files produced by this step */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }} data-testid="step-detail-session">
+        {step.childRunId ? (
+          <RunWatcher runId={step.childRunId} style={{ flex: 1, minHeight: 0 }} />
+        ) : (
+          <Text size={200}>
+            {step.planned
+              ? 'This step has not started yet. Its session stream and files will appear here once it runs.'
+              : 'No dedicated session stream for this step. Its progress is reflected in the coordinator timeline below.'}
+          </Text>
+        )}
+      </div>
     </div>
   );
 }

@@ -492,6 +492,30 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
       { timeout: 4000 },
     );
   });
+
+  it('opens a two-column step detail panel (agents + session stream) when a step is clicked (#161)', async () => {
+    // Clicking a subtask step in the pipeline slides in the detail panel: the left column lists the
+    // step's agent with a status indicator, the right column surfaces the live session stream/files.
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const step = await waitFor(() => {
+      const el = document.querySelector('[data-testid="pipeline-step-plan:subtask-1"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    }, { timeout: 4000 });
+
+    fireEvent.click(step);
+
+    await waitFor(
+      () => expect(document.querySelector('[data-testid="step-detail-panel"]')).toBeTruthy(),
+      { timeout: 4000 },
+    );
+    // Both columns render: nested agent list (left) + session stream (right).
+    expect(document.querySelector('[data-testid="step-detail-agents"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="step-detail-session"]')).toBeTruthy();
+    // Subtask 1 is assigned to Neo (from the fixture) — surfaced in the agents column.
+    expect(document.querySelector('[data-testid="step-detail-agents"]')?.textContent).toContain('Neo');
+  });
 });
 
 
