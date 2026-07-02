@@ -10,13 +10,11 @@ import {
   DialogSurface,
   DialogTitle,
   Field,
-  InfoLabel,
   Input,
   MessageBar,
   MessageBarBody,
   Spinner,
   Text,
-  Textarea,
   Title2,
   Title3,
   makeStyles,
@@ -24,15 +22,12 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowRepeatAllRegular,
-  ArrowRoutingRegular,
   BotRegular,
+  ChatRegular,
   ChevronLeftRegular,
   ChevronRightRegular,
   DismissRegular,
-  EditRegular,
   OpenRegular,
-  SendRegular,
-  StopRegular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
 import {
@@ -49,7 +44,7 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, SteerKind, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
+import type { GraphDescriptor, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
 import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
@@ -59,10 +54,10 @@ import { CostChip } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { AgentRail } from '../components/AgentRail';
 import { SteerPanel } from '../components/SteerPanel';
+import { SlidePanel } from '../components/SlidePanel';
+import { SteerChatPanel } from '../components/SteerChatPanel';
 import { AutomationToggle } from '../components/AutomationToggle';
 import { AUTOMATION_HELP } from '../components/automationHelp';
-import { SteeringLegend } from '../components/SteeringLegend';
-import { STEERING_HELP } from '../components/steeringHelp';
 import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
@@ -104,15 +99,6 @@ import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScro
 import { formatModelLabel } from '../utils/agentIdentity';
 
 // ---------------------------------------------------------------------------
-// Steering context — page-level; lets the steer bar trigger the dialog
-// ---------------------------------------------------------------------------
-
-interface SteerRequest {
-  kind: SteerKind;
-}
-
-const CoordSteerContext = createContext<((req: SteerRequest) => void) | undefined>(undefined);
-
 // Subtask pipeline expansion is controlled at the page level so the graph container height can grow
 // to fit expanded child pipelines (instead of clipping them inside the fixed-height canvas).
 interface CoordExpandValue { expanded: Set<string>; toggle: (key: string) => void; }
@@ -912,15 +898,11 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     '& .react-flow__renderer': { borderRadius: '8px' },
   },
-  steerBar: {
+  coordControls: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
-  },
-  steerInput: {
-    flex: 1,
-    minWidth: '220px',
   },
   viewRunSurface: {
     maxWidth: '92vw',
@@ -941,13 +923,6 @@ const useStyles = makeStyles({
   steerLabel: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
-  },
-  steerScopeNote: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-  },
-  steerNote: {
-    marginTop: tokens.spacingVerticalXS,
   },
   panel: {
     display: 'flex',
@@ -1001,31 +976,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall,
     padding: tokens.spacingVerticalS,
   },
-  dialogFields: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
 });
-
-function steerKindLabel(kind: SteerKind): string {
-  if (kind === 'stop') return 'Stop';
-  if (kind === 'send') return 'Send';
-  if (kind === 'redirect') return 'Redirect';
-  if (kind === 'amend') return 'Amend';
-  return 'Steer';
-}
-
-// Maps a successful inline steer response status to a compact confirmation line.
-function steerStatusMessage(status: string): string {
-  if (status === 'applied') return 'Applied — re-running the affected work with your guidance.';
-  if (status === 'queued') return 'Queued — applies at the next step.';
-  return 'Steering message sent.';
-}
-
-// Verbatim explanation for the steer info affordance (visible InfoLabel, not hover-only).
-const STEER_INFO =
-  `Sends a course-correction to the coordinator. It applies at the next step of the affected subtasks, or resumes the run if it's parked (blocked or failed). Targets all active subtasks. Send: ${STEERING_HELP.send} Redirect: ${STEERING_HELP.redirect} Amend: ${STEERING_HELP.amend}`;
 
 // ---------------------------------------------------------------------------
 // Page
@@ -1691,46 +1642,10 @@ export function CoordinatorRunPage() {
   }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
 
   // ---------------------------------------------------------------------------
-  // Steering dialog
+  // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
   // ---------------------------------------------------------------------------
 
-  const [steerReq, setSteerReq] = useState<SteerRequest | null>(null);
-  const [instruction, setInstruction] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [steerError, setSteerError] = useState<string | null>(null);
-
-  const openSteer = useCallback((req: SteerRequest) => {
-    setSteerReq(req);
-    setInstruction('');
-    setSteerError(null);
-  }, []);
-
-  const closeSteer = useCallback(() => {
-    setSteerReq(null);
-    setInstruction('');
-    setSteerError(null);
-    setBusy(false);
-  }, []);
-
-  const submitSteer = useCallback(async () => {
-    if (!steerReq || !runId) return;
-    setBusy(true);
-    setSteerError(null);
-    try {
-      await apiClient.steerCoordinator(runId, {
-        kind: steerReq.kind,
-        instruction: steerReq.kind === 'stop' ? undefined : instruction.trim() || undefined,
-      });
-      closeSteer();
-    } catch (err) {
-      setSteerError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error ? err.message : String(err),
-      );
-      setBusy(false);
-    }
-  }, [steerReq, instruction, runId, closeSteer]);
+  const [steerPanelOpen, setSteerPanelOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Session panel anchor — the coordinator node's "View session" scrolls here.
@@ -1776,52 +1691,6 @@ export function CoordinatorRunPage() {
     if (id.endsWith('-rai') || id.endsWith('-scribe')) setViewRunId(id);
     else scrollToReview();
   }, [scrollToReview]);
-
-  // Inline coordinator steering from the graph toolbar — sends redirect/amend with the typed text
-  // directly (falling back to the confirmation dialog when no text is provided).
-  const [steerText, setSteerText] = useState('');
-  const [steerBusy, setSteerBusy] = useState(false);
-  // Transient inline confirmation/error after an inline send (the bar otherwise "feels pending").
-  const [steerNote, setSteerNote] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
-  const quickSteer = useCallback(async (kind: SteerKind) => {
-    if (!runId) return;
-    const text = steerText.trim();
-    if ((kind === 'send' || kind === 'redirect' || kind === 'amend') && !text) {
-      openSteer({ kind });
-      return;
-    }
-    setSteerBusy(true);
-    setSteerNote(null);
-    try {
-      const res = await apiClient.steerCoordinator(runId, {
-        kind,
-        instruction: kind === 'stop' ? undefined : text || undefined,
-      });
-      if (kind !== 'stop') {
-        setSteerText('');
-        setSteerNote({ intent: 'success', text: steerStatusMessage(res.status) });
-      }
-    } catch (err) {
-      // Surface failures inline AND via the dialog path so the user can retry with full context.
-      setSteerNote({
-        intent: 'error',
-        text:
-          err instanceof ApiError
-            ? `Steer failed (${err.status}): ${err.body}`
-            : err instanceof Error ? err.message : String(err),
-      });
-      openSteer({ kind });
-    } finally {
-      setSteerBusy(false);
-    }
-  }, [runId, steerText, openSteer]);
-
-  // Auto-clear the inline steer confirmation after a few seconds so it stays non-blocking.
-  useEffect(() => {
-    if (!steerNote) return;
-    const t = setTimeout(() => setSteerNote(null), 6000);
-    return () => clearTimeout(t);
-  }, [steerNote]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -1927,7 +1796,6 @@ export function CoordinatorRunPage() {
     const loopHeadroom = hasLoopback ? 132 : 0;
     return Math.max(180, maxY - minY + 56 + loopHeadroom);
   }, [rfNodes, expandedKeys, displayEdges]);
-  const needsInstruction = steerReq?.kind === 'redirect' || steerReq?.kind === 'amend';
   // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
@@ -2040,62 +1908,25 @@ export function CoordinatorRunPage() {
           {isStreaming && <Spinner size="extra-tiny" aria-label="Live" />}
         </div>
         <Text className={styles.hint}>
-          Live view of the coordinator and its subtasks. Expand a subtask to see its pipeline, or use
-          the steering controls to send a course-correction to the coordinator or stop the orchestration.
+          Live view of the coordinator and its subtasks. Use the Steer button to send a
+          course-correction to the coordinator or stop the orchestration.
         </Text>
 
-        <CoordSteerContext.Provider value={openSteer}>
-          {coordActive && (
-          <div className={styles.steerBar}>
-            <InfoLabel
-              className={styles.steerLabel}
-              info={STEER_INFO}
-              infoButton={{ 'aria-label': 'About steering the coordinator' }}
-            >
-              Steer coordinator:
-            </InfoLabel>
-            <Input
+        {coordActive && (
+          <div className={styles.coordControls}>
+            <Button
+              appearance="primary"
               size="small"
-              className={styles.steerInput}
-              value={steerText}
-              onChange={(_, v) => setSteerText(v.value)}
-              placeholder="Message the coordinator with a course-correction…"
-              disabled={steerBusy || !coordActive}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && steerText.trim()) { e.preventDefault(); void quickSteer('send'); }
-              }}
-            />
-            <Button appearance="primary" size="small" icon={<SendRegular />}
-              disabled={steerBusy || !coordActive || !steerText.trim()}
-              onClick={() => void quickSteer('send')}>
-              Send
+              icon={<ChatRegular />}
+              onClick={() => setSteerPanelOpen(true)}
+              data-testid="open-steer-panel"
+            >
+              Steer
             </Button>
-            <Button appearance="subtle" size="small" icon={<ArrowRoutingRegular />}
-              disabled={steerBusy || !coordActive}
-              onClick={() => void quickSteer('redirect')}>
-              Redirect
-            </Button>
-            <Button appearance="subtle" size="small" icon={<EditRegular />}
-              disabled={steerBusy || !coordActive}
-              onClick={() => void quickSteer('amend')}>
-              Amend
-            </Button>
-            <Button appearance="subtle" size="small" icon={<StopRegular />}
-              disabled={steerBusy || !coordActive}
-              onClick={() => openSteer({ kind: 'stop' })}>
-              Stop
-            </Button>
-            {steerBusy && <Spinner size="extra-tiny" aria-label="Steering" />}
-            <span className={styles.steerScopeNote}>Applies to all active subtasks.</span>
           </div>
-          )}
-          {coordActive && <SteeringLegend />}
-          {steerNote && (
-            <MessageBar intent={steerNote.intent} className={styles.steerNote}>
-              <MessageBarBody>{steerNote.text}</MessageBarBody>
-            </MessageBar>
-          )}
+        )}
 
+        <>
           {hasGraph ? (
             <ExecutionModalContext.Provider value={viewAssemblyExecution}>
             <BrowseFilesContext.Provider value={browseAssemblyFiles}>
@@ -2152,7 +1983,7 @@ export function CoordinatorRunPage() {
                   : 'Waiting for coordinator graph...'}
             </Text>
           )}
-        </CoordSteerContext.Provider>
+        </>
       </div>
 
       {/* Agent rail — compact per-agent load summary derived from the work plan.
@@ -2445,51 +2276,18 @@ export function CoordinatorRunPage() {
         </DialogSurface>
       </Dialog>
 
-      {/* Steering dialog */}
-      <Dialog open={!!steerReq} onOpenChange={(_, d) => { if (!d.open) closeSteer(); }}>
-        <DialogSurface>
-          <DialogBody>
-            <DialogTitle>
-              {steerReq ? steerKindLabel(steerReq.kind) : ''} — Coordinator
-            </DialogTitle>
-            <DialogContent>
-              <div className={styles.dialogFields}>
-                {steerReq?.kind === 'stop' ? (
-                  <Text>Stop this orchestration? No further work will be dispatched.</Text>
-                ) : (
-                  <>
-                    <Text>Describe the course-correction to send to the coordinator.</Text>
-                    <Field label="Instruction" required>
-                      <Textarea
-                        value={instruction}
-                        onChange={(_, v) => setInstruction(v.value)}
-                        placeholder="e.g. Target the v2 API instead, and add integration tests."
-                        rows={4}
-                      />
-                    </Field>
-                  </>
-                )}
-                {steerError && (
-                  <MessageBar intent="error">
-                    <MessageBarBody>{steerError}</MessageBarBody>
-                  </MessageBar>
-                )}
-              </div>
-            </DialogContent>
-            <DialogActions>
-              <Button appearance="secondary" disabled={busy} onClick={closeSteer}>Cancel</Button>
-              <Button
-                appearance="primary"
-                disabled={busy || (!!needsInstruction && !instruction.trim())}
-                onClick={() => void submitSteer()}
-              >
-                {busy ? 'Sending' : steerReq?.kind === 'stop' ? 'Stop' : 'Send'}
-              </Button>
-              {busy && <Spinner size="extra-tiny" aria-hidden="true" />}
-            </DialogActions>
-          </DialogBody>
-        </DialogSurface>
-      </Dialog>
+      {/* Coordinator steering chat side panel (#163) */}
+      <SlidePanel
+        open={steerPanelOpen}
+        onClose={() => setSteerPanelOpen(false)}
+        title="Steer coordinator"
+      >
+        <SteerChatPanel
+          runId={runId}
+          canSteer={coordActive}
+          onSteered={reconnectStream}
+        />
+      </SlidePanel>
 
       {/* Sandbox preview port-forward dialog */}
       <Dialog open={previewDialogOpen} onOpenChange={(_, d) => { if (!d.open) setPreviewDialogOpen(false); }}>

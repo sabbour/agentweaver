@@ -157,24 +157,23 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.querySelector('[aria-label^="Executing in pod agentweaver-api-pod-1"]')).toBeNull();
   });
 
-  it('shows the steering bar with Send, Redirect, Amend, and Stop verbs', async () => {
+  it('shows a Steer button that opens the steering chat side panel', async () => {
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
+    const steerBtn = await waitFor(() => {
+      const btn = container.querySelector('[data-testid="open-steer-panel"]') as HTMLButtonElement | null;
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }, { timeout: 4000 });
+
+    steerBtn.click();
+
     await waitFor(
-      () => expect(document.body.textContent).toContain('Steer coordinator'),
+      () => expect(container.querySelector('[data-testid="steer-chat-panel"]')).toBeTruthy(),
       { timeout: 4000 },
     );
-
-    const text = document.body.textContent ?? '';
-    expect(text).toContain('Send');
-    expect(text).toContain('Stop');
-    // All three steering verbs are distinctly selectable, matching the backend contract.
-    const buttonLabels = Array.from(container.querySelectorAll('button')).map((b) => (b.textContent ?? '').trim());
-    expect(buttonLabels.some((t) => t === 'Send')).toBe(true);
-    expect(buttonLabels.some((t) => t === 'Redirect')).toBe(true);
-    expect(buttonLabels.some((t) => t === 'Amend')).toBe(true);
-    // Broadcast scope note is shown next to the bar.
-    expect(text).toContain('Applies to all active subtasks.');
+    expect(container.querySelector('[data-testid="steer-chat-send"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="steer-chat-stop"]')).toBeTruthy();
   });
 
   it('renders Ctrl+Scroll zoom controls on the orchestration graph', async () => {

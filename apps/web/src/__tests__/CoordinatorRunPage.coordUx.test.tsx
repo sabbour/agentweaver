@@ -125,15 +125,15 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
     // The session now reuses the standard rich run Timeline over the coordinator's own stream,
     // so the coordinator's agent messages render like every other agent's "view run".
     expect(text).toContain('Decomposing the outcome into subtasks.');
-    // Steering lives in the graph toolbar (collapsed to a single Send action + Stop).
-    expect(text).toContain('Steer coordinator:');
+    // Steering lives in a slide-in chat panel opened from the Steer button.
+    expect(document.body.querySelector('[data-testid="open-steer-panel"]')).toBeTruthy();
     // Compact automation toolbar (no oversized session panel/heading).
     expect(text).toContain('Autopilot');
   });
 
-  it('hides the steering toolbar once the orchestration is complete (no Stop on a finished run)', async () => {
-    // Regression: a terminal orchestration cannot be steered or stopped, so the whole "Steer
-    // coordinator:" toolbar (incl. the Stop button) must disappear once the run completes.
+  it('hides the Steer button once the orchestration is complete (no steering on a finished run)', async () => {
+    // Regression: a terminal orchestration cannot be steered or stopped, so the Steer button
+    // (which opens the chat panel) must disappear once the run completes.
     currentEvents = [
       { sequence: 1, type: 'coordinator.assembly_completed', payload: { timestamp_utc: new Date().toISOString() } },
     ];
@@ -144,8 +144,7 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
       () => expect(document.body.textContent).toContain('Coordinator Graph'),
       { timeout: 4000 },
     );
-    const text = document.body.textContent ?? '';
-    expect(text).not.toContain('Steer coordinator:');
+    expect(document.body.querySelector('[data-testid="open-steer-panel"]')).toBeNull();
   });
 });
 
@@ -685,42 +684,50 @@ describe('CoordinatorRunPage — automation toggles (autopilot + auto-approve)',
   });
 });
 
-describe('CoordinatorRunPage — collapsed steer bar', () => {
-  it('exposes Send, Redirect, and Amend actions plus Stop and the broadcast scope note', async () => {
+describe('CoordinatorRunPage — steering chat side panel (#163)', () => {
+  it('opens the steering chat panel with a message input, Send, and Stop', async () => {
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
+    const steerBtn = await waitFor(() => {
+      const btn = container.querySelector('[data-testid="open-steer-panel"]') as HTMLButtonElement | null;
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }, { timeout: 4000 });
+
+    fireEvent.click(steerBtn);
+
     await waitFor(
-      () => expect(document.body.textContent).toContain('Steer coordinator:'),
+      () => expect(container.querySelector('[data-testid="steer-chat-panel"]')).toBeTruthy(),
       { timeout: 4000 },
     );
 
-    const text = document.body.textContent ?? '';
-    expect(text).toContain('Applies to all active subtasks.');
-
-    const buttons = Array.from(container.querySelectorAll('button')).map((b) => (b.textContent ?? '').trim());
-    // All three steering verbs are distinctly selectable, plus Stop.
-    expect(buttons.some((t) => t === 'Send')).toBe(true);
-    expect(buttons.some((t) => t === 'Redirect')).toBe(true);
-    expect(buttons.some((t) => t === 'Amend')).toBe(true);
-    expect(buttons.some((t) => t.includes('Stop'))).toBe(true);
+    expect(container.querySelector('[data-testid="steer-chat-input"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="steer-chat-send"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="steer-chat-stop"]')).toBeTruthy();
+    // Broadcast scope note is shown in the panel.
+    expect(document.body.textContent).toContain('Applies to all active subtasks.');
   });
 
-  it('Send sends with kind=send and surfaces the queued/applied confirmation', async () => {
+  it('Send sends with kind=send and appends the queued/applied confirmation to the history', async () => {
     vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'queued' });
 
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    await waitFor(
-      () => expect(document.body.textContent).toContain('Steer coordinator:'),
-      { timeout: 4000 },
-    );
+    const steerBtn = await waitFor(() => {
+      const btn = container.querySelector('[data-testid="open-steer-panel"]') as HTMLButtonElement | null;
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }, { timeout: 4000 });
+    fireEvent.click(steerBtn);
 
-    const input = container.querySelector('input[type=text]') as HTMLInputElement;
+    const input = await waitFor(() => {
+      const el = container.querySelector('[data-testid="steer-chat-input"]') as HTMLTextAreaElement | null;
+      expect(el).not.toBeNull();
+      return el as HTMLTextAreaElement;
+    }, { timeout: 4000 });
     fireEvent.change(input, { target: { value: 'Target the v2 API instead.' } });
 
-    const sendBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => (b.textContent ?? '').trim() === 'Send',
-    ) as HTMLButtonElement;
+    const sendBtn = container.querySelector('[data-testid="steer-chat-send"]') as HTMLButtonElement;
     fireEvent.click(sendBtn);
 
     await waitFor(
@@ -734,22 +741,8 @@ describe('CoordinatorRunPage — collapsed steer bar', () => {
       () => expect(document.body.textContent).toContain('Queued — applies at the next step.'),
       { timeout: 4000 },
     );
-  });
-
-  it('exposes a visible info affordance explaining what Send does', async () => {
-    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    const infoButton = await waitFor(() => {
-      const btn = container.querySelector('button[aria-label="About steering the coordinator"]') as HTMLButtonElement | null;
-      expect(btn).not.toBeNull();
-      return btn as HTMLButtonElement;
-    }, { timeout: 4000 });
-
-    fireEvent.click(infoButton);
-    await waitFor(
-      () => expect(document.body.textContent).toContain('Sends a course-correction to the coordinator'),
-      { timeout: 4000 },
-    );
+    // The sent message is echoed into the history.
+    expect(document.body.textContent).toContain('Target the v2 API instead.');
   });
 });
 
