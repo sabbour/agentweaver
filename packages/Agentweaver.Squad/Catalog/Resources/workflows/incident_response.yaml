@@ -15,6 +15,7 @@ nodes:
     label: Triage
     role: agent
     kind: live
+    prompt: Triage the incident - establish impact, scope, and likely cause, and decide the mitigation approach. Report your triage findings by calling report_outcome; the outcome is captured in the run record. Do NOT write a triage or incident report file into the workspace. Only create or edit files that are actual deliverables (e.g. mitigation code or config changes).
 
   - id: mitigate
     type: prompt
@@ -27,7 +28,7 @@ nodes:
     label: Verify
     role: review
     kind: live
-    prompt: Verify the mitigation and summarize whether the incident response is ready for human review.
+    prompt: Verify the mitigation and summarize whether the incident response is ready for human review. Report your verdict and findings by calling report_outcome; they are captured in the run record and shown in the UI. Do NOT write a verification or status report file into the workspace.
 
   - id: review-gate
     type: check

@@ -16,6 +16,7 @@ nodes:
     label: Triage
     role: agent
     kind: live
+    prompt: Triage the reported issue - reproduce it, identify the root cause, and determine the fix approach and severity. Report your triage findings by calling report_outcome with a clear summary of root cause and recommended fix. Do NOT write a triage report file (e.g. triage-report.md) into the workspace; the outcome is captured in the run record. Only create or edit files that are actual deliverables of the fix.
 
   - id: fix
     type: prompt
@@ -29,6 +30,7 @@ nodes:
     role: review
     kind: live
     agent: qa-engineer
+    prompt: Verify the fix resolves the reported defect without regressions - review the change and exercise the relevant behavior. Provide your verdict and findings inline through your review decision; they are captured in the run record and shown in the UI. Do NOT write a verification report file (e.g. qa-verification.md) into the workspace. Any test code you add is a deliverable and belongs in the repository's test suite.
 
   - id: build-test
     type: peer_review

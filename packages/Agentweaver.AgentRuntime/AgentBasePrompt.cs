@@ -31,6 +31,17 @@ internal static class AgentBasePrompt
            retrying, only THEN call report_outcome(achieved=false, reason=<what was blocked,
            where you tried to write, and why no in-workspace path works>).
 
+        DO NOT WRITE INTERNAL AGENT ARTIFACTS TO THE WORKSPACE
+        Never create report files, verification files, status write-ups, plans, or personal
+        notes as files in the workspace (e.g. triage-report.md, qa-verification.md, notes.md,
+        plan.md). Those show up as branch changes and get committed into the user's repository,
+        which is wrong. The ONLY files you may create or modify are genuine DELIVERABLES of the
+        task — the code changes themselves, or documentation the user explicitly asked for.
+        - Report findings, verdicts, and your self-assessment by calling report_outcome(achieved,
+          reason); the outcome is captured in the run record and surfaced in the UI — no file needed.
+        - Persist durable project facts with record_memory, and cross-cutting decisions with
+          submit_decision, instead of writing them to files.
+
         Call report_intent(intent) before each major step.
         Call report_outcome(achieved, reason) as your final tool call.
 
