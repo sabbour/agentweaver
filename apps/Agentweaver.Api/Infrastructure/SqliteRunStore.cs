@@ -27,13 +27,13 @@ public sealed class SqliteRunStore : IRunStore
                               worktree_path, worktree_branch, project_id, model_id,
                               agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
                               origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
-                              sandbox_pod_name, sandbox_namespace)
+                              sandbox_pod_name, sandbox_namespace, workflow_selection_reason)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
                     $user, $status, $startedAt, $endedAt, $result,
                     $worktreePath, $worktreeBranch, $projectId, $modelId,
                     $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
                     $origin, $retriedFrom, $archivedAt, $sandboxBackend, $sandboxClaimName,
-                    $sandboxPodName, $sandboxNamespace);
+                    $sandboxPodName, $sandboxNamespace, $workflowSelectionReason);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -61,6 +61,7 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$sandboxClaimName", (object?)run.SandboxClaimName ?? DBNull.Value);
         command.Parameters.AddWithValue("$sandboxPodName", (object?)run.SandboxPodName ?? DBNull.Value);
         command.Parameters.AddWithValue("$sandboxNamespace", (object?)run.SandboxNamespace ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowSelectionReason", (object?)run.WorkflowSelectionReason ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -614,7 +615,7 @@ public sealed class SqliteRunStore : IRunStore
     //           15=project_id 16=model_id 17=agent_name 18=agent_charter 19=reviewed_by
     //           20=workflow_run_id 21=merged_commit_hash 22=parent_run_id 23=subtask_id
     //           24=origin 25=retried_from 26=archived_at 27=sandbox_backend 28=sandbox_claim_name
-    //           29=sandbox_pod_name 30=sandbox_namespace
+    //           29=sandbox_pod_name 30=sandbox_namespace 31=workflow_selection_reason
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
@@ -623,7 +624,7 @@ public sealed class SqliteRunStore : IRunStore
                project_id, model_id, agent_name, agent_charter, reviewed_by,
                workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
-               sandbox_pod_name, sandbox_namespace
+               sandbox_pod_name, sandbox_namespace, workflow_selection_reason
           FROM runs
         """;
 
@@ -661,6 +662,7 @@ public sealed class SqliteRunStore : IRunStore
         SandboxClaimName = r.IsDBNull(28) ? null : r.GetString(28),
         SandboxPodName   = r.IsDBNull(29) ? null : r.GetString(29),
         SandboxNamespace = r.IsDBNull(30) ? null : r.GetString(30),
+        WorkflowSelectionReason = r.IsDBNull(31) ? null : r.GetString(31),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
@@ -679,5 +681,17 @@ public sealed class SqliteRunStore : IRunStore
 
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false) ? Map(reader) : null;
+    }
+
+    public async Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            "UPDATE runs SET workflow_selection_reason = $reason WHERE run_id = $runId;",
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$reason", (object?)reason ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "update workflow selection reason");
     }
 }

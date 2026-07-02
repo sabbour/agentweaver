@@ -59,6 +59,13 @@ public sealed record Run
     /// </summary>
     public string? RetriedFrom { get; init; }
 
+    /// <summary>
+    /// Short human-readable explanation of why the coordinator selected the workflow it planned this
+    /// run against (e.g. "Selected 'Bug Fix' because the task mentions a regression"). Populated by the
+    /// coordinator during orchestration; null for runs where no workflow selection reasoning was captured.
+    /// </summary>
+    public string? WorkflowSelectionReason { get; init; }
+
     /// <summary>When set, the run is archived off project board/list projections.</summary>
     public DateTimeOffset? ArchivedAt { get; init; }
     public string? SandboxBackend { get; init; }

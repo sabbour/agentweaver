@@ -161,6 +161,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.AgentCharter).HasColumnName("agent_charter");
             e.Property(r => r.ReviewedBy).HasColumnName("reviewed_by");
             e.Property(r => r.WorkflowRunId).HasColumnName("workflow_run_id");
+            e.Property(r => r.WorkflowSelectionReason).HasColumnName("workflow_selection_reason");
             e.Property(r => r.MergedCommitHash).HasColumnName("merged_commit_hash");
             e.Property(r => r.ParentRunId).HasColumnName("parent_run_id");
             e.Property(r => r.SubtaskId).HasColumnName("subtask_id");

@@ -120,6 +120,13 @@ public sealed record RunResponse
     public string? WorkflowRunId { get; init; }
 
     /// <summary>
+    /// Short human-readable explanation of why the coordinator selected the workflow it planned this
+    /// run against (#167). Null for runs where no workflow-selection reasoning was captured.
+    /// </summary>
+    [JsonPropertyName("workflow_selection_reason")]
+    public string? WorkflowSelectionReason { get; init; }
+
+    /// <summary>
     /// Parent coordinator run id when this run is a coordinator CHILD (Feature 008).
     /// Null for standalone runs and for the coordinator run itself. The web run-detail
     /// page uses this to render the TRIMMED child pipeline (agent → RAI → assemble-ready)

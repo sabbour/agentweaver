@@ -390,6 +390,16 @@ public sealed class EfRunStore : IRunStore
         return rec is null ? null : FromRecord(rec);
     }
 
+    public async Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var id = runId.ToString();
+        var rows = await db.Runs
+            .Where(r => r.RunId == id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.WorkflowSelectionReason, reason), ct);
+        WarnIfNoRows(rows, runId, "update workflow selection reason");
+    }
+
     private void WarnIfNoRows(int rows, RunId runId, string operation)
     {
         if (rows == 0)
@@ -419,6 +429,7 @@ public sealed class EfRunStore : IRunStore
         AgentCharter = r.AgentCharter,
         ReviewedBy = r.ReviewedBy,
         WorkflowRunId = r.WorkflowRunId,
+        WorkflowSelectionReason = r.WorkflowSelectionReason,
         MergedCommitHash = r.MergedCommitHash,
         ParentRunId = r.ParentRunId,
         SubtaskId = r.SubtaskId,
@@ -456,6 +467,7 @@ public sealed class EfRunStore : IRunStore
         AgentCharter = r.AgentCharter,
         ReviewedBy = r.ReviewedBy,
         WorkflowRunId = r.WorkflowRunId,
+        WorkflowSelectionReason = r.WorkflowSelectionReason,
         MergedCommitHash = r.MergedCommitHash,
         ParentRunId = r.ParentRunId,
         SubtaskId = r.SubtaskId,

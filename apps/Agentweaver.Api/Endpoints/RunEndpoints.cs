@@ -238,6 +238,7 @@ app.MapGet("/api/runs/{id}", async (
         OutcomeReason = outcomeReason,
         AgentName = run.AgentName,
         ReviewedBy = run.ReviewedBy,
+        WorkflowSelectionReason = run.WorkflowSelectionReason,
         ParentRunId = run.ParentRunId,
         SubtaskId = run.SubtaskId,
         RetriedFrom = run.RetriedFrom,

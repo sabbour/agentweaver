@@ -24,6 +24,7 @@ public sealed class RunRecord
     public string? AgentCharter { get; set; }
     public string? ReviewedBy { get; set; }
     public string? WorkflowRunId { get; set; }
+    public string? WorkflowSelectionReason { get; set; }
     public string? MergedCommitHash { get; set; }
     public string? ParentRunId { get; set; }
     public string? SubtaskId { get; set; }

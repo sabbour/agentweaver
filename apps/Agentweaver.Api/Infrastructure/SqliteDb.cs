@@ -73,6 +73,9 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN reviewed_by TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merged_commit_hash TEXT;", ct);
+        // Coordinator workflow-selection reasoning (#167): short human-readable explanation of why the
+        // coordinator selected the workflow it planned this run against. NULL for runs with no captured reason.
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_selection_reason TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN parent_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN subtask_id TEXT;", ct);
 
@@ -228,7 +231,8 @@ public sealed class SqliteDb
                 sandbox_backend    TEXT,
                 sandbox_claim_name TEXT,
                 sandbox_pod_name   TEXT,
-                sandbox_namespace  TEXT
+                sandbox_namespace  TEXT,
+                workflow_selection_reason TEXT
             );
 
             INSERT INTO runs__new (
@@ -238,7 +242,7 @@ public sealed class SqliteDb
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
                 reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                 origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
-                sandbox_pod_name, sandbox_namespace
+                sandbox_pod_name, sandbox_namespace, workflow_selection_reason
             )
             SELECT
                 run_id, repository_path, originating_branch, model_source, task,
@@ -247,7 +251,8 @@ public sealed class SqliteDb
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
                 reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                 COALESCE(origin, 'interactive'), retried_from, archived_at,
-                sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace
+                sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace,
+                workflow_selection_reason
             FROM runs;
 
             DROP TABLE runs;

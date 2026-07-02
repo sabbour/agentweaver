@@ -168,6 +168,7 @@ public sealed class CoordinatorOrchestratorExecutor
         IServiceScope scope, CoordinatorDraftInput input, OutcomeSpec spec, CancellationToken ct)
     {
         WorkflowDefinition? defaultDef = null;
+        var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
         try
         {
             var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
@@ -204,6 +205,10 @@ public sealed class CoordinatorOrchestratorExecutor
                     _logger.LogInformation(
                         "Coordinator workflow selection for run {RunId}: using explicit workflow override '{WorkflowId}'.",
                         input.RunId, overrideResult.Definition.Id);
+                    var reason = $"Selected '{overrideResult.Definition.Name}' from an explicit workflow override.";
+                    EmitWorkflowSelectedEvent(input.RunId, overrideResult.Definition, reason,
+                        wasAutoSelected: false, availableResults.Select(r => r.Definition!).ToList());
+                    await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
                     return overrideResult.Definition;
                 }
 
@@ -222,29 +227,35 @@ public sealed class CoordinatorOrchestratorExecutor
                     ?.Definition;
                 if (overridden is not null)
                 {
+                    var reason = $"Using '{overridden.Name}' as requested.";
                     EmitWorkflowSelectedEvent(input.RunId, overridden,
-                        $"Using '{overridden.Name}' as requested.", wasAutoSelected: false,
+                        reason, wasAutoSelected: false,
                         availableResults.Select(r => r.Definition!).ToList());
+                    await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
                     return overridden;
                 }
             }
 
-            // A project's explicitly-configured active/default workflow is honored: pinning a project
-            // default is a deliberate owner choice.
-            if (!string.IsNullOrWhiteSpace(project.DefaultWorkflowId)
-                && defaultDef is not null
-                && availableResults.Any(r => string.Equals(r.Definition!.Id, defaultDef.Id, StringComparison.Ordinal)))
-            {
-                _logger.LogInformation(
-                    "Coordinator workflow selection for run {RunId}: using the project's active workflow '{WorkflowId}'.",
-                    input.RunId, defaultDef.Id);
-                return defaultDef;
-            }
+            // NOTE (#168): the project's configured default workflow is NO LONGER a short-circuit.
+            // "Auto" (no explicit dropdown/conversational override) must actually REASON about the
+            // task instead of always returning the pinned default. The default remains the selector's
+            // deterministic fallback (it is ordered first in `available`) and the fallback returned by
+            // the catch block below — so it still wins whenever selection is impossible or the LLM
+            // cannot decide, but it does not pre-empt automatic selection when multiple workflows fit.
 
             var available = availableResults.Select(r => r.Definition!).ToList();
 
             // Single (or zero) workflow: skip selection silently, but still drive planning from it.
-            if (available.Count <= 1) return available.FirstOrDefault() ?? defaultDef;
+            if (available.Count <= 1)
+            {
+                var only = available.FirstOrDefault() ?? defaultDef;
+                if (only is not null)
+                {
+                    var reason = $"Selected '{only.Name}' as the only workflow available for this project.";
+                    await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
+                }
+                return only;
+            }
 
             var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
             var customWorkflowIds = availableResults
@@ -255,6 +266,7 @@ public sealed class CoordinatorOrchestratorExecutor
 
             var result = await selector.SelectAsync(context, ct).ConfigureAwait(false);
             EmitWorkflowSelectedEvent(input.RunId, result.Selected, result.Rationale, result.WasAutoSelected, available);
+            await PersistSelectionReasonAsync(runStore, input.RunId, result.Rationale, ct).ConfigureAwait(false);
             return result.Selected;
         }
         catch (Exception ex)
@@ -264,7 +276,30 @@ public sealed class CoordinatorOrchestratorExecutor
             _logger.LogWarning(ex,
                 "Coordinator workflow selection failed for run {RunId}; falling back to the project default workflow '{DefaultId}'.",
                 input.RunId, defaultDef?.Id ?? "(unresolved)");
+            if (defaultDef is not null)
+            {
+                var reason = $"Fell back to the project default workflow '{defaultDef.Name}' after workflow selection failed.";
+                await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
+            }
             return defaultDef;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort persistence of the coordinator's workflow-selection reasoning onto the run record
+    /// (#167). Never throws — a persistence failure must not abort orchestration.
+    /// </summary>
+    private async Task PersistSelectionReasonAsync(IRunStore runStore, string runId, string? reason, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return;
+        if (!RunId.TryParse(runId, out var rid)) return;
+        try
+        {
+            await runStore.UpdateWorkflowSelectionReasonAsync(rid, reason, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist workflow selection reason for run {RunId}", runId);
         }
     }
 

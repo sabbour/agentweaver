@@ -36,4 +36,5 @@ public interface IRunStore
     Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default);
     Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default);
     Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default);
+    Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default);
 }
