@@ -3,7 +3,7 @@
   "name": "Software Development",
   "description": "A complete software delivery team spanning architecture, frontend, backend, security, QA, DevOps, and documentation.",
   "roster": ["lead-architect", "frontend-engineer", "backend-engineer", "security-engineer", "devops-engineer", "qa-engineer", "docs-writer"],
-  "workflows": ["software-delivery", "bug-fix", "code-review"],
+  "workflows": ["software-delivery", "bug-fix"],
   "review_policy": "default",
   "sandbox_profile": "default"
 }

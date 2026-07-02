@@ -29,6 +29,24 @@ public sealed class WorkflowSelectorTests
         }
     }
 
+    /// <summary>Returns each queued response in turn (last response repeats once the queue drains).</summary>
+    private sealed class SequenceModel : IWorkflowSelectionModel
+    {
+        private readonly string?[] _responses;
+        public int Calls { get; private set; }
+        public string? LastPrompt { get; private set; }
+
+        public SequenceModel(params string?[] responses) => _responses = responses;
+
+        public Task<string?> CompleteAsync(string prompt, WorkflowSelectionContext context, CancellationToken ct)
+        {
+            LastPrompt = prompt;
+            var index = Math.Min(Calls, _responses.Length - 1);
+            Calls++;
+            return Task.FromResult(_responses[index]);
+        }
+    }
+
     private static WorkflowDefinition Workflow(string id, string name, string description) => new()
     {
         Id = id,
@@ -63,7 +81,7 @@ public sealed class WorkflowSelectorTests
         var model = new FakeModel("""{"selected": "bug-fix", "rationale": "A one-line null check is a quick fix."}""");
         var delivery = Workflow("software-delivery", "Software Delivery", "Net-new feature delivery pipeline.");
         var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
-        var review = Workflow("code-review", "Code Review", "Review-only pass over a change.");
+        var review = Workflow("content-authoring", "Content Authoring", "Draft and publish content.");
         var context = new WorkflowSelectionContext(
             "p1", "Fix the null check in X", ["Implementer", "Reviewer"], [delivery, bug, review]);
 
@@ -107,7 +125,7 @@ public sealed class WorkflowSelectorTests
     }
 
     [Fact]
-    public async Task MultiWorkflow_InvalidSelectedId_FallsBackToDefault()
+    public async Task MultiWorkflow_InvalidSelectedId_RetriesThenFallsBackToDefault()
     {
         var model = new FakeModel("""{"selected": "does-not-exist", "rationale": "n/a"}""");
         var def = Workflow("default", "Default", "The general-purpose pipeline.");
@@ -116,13 +134,14 @@ public sealed class WorkflowSelectorTests
 
         var result = await Selector(model).SelectAsync(context);
 
-        model.Calls.Should().Be(1);
+        // Unknown id triggers ONE stricter re-prompt before the deterministic fallback.
+        model.Calls.Should().Be(2);
         result.Selected.Should().BeSameAs(def);
         result.WasAutoSelected.Should().BeTrue();
     }
 
     [Fact]
-    public async Task MultiWorkflow_MalformedJson_FallsBackToDefault()
+    public async Task MultiWorkflow_MalformedJson_RetriesThenFallsBackToDefault()
     {
         var model = new FakeModel("I think you should use the bug-fix workflow, definitely.");
         var def = Workflow("default", "Default", "The general-purpose pipeline.");
@@ -131,9 +150,60 @@ public sealed class WorkflowSelectorTests
 
         var result = await Selector(model).SelectAsync(context);
 
-        model.Calls.Should().Be(1);
+        model.Calls.Should().Be(2);
         result.Selected.Should().BeSameAs(def);
         result.WasAutoSelected.Should().BeTrue();
+
+        // The fallback default is a general-purpose workflow, never a review-only one.
+        result.Rationale.Should().Contain("Default");
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_RetrySucceedsAfterUnparseableFirstReply()
+    {
+        var model = new SequenceModel(
+            "Sure! You probably want bug-fix.",
+            """{"selected": "bug-fix", "rationale": "A targeted defect fix."}""");
+        var def = Workflow("default", "Default", "The general-purpose pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix the bug", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        model.Calls.Should().Be(2);
+        result.Selected.Should().BeSameAs(bug);
+        result.WasAutoSelected.Should().BeTrue();
+        result.Rationale.Should().Contain("defect fix");
+        model.LastPrompt.Should().Contain("previous reply could not be parsed");
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_ParsesJsonWrappedInMarkdownFence()
+    {
+        var model = new FakeModel(
+            "Here is my choice:\n```json\n{\"selected\": \"bug-fix\", \"rationale\": \"Small fix.\"}\n```\nThanks!");
+        var def = Workflow("default", "Default", "The general-purpose pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix it", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        model.Calls.Should().Be(1);
+        result.Selected.Should().BeSameAs(bug);
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_MatchesIdWithUnderscoresAndDisplayName()
+    {
+        // Model answers with an underscore variant of the id — normalization folds it to the hyphen id.
+        var underscore = new FakeModel("""{"selected": "bug_fix", "rationale": "x"}""");
+        var byName = new FakeModel("""{"selected": "Bug Fix", "rationale": "x"}""");
+        var def = Workflow("default", "Default", "The general-purpose pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix it", ["Implementer"], [def, bug]);
+
+        (await Selector(underscore).SelectAsync(context)).Selected.Should().BeSameAs(bug);
+        (await Selector(byName).SelectAsync(context)).Selected.Should().BeSameAs(bug);
     }
 
     [Theory]

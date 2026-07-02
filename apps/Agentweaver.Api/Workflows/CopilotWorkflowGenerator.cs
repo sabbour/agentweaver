@@ -210,8 +210,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         bool Preferred(string src) =>
             src.Contains("software_delivery", StringComparison.OrdinalIgnoreCase) ||
-            src.Contains("bug_fix", StringComparison.OrdinalIgnoreCase) ||
-            src.Contains("code_review", StringComparison.OrdinalIgnoreCase);
+            src.Contains("bug_fix", StringComparison.OrdinalIgnoreCase);
 
         // Never offer fan_out/fan_in/serial/coordinator_composed workflows (e.g. agent-evaluation) as
         // few-shot examples — they would teach the model to emit unbindable node types.

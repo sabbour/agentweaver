@@ -68,6 +68,9 @@ public sealed class WorkflowSelector : IWorkflowSelector
         new(@"^\s*use\s+(?<id>[A-Za-z0-9._-]+)\s*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>Total model attempts before falling back to the project default (1 initial + 1 retry).</summary>
+    private const int MaxAttempts = 2;
+
     private readonly IWorkflowSelectionModel _model;
     private readonly ILogger<WorkflowSelector> _logger;
 
@@ -91,46 +94,53 @@ public sealed class WorkflowSelector : IWorkflowSelector
         if (available.Count == 1)
             return new WorkflowSelectionResult(fallback, "Only one workflow is available.", WasAutoSelected: false);
 
-        string? response;
-        try
+        // Give the model up to MaxAttempts tries. On a parse failure or an unknown-id pick we re-prompt
+        // ONCE with a stricter format instruction rather than silently defaulting — a transient
+        // formatting slip (prose, code fences, a stray display name) should not decide the workflow.
+        string? lastResponse = null;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            var prompt = BuildPrompt(context);
-            response = await _model.CompleteAsync(prompt, context, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Workflow selection model call failed for project {ProjectId}; falling back to default '{WorkflowId}'.",
-                context.ProjectId, fallback.Id);
-            return new WorkflowSelectionResult(fallback,
-                $"Defaulted to '{fallback.Name}' because workflow selection was unavailable.",
-                WasAutoSelected: true);
-        }
+            string? response;
+            try
+            {
+                var prompt = attempt == 1 ? BuildPrompt(context) : BuildRetryPrompt(context);
+                response = await _model.CompleteAsync(prompt, context, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Workflow selection model call failed for project {ProjectId} (attempt {Attempt}/{MaxAttempts}); falling back to default '{WorkflowId}'.",
+                    context.ProjectId, attempt, MaxAttempts, fallback.Id);
+                return new WorkflowSelectionResult(fallback,
+                    $"Defaulted to '{fallback.Name}' because workflow selection was unavailable.",
+                    WasAutoSelected: true);
+            }
 
-        if (!TryParse(response, out var selectedId, out var rationale))
-        {
+            lastResponse = response;
+
+            if (!TryParse(response, out var selectedId, out var rationale))
+            {
+                _logger.LogWarning(
+                    "Workflow selection model returned no parseable choice for project {ProjectId} (attempt {Attempt}/{MaxAttempts}). Raw response (truncated): {Response}",
+                    context.ProjectId, attempt, MaxAttempts, Truncate(response));
+                continue;
+            }
+
+            var selected = MatchWorkflow(available, selectedId);
+            if (selected is not null)
+                return new WorkflowSelectionResult(selected, rationale, WasAutoSelected: true);
+
             _logger.LogWarning(
-                "Workflow selection model returned no parseable choice for project {ProjectId}; falling back to default '{WorkflowId}'.",
-                context.ProjectId, fallback.Id);
-            return new WorkflowSelectionResult(fallback,
-                $"Defaulted to '{fallback.Name}' because the model response could not be parsed.",
-                WasAutoSelected: true);
+                "Workflow selection model chose unknown workflow id '{SelectedId}' for project {ProjectId} (attempt {Attempt}/{MaxAttempts}).",
+                selectedId, context.ProjectId, attempt, MaxAttempts);
         }
 
-        var normalizedSelectedId = selectedId.Trim().ToLowerInvariant();
-        var selected = available.FirstOrDefault(w =>
-            string.Equals(w.Id.Trim().ToLowerInvariant(), normalizedSelectedId, StringComparison.Ordinal));
-        if (selected is null)
-        {
-            _logger.LogWarning(
-                "Workflow selection model chose unknown workflow id '{SelectedId}' for project {ProjectId}; falling back to default '{WorkflowId}'.",
-                selectedId, context.ProjectId, fallback.Id);
-            return new WorkflowSelectionResult(fallback,
-                $"Defaulted to '{fallback.Name}' because the model chose an unavailable workflow ('{selectedId}').",
-                WasAutoSelected: true);
-        }
-
-        return new WorkflowSelectionResult(selected, rationale, WasAutoSelected: true);
+        _logger.LogWarning(
+            "Workflow selection could not obtain a usable choice for project {ProjectId} after {MaxAttempts} attempts; falling back to default '{WorkflowId}'. Last raw response (truncated): {Response}",
+            context.ProjectId, MaxAttempts, fallback.Id, Truncate(lastResponse));
+        return new WorkflowSelectionResult(fallback,
+            $"Defaulted to '{fallback.Name}' because the model response could not be parsed after {MaxAttempts} attempts.",
+            WasAutoSelected: true);
     }
 
     /// <summary>
@@ -153,6 +163,31 @@ public sealed class WorkflowSelector : IWorkflowSelector
     /// <summary>The deterministic default: callers put the project default first.</summary>
     private static WorkflowDefinition ResolveDefault(IReadOnlyList<WorkflowDefinition> available) =>
         available[0];
+
+    /// <summary>
+    /// Resolves a model-supplied choice to an available workflow. Matches on id first, then falls back
+    /// to the display name — both compared under a lenient normalization (lower-case, and '_'/spaces
+    /// folded to '-') so a model that answers "code_review", "Software Delivery", or "software delivery"
+    /// still binds to the intended workflow instead of being treated as an unknown id.
+    /// </summary>
+    private static WorkflowDefinition? MatchWorkflow(IReadOnlyList<WorkflowDefinition> available, string selectedId)
+    {
+        var norm = Normalize(selectedId);
+        if (norm.Length == 0) return null;
+
+        return available.FirstOrDefault(w => string.Equals(Normalize(w.Id), norm, StringComparison.Ordinal))
+            ?? available.FirstOrDefault(w => string.Equals(Normalize(w.Name), norm, StringComparison.Ordinal));
+    }
+
+    private static string Normalize(string value) =>
+        value.Trim().ToLowerInvariant().Replace('_', '-').Replace(' ', '-');
+
+    private static string Truncate(string? value, int max = 500)
+    {
+        if (string.IsNullOrEmpty(value)) return "(empty)";
+        var collapsed = value.Trim();
+        return collapsed.Length <= max ? collapsed : collapsed[..max] + "…";
+    }
 
     private static string BuildPrompt(WorkflowSelectionContext context)
     {
@@ -188,6 +223,23 @@ public sealed class WorkflowSelector : IWorkflowSelector
         return sb.ToString();
     }
 
+    /// <summary>
+    /// A stricter re-prompt used after the model's first reply could not be parsed or picked an unknown
+    /// id. Repeats the selection context and hammers the output contract (single JSON object, no prose,
+    /// no code fences, id from the list) so a transient formatting slip is corrected before we fall back.
+    /// </summary>
+    private static string BuildRetryPrompt(WorkflowSelectionContext context)
+    {
+        var sb = new StringBuilder(BuildPrompt(context));
+        sb.AppendLine();
+        sb.AppendLine();
+        sb.AppendLine("IMPORTANT: your previous reply could not be parsed.");
+        sb.AppendLine("Reply with ONLY a single JSON object and nothing else — no prose, no explanation, no markdown code fences, no backticks.");
+        sb.AppendLine("The value of \"selected\" MUST be exactly one of the workflow ids listed above.");
+        sb.Append("Format: {\"selected\": \"<workflow-id>\", \"rationale\": \"<1-2 sentences why>\"}");
+        return sb.ToString();
+    }
+
     /// <summary>Tolerant JSON extraction: pulls the first balanced object out of the model response.</summary>
     private static bool TryParse(string? response, out string selectedId, out string rationale)
     {
@@ -195,13 +247,12 @@ public sealed class WorkflowSelector : IWorkflowSelector
         rationale = string.Empty;
         if (string.IsNullOrWhiteSpace(response)) return false;
 
-        var start = response.IndexOf('{');
-        var end = response.LastIndexOf('}');
-        if (start < 0 || end <= start) return false;
+        var json = ExtractFirstJsonObject(response);
+        if (json is null) return false;
 
         try
         {
-            using var doc = JsonDocument.Parse(response[start..(end + 1)]);
+            using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return false;
 
@@ -224,5 +275,53 @@ public sealed class WorkflowSelector : IWorkflowSelector
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Returns the FIRST complete, balanced <c>{…}</c> object embedded in <paramref name="text"/> — string
+    /// contents (and escaped quotes) are skipped so braces inside a value don't confuse the scan. This is
+    /// more robust than a naive first-'{'/last-'}' slice: it tolerates markdown code fences, leading/trailing
+    /// prose, and any trailing text after the object.
+    /// </summary>
+    private static string? ExtractFirstJsonObject(string text)
+    {
+        var depth = 0;
+        var start = -1;
+        var inString = false;
+        var escaped = false;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+
+            if (inString)
+            {
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{':
+                    if (depth == 0) start = i;
+                    depth++;
+                    break;
+                case '}':
+                    if (depth > 0)
+                    {
+                        depth--;
+                        if (depth == 0 && start >= 0)
+                            return text[start..(i + 1)];
+                    }
+                    break;
+            }
+        }
+
+        return null;
     }
 }
