@@ -141,7 +141,7 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('Coordinator Graph'),
+      () => expect(document.body.textContent).toContain('Orchestration'),
       { timeout: 4000 },
     );
     expect(document.body.querySelector('[data-testid="open-steer-panel"]')).toBeNull();
@@ -459,10 +459,10 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     expect(document.body.textContent ?? '').not.toContain('Awaiting your review');
   });
 
-  it('opens the Scribe sub-run stream in a dialog from the assembly "View execution" button', async () => {
-    // Regression: assembly Scribe/RAI own a real persisted sub-run stream (`${runId}-scribe`),
-    // so "View execution" must open it in the RunWatcher dialog (surfacing the actual memory work),
-    // not merely scroll to the high-level coordinator timeline.
+  it('opens the Scribe sub-run stream from the step detail panel "View execution" action', async () => {
+    // Assembly Scribe/RAI own a real persisted sub-run stream (`${runId}-scribe`). Clicking the
+    // Scribe step in the pipeline opens its detail panel; "View execution" opens the RunWatcher
+    // dialog surfacing the actual memory work.
     const startedIso = new Date(Date.now() - 30_000).toISOString();
     currentEvents = [
       { sequence: 1, type: 'coordinator.assembly_scribe_started', payload: { workPlanId: 1, timestamp_utc: startedIso } },
@@ -470,11 +470,19 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
+    const step = await waitFor(() => {
+      const el = document.querySelector('[data-testid="pipeline-step-planned:assembly-scribe"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    }, { timeout: 4000 });
+
+    fireEvent.click(step);
+
     const btn = await waitFor(() => {
-      const els = Array.from(document.querySelectorAll('button'))
-        .filter(b => b.textContent === 'View execution');
-      expect(els.length).toBeGreaterThan(0);
-      return els[els.length - 1];
+      const el = Array.from(document.querySelectorAll('button'))
+        .find(b => b.textContent === 'View execution');
+      expect(el).toBeTruthy();
+      return el as HTMLButtonElement;
     }, { timeout: 4000 });
 
     fireEvent.click(btn);
@@ -483,32 +491,6 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
       () => expect(document.body.textContent).toContain('Scribe documentation (collective assembly)'),
       { timeout: 4000 },
     );
-  });
-
-  it('Merge "Browse files" routes to Workspace with the integration branch selected', async () => {
-    // Regression: "Browse files" must leave the orchestration page and land in the project Workspace
-    // with enough context to preserve refresh/back behavior for the assembled integration branch.
-    const t0 = new Date(Date.now() - 60_000).toISOString();
-    currentEvents = [
-      { sequence: 1, type: 'coordinator.assembly_merge_started', payload: { workPlanId: 1, timestamp_utc: t0 } },
-      { sequence: 2, type: 'coordinator.assembly_merge_completed', payload: { workPlanId: 1, timestamp_utc: new Date().toISOString() } },
-    ];
-
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    const btn = await waitFor(() => {
-      const el = Array.from(document.querySelectorAll('button'))
-        .find(b => b.textContent?.includes('Browse files'));
-      expect(el).toBeTruthy();
-      return el as HTMLButtonElement;
-    }, { timeout: 4000 });
-
-    fireEvent.click(btn);
-
-    expect(mockNavigate).toHaveBeenCalledWith(
-      '/projects/p1/workspace?run=coord-run-1&ref=agentweaver%2Fintegration%2Fcoord-run-1',
-    );
-    expect(apiClient.getAssemblyWorkspace).not.toHaveBeenCalled();
   });
 });
 

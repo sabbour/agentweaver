@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Badge,
@@ -29,28 +29,11 @@ import {
   FolderRegular,
   OpenRegular,
 } from '@fluentui/react-icons';
-import type { FluentIcon } from '@fluentui/react-icons';
-import {
-  ReactFlow,
-  Handle,
-  Position,
-  useReactFlow,
-  useNodesInitialized,
-  type Node,
-  type Edge,
-  type NodeProps,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { GraphDescriptor, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
-import { layoutDag, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
-import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
-import { AgentAvatar } from '../components/AgentAvatar';
-import { PodIndicator } from '../components/PodIndicator';
-import { CostChip } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { AgentRail } from '../components/AgentRail';
 import { SteerPanel } from '../components/SteerPanel';
@@ -70,24 +53,12 @@ import { RunLayout } from '../components/RunLayout';
 import { RunWatcher } from '../components/RunWatcher';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import {
-  workflowNodeTypes,
-  forwardEdge,
-  loopbackEdge,
-  workflowEdgeTypes,
-  coordinatorLoopbackLabel,
   roleDescForRole,
   iconForRole,
-  useNodeStyles,
   StatusBadge,
   ElapsedTimer,
-  CoordinatorSessionContext,
-  ExecutionModalContext,
-  BrowseFilesContext,
-  ActiveEdgeContext,
-  type ExecutorDef,
-  type ExecutorState,
+  statusDescription,
   type StepStatus,
-  type WorkflowNodeData,
 } from '../components/WorkflowGraphPanel';
 import {
   buildTopologyState,
@@ -96,18 +67,7 @@ import {
   type CoordinatorTopologyState,
   type TopologyNodeState,
 } from '../state/topologyReducer';
-import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
 import { formatModelLabel } from '../utils/agentIdentity';
-
-// ---------------------------------------------------------------------------
-// Subtask pipeline expansion is controlled at the page level so the graph container height can grow
-// to fit expanded child pipelines (instead of clipping them inside the fixed-height canvas).
-interface CoordExpandValue { expanded: Set<string>; toggle: (key: string) => void; }
-const CoordExpandContext = createContext<CoordExpandValue | undefined>(undefined);
-
-// "View run" on a subtask opens the child run in a modal (reusing the standard RunWatcher) rather
-// than navigating away from the orchestration.
-const CoordViewRunContext = createContext<((runId: string) => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Topology status helpers
@@ -135,6 +95,59 @@ function topoStatusToLabel(status: string): string {
     case 'failed':         return 'Failed';
     default:               return 'Pending';
   }
+}
+
+/** Human-friendly label for a resolved StepStatus (used by assembly stages in the pipeline). */
+function stepStatusLabel(status: StepStatus): string {
+  switch (status) {
+    case 'started':   return 'In progress';
+    case 'completed': return 'Completed';
+    case 'failed':    return 'Failed';
+    case 'revise':    return 'Needs changes';
+    case 'skipped':   return 'Skipped';
+    default:          return 'Pending';
+  }
+}
+
+/** A single step rendered in the vertical pipeline (#160). */
+interface PipelineStep {
+  id: string;
+  label: string;
+  role: string;
+  status: StepStatus;
+  statusLabel: string;
+  planned: boolean;
+  isSubtask: boolean;
+  agent?: string;
+  agentRole?: string;
+  model?: string;
+  childRunId?: string;
+  startedAt?: number;
+  completedAt?: number;
+}
+
+/**
+ * Slide-in detail for a pipeline step (#160). Shows the step's status, role and agent, plus a
+ * link to open the step's underlying execution. Enriched in #161 with the nested subtask/agent
+ * list and the live session event stream + produced files.
+ */
+function StepDetailPanel({ step, onViewRun }: { step: PipelineStep; onViewRun: (id: string) => void }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="step-detail-panel">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <StatusBadge status={step.status} isPlanned={step.planned} label={step.statusLabel} />
+        <span>{roleDescForRole(step.role)}</span>
+      </div>
+      {step.agent && (
+        <div>Agent: {step.agent}{step.model ? ` · ${formatModelLabel(step.model)}` : ''}</div>
+      )}
+      {step.childRunId && (
+        <Button appearance="secondary" size="small" onClick={() => onViewRun(step.childRunId!)}>
+          View execution
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** Map a coordinator graph node id (e.g. 'plan:subtask-1') to its topology node. */
@@ -412,312 +425,6 @@ function orchPhaseLabel(phase: OrchPhase): string {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Session timeline derivation (issue 6)
-// ---------------------------------------------------------------------------
-
-function fmtTotal(ms: number): string {
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const s = secs % 60;
-  if (mins < 60) return `${mins}m ${s}s`;
-  const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m`;
-}
-
-// Parent subtask elapsed = sum of the child pipeline steps' durations (issue 2).
-// Ticks live while any child step is still running.
-function AggregateElapsed({ states }: { states: Record<string, ExecutorState> }) {
-  const hasRunning = Object.values(states).some((st) => st.startedAt !== undefined && st.completedAt === undefined);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!hasRunning) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [hasRunning]);
-  let total = 0;
-  for (const st of Object.values(states)) {
-    if (st.startedAt === undefined) continue;
-    total += Math.max(0, (st.completedAt ?? now) - st.startedAt);
-  }
-  if (total <= 0) return null;
-  return <span aria-label="Total child elapsed">{fmtTotal(total)}</span>;
-}
-
-// ---------------------------------------------------------------------------
-// Subtask node data + custom React Flow node
-// ---------------------------------------------------------------------------
-
-interface SubtaskNodeData extends Record<string, unknown> {
-  graphNodeId: string;
-  label: string;
-  topoStatus: string;
-  topoNode: TopologyNodeState | undefined;
-  childGraphRef: string | undefined;
-  childRunId: string | undefined;
-  agent: string | undefined;
-  agentRole: string | undefined;
-  model: string | undefined;
-  phase: string | undefined;
-  projectId: string;
-  startedAt?: number;
-  completedAt?: number;
-  totalNanoAiu?: number | null;
-  totalTokens?: number | null;
-  executionPodName?: string | null;
-  /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
-  dir?: 'LR' | 'TB';
-}
-
-// Fallback child pipeline defs (used when a child run's graph descriptor is not yet available).
-const INLINE_CHILD_FALLBACK: ExecutorDef[] = [
-  { key: 'agent',          label: 'Agent',          roleDescription: 'AI Assistant',                Icon: iconForRole('agent')    },
-  { key: 'rai',            label: 'Rai',             roleDescription: 'RAI Reviewer',                Icon: iconForRole('rai')      },
-  { key: 'assemble-ready', label: 'Assemble-ready',  roleDescription: 'Awaiting collective assembly', Icon: iconForRole('assembly') },
-];
-
-// Vertical space (px) a subtask node reserves below its body when its child pipeline is expanded,
-// so dagre spaces sibling subtasks apart instead of letting the expansion overlap neighbours.
-const EXPANDED_PIPELINE_RESERVE = 188;
-
-// Dagre's nodesep is the vertical gap between sibling nodes in LR layout. Subtask cards can be
-// taller than the generic hints because their titles/metadata wrap, so keep a generous separation
-// for fan-out columns.
-const COORDINATOR_GRAPH_NODE_SEP = 96;
-
-// Refits the graph to the viewport AFTER React Flow has measured the node DOM. The bare `fitView`
-// prop only fits once at mount using estimated sizes, so on the initial pre-spec load the wide
-// linear chain (Coordinator → RAI → Review → Merge → Scribe) was fitted before measurement and the
-// last node (Scribe) ended up clipped off the right edge. Re-fitting once nodes are initialized —
-// and whenever the layout token changes (node/edge count, expansion, height) — keeps the whole
-// pipeline in view without leaving stale vertical whitespace.
-function GraphAutoFit({ token }: { token: string }) {
-  const { fitView } = useReactFlow();
-  const initialized = useNodesInitialized();
-  useEffect(() => {
-    if (!initialized) return;
-    const id = requestAnimationFrame(() => {
-      void fitView({ padding: 0.12, maxZoom: 1.1, duration: 150 });
-    });
-    return () => cancelAnimationFrame(id);
-  }, [initialized, token, fitView]);
-  return null;
-}
-
-// A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
-// narrow VERTICAL strip (icon + label/role + status/timer) so the expansion stays within the card
-// width and only grows downward — avoiding the horizontal overflow that overlapped neighbour nodes.
-// Does not use React Flow Handles (rendered outside a ReactFlow canvas).
-function ChildStepRow({ def, state, isLast }: { def: ExecutorDef; state: ExecutorState; isLast: boolean }) {
-  const { key, label, Icon } = def;
-  const { status, startedAt, completedAt } = state;
-  return (
-    <div
-      style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
-      data-testid={`child-node-${key}`}
-    >
-      <div
-        role="article"
-        aria-label={`${label}: ${status}`}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 8px',
-          border: '1px solid var(--colorNeutralStroke2)',
-          borderRadius: 6,
-          background: status === 'started'
-            ? 'var(--colorBrandBackground2)'
-            : 'var(--colorNeutralBackground1)',
-        }}
-      >
-        <span aria-hidden="true" style={{ display: 'inline-flex', color: 'var(--colorNeutralForeground3)', flexShrink: 0 }}>
-          <Icon fontSize={16} />
-        </span>
-        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-          <span style={{ fontSize: 'var(--fontSizeBase200)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {label}
-          </span>
-          <span style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {def.roleDescription}
-          </span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
-          <StatusBadge status={status} />
-          {startedAt !== undefined && (
-            <span style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)' }}>
-              <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
-            </span>
-          )}
-        </div>
-      </div>
-      {!isLast && (
-        <span aria-hidden="true" style={{ alignSelf: 'center', color: 'var(--colorNeutralForeground4)', lineHeight: 1, fontSize: 12, height: 14, display: 'flex', alignItems: 'center' }}>
-          ↓
-        </span>
-      )}
-    </div>
-  );
-}
-
-function SubtaskNode({ id, data }: NodeProps) {
-  const s = useNodeStyles();
-  const d = data as SubtaskNodeData;
-  const expandCtx = useContext(CoordExpandContext);
-  const viewRun = useContext(CoordViewRunContext);
-  const expanded = expandCtx?.expanded.has(id) ?? false;
-  const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
-  const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
-
-  // Fetch the child run's graph descriptor only when expanded.
-  useEffect(() => {
-    if (!expanded || !d.childRunId) return;
-    let cancelled = false;
-    apiClient.getRunGraph(d.childRunId as string)
-      .then((desc) => { if (!cancelled) setChildDescriptor(desc); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [expanded, d.childRunId]);
-
-  // Subscribe to the child run's live SSE events only while expanded; tear down on collapse.
-  const childStreamRunId = expanded && d.childRunId ? (d.childRunId as string) : '';
-  const { events: childEvents } = useRunStream(childStreamRunId);
-
-  // Map workflow.step events from the child run to executor states.
-  const childStepStates = useMemo<Record<string, ExecutorState>>(() => {
-    const map: Record<string, ExecutorState> = {};
-    for (const evt of childEvents) {
-      if (evt.type === 'workflow.step') {
-        const step      = String(evt.payload['step'] ?? '');
-        const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
-        const tsStr     = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
-        const tsMs      = tsStr ? new Date(tsStr).getTime() : NaN;
-        const evtMsg    = evt.payload['message'] != null ? String(evt.payload['message']) : undefined;
-        const prev      = map[step];
-        map[step] = {
-          status:      evtStatus,
-          agentName:   prev?.agentName,
-          message:     evtMsg,
-          startedAt:   evtStatus === 'started' ? (!isNaN(tsMs) ? tsMs : undefined) : prev?.startedAt,
-          completedAt: evtStatus !== 'started' && !isNaN(tsMs) ? tsMs : prev?.completedAt,
-        };
-      } else if (evt.type === 'run.assemble_ready' || evt.type === 'subtask.assemble_ready') {
-        const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
-        const tsMs  = tsStr ? new Date(tsStr).getTime() : NaN;
-        map['assemble-ready'] = { status: 'completed', completedAt: !isNaN(tsMs) ? tsMs : Date.now() };
-      }
-    }
-    return map;
-  }, [childEvents]);
-
-  // Build the ordered list of child pipeline nodes: from the descriptor when available,
-  // or from the hardcoded fallback while the fetch is in-flight or unavailable.
-  const childNodes = useMemo<Array<{ def: ExecutorDef; state: ExecutorState }>>(() => {
-    const defs = childDescriptor
-      ? childDescriptor.nodes.map((n) => ({
-          key:             n.id,
-          label:           n.label,
-          roleDescription: roleDescForRole(n.role),
-          Icon:            iconForRole(n.role),
-        }))
-      : INLINE_CHILD_FALLBACK;
-    return defs.map((def) => ({
-      def,
-      state: childStepStates[def.key] ?? { status: 'pending' },
-    }));
-  }, [childDescriptor, childStepStates]);
-
-  const stepStatus = topoStatusToStepStatus(d.topoStatus as string);
-  const statusLabel = topoStatusToLabel(d.topoStatus as string);
-
-  return (
-    <>
-      <PodIndicator podName={d.executionPodName as string | null | undefined} />
-      <div
-        className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}`}
-        data-node-type="subtask"
-        role="article"
-        aria-label={`${d.label as string}: ${d.topoStatus as string}`}
-      >
-      <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
-      <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
-
-      <div className={s.cardHeader}>
-        <CostChip totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
-        <StatusBadge status={stepStatus} label={statusLabel} />
-      </div>
-
-      <div className={s.cardMain}>
-        <span className={s.cardIcon} aria-hidden="true">
-          {d.agent
-            ? <AgentAvatar name={d.agent as string} size={28} circle badgeIcon={d.Icon as FluentIcon} badgeTitle={(d.agentRole as string | undefined) ?? 'Subtask Agent'} />
-            : <BotRegular fontSize={22} />}
-        </span>
-        <div className={s.cardTitleGroup}>
-          <span className={s.cardTitle}>{d.label as string}</span>
-          <span className={s.cardRole}>{(d.agentRole as string | undefined) ?? 'Subtask Agent'}</span>
-          {d.agent && <span className={s.cardSubText}>{d.agent as string}</span>}
-          {d.model && <span className={s.cardModel}>{formatModelLabel(d.model as string)}</span>}
-          {d.phase && <span className={s.cardSubText}>{d.phase as string}</span>}
-        </div>
-      </div>
-
-      {d.childGraphRef && d.childRunId && (
-        <div className={`${s.cardActions} nopan nodrag`}>
-          <Button
-            appearance="outline"
-            size="small"
-            onClick={() => viewRun?.(d.childRunId as string)}
-          >
-            View run
-          </Button>
-        </div>
-      )}
-
-      {/* Inline child pipeline — compact vertical strip of step rows. Stays within the card width
-          (grows only downward) so the expansion never overflows into neighbouring subtask columns. */}
-      {expanded && (
-        <div
-          className="nopan nodrag"
-          style={{
-            marginTop: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 0,
-          }}
-        >
-          {childNodes.map((node, i) => (
-            <ChildStepRow
-              key={node.def.key}
-              def={node.def}
-              state={node.state}
-              isLast={i === childNodes.length - 1}
-            />
-          ))}
-        </div>
-      )}
-
-      {d.startedAt !== undefined ? (
-        <div className={s.cardFooter}>
-          <span className={s.cardTimer}>
-            <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} />
-          </span>
-        </div>
-      ) : (expanded && Object.keys(childStepStates).length > 0 && (
-        <div className={s.cardFooter}>
-          <span className={s.cardTimer}>
-            <AggregateElapsed states={childStepStates} />
-          </span>
-        </div>
-      ))}
-    </div>
-    </>
-  );
-}
-
-/** Combined node types: generic workflow nodes + subtask expandable node. */
-const coordinatorNodeTypes = { ...workflowNodeTypes, subtask: SubtaskNode };
 
 // ---------------------------------------------------------------------------
 // Page styles
@@ -851,6 +558,118 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     marginBottom: tokens.spacingVerticalXS,
   },
+  // ---- Pipeline layout (#160): coordinator card (left) + steps pipeline (right) ----
+  pipelineLayout: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(260px, 320px) minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'start',
+    '@media (max-width: 900px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  coordCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  coordCardHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+  },
+  coordAvatar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
+    flexShrink: 0,
+  },
+  coordName: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  coordStatusRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+  },
+  stepsPipeline: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 0,
+    minWidth: 0,
+  },
+  stepCard: {
+    display: 'flex',
+    alignItems: 'stretch',
+    gap: tokens.spacingHorizontalM,
+    padding: 0,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'hidden',
+    cursor: 'pointer',
+    textAlign: 'left',
+    width: '100%',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+  },
+  stepCardSelected: {
+    outline: `2px solid ${tokens.colorBrandStroke1}`,
+  },
+  stepStatusBar: {
+    width: '6px',
+    flexShrink: 0,
+  },
+  stepBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    minWidth: 0,
+    flex: 1,
+  },
+  stepTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  stepTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  stepMeta: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  stepTimer: {
+    fontVariantNumeric: 'tabular-nums',
+  },
+  stepArrow: {
+    display: 'flex',
+    justifyContent: 'center',
+    color: tokens.colorNeutralForeground4,
+    height: '18px',
+    lineHeight: '18px',
+  },
+  barDone:       { backgroundColor: tokens.colorPaletteGreenBackground3 },
+  barProgress:   { backgroundColor: tokens.colorPaletteYellowBackground3 },
+  barFailed:     { backgroundColor: tokens.colorPaletteRedBackground3 },
+  barRevise:     { backgroundColor: tokens.colorPaletteDarkOrangeBackground3 },
+  barPending:    { backgroundColor: tokens.colorNeutralStroke2 },
   viewRunSurface: {
     maxWidth: '92vw',
     width: '1200px',
@@ -935,9 +754,6 @@ export function CoordinatorRunPage() {
   const navigate = useNavigate();
 
   const { events, status: streamStatus, reconnect: reconnectStream } = useRunStream(runId ?? '');
-
-  // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
-  const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
 
   // REST seed: coordinator GraphDescriptor (GET /api/runs/{id}/graph, coordinator variant).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
@@ -1271,33 +1087,6 @@ export function CoordinatorRunPage() {
     [events, topoSeed],
   );
 
-  // Per-subtask elapsed timing, derived from the subtask.* coordinator events (which carry a
-  // timestamp_utc). Keyed by the raw subtaskId string. startedAt = first dispatched/running;
-  // completedAt = first terminal (completed/failed/assemble_ready/rai_flagged). Drives a live counter
-  // on each subtask card so the user can see how long it has been running.
-  const subtaskTiming = useMemo<Record<string, { startedAt?: number; completedAt?: number }>>(() => {
-    const STARTED = new Set(['subtask.dispatched', 'subtask.running']);
-    const TERMINAL = new Set(['subtask.completed', 'subtask.failed', 'subtask.assemble_ready', 'subtask.rai_flagged']);
-    const map: Record<string, { startedAt?: number; completedAt?: number }> = {};
-    for (const evt of events) {
-      if (!STARTED.has(evt.type) && !TERMINAL.has(evt.type)) continue;
-      const sid = evt.payload['subtaskId'];
-      if (sid == null) continue;
-      const key = String(sid);
-      const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
-      const tsMs = tsStr ? new Date(tsStr).getTime() : NaN;
-      if (isNaN(tsMs)) continue;
-      const cur = map[key] ?? {};
-      if (STARTED.has(evt.type)) {
-        cur.startedAt = cur.startedAt === undefined ? tsMs : Math.min(cur.startedAt, tsMs);
-      } else {
-        cur.completedAt = cur.completedAt === undefined ? tsMs : Math.max(cur.completedAt, tsMs);
-      }
-      map[key] = cur;
-    }
-    return map;
-  }, [events]);
-
   // Per-assembly-stage elapsed timing (RAI / Review / Merge / Scribe), derived from the
   // coordinator.assembly_* events (which now carry timestamp_utc). Keyed by node ROLE so it can be
   // injected into the generic assembly node state the same way subtaskTiming feeds subtask cards —
@@ -1337,147 +1126,61 @@ export function CoordinatorRunPage() {
     }
     return map;
   }, [events]);
-  // reserve room for expanded child pipelines and the container can grow to fit them.
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
-  const toggleExpand = useCallback((key: string) => {
-    setExpandedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
-  const expandValue = useMemo<CoordExpandValue>(
-    () => ({ expanded: expandedKeys, toggle: toggleExpand }),
-    [expandedKeys, toggleExpand],
-  );
 
   // Which coordinator loopback arc (if any) is currently "lit" blue: the review→coordinator
   // "Request changes" arc while a human-review request-changes wave is re-dispatching, or the
   // rai→coordinator "RAI flags" arc while an RAI flag is looping back. Mirrors the per-run page's
   // active-edge highlight (ActiveEdgeContext). A loop is active when its triggering event is the
   // most recent one that has not yet been superseded by a fresh assembly review / terminal.
-  const activeLoopbackId = useMemo<string | undefined>(() => {
-    let changesSeq = -1;
-    let raiSeq = -1;
-    let supersedeSeq = -1;
-    for (const e of events) {
-      const seq = e.sequence ?? -1;
-      const t = e.type as string;
-      if (t === 'coordinator.assembly_changes_requested') {
-        changesSeq = Math.max(changesSeq, seq);
-      } else if (t === 'subtask.rai_flagged') {
-        raiSeq = Math.max(raiSeq, seq);
-      } else if (
-        t === 'coordinator.assembly_review_requested' ||
-        t === 'coordinator.assembly_review_approved' ||
-        t === 'coordinator.assembly_completed' ||
-        t === 'coordinator.assembly_declined' ||
-        t === 'coordinator.assembly_failed' ||
-        t === 'coordinator.assembly_blocked'
-      ) {
-        supersedeSeq = Math.max(supersedeSeq, seq);
-      }
-    }
-    const reviewActive = changesSeq > supersedeSeq && changesSeq >= raiSeq;
-    const raiActive = raiSeq > supersedeSeq && raiSeq > changesSeq;
-    if (!reviewActive && !raiActive) return undefined;
-    if (!effectiveDescriptor) return undefined;
-    const wantRole = reviewActive ? 'review' : 'rai';
-    const roleById: Record<string, string> = {};
-    for (const n of effectiveDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
-    const edge = effectiveDescriptor.edges.find(
-      (e) => e.loopback && roleById[e.from] === wantRole,
-    );
-    return edge ? `${edge.from}-${edge.to}` : undefined;
-  }, [events, effectiveDescriptor]);
 
+  // Per-node display data for the pipeline (#160). Computes status/label/agent for every descriptor
+  // node without any React Flow / layout dependency. Assembly stages combine the phase projection
+  // with their own wall-clock timing so each stage can go live.
+  const stepDataById = useMemo(() => {
+    const map = new Map<string, {
+      label: string;
+      role: string;
+      status: StepStatus;
+      statusLabel: string;
+      planned: boolean;
+      isSubtask: boolean;
+      agent?: string;
+      agentRole?: string;
+      model?: string;
+      childRunId?: string;
+      startedAt?: number;
+      completedAt?: number;
+    }>();
+    if (!effectiveDescriptor) return map;
 
-  const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
-    if (!effectiveDescriptor) return { rfNodes: [], displayEdges: [] };
-
-    const fwdEdges: Edge[] = [];
-    const allEdges: Edge[] = [];
-    // Role lookup so loopback labels are derived from the SOURCE node's role rather than its
-    // exact id (robust across descriptor id schemes). Tank adds two coordinator-level loopbacks:
-    // rai→coordinator and review→coordinator (loopback:true, no label field on GraphEdge). Render
-    // them as labelled back-edges matching the per-run loopback styling. Falls back gracefully when
-    // a descriptor has zero loopbacks (older runs) — the loop simply produces no loopback edges.
-    const roleById: Record<string, string> = {};
-    for (const n of effectiveDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
-    for (const edge of effectiveDescriptor.edges) {
-      const edgeId = `${edge.from}-${edge.to}`;
-      if (edge.loopback) {
-        allEdges.push(loopbackEdge(edgeId, edge.from, edge.to, coordinatorLoopbackLabel(roleById[edge.from], edge.from)));
-      } else {
-        const e = forwardEdge(edgeId, edge.from, edge.to);
-        fwdEdges.push(e);
-        allEdges.push(e);
-      }
-    }
-
-    const nodeSizeHints: Record<string, NodeSizeHint> = {};
-    const raw: Node[] = effectiveDescriptor.nodes.map((node) => {
+    for (const node of effectiveDescriptor.nodes) {
       const nt = node.node_type;
-      // Subtask cards render taller than the generic hint (multi-line title + role + agent + model +
-      // phase + the Expand-pipeline / View-run buttons), so reserve a generous base height to keep
-      // sibling fan-out cards from overlapping. Expanded cards reserve extra room for the inline
-      // child pipeline so the expansion pushes neighbours apart instead of overlapping them.
-      const subtaskExpanded = nt === 'subtask' && expandedKeys.has(node.id);
-      const baseHeight = nt === 'subtask' ? 244 : (NODE_TYPE_H[nt ?? ''] ?? NODE_H);
-      nodeSizeHints[node.id] = {
-        width:  NODE_TYPE_W[nt ?? ''] ?? NODE_W,
-        height: baseHeight + (subtaskExpanded ? EXPANDED_PIPELINE_RESERVE : 0),
-      };
-
-      const planned = node.kind === 'planned';
+      const role = (node.role ?? '').toLowerCase();
 
       if (nt === 'subtask') {
-        // Subtask node — look up topology status by mapped id.
         const topoNode = resolveSubtaskTopoNode(node.id, topology);
-        // Defensive: read display fields from flat props OR nested data map.
-        const agentField  = node.agent  ?? (node.data?.['agent']  as string | undefined) ?? topoNode?.assignedAgent;
-        const modelField  = node.model  ?? (node.data?.['model']  as string | undefined) ?? topoNode?.selectedModelId;
-        const phaseField  = node.phase  ?? (node.data?.['phase']  as string | undefined);
-        const childRunId  = readChildRunId(node) ?? topoNode?.childRunId;
-        // node.id is "plan:subtask-{id}"; the subtask.* timing map is keyed by the raw "{id}".
-        const subtaskKey  = node.id.replace(/^plan:/, '').replace(/^subtask-/, '');
-        const timing      = subtaskTiming[subtaskKey];
-        return {
-          id:   node.id,
-          type: 'subtask',
-          data: {
-            graphNodeId:   node.id,
-            label:         node.label,
-            topoStatus:    topoNode?.status ?? 'pending',
-            topoNode,
-            childGraphRef: node.child_graph_ref,
-            childRunId,
-            agent:         agentField,
-            agentRole:     agentField ? roleByAgent[agentField] : undefined,
-            model:         modelField,
-            phase:         phaseField,
-            projectId:     projectId ?? '',
-            startedAt:     timing?.startedAt,
-            completedAt:   timing?.completedAt,
-            executionPodName: topoNode?.executionPodName ?? null,
-            dir:           'LR',
-          } as SubtaskNodeData,
-          position: { x: 0, y: 0 },
-        };
+        const agentField = node.agent ?? (node.data?.['agent'] as string | undefined) ?? topoNode?.assignedAgent;
+        const modelField = node.model ?? (node.data?.['model'] as string | undefined) ?? topoNode?.selectedModelId;
+        const childRunId = readChildRunId(node) ?? topoNode?.childRunId;
+        const topoStatus = topoNode?.status ?? 'pending';
+        map.set(node.id, {
+          label: node.label,
+          role,
+          status: topoStatusToStepStatus(topoStatus),
+          statusLabel: topoStatusToLabel(topoStatus),
+          planned: false,
+          isSubtask: true,
+          agent: agentField,
+          agentRole: agentField ? roleByAgent[agentField] : undefined,
+          model: modelField,
+          childRunId,
+        });
+        continue;
       }
 
-      // Coordinator or collective-assembly node — use generic WorkflowNode. def.key MUST be the
-      // node ROLE (not node.id), so WorkflowNode's role-based logic fires: the review gate becomes
-      // action-required ("Awaiting your review") and the coordinator keeps its "View session" button.
+      // Coordinator or collective-assembly stage.
       const roleKey = node.role;
       const coordTopoNode = topology.nodes['coordinator'];
-
-      // Collective-assembly stage status. Two sources combine: the phase projection
-      // (assemblyNodeStatus) covers RAI + the human Review gate, but merge/scribe have no distinct
-      // orchestration phase, so their started/completed state is taken from the stage's own
-      // timing events. Phase status wins when present (it preserves the review "failed"/decline
-      // semantics); timing fills in the merge/scribe window so every stage can go live.
       const isAssemblyRole = roleKey === 'rai' || roleKey === 'review' || roleKey === 'merge' || roleKey === 'scribe';
       const at = isAssemblyRole ? assemblyTiming[roleKey] : undefined;
       const timingStatus: StepStatus | undefined =
@@ -1485,17 +1188,13 @@ export function CoordinatorRunPage() {
         : at?.startedAt !== undefined ? 'started'
         : undefined;
       const phaseStatus = isAssemblyRole ? assemblyNodeStatus(roleKey, orch.phase) : undefined;
-      // Timing wins once a stage has actually finished: after the user approves the review (or
-      // merge/scribe begin), the orchestration phase can linger on `in_review`, which would
-      // otherwise keep the Human Review gate showing "Awaiting your review". A real decline still
-      // surfaces via phaseStatus === 'failed', which keeps precedence.
       const assemblyStatus = isAssemblyRole
         ? (phaseStatus === 'failed' ? 'failed'
            : timingStatus === 'completed' ? 'completed'
            : (phaseStatus ?? timingStatus))
         : undefined;
 
-      let nodePlanned = planned;
+      let nodePlanned = node.kind === 'planned';
       let stepStatus: StepStatus;
       if (node.id === 'coordinator') {
         stepStatus = topoStatusToStepStatus(coordNodeStatusOverride ?? coordTopoNode?.status ?? 'running');
@@ -1506,46 +1205,31 @@ export function CoordinatorRunPage() {
         stepStatus = 'pending';
       }
 
-      const st: ExecutorState = nodePlanned
-        ? { status: 'pending' }
-        : { status: stepStatus };
+      // Assembly stages own a real persisted sub-run stream (`${runId}-rai` / `${runId}-scribe`)
+      // once they have started; expose it so the step detail panel can surface the actual work.
+      const assemblyChildRunId =
+        runId && (roleKey === 'rai' || roleKey === 'scribe') && assemblyStatus !== undefined
+          ? `${runId}-${roleKey}`
+          : undefined;
 
-      // Feed the stage's wall-clock timing so the generic WorkflowNode renders a live count-up
-      // timer (RAI / Review / Merge / Scribe), matching the subtask cards.
-      if (at?.startedAt !== undefined) {
-        st.startedAt = at.startedAt;
-        st.completedAt = at.completedAt;
-      }
+      const roleLabel = isAssemblyRole && !nodePlanned
+        ? (statusDescription(roleKey ?? '', stepStatus) ?? stepStatusLabel(stepStatus))
+        : stepStatusLabel(stepStatus);
 
-      const def: ExecutorDef = {
-        key:             roleKey,
-        label:           node.label,
-        roleDescription: roleDescForRole(node.role),
-        Icon:            iconForRole(node.role),
-      };
-
-      return {
-        id:   node.id,
-        type: 'workflow',
-        data: {
-          def,
-          state:     st,
-          isPlanned: nodePlanned,
-          nodeType:  nt,
-          runId:     runId      ?? '',
-          executionId: runId    ?? '',
-          projectId:   projectId ?? '',
-          dir:         'LR',
-        } as WorkflowNodeData,
-        position: { x: 0, y: 0 },
-      };
-    });
-
-    return {
-      rfNodes:      layoutDag(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: COORDINATOR_GRAPH_NODE_SEP }, nodeSizeHints),
-      displayEdges: allEdges,
-    };
-  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
+      map.set(node.id, {
+        label: node.label,
+        role,
+        status: stepStatus,
+        statusLabel: nodePlanned ? 'Planned' : roleLabel,
+        planned: nodePlanned,
+        isSubtask: false,
+        childRunId: assemblyChildRunId,
+        startedAt: at?.startedAt,
+        completedAt: at?.completedAt,
+      });
+    }
+    return map;
+  }, [effectiveDescriptor, topology, coordNodeStatusOverride, orch.phase, assemblyTiming, roleByAgent, runId]);
 
   // While the Coordinator is still drafting the outcome spec (inSpecAuthoring), the assembly
   // stages (RAI / Human Review / Merge / Scribe) are not yet committed work — no spec confirmed,
@@ -1562,16 +1246,54 @@ export function CoordinatorRunPage() {
     return ids;
   }, [effectiveDescriptor]);
 
-  const { displayNodes, displayEdges2 } = useMemo<{ displayNodes: Node[]; displayEdges2: Edge[] }>(() => {
-    if (!inSpecAuthoring) return { displayNodes: rfNodes, displayEdges2: displayEdges };
-    const filteredNodes = rfNodes.filter((n) => !assemblyNodeIds.has(n.id));
-    // Defensive fallback: never render an empty graph box. If filtering would drop every node
-    // (e.g. a descriptor with assembly stages but no coordinator node), keep the full graph.
-    if (filteredNodes.length === 0) return { displayNodes: rfNodes, displayEdges2: displayEdges };
-    const keptIds = new Set(filteredNodes.map((n) => n.id));
-    const filteredEdges = displayEdges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target));
-    return { displayNodes: filteredNodes, displayEdges2: filteredEdges };
-  }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
+  // ---------------------------------------------------------------------------
+  // Pipeline layout model (#160) — the coordinator renders as a card on the left; every non-
+  // coordinator node becomes a vertical step in the pipeline on the right.
+  // ---------------------------------------------------------------------------
+  const coordinatorLabel = useMemo(
+    () => effectiveDescriptor?.nodes.find((n) => n.id === 'coordinator')?.label ?? 'Coordinator',
+    [effectiveDescriptor],
+  );
+
+  const pipelineSteps = useMemo<PipelineStep[]>(() => {
+    if (!effectiveDescriptor) return [];
+    return effectiveDescriptor.nodes
+      .filter((n) => n.id !== 'coordinator')
+      .filter((n) => !(inSpecAuthoring && assemblyNodeIds.has(n.id)))
+      .map((n) => {
+        const d = stepDataById.get(n.id);
+        return {
+          id: n.id,
+          label: d?.label ?? n.label ?? n.id,
+          role: d?.role ?? (n.role ?? '').toLowerCase(),
+          status: d?.status ?? 'pending',
+          statusLabel: d?.statusLabel ?? 'Pending',
+          planned: d?.planned ?? false,
+          isSubtask: d?.isSubtask ?? (n.node_type === 'subtask'),
+          agent: d?.agent,
+          agentRole: d?.agentRole,
+          model: d?.model,
+          childRunId: d?.childRunId,
+          startedAt: d?.startedAt,
+          completedAt: d?.completedAt,
+        };
+      });
+  }, [effectiveDescriptor, stepDataById, inSpecAuthoring, assemblyNodeIds]);
+
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const selectedStep = useMemo(
+    () => pipelineSteps.find((s) => s.id === selectedStepId) ?? null,
+    [pipelineSteps, selectedStepId],
+  );
+
+  const stepBarClass = (s: StepStatus, planned: boolean) =>
+    planned ? styles.barPending
+    : s === 'completed' ? styles.barDone
+    : s === 'started' ? styles.barProgress
+    : s === 'failed' ? styles.barFailed
+    : s === 'revise' ? styles.barRevise
+    : styles.barPending;
+
 
   // ---------------------------------------------------------------------------
   // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
@@ -1581,48 +1303,19 @@ export function CoordinatorRunPage() {
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
 
-  // ---------------------------------------------------------------------------
-  // Session panel anchor — the coordinator node's "View session" scrolls here.
+  // Session panel anchor — the session view scroll target.
   const sessionRef = useRef<HTMLDivElement>(null);
-  const scrollToSession = useCallback(() => {
-    // Defer scroll by one animation frame so React re-renders the ref'd element before scrolling.
-    requestAnimationFrame(() => {
-      sessionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }, []);
 
   // Review/Changes panel anchor — the Human Review gate's "Review now" scrolls here.
   const reviewRef = useRef<HTMLDivElement>(null);
-  const scrollToReview = useCallback(() => {
-    reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
 
-  // Merge "Browse files": route to the project Workspace with the coordinator integration branch
-  // selected, so refresh/back preserve the browsed ref and the user lands in the WORK section.
+  // Coordinator integration-branch file focus signal for the reused Changes/Files rail.
   const [filesFocusSignal] = useState(0);
-  const browseAssemblyFiles = useCallback(() => {
-    if (!projectId || !runId) return;
-    const query = new URLSearchParams({
-      run: runId,
-      ref: `agentweaver/integration/${runId}`,
-    });
-    navigate(`/projects/${projectId}/workspace?${query.toString()}`);
-  }, [navigate, projectId, runId]);
 
   // "View run" modal — renders the selected child run (or a collective-assembly sub-run stream
   // such as `${runId}-rai` / `${runId}-scribe`) via the standard RunWatcher in a dialog.
   const [viewRunId, setViewRunId] = useState<string | null>(null);
   const openChildRun = useCallback((id: string) => setViewRunId(id), []);
-
-  // Collective-assembly "View execution": the RAI and Scribe stages run a real agent turn on their
-  // own persisted sub-run stream (`${runId}-rai` / `${runId}-scribe`), so open that stream in the
-  // RunWatcher dialog to surface the actual work (tool calls, inbox review, memory writes) — same
-  // pattern the per-run page uses. Merge "Browse files" and Review "Review now" own no separate run,
-  // so they jump to the reused Changes/Files review panel.
-  const viewAssemblyExecution = useCallback((id: string) => {
-    if (id.endsWith('-rai') || id.endsWith('-scribe')) setViewRunId(id);
-    else scrollToReview();
-  }, [scrollToReview]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -1703,31 +1396,8 @@ export function CoordinatorRunPage() {
   const shortId         = runId.length > 8 ? runId.slice(0, 8) : runId;
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
-  const hasGraph        = rfNodes.length > 0;
   const isRetryable     = runLevelStatus === 'failed' || runLevelStatus === 'merge_failed';
   const retriedFromShort = retriedFrom ? retriedFrom.slice(0, 8) : null;
-  // Auto-size the graph band to its content so it grows as subtask pipelines expand, instead of a
-  // fixed height that clips tall fan-outs (horizontal LR layout still varies in height per rank).
-  const graphHeight = useMemo(() => {
-    if (rfNodes.length === 0) return 200;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const n of rfNodes) {
-      const nt = (n.data as { nodeType?: string } | undefined)?.nodeType;
-      // Mirror the layout size hints: subtask cards reserve a taller base, plus the inline-pipeline
-      // reserve when expanded, so the band grows to exactly contain the (possibly expanded) cards.
-      const base = nt === 'subtask' ? 244 : (NODE_TYPE_H[nt ?? ''] ?? NODE_H);
-      const h = base + (nt === 'subtask' && expandedKeys.has(n.id) ? EXPANDED_PIPELINE_RESERVE : 0);
-      minY = Math.min(minY, n.position.y);
-      maxY = Math.max(maxY, n.position.y + h);
-    }
-    // Loopback arcs (e.g. "RAI flags" above, "Request changes" below) route ~ARC_GAP(40)px plus a
-    // label outside the node box on each side. Reserve headroom so fitView leaves room for them
-    // instead of clipping the arcs/labels at the band edges.
-    const hasLoopback = displayEdges.some((e) => e.type === 'loopback');
-    const loopHeadroom = hasLoopback ? 132 : 0;
-    return Math.max(180, maxY - minY + 56 + loopHeadroom);
-  }, [rfNodes, expandedKeys, displayEdges]);
   // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
@@ -1829,120 +1499,130 @@ export function CoordinatorRunPage() {
 
       {goal && <Text className={styles.goal}>Goal: {goal}</Text>}
 
-      {/* Coordinator graph — full-width horizontal band on top (fits the pipeline far better
-          than a narrow side column). */}
+      {/* Orchestration pipeline (#160): Coordinator card on the left, vertical steps pipeline on
+          the right. Replaces the old React Flow canvas. */}
       <div className={styles.graphBand}>
         <div className={styles.sectionTitleRow}>
-          <Title3>Coordinator Graph</Title3>
+          <Title3>Orchestration</Title3>
           {orch.phase !== 'unknown' && (
             <span className={styles.steerLabel}>{orchPhaseLabel(orch.phase)}</span>
           )}
           {isStreaming && <Spinner size="extra-tiny" aria-label="Live" />}
         </div>
-        <Text className={styles.hint}>
-          Live view of the coordinator and its subtasks. Use the Steer button to send a
-          course-correction to the coordinator or stop the orchestration.
-        </Text>
 
-        {!isChildRun && (
-          <div className={styles.coordCardLinks}>
-            <Button
-              appearance="transparent"
-              size="small"
-              icon={<FolderRegular />}
-              onClick={() => setArtifactsPanelOpen(true)}
-              data-testid="open-artifacts-panel"
-            >
-              Artifacts
-            </Button>
-          </div>
-        )}
-
-        {(!isChildRun || coordActive) && (
-          <div className={styles.coordControls}>
-            {!isChildRun && (
-              <Button
-                appearance="secondary"
-                size="small"
-                icon={<DocumentRegular />}
-                onClick={() => setSpecPanelOpen(true)}
-                data-testid="open-spec-panel"
-              >
-                Spec
-              </Button>
-            )}
-            {coordActive && (
-              <Button
-                appearance="primary"
-                size="small"
-                icon={<ChatRegular />}
-                onClick={() => setSteerPanelOpen(true)}
-                data-testid="open-steer-panel"
-              >
-                Steer
-              </Button>
-            )}
-          </div>
-        )}
-
-        <>
-          {hasGraph ? (
-            <ExecutionModalContext.Provider value={viewAssemblyExecution}>
-            <BrowseFilesContext.Provider value={browseAssemblyFiles}>
-            <ActiveEdgeContext.Provider value={activeLoopbackId}>
-            <CoordinatorSessionContext.Provider value={scrollToSession}>
-            <CoordExpandContext.Provider value={expandValue}>
-            <CoordViewRunContext.Provider value={openChildRun}>
-              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
-              <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
-                <div style={{ zoom, width: '100%', height: '100%' }}>
-                <ReactFlow
-                  key={`${displayNodes.length}:${displayEdges2.length}`}
-                  nodes={displayNodes}
-                  edges={displayEdges2}
-                  nodeTypes={coordinatorNodeTypes}
-                  edgeTypes={workflowEdgeTypes}
-                  fitView
-                  fitViewOptions={{ padding: 0.12, maxZoom: 1.1 }}
-                  minZoom={0.4}
-                  nodesDraggable={false}
-                  nodesConnectable={false}
-                  nodesFocusable={false}
-                  edgesFocusable={false}
-                  panOnScroll={false}
-                  zoomOnScroll={false}
-                  zoomOnPinch={false}
-                  zoomOnDoubleClick={false}
-                  panOnDrag
-                  proOptions={{ hideAttribution: true }}
-                >
-                  <GraphAutoFit
-                    token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
-                  />
-                </ReactFlow>
+        <div className={styles.pipelineLayout}>
+          {/* Left — Coordinator card */}
+          <div className={styles.coordCard}>
+            <div className={styles.coordCardHead}>
+              <span className={styles.coordAvatar} aria-hidden="true"><BotRegular fontSize={22} /></span>
+              <div>
+                <div className={styles.coordName}>{coordinatorLabel}</div>
+                <div className={styles.coordStatusRow}>
+                  <span>{orchPhaseLabel(orch.phase)}</span>
+                  {isStreaming && <Spinner size="extra-tiny" aria-label="Live" />}
                 </div>
               </div>
-              {inSpecAuthoring && (
-                <Text className={styles.hint}>
-                  The execution pipeline appears once you confirm the outcome spec.
-                </Text>
-              )}
-            </CoordViewRunContext.Provider>
-            </CoordExpandContext.Provider>
-            </CoordinatorSessionContext.Provider>
-            </ActiveEdgeContext.Provider>
-            </BrowseFilesContext.Provider>
-            </ExecutionModalContext.Provider>
-          ) : (
-            <Text className={styles.hint}>
-              {isConnecting
-                ? 'Connecting to coordinator stream...'
-                : noWorkPlan
+            </div>
+
+            {!isChildRun && (
+              <div className={styles.coordCardLinks}>
+                <Button
+                  appearance="transparent"
+                  size="small"
+                  icon={<FolderRegular />}
+                  onClick={() => setArtifactsPanelOpen(true)}
+                  data-testid="open-artifacts-panel"
+                >
+                  Artifacts
+                </Button>
+              </div>
+            )}
+
+            {(!isChildRun || coordActive) && (
+              <div className={styles.coordControls}>
+                {!isChildRun && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    icon={<DocumentRegular />}
+                    onClick={() => setSpecPanelOpen(true)}
+                    data-testid="open-spec-panel"
+                  >
+                    Spec
+                  </Button>
+                )}
+                {coordActive && (
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    icon={<ChatRegular />}
+                    onClick={() => setSteerPanelOpen(true)}
+                    data-testid="open-steer-panel"
+                  >
+                    Steer
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right — Steps pipeline */}
+          <div className={styles.stepsPipeline} data-testid="steps-pipeline">
+            {pipelineSteps.length === 0 ? (
+              <Text className={styles.hint}>
+                {noWorkPlan
                   ? 'No work plan available yet.'
-                  : 'Waiting for coordinator graph...'}
-            </Text>
-          )}
-        </>
+                  : inSpecAuthoring
+                    ? 'The execution pipeline appears once you confirm the outcome spec.'
+                    : isConnecting
+                      ? 'Connecting to coordinator stream...'
+                      : 'Waiting for coordinator graph...'}
+              </Text>
+            ) : (
+              pipelineSteps.map((step, i) => {
+                const StepIcon = iconForRole(step.role);
+                return (
+                  <Fragment key={step.id}>
+                    <button
+                      type="button"
+                      className={`${styles.stepCard} ${selectedStepId === step.id ? styles.stepCardSelected : ''}`}
+                      onClick={() => setSelectedStepId(step.id)}
+                      data-testid={`pipeline-step-${step.id}`}
+                      data-step-status={step.status}
+                    >
+                      <div className={`${styles.stepStatusBar} ${stepBarClass(step.status, step.planned)}`} />
+                      <div className={styles.stepBody}>
+                        <div className={styles.stepTitleRow}>
+                          <StepIcon fontSize={16} aria-hidden="true" />
+                          <span className={styles.stepTitle}>{step.label}</span>
+                          <StatusBadge
+                            status={step.status}
+                            isPlanned={step.planned}
+                            label={step.statusLabel}
+                          />
+                        </div>
+                        <div className={styles.stepMeta}>
+                          {step.agent
+                            ? `${step.agent}${step.model ? ` · ${formatModelLabel(step.model)}` : ''}`
+                            : roleDescForRole(step.role)}
+                          {step.startedAt !== undefined && (
+                            <span className={styles.stepTimer}>
+                              {' · '}
+                              <ElapsedTimer startedAt={step.startedAt} completedAt={step.completedAt} />
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                    {i < pipelineSteps.length - 1 && (
+                      <div className={styles.stepArrow} aria-hidden="true">↓</div>
+                    )}
+                  </Fragment>
+                );
+              })
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Agent rail — compact per-agent load summary derived from the work plan.
@@ -2226,6 +1906,21 @@ export function CoordinatorRunPage() {
       >
         {artifactsPanelOpen && runId && (
           <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
+        )}
+      </SlidePanel>
+
+      {/* Step detail side panel (#160/#161) */}
+      <SlidePanel
+        open={!!selectedStep}
+        onClose={() => setSelectedStepId(null)}
+        title={selectedStep?.label ?? 'Step'}
+        width="min(880px, 97vw)"
+      >
+        {selectedStep && (
+          <StepDetailPanel
+            step={selectedStep}
+            onViewRun={(id) => openChildRun(id)}
+          />
         )}
       </SlidePanel>
 
