@@ -29,6 +29,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
         "/healthz",
         "/api/health",
         "/api/ping",
+        "/api/version",
         "/auth",
         "/api/auth",
         "/mcp",
