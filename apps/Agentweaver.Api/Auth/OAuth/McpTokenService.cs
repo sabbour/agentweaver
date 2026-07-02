@@ -23,8 +23,8 @@ public sealed class McpTokenService : IDisposable
     public const string AccessTokenScope = "mcp:invoke";
     public const string SigningAlgorithm = SecurityAlgorithms.RsaSha256; // RS256
 
-    /// <summary>Default access-token lifetime. Short by design — refresh (T4) keeps UX seamless.</summary>
-    public static readonly TimeSpan AccessTokenLifetime = TimeSpan.FromMinutes(15);
+    /// <summary>Default access-token lifetime. Refresh (T4) handles rotation; 8h balances security with UX for long-running agent sessions.</summary>
+    public static readonly TimeSpan AccessTokenLifetime = TimeSpan.FromHours(8);
 
     private readonly RSA _rsa;
     private readonly RsaSecurityKey _signingKey;
