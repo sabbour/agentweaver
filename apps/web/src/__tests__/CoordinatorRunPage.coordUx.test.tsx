@@ -630,6 +630,42 @@ describe('CoordinatorRunPage — bubbled child questions & approvals', () => {
   });
 });
 
+describe('CoordinatorRunPage — Coordinator card workflow (#160)', () => {
+  it('shows the selected workflow name and the selection reasoning in the Coordinator card', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'running', parent_run_id: null,
+      workflow_name: 'Software Delivery',
+      workflow_selection_reason: 'Multi-file change with review + merge stages.',
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const wf = await waitFor(() => {
+      const el = document.querySelector('[data-testid="coord-workflow"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    }, { timeout: 4000 });
+
+    expect(wf.textContent).toContain('Workflow: Software Delivery');
+    // The coordinator's reasoning renders below the workflow name.
+    expect(document.body.textContent).toContain('Multi-file change with review + merge stages.');
+  });
+
+  it('falls back to workflow_id and omits the caption entirely when no workflow is present', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1', status: 'running', parent_run_id: null,
+      workflow_id: 'software-delivery',
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(() => {
+      const el = document.querySelector('[data-testid="coord-workflow"]');
+      expect(el?.textContent).toContain('Workflow: software-delivery');
+    }, { timeout: 4000 });
+  });
+});
+
 describe('CoordinatorRunPage — automation toggles (autopilot + auto-approve)', () => {
   it('seeds both toggles from the coordinator run and flips them via the right endpoints', async () => {
     vi.mocked(apiClient.getRun).mockResolvedValue({

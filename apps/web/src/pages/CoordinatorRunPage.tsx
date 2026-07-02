@@ -28,6 +28,7 @@ import {
   DocumentRegular,
   FolderRegular,
   OpenRegular,
+  BranchRegular,
 } from '@fluentui/react-icons';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
@@ -643,6 +644,20 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
   },
+  coordWorkflow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalXXS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  coordWorkflowReason: {
+    marginTop: tokens.spacingVerticalXXS,
+    fontSize: tokens.fontSizeBase200,
+    fontStyle: 'italic',
+    color: tokens.colorNeutralForeground3,
+  },
   stepsPipeline: {
     display: 'flex',
     flexDirection: 'column',
@@ -911,6 +926,10 @@ export function CoordinatorRunPage() {
   // True when the run detail confirms this is a child run (parent_run_id non-null). Child runs
   // never have a work-plan or outcome-spec; skip coordinator-only artifact fetches entirely.
   const [isChildRun, setIsChildRun] = useState(false);
+  // The workflow the coordinator selected for this run, plus the model's reasoning for the choice
+  // (#160 addendum / #167). Both are sourced from the run detail; render only when present.
+  const [workflowLabel, setWorkflowLabel] = useState<string | undefined>(undefined);
+  const [workflowSelectionReason, setWorkflowSelectionReason] = useState<string | undefined>(undefined);
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -964,6 +983,9 @@ export function CoordinatorRunPage() {
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
       if (detail?.retried_from) setRetriedFrom(detail.retried_from);
+      // Workflow selected for this run (+ the coordinator's reasoning for the choice).
+      setWorkflowLabel(detail?.workflow_name ?? detail?.workflow_id ?? undefined);
+      setWorkflowSelectionReason(detail?.workflow_selection_reason ?? undefined);
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
         setAutopilot(Boolean(detail.autopilot));
@@ -1561,6 +1583,17 @@ export function CoordinatorRunPage() {
                   <span>{orchPhaseLabel(orch.phase)}</span>
                   {isStreaming && <Spinner size="extra-tiny" aria-label="Live" />}
                 </div>
+                {workflowLabel && (
+                  <div className={styles.coordWorkflow} data-testid="coord-workflow">
+                    <BranchRegular fontSize={14} aria-hidden="true" />
+                    <span>Workflow: {workflowLabel}</span>
+                  </div>
+                )}
+                {workflowSelectionReason && (
+                  <div className={styles.coordWorkflowReason}>“{workflowSelectionReason}”</div>
+                )}
+                {/* TODO: show workflow_selection_reason when available (wired above; renders once
+                    the backend surfaces the field on the run detail). */}
               </div>
             </div>
 

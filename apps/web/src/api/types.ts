@@ -71,6 +71,14 @@ export interface RunDetail {
   // GET /api/runs/{id} also carries the cast agent name for a child run (the list
   // endpoint omits child runs entirely). Optional — absent on plain runs.
   agent_name?: string | null;
+  // The workflow the coordinator selected/planned this run against. workflow_name is the
+  // human-friendly label; workflow_id is the fallback identifier. Optional — present only once
+  // the backend surfaces it on the run detail.
+  workflow_id?: string | null;
+  workflow_name?: string | null;
+  // Short human-readable explanation of why the coordinator selected the workflow it planned this
+  // run against (#167). Optional — null for runs with no captured reasoning.
+  workflow_selection_reason?: string | null;
   // Feature 008 Phase 3 — orchestration lifecycle string surfaced on a coordinator
   // run (dispatching | awaiting_assembly | assembling | in_review | complete | failed).
   // Added by the backend concurrently; treat as optional and degrade gracefully.
