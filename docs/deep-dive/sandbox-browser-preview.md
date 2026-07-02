@@ -143,6 +143,11 @@ When the feature is enabled, `RunOrchestrator.ComposeCapabilities`
 ([`RunOrchestrator.cs:64`](#source)) to worker/child system prompts, telling the agent to bind its server to
 `0.0.0.0` (not `127.0.0.1`), keep it running, and tell the user which port to preview.
 
+The note is additionally gated by `RunOrchestrator.RunSupportsPreview`: the orchestrating **Coordinator**
+run (a run with no parent whose agent is `Coordinator`) never launches a server itself — it only dispatches
+child worker runs — so it is not given the "you MUST launch, test, and preview a server" mandate. Child
+worker runs and ordinary single-agent runs still receive it when the feature is enabled.
+
 ## Agent-initiated preview (`start_preview`)
 
 A running agent can also expose its server **autonomously**, mid-workflow, without a human picking a port in

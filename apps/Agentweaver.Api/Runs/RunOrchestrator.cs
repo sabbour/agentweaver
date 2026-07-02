@@ -559,7 +559,7 @@ public sealed class RunOrchestrator
                 }
             }
 
-            return (run.Task, AppendCapabilities(AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter, childDecisions))));
+            return (run.Task, AppendCapabilities(AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter, childDecisions)), run));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)
@@ -602,28 +602,44 @@ public sealed class RunOrchestrator
             }
         }
 
-        return (run.Task, AppendCapabilities(AppendMemoryProtocol(systemPromptContext)));
+        return (run.Task, AppendCapabilities(AppendMemoryProtocol(systemPromptContext), run));
     }
 
     /// <summary>
     /// Adds the <see cref="BrowserPreviewCapability"/> note to the system prompt when the Gateway
-    /// browser-preview feature is enabled (Sandbox:Preview:Enabled=true). No-op otherwise, so default
-    /// (preview-disabled) runs see an unchanged prompt. MCP awareness is intentionally NOT added here:
-    /// spawned agents run with EnableConfigDiscovery=false and no MCP server in their SessionConfig, so
-    /// the standalone agentweaver MCP server is not reachable by them (the agentweaver loopback tools
-    /// they DO have are already surfaced via the base prompt + Memory Protocol).
+    /// browser-preview feature is enabled (Sandbox:Preview:Enabled=true) AND the run is one that can
+    /// actually run a server. No-op otherwise, so default (preview-disabled) runs see an unchanged
+    /// prompt. MCP awareness is intentionally NOT added here: spawned agents run with
+    /// EnableConfigDiscovery=false and no MCP server in their SessionConfig, so the standalone
+    /// agentweaver MCP server is not reachable by them (the agentweaver loopback tools they DO have are
+    /// already surfaced via the base prompt + Memory Protocol).
     /// </summary>
-    internal string AppendCapabilities(string systemPromptContext) =>
-        ComposeCapabilities(systemPromptContext, _configuration.GetValue<bool>("Sandbox:Preview:Enabled"));
+    internal string AppendCapabilities(string systemPromptContext, Run run) =>
+        ComposeCapabilities(
+            systemPromptContext,
+            previewEnabled: _configuration.GetValue<bool>("Sandbox:Preview:Enabled"),
+            supportsPreview: RunSupportsPreview(run));
+
+    /// <summary>
+    /// Whether the browser-preview mandate is appropriate for this run. The Coordinator run orchestrates
+    /// and dispatches child worker runs — it never builds or serves anything itself, so injecting the
+    /// forceful "you MUST launch, test, and preview a server before finishing" mandate into it is always
+    /// wrong (there is nothing for it to preview). Worker/child runs and ordinary single-agent runs DO
+    /// produce runnable output, so they keep the capability when preview is enabled.
+    /// </summary>
+    internal static bool RunSupportsPreview(Run run) =>
+        !(run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal));
 
     /// <summary>
     /// Pure capability-composition: injects <see cref="BrowserPreviewCapability"/> only when
-    /// <paramref name="previewEnabled"/> is true. Extracted from <see cref="AppendCapabilities"/> so the
-    /// gating is unit-testable without constructing the full orchestrator.
+    /// <paramref name="previewEnabled"/> is true AND <paramref name="supportsPreview"/> is true. Extracted
+    /// from <see cref="AppendCapabilities"/> so the gating is unit-testable without constructing the full
+    /// orchestrator.
     /// </summary>
-    internal static string ComposeCapabilities(string? systemPromptContext, bool previewEnabled)
+    internal static string ComposeCapabilities(
+        string? systemPromptContext, bool previewEnabled, bool supportsPreview = true)
     {
-        if (!previewEnabled)
+        if (!previewEnabled || !supportsPreview)
             return systemPromptContext ?? "";
 
         return string.IsNullOrEmpty(systemPromptContext)
