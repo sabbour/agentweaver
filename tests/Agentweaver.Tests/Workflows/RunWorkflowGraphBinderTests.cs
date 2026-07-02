@@ -275,6 +275,7 @@ internal sealed class FakeWiring(ExecutorBinding agent) : IRunWorkflowWiringSupp
     public ExecutorBinding ReviewToAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding ReviewToMergeAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();

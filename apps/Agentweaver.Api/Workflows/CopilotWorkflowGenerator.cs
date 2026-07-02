@@ -149,6 +149,22 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - scribe: records the run outcome. Place before terminal `done` nodes.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
 
+            MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
+            implements, fixes, refactors, or otherwise changes code (bug fix, feature delivery, refactor,
+            etc.) — you MUST include a build & test step IMMEDIATELY before the human-review gate. This step
+            is static and always-on; never omit it and never make it optional. Wire it exactly as:
+              - id: build-test
+                type: peer_review
+                label: Build & Test
+                role: review
+                agent: qa-engineer
+                prompt: Run the project's build and test suite. Execute all available build commands and test runners for the repository. The step passes only if build succeeds AND all tests pass. Report any failures with full error output. Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. After tests pass, if the project is a web application or service, start the development/preview server on the declared preview port so stakeholders can access the running changes before human review. Check the project's `.agentweaver/agents.yaml` for a declared `preview.port` or `sandbox.port`. If one is declared, start the application on that port. If none is declared, attempt to start on port 8080 as the default.
+            Route its verdicts: `when: approved` advances to the human-review gate; `when: request-changes`
+            loops back to the implementation node (e.g. implement/fix); `when: declined` goes to a terminal.
+            If a software workflow has no human-review gate, add one (a `check` node with
+            `gate_kind: human-review`) placed immediately after build-test, before merge. Non-software
+            workflows (pure content authoring, discovery, incident response, evaluation) do NOT need this step.
+
             VALIDATION RULES (your output MUST satisfy all):
             - id, name, trigger.type, start, and at least one node are required.
             - `start` and every edge `from`/`to` MUST reference declared node ids.

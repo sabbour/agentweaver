@@ -1026,6 +1026,20 @@ public sealed class RunWorkflowFactory
                 });
         }
 
+        public ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("review-to-review", edge);
+            return new VisualFunctionExecutor<WorkflowReviewDecision, WorkflowReviewRequest>(
+                id, id, "Approved → human review", "plumbing", "action", true,
+                async (decision, ctx, ct) =>
+                {
+                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
+                    return new WorkflowReviewRequest(
+                        produced!.RunId, produced.TreeHash, produced.Diff, produced.StepCount,
+                        RaiSafetyFlagged: produced.ContentSafetyFlagged);
+                });
+        }
+
         public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge)
         {
             var id = EdgeId("agent-to-merge", edge);

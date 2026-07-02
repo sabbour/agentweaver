@@ -57,6 +57,11 @@ internal interface IRunWorkflowWiringSupport
     /// approved peer-review verdict into the merge stage.</summary>
     ExecutorBinding ReviewToMergeAdapter(WorkflowEdge edge);
 
+    /// <summary><c>WorkflowReviewDecision → WorkflowReviewRequest</c>: reconstruct the stored produced diff
+    /// after an AI peer-review verdict cleared and raise a human review request (a peer-review gate — e.g. a
+    /// build/test gate — that flows straight into a human-review gate).</summary>
+    ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge);
+
     /// <summary><c>AgentTurnOutput → WorkflowReviewRequest</c>: store the diff and raise a human review
     /// request directly from an agent turn (a producer that flows straight into a human-review gate).</summary>
     ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge);

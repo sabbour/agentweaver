@@ -491,6 +491,28 @@ internal static class RunWorkflowGraphBinder
                     decision => decision is null || (!decision.Approved && !decision.RequestChanges));
                 return true;
 
+            // Peer-review APPROVED / PASS -> next AI peer-review verdict gate (e.g. code review -> build/test).
+            case (NodeKind.PeerReview, NodeKind.PeerReview, "approved"):
+            case (NodeKind.PeerReview, NodeKind.PeerReview, "pass"):
+            {
+                var adapter = s.ReviewToAgentOutputAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, s.ResolvePeerReviewNode(toNode));
+                return true;
+            }
+
+            // Peer-review APPROVED / PASS -> human review gate (e.g. build/test gate -> HITL approval).
+            case (NodeKind.PeerReview, NodeKind.HumanReview, "approved"):
+            case (NodeKind.PeerReview, NodeKind.HumanReview, "pass"):
+            {
+                var adapter = s.ReviewToReviewRequestAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, ResolveReview(toNode, b));
+                return true;
+            }
+
             // Human review APPROVED -> next agent turn (e.g. postmortem before the scribe).
             case (NodeKind.HumanReview, NodeKind.Agent, "approved"):
             {
@@ -614,6 +636,8 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.Rai, NodeKind.Agent, "review") => true,
             (NodeKind.Rai, NodeKind.PeerReview, "review") => true,
             (NodeKind.PeerReview, NodeKind.Merge, "approved" or "pass") => true,
+            (NodeKind.PeerReview, NodeKind.PeerReview, "approved" or "pass") => true,
+            (NodeKind.PeerReview, NodeKind.HumanReview, "approved" or "pass") => true,
             (NodeKind.PeerReview, NodeKind.Rai, "pass") => true,
             (NodeKind.PeerReview, NodeKind.Agent, "request-changes" or "fail") => true,
             (NodeKind.PeerReview, NodeKind.Terminal, "declined") => true,
