@@ -17,6 +17,10 @@
 
 set -euo pipefail
 
+# On Windows/PowerShell, az can inherit a legacy code page when stdout/stderr is piped and crash on
+# Unicode progress glyphs during 'az acr build'. Force UTF-8 for the Python-based CLI process.
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=00-variables.sh
@@ -85,6 +89,7 @@ build_image() {
     --resource-group "${RESOURCE_GROUP}" \
     --image "${image}:${tag}" \
     --file "${dockerfile}" \
+    --output none \
     .
   echo "  [built]  ${ACR_LOGIN_SERVER}/${image}:${tag}"
   # Also tag as latest-release so it always points at the most recently built version
