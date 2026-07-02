@@ -239,12 +239,13 @@ public sealed class WorkflowSelectionEndpointsHttpTests : IClassFixture<Projects
     }
 
     /// <summary>Writes a second, valid workflow (with the given id) into the project's workflows dir so
-    /// a Sync discovers it. Derived from the real built-in default so it validates identically.</summary>
+    /// a Sync discovers it. Derived from the real built-in Generic Workflow so it validates
+    /// identically.</summary>
     private static async Task WriteCustomWorkflowAsync(string workingDir, string workflowId)
     {
         var yaml = Agentweaver.Api.Workflows.DefaultWorkflowTemplate.Yaml
             .Replace("id: default", $"id: {workflowId}")
-            .Replace("name: Default Run Workflow", $"name: Custom {workflowId}");
+            .Replace("name: Generic Workflow", $"name: Custom {workflowId}");
         var dir = Path.Combine(workingDir, ".agentweaver", "workflows");
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(Path.Combine(dir, "custom.yaml"), yaml);

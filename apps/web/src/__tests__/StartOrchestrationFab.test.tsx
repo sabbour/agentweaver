@@ -203,7 +203,7 @@ describe('StartOrchestrationFab', () => {
       default_workflow_id: 'software-delivery',
       workflows: [
         { id: 'software-delivery', name: 'Software Delivery', valid: true, source: 'catalog', is_built_in: true, is_default: true, warnings: [] },
-        { id: 'default', name: 'Default Run Workflow', valid: true, source: 'built-in', is_built_in: true, is_default: false, warnings: [] },
+        { id: 'default', name: 'Generic Workflow', valid: true, source: 'built-in', is_built_in: true, is_default: false, warnings: [] },
       ],
     } as never);
 

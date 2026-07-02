@@ -1,8 +1,9 @@
 namespace Agentweaver.Api.Workflows;
 
 /// <summary>
-/// The canonical, code-embedded generator for the default run workflow (Feature 010). This is the
-/// single source of truth for "the default workflow" — held in code, NOT a checked-in repo file.
+/// The canonical, code-embedded generator for the built-in "Generic Workflow" run workflow
+/// (Feature 010). This is the single source of truth for "the default workflow" — held in code, NOT
+/// a checked-in repo file.
 ///
 /// It is materialized per-project at instantiation time into
 /// <c>&lt;projectWorkingDir&gt;/.agentweaver/workflows/default.yaml</c> (see
@@ -24,7 +25,7 @@ public static class DefaultWorkflowTemplate
     /// used, so it is validated identically to any project-authored workflow (Principle VII).</summary>
     public const string Yaml =
         """
-        # Default Run Workflow (Feature 010 — behavior-preserving conversion of
+        # Generic Workflow (Feature 010 — behavior-preserving conversion of
         # RunWorkflowFactory.BuildWorkflow). Generated into each project at instantiation time and
         # editable afterwards. The canonical generator lives in code (DefaultWorkflowTemplate); this
         # file is a materialized copy.
@@ -37,7 +38,7 @@ public static class DefaultWorkflowTemplate
         # are preserved. Plumbing/adapter executors are hidden and not modeled here.
 
         id: default
-        name: Default Run Workflow
+        name: Generic Workflow
         description: Behavior-preserving conversion of the built-in run pipeline (agent, rai, review, merge, scribe).
 
         start: agent
