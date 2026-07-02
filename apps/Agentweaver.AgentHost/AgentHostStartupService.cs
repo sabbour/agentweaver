@@ -21,6 +21,20 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal sealed class AgentHostStartupService : IHostedService
 {
+    private const string SandboxManifestPath = "/etc/agentweaver/sandbox-manifest.json";
+
+    /// <summary>
+    /// Sandbox tool manifest baked into the image at build time.
+    /// Null when running outside a production AgentHost image (local dev, tests).
+    /// </summary>
+    private static readonly string? SandboxManifestJson = TryReadManifest();
+
+    private static string? TryReadManifest()
+    {
+        try { return File.Exists(SandboxManifestPath) ? File.ReadAllText(SandboxManifestPath) : null; }
+        catch { return null; }
+    }
+
     private readonly CopilotAIAgent _agent;
     private readonly AgentHostOptions _options;
     private readonly AgentHostRuntimeState _runtimeState;
@@ -98,16 +112,20 @@ internal sealed class AgentHostStartupService : IHostedService
             ? opts.RepositoryPath
             : workingDirectoryOverride!;
 
+        // Prepend the sandbox tool manifest (baked into the image) to the per-run system prompt
+        // context so every agent knows what tools are available without probing.
+        var systemPromptContext = BuildSystemPromptContext(opts.SystemPromptContext);
+
         _logger.LogInformation(
-            "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir} (override={HasOverride})",
-            runId, workingDirectory, !string.IsNullOrWhiteSpace(workingDirectoryOverride));
+            "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir} (override={HasOverride}), manifestAttached={ManifestAttached}",
+            runId, workingDirectory, !string.IsNullOrWhiteSpace(workingDirectoryOverride), SandboxManifestJson is not null);
 
         await _agent.SetupAsync(
             workingDirectory: workingDirectory,
             repositoryPath: repositoryPath,
             runId: runId,
             modelId: opts.ModelId,
-            systemPromptContext: opts.SystemPromptContext,
+            systemPromptContext: systemPromptContext,
             streamWriter: null,     // RunEvent side-channel forwarded via A2A DataParts (P1.5)
             projectId: opts.ProjectId,
             agentName: opts.AgentName,
@@ -119,6 +137,29 @@ internal sealed class AgentHostStartupService : IHostedService
         _ready = true;
         _logger.LogInformation(
             "AgentHostStartupService: agent ready for run {RunId}", runId);
+    }
+
+    /// <summary>
+    /// Prepends the sandbox tool manifest to <paramref name="configuredContext"/> when the manifest
+    /// is available (i.e., running inside a production AgentHost image).
+    /// The manifest is baked at image build time; see <c>apps/Agentweaver.AgentHost/Dockerfile</c>.
+    /// </summary>
+    private static string? BuildSystemPromptContext(string? configuredContext)
+    {
+        if (SandboxManifestJson is null)
+            return configuredContext;
+
+        var manifestSection =
+            $"""
+            SANDBOX TOOL MANIFEST
+            The following tools are pre-installed in this sandbox (from /etc/agentweaver/sandbox-manifest.json).
+            Check this list before attempting to install anything:
+            {SandboxManifestJson}
+            """;
+
+        return string.IsNullOrWhiteSpace(configuredContext)
+            ? manifestSection
+            : manifestSection + "\n\n" + configuredContext;
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

@@ -62,5 +62,12 @@ internal static class AgentBasePrompt
         so other agents can see it before they make dependent choices. Namespace your slug by
         topic and agent (e.g. 'api-shape--yourname') so peer decisions on the same topic can
         coexist in the inbox without collision.
+
+        SANDBOX ENVIRONMENT
+        Your sandbox has a full dev toolchain. Read /etc/agentweaver/sandbox-manifest.json
+        for the exact list of installed tools and their versions. Key tools available:
+        git, gh (GitHub CLI), node/npm/pnpm/tsc/ts-node, python3/pip3, dotnet SDK,
+        ripgrep (rg), jq, yq, sqlite3, psql, cmake, make, tmux, vim, curl, wget, ssh.
+        Do not install tools that are already present — check the manifest first.
         """;
 }
