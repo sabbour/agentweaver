@@ -266,7 +266,7 @@ export function WorkflowRunPage() {
   const [sandboxBackend,      setSandboxBackend]      = useState<string | undefined>(undefined);
   const [sandboxPhase,        setSandboxPhase]        = useState<string | null>(null);
   const [previewDialogOpen,   setPreviewDialogOpen]   = useState(false);
-  const [previewTargetPort,   setPreviewTargetPort]   = useState('3000');
+  const [previewTargetPort,   setPreviewTargetPort]   = useState('8080');
   const [previewSession,      setPreviewSession]      = useState<PortForwardSessionDto | undefined>(undefined);
   const [previewBusy,         setPreviewBusy]         = useState(false);
   const [previewError,        setPreviewError]        = useState<string | undefined>(undefined);
@@ -988,7 +988,12 @@ export function WorkflowRunPage() {
                     Preview traffic is proxied through the Agentweaver API server.
                     Enter the port your app is listening on inside the sandbox.
                   </Text>
-                  <Field label="Target port (inside sandbox)" validationMessage={previewError} validationState={previewError ? 'error' : 'none'}>
+                  <Field
+                    label="Target port (inside sandbox)"
+                    hint="We couldn't detect the port automatically. Enter the port your app is listening on (default: 8080)."
+                    validationMessage={previewError}
+                    validationState={previewError ? 'error' : 'none'}
+                  >
                     <Input
                       type="number"
                       value={previewTargetPort}
