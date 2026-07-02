@@ -263,7 +263,8 @@ public sealed class CoordinatorReconciler
         return await db.AssemblyReviews
             .AsNoTracking()
             .AnyAsync(r => r.CoordinatorRunId == plan.CoordinatorRunId
-                        && r.DecisionSubmittedAt == null, ct)
+                        && r.DecisionSubmittedAt == null
+                        && r.CoordinatorFailedAt == null, ct)
             .ConfigureAwait(false);
     }
 
@@ -307,6 +308,15 @@ public sealed class CoordinatorReconciler
     private async Task<bool> TryAbandonStaleReviewAsync(PlanCandidate plan, CancellationToken ct)
     {
         if (_assembly is null || string.IsNullOrWhiteSpace(plan.CoordinatorRunId))
+            return false;
+
+        // NEVER auto-abandon a run whose human-review gate is genuinely OPEN (a pending review record
+        // with no decision submitted). in_review with an open gate means "waiting for the human", NOT
+        // "stuck" — the operator may take days. Abandoning here is exactly what produced the unwanted
+        // "the review gate is no longer open" message. The idle timeout therefore only applies to runs
+        // parked in in_review with NO open gate (e.g. the gate was dismissed/auto-closed but the status
+        // never advanced) — a true orphan that would otherwise loop forever.
+        if (await HasPendingReviewGateAsync(plan, ct).ConfigureAwait(false))
             return false;
 
         if (DateTimeOffset.UtcNow - plan.UpdatedAt < _reviewAbandonTimeout)

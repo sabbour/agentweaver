@@ -599,6 +599,66 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task FailAssembly_WithOpenReviewGate_PreservesGate_MarksCoordinatorFailed_AndEmitsReviewPreserved()
+    {
+        // The review gate must OUTLIVE a failed coordinator run: if the run fails while the human
+        // review gate is still open (no decision submitted — e.g. the git integration ref-lock race
+        // exhausted the reconciler's re-arm cap), the durable review record is PRESERVED and marked
+        // coordinator_failed rather than cleared, and a review_preserved event is emitted so the UI
+        // keeps the changes visible instead of kicking the operator out.
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SetPlanReviewStateAsync(workPlanId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, coordinatorRunId, "alice",
+            "agentweaver/integration/" + coordinatorRunId, "deadbeef", default);
+
+        const string reason = "assembly_rearm_exhausted after 3 attempts";
+        await _sut.FailAssemblyAsync(Context(coordinatorRunId), reason, default);
+
+        // The gate is preserved (not deleted) and stamped coordinator_failed.
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var record = await db.AssemblyReviews.AsNoTracking()
+            .SingleAsync(r => r.CoordinatorRunId == coordinatorRunId);
+        record.CoordinatorFailedAt.Should().NotBeNull("an open gate must be preserved, not cleared, on failure");
+        record.CoordinatorFailureReason.Should().Be(reason);
+        record.DecisionSubmittedAt.Should().BeNull("the human never acted — the gate is still theirs to complete");
+
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewPreserved);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status.Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
+    public async Task FailAssembly_WithNoOpenReviewGate_ClearsRecord_AndDoesNotEmitReviewPreserved()
+    {
+        // When there is no OPEN gate (the human already decided — DecisionSubmittedAt set), a failure
+        // clears the record as before and never emits the preserved event.
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SetPlanReviewStateAsync(workPlanId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
+            _scopeFactory, coordinatorRunId,
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"),
+            default);
+
+        await _sut.FailAssemblyAsync(Context(coordinatorRunId), "some_failure", default);
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.AssemblyReviews.CountAsync(r => r.CoordinatorRunId == coordinatorRunId))
+            .Should().Be(0, "a decided gate is cleared on failure as before");
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyReviewPreserved);
+    }
+
+    [Fact]
     public async Task RunAssembly_Approved_TerminalizesCoordinatorRun_Completed_WithReason()
     {
         var coordinatorRunId = RunId.New().ToString();

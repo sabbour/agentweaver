@@ -372,7 +372,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Failed, reason, ct).ConfigureAwait(false);
-        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+        await PreserveOrClearReviewGateAsync(context, workPlanId, reason, clearIfNoOpenGate: true, ct)
             .ConfigureAwait(false);
         await RunCoordinatorScribeAsync(
             context,
@@ -381,6 +381,48 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             mergeResult: reason,
             ct).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// When a coordinator run terminates in a failure state, an OPEN human-review gate must OUTLIVE the
+    /// run: the human should always be able to view the assembled changes and complete their review even
+    /// if the backend faulted (git-lock race, crash, pod eviction, reconciler re-arm exhaustion). If a
+    /// review gate is still open (no decision submitted) it is preserved — marked <c>coordinator_failed</c>
+    /// via <see cref="CoordinatorAssemblyReviewPersistence.MarkCoordinatorFailedAsync"/> and surfaced with
+    /// <see cref="EventTypes.CoordinatorAssemblyReviewPreserved"/> (emitted LAST so the UI keeps the review
+    /// visible instead of kicking the operator out). Only when there is NO open gate (already decided, or
+    /// never armed) is the record cleared, and only if <paramref name="clearIfNoOpenGate"/> is set.
+    /// </summary>
+    private async Task PreserveOrClearReviewGateAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        string reason,
+        bool clearIfNoOpenGate,
+        CancellationToken ct)
+    {
+        var preserved = await CoordinatorAssemblyReviewPersistence.MarkCoordinatorFailedAsync(
+            _scopeFactory, context.CoordinatorRunId, reason, ct).ConfigureAwait(false);
+        if (preserved)
+        {
+            var record = await CoordinatorAssemblyReviewPersistence.GetAsync(
+                _scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewPreserved, new
+            {
+                workPlanId,
+                integrationBranch = record?.IntegrationBranch,
+                treeHash = record?.AggregateTreeHash,
+                reason,
+            });
+            _logger.LogWarning(
+                "Collective assembly: run {RunId} failed while the review gate was open ({Reason}); "
+                + "preserving the gate so the operator can still view the changes",
+                context.CoordinatorRunId, reason);
+            return;
+        }
+
+        if (clearIfNoOpenGate)
+            await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+                .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -736,13 +778,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _ = PollDeferredAssemblyReviewDecisionAsync(context, ct);
         try
         {
-            var completed = await Task.WhenAny(decisionTask, Task.Delay(_reviewTimeout)).ConfigureAwait(false);
-            if (completed != decisionTask)
-            {
-                await ReviewTimeoutAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
-                return null;
-            }
-
+            // The human-review gate waits INDEFINITELY for the operator — an open gate is never
+            // auto-failed on a wall-clock timeout. The wait ends only when a decision arrives (here or
+            // via another replica, picked up by the deferred poller) or the app is stopping (ct). The
+            // durable review record + the reconciler recover the gate across restarts, so parking here
+            // indefinitely is safe and honors "let it wait for the human".
             var decision = await decisionTask.ConfigureAwait(false);
             await MarkCoordinatorInProgressAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
             return decision;
@@ -1297,36 +1337,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _logger.LogWarning("Collective assembly RAI-blocked run {RunId}", context.CoordinatorRunId);
     }
 
-    private async Task ReviewTimeoutAsync(
-        CoordinatorDispatchContext context,
-        int workPlanId,
-        IReadOnlyCollection<(int, int)> edges,
-        CancellationToken ct)
-    {
-        await _assemblyStore.SetStatusAndStageAsync(
-            workPlanId, WorkPlanStatus.AssemblyFailed, null, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, "run.review_timeout", new
-        {
-            workPlanId,
-            timeoutSeconds = (int)_reviewTimeout.TotalSeconds,
-        });
-        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyFailed, edges, ct)
-            .ConfigureAwait(false);
-        await TerminalizeCoordinatorRunAsync(
-            context.CoordinatorRunId, RunStatus.Failed, "review_timeout", ct).ConfigureAwait(false);
-        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
-            .ConfigureAwait(false);
-        await RunCoordinatorScribeAsync(
-            context,
-            workPlanId,
-            terminalStatus: RunStatus.Failed.ToApiString(),
-            mergeResult: "review_timeout",
-            ct).ConfigureAwait(false);
-        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
-        _logger.LogWarning("Collective assembly review timed out for run {RunId}", context.CoordinatorRunId);
-    }
-
     private async Task NeedsResolutionAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -1391,6 +1401,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
         await TerminalizeCoordinatorRunAsync(context.CoordinatorRunId, RunStatus.Failed, reason, ct)
             .ConfigureAwait(false);
+        // An unexpected fault must not close an open review gate — preserve it so the human can still
+        // view the changes. Do NOT clear when absent/decided (this path never cleared historically).
+        await PreserveOrClearReviewGateAsync(context, workPlanId, reason, clearIfNoOpenGate: false, ct)
+            .ConfigureAwait(false);
         await RunCoordinatorScribeAsync(
             context,
             workPlanId,
@@ -1399,9 +1413,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             ct).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
     }
-
-    /// <summary>
-    /// Records a terminal status + human-readable result on the COORDINATOR run so the project runs
     /// list and run detail surface why assembly ended (instead of leaving the run InProgress, which a
     /// later restart would sweep to a bare "Failed"). A no-op when the run row is absent or already
     /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>).

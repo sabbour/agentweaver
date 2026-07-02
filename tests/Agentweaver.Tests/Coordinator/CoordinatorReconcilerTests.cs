@@ -307,6 +307,35 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Sweep_InReviewPlan_StaleBeyondTimeout_WithOpenGate_DoesNotAbandon()
+    {
+        // The review gate is genuinely OPEN (a pending review record, no decision submitted) and the
+        // human simply hasn't acted — even for two days. The idle timeout must NOT fire: an open gate
+        // waits INDEFINITELY for the human. Abandoning here is exactly what produced the unwanted
+        // "the review gate is no longer open" message, so it must never happen while the gate is open.
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.InReview, updatedAt: DateTimeOffset.UtcNow.AddHours(-48));
+        await SeedReviewRecordAsync(coord, decisionSubmitted: false); // pending human decision
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Runs:ReviewTimeoutHours"] = "24" })
+            .Build();
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: config, assembly: _assembly);
+
+        // Repeated sweeps remain a silent no-op — never abandon, never re-arm.
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+
+        _assembly.Abandoned.Should().BeEmpty("an open review gate is never timed out — it waits for the human");
+        _assembly.Started.Should().BeEmpty();
+        _assembly.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Sweep_AssemblingPlan_FreshLease_DoesNotReArm()
     {
         // A fresh `assembling` plan is being actively built by a live loop (possibly on another

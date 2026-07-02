@@ -344,6 +344,15 @@ public static class EventTypes
     public const string CoordinatorAssemblyFailed = "coordinator.assembly_failed";
 
     /// <summary>
+    /// The coordinator run terminated (failed/crashed/evicted) while the ONE collective human-review
+    /// gate was still open. The gate is DELIBERATELY preserved (not closed): the human can still view
+    /// the assembled changes and complete their review. Emitted AFTER
+    /// <see cref="CoordinatorAssemblyFailed"/> so the UI keeps the review visible instead of kicking
+    /// the operator out. Approving a preserved gate will NOT trigger a new deployment.
+    /// Payload: { workPlanId, integrationBranch?, treeHash?, reason }.</summary>
+    public const string CoordinatorAssemblyReviewPreserved = "coordinator.assembly_review_preserved";
+
+    /// <summary>
     /// Emitted on the COORDINATOR run's stream when a coordinator CHILD run bubbles a clarifying
     /// question via <c>ask_question</c>. The coordinator watcher re-projects the child's
     /// <see cref="AgentQuestionAsked"/> event so the operator (and, later, Autopilot) can answer.
